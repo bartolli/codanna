@@ -2,6 +2,8 @@
 
 This document tracks the development progress following TDD principles. Each task must have passing tests before moving to the next.
 
+**Note for Claude**: See [CLAUDE.md](./CLAUDE.md) for project instructions and development guidelines.
+
 ## ✅ Phase 1: Core Data Structures (COMPLETED)
 
 ### ✅ 1.1 Basic Type Definitions
@@ -9,21 +11,18 @@ This document tracks the development progress following TDD principles. Each tas
 - **Files**: `src/types/mod.rs`
 - **Tests**: 7 tests passing
 - **What we built**: SymbolId, FileId with NonZeroU32 for memory efficiency, Range for positions, SymbolKind enum
-- **Why**: Type safety and zero-cost abstractions are fundamental to the entire system
 
 ### ✅ 1.2 Symbol Structure
 - **Status**: COMPLETED
 - **Files**: `src/symbol/mod.rs`
 - **Tests**: 6 tests passing
 - **What we built**: Symbol struct, CompactSymbol (32-byte aligned), StringTable for interning
-- **Why**: Symbols are the core unit of code intelligence; compact representation enables processing millions of symbols
 
 ### ✅ 1.3 Relationship Types
 - **Status**: COMPLETED
 - **Files**: `src/relationship/mod.rs`
 - **Tests**: 7 tests passing
 - **What we built**: RelationKind enum, Relationship struct with weights, metadata support
-- **Why**: Relationships define how code elements connect; weights enable ranking and metadata provides context
 
 ## ✅ Phase 2: Storage Layer (COMPLETED)
 
@@ -32,517 +31,213 @@ This document tracks the development progress following TDD principles. Each tas
 - **Files**: `src/storage/memory.rs`
 - **Tests**: 9 tests passing
 - **What we built**: Thread-safe SymbolStore using DashMap, indexes by name/file/kind
-- **Why**: Concurrent access is critical for parallel indexing; multiple indexes enable fast queries
 
 ### ✅ 2.2 Graph Structure
 - **Status**: COMPLETED
 - **Files**: `src/storage/graph.rs`
 - **Tests**: 5 tests passing
-- **What we built**: DependencyGraph wrapping petgraph, BFS traversal, path finding
-- **Why**: Graph algorithms are essential for impact analysis and understanding code relationships
+- **What we built**: DependencyGraph wrapping petgraph, BFS traversal, path finding, impact analysis
 
-## ✅ Phase 3: Parser Integration (PARTIALLY COMPLETED)
+### ✅ 2.3 Basic Persistence
+- **Status**: COMPLETED
+- **Files**: `src/storage/persistence.rs`, `src/storage/index_data.rs`
+- **What we built**: SQLite-based persistence, save/load complete index, versioning support
 
-### 🔲 3.1 Parser Pool
-- **Status**: SKIPPED FOR NOW
-- **Note**: We implemented a simple parser first to validate the concept
-- **Next Steps**: 
-  1. Write test for creating language-specific parsers
-  2. Test thread-local parser reuse
-  3. Test concurrent parser access
-- **Implementation Plan**:
-  - Create `src/parsing/pool.rs`
-  - Use ThreadLocal<RefCell<HashMap<Language, Parser>>>
-  - Implement borrowing mechanism with RAII guards
-- **Why**: Parser creation is expensive; reusing parsers improves performance by 10x
+## ✅ Phase 3: Parser Integration (COMPLETED FOR RUST)
 
-### ✅ 3.2 Basic Rust Parser
+### ✅ 3.1 Language Abstraction
+- **Status**: COMPLETED
+- **Files**: `src/parsing/language.rs`, `src/parsing/parser.rs`, `src/parsing/factory.rs`
+- **What we built**:
+  - Language enum supporting Rust, Python, JavaScript, TypeScript
+  - LanguageParser trait defining common interface
+  - ParserFactory for creating language-specific parsers
+  - File extension-based language detection
+
+### ✅ 3.2 Rust Parser
 - **Status**: COMPLETED
 - **Files**: `src/parsing/rust.rs`
 - **Tests**: 9 tests passing
-- **What we built**:
-  - Tree-sitter based Rust parser
-  - Extracts functions, methods, structs, and traits
-  - Detects function calls for relationship building
-  - Correctly distinguishes between functions and methods in impl blocks
-  - Detects trait implementations (`impl Trait for Type`)
-  - Detects type usage in struct fields and function signatures
-  - Detects method definitions in traits and impl blocks
-- **Why**: Starting with Rust allows us to test on our own codebase
+- **What we built**: Complete Rust parser with all relationship types
 
-### 🔲 3.3 Language Detection
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test detecting language from file extension
-  2. Test detecting from shebang lines
-  3. Test fallback strategies
-- **Implementation Plan**:
-  - Create `src/parsing/language.rs`
-  - Map extensions to Language enum
-  - Support content-based detection
-- **Why**: Automatic language detection enables processing mixed codebases
+### 🔲 3.3 Additional Language Parsers
+- **Status**: Infrastructure ready, parsers not implemented
+- **Priority order** (based on popularity and ecosystem importance):
+  1. **JavaScript/TypeScript** - Most popular, essential for web development
+  2. **Python** - Data science, ML, scripting
+  3. **Go** - Cloud infrastructure, DevOps
+  4. **Java** - Enterprise applications
+  5. **C/C++** - System programming
+- **Note**: Only Rust parser is currently implemented
 
-## ✅ Phase 4: Basic Indexing Pipeline (PARTIALLY COMPLETED)
+## ✅ Phase 4: Indexing Pipeline (COMPLETED)
 
-### 🔲 4.1 File Walker
-- **Status**: NOT STARTED
-- **Note**: We focused on single file indexing first
-- **Next Steps**:
-  1. Test walking directory with .gitignore respect
-  2. Test filtering by language
-  3. Test symlink handling
-- **Implementation Plan**:
-  - Create `src/indexing/walker.rs`
-  - Use `ignore` crate for gitignore support
-  - Yield PathBuf items for processing
-- **Why**: Efficient file discovery respecting ignore rules prevents indexing unnecessary files
+### ✅ 4.1 File Walker
+- **Status**: COMPLETED
+- **Files**: `src/indexing/walker.rs`
+- **Tests**: 3 tests passing
+- **What we built**: FileWalker with .gitignore support, language filtering
 
-### ✅ 4.2 Single File Indexer
+### ✅ 4.2 Simple Indexer
 - **Status**: COMPLETED
 - **Files**: `src/indexing/simple.rs`
-- **Tests**: 6 tests passing
-- **What we built**:
-  - SimpleIndexer that indexes single Rust files
-  - Extracts symbols and stores them in SymbolStore
-  - Builds all relationship types in DependencyGraph:
-    - Function calls (Calls)
-    - Trait implementations (Implements)
-    - Type usage (Uses)
-    - Method definitions (Defines)
-  - Provides queries for symbols and relationships
-- **Why**: Single file indexing is the atomic unit that will be parallelized
-  2. Test symbol extraction accuracy
-  3. Test relationship detection (e.g., function calls)
-  4. Test incremental update detection
-- **Implementation Plan**:
-  - Create `src/indexing/single.rs`
-  - Parse file → Extract symbols → Detect relationships → Store
-  - Track file hash for change detection
-- **Why**: Single file indexing is the atomic unit that will be parallelized
+- **Tests**: 1 test passing
+- **What we built**: Single and multi-file indexing with all relationship types
 
-### 🔲 4.3 Parallel Indexer
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test processing multiple files concurrently
-  2. Test work distribution across threads
-  3. Test progress reporting
-  4. Benchmark against performance target (10k files/sec)
-- **Implementation Plan**:
-  - Create `src/indexing/parallel.rs`
-  - Use rayon with custom chunk size
-  - Implement work-stealing queue
-  - Batch symbol insertions
-- **Why**: Parallel processing is required to meet our performance targets
-
-### 🔲 4.4 Incremental Indexer
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test detecting changed files via hash
-  2. Test reindexing only affected files
-  3. Test dependency invalidation
-  4. Test <100ms update performance
-- **Implementation Plan**:
-  - Create `src/indexing/incremental.rs`
-  - Track file hashes and timestamps
-  - Build file dependency graph
-  - Implement smart invalidation
-- **Why**: Incremental updates keep the index fresh during development
-
-## 🔲 Phase 5: Query Interface
-
-### 🔲 5.1 Basic Symbol Queries
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test finding symbol by exact name
-  2. Test fuzzy name matching
-  3. Test filtering by kind/file
-  4. Test query performance <10ms
-- **Implementation Plan**:
-  - Create `src/query/symbol.rs`
-  - Implement exact and fuzzy matching
-  - Add query builders for complex filters
-- **Why**: Symbol lookup is the most common query operation
-
-### 🔲 5.2 Relationship Queries
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test finding all callers of a function
-  2. Test finding implementations of trait
-  3. Test transitive dependency queries
-  4. Test path finding between symbols
-- **Implementation Plan**:
-  - Create `src/query/relationship.rs`
-  - Leverage graph traversal algorithms
-  - Implement depth limiting
-- **Why**: Understanding relationships enables impact analysis
-
-### 🔲 5.3 Code Context Queries
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test getting symbol at file position
-  2. Test gathering full context (definition, references, hierarchy)
-  3. Test performance with large result sets
-- **Implementation Plan**:
-  - Create `src/query/context.rs`
-  - Combine multiple query types
-  - Implement result ranking
-- **Why**: Rich context is what makes code intelligence useful for AI assistants
-
-## ✅ Phase 6: CLI Interface (BASIC VERSION COMPLETED)
-
-### ✅ 6.1 Basic CLI Structure
+### ✅ 4.3 Progress Reporting
 - **Status**: COMPLETED
-- **Files**: `src/main.rs`
-- **Tests**: 1 CLI validation test
-- **What we built**:
-  - CLI using clap with subcommands
-  - `index` command for indexing files
-  - `retrieve` command with subcommands (symbol, calls, callers)
-  - Basic state persistence (remembers last indexed file)
-- **Why**: CLI provides the primary interface for users
+- **Files**: `src/indexing/progress.rs`
+- **What we built**: Real-time progress with ETA, performance metrics
 
-### ✅ 6.2 Index Command
-- **Status**: COMPLETED (single file version)
-- **What we built**:
-  - `index <file.rs>` - Indexes a single Rust file
-  - Shows symbol count summary (functions, methods, structs, traits)
-  - Saves indexed file path for subsequent retrieve commands
-- **Next Steps for full version**:
-  1. Add directory recursion support
-  2. Add progress reporting
-  3. Persist full index to disk
-- **Why**: Users need to build an index before querying
+### 🔲 4.4 Parallel Indexer
+- **Status**: NOT STARTED
+- **Why needed**: Current performance ~19 files/sec, target 1000+ files/sec
+- **Implementation plan**: Use rayon for parallel file processing
 
-### ✅ 6.3 Retrieve Commands
+## ✅ Phase 5: CLI Interface (COMPLETED)
+
+### ✅ 5.1 Basic CLI Structure
 - **Status**: COMPLETED
-- **What we built**:
-  - `retrieve symbol <name>` - Find symbols by name
-  - `retrieve calls <function>` - Show what a function calls
-  - `retrieve callers <function>` - Show what calls a function
-  - `retrieve implementations <trait>` - Show types implementing a trait
-  - `retrieve uses <symbol>` - Show what types a symbol uses
-  - `retrieve defines <symbol>` - Show what methods a type/trait defines
-  - `retrieve impact <symbol>` - Show impact radius of changes
-  - `retrieve dependencies <symbol>` - Show comprehensive dependency analysis
-  - Auto re-indexes the last indexed file on retrieve
-- **Next Steps**:
-  1. Add JSON output format
-  2. Support regex patterns
-  3. Add cross-file query support
-- **Why**: Interactive querying helps users explore codebases
+- **Files**: `src/main.rs`, `CLI.md`
+- **What we built**: Full CLI with all commands documented
 
-## 🎯 MVP Completion Tasks (HIGH PRIORITY)
-
-### Critical Missing Pieces for Robust MVP
-
-**Suggested Implementation Order:**
-1. ✅ Enhanced Relationship Detection (foundation) - COMPLETED
-2. Directory Walking (multi-file support)
-3. Multi-File Relationship Building (cross-file deps)
-4. Basic Persistence (practical usage)
-5. ✅ Essential Graph Queries (leverage the graph) - COMPLETED
-6. Basic MCP Server (deliver value to AI)
-
-#### ✅ Enhanced Relationship Detection (COMPLETED)
-- **Why Critical**: Currently only detecting function calls, missing 80% of relationship types
+### ✅ 5.2 Index Command
 - **Status**: COMPLETED
-- **What we built**:
-  1. **Detect `impl Trait for Type`** → Creates "Implements" relationships ✅
-     - Parse impl blocks with trait bounds
-     - Link trait to implementing type
-     - Test with standard traits (Debug, Clone, etc.)
-  2. **Detect struct field types** → Creates "Uses" relationships ✅
-     - Parse struct field declarations
-     - Create relationship to field type
-     - Handle generic parameters
-  3. **Detect function parameter/return types** → Creates "Uses" relationships ✅
-     - Parse function signatures
-     - Link to parameter and return types
-     - Handle references and lifetimes
-  4. **Detect trait definitions** → Creates "Defines" relationships ✅
-     - Parse trait method signatures
-     - Link trait to its methods
-  5. **Test relationship detection** ✅
-     - Create comprehensive test fixtures
-     - Verify all relationship types work
+- **Features**: Single file, directory, progress, dry-run, max-files
 
-#### 🔲 Multi-File Relationship Building
-- **Why Critical**: Real codebases have cross-file dependencies
-- **Tasks**:
-  1. **Symbol resolution across files**
-     - Build symbol table for entire index
-     - Resolve `use` statements
-     - Handle module paths
-  2. **Cross-file relationship detection**
-     - Link calls to definitions in other files
-     - Handle pub/private visibility
-  3. **Test multi-file scenarios**
-     - Create multi-file test project
-     - Verify relationships span files
-
-#### ✅ Essential Graph Queries (COMPLETED)
-- **Why Critical**: The graph's value is in traversal and analysis
+### ✅ 5.3 Retrieve Commands
 - **Status**: COMPLETED
-- **What we built**:
-  1. **Impact analysis query** ✅
-     ```rust
-     pub fn get_impact_radius(&self, symbol: SymbolId, max_depth: usize) -> Vec<SymbolId>
-     ```
-     - Find all symbols affected by changing one symbol
-     - Use BFS with relationship filtering
-  2. **Dependency analysis query** ✅
-     ```rust
-     pub fn get_dependencies(&self, symbol_id: SymbolId) -> HashMap<RelationKind, Vec<SymbolId>>
-     pub fn get_dependents(&self, symbol_id: SymbolId) -> HashMap<RelationKind, Vec<SymbolId>>
-     ```
-     - Find all symbols that a given symbol depends on
-     - Find all symbols that depend on a given symbol
-     - Group by relationship type for clarity
-  3. **Find implementations query** ✅
-     ```rust
-     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol>
-     ```
-     - Find all types implementing a trait
-  4. **Add to CLI** ✅
-     - `retrieve impact <symbol>` command
-     - `retrieve dependencies <symbol>` command
-     - `retrieve implementations <trait>` command
-     - `retrieve uses <symbol>` command
-     - `retrieve defines <symbol>` command
+- **Commands**: symbol, calls, callers, implementations, uses, defines, impact, dependencies
 
-#### 🔲 Basic Persistence
-- **Why Critical**: Re-indexing on every command is not scalable
+### ✅ 5.4 Configuration
+- **Status**: COMPLETED
+- **Commands**: init, config
+- **Files**: Settings stored in `.code-intelligence/settings.toml`
+
+## 🚧 Phase 6: MCP Integration (PARTIALLY COMPLETED)
+
+### ✅ 6.1 MCP Server Implementation
+- **Status**: COMPLETED
+- **Files**: `src/mcp/mod.rs`
+- **What we built**: 
+  - MCP server with stdio transport
+  - Tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info
+  - Serve command in CLI
+
+### ✅ 6.2 MCP Client Testing
+- **Status**: COMPLETED
+- **Files**: `src/mcp/client.rs`
+- **Commands**: mcp-test, mcp (embedded mode)
+
+### 🔲 6.3 Claude Desktop Integration
+- **Status**: NOT TESTED
+- **Next steps**: Test with actual Claude Desktop, create example configuration
+
+## 🎯 High Priority Tasks (MVP Completion)
+
+### 1. 🔲 Cross-File Relationship Building
+- **Why Critical**: Current implementation only links symbols within same file
 - **Tasks**:
-  1. **Save index to disk**
-     - Serialize SymbolStore
-     - Serialize DependencyGraph
-     - Use rkyv for zero-copy deserialization
-  2. **Load index from disk**
-     - Detect saved index
-     - Load on CLI startup
-     - Version compatibility check
-  3. **Incremental updates**
-     - Detect file changes
-     - Update only changed symbols
-     - Maintain graph consistency
+  - Implement module path resolution
+  - Handle `use` statements and imports
+  - Link symbols across file boundaries
+  - Test on multi-file projects
 
-#### 🔲 Directory Walking
-- **Why Critical**: Single file indexing is too limited
+### 2. 🔲 Tantivy Integration (Documentation Search)
+- **Why Critical**: Need to search documentation and comments
 - **Tasks**:
-  1. **Implement directory walker**
-     - Use `ignore` crate for .gitignore
-     - Filter by .rs extension
-     - Progress reporting
-  2. **Update CLI**
-     - Support directory path in index command
-     - Show file count and progress
-  3. **Handle large codebases**
-     - Test on rust-lang/rust repo
-     - Memory usage monitoring
+  - Create tantivy schema for code
+  - Index symbol names and documentation
+  - Implement search query interface
+  - Add to CLI and MCP tools
 
-#### 🔲 Basic MCP Server Implementation
-- **Why Critical**: MCP integration is the primary use case for AI assistants
+### 3. 🔲 Performance Optimization
+- **Current**: ~19 files/second
+- **Target**: 1000+ files/second
 - **Tasks**:
-  1. **Implement MCP server mode**
-     - Add `serve` command to CLI
-     - Use rmcp crate for server implementation
-     - Handle connection lifecycle
-  2. **Core MCP tools**:
-     ```rust
-     #[tool(description = "Find symbol by name")]
-     find_symbol(name: String) -> Vec<Symbol>
-     
-     #[tool(description = "Get symbol definition and context")]
-     get_symbol_context(symbol_id: String) -> SymbolContext
-     
-     #[tool(description = "Find who calls this function")]
-     find_callers(function_name: String) -> Vec<Symbol>
-     
-     #[tool(description = "Analyze impact of changing a symbol")]
-     analyze_impact(symbol_name: String, max_depth: Option<usize>) -> ImpactAnalysis
-     
-     #[tool(description = "Find implementations of a trait")]
-     find_implementations(trait_name: String) -> Vec<Symbol>
-     ```
-  3. **Context management**
-     - Load persisted index on startup
-     - Handle multiple concurrent requests
-     - Efficient response formatting
-  4. **Test with Claude Desktop**
-     - Create test configuration
-     - Verify tool discovery
-     - Test real queries
-  5. **Add to CLAUDE.md**
-     - Document MCP server usage
-     - Example tool invocations
-     - Integration guide
+  - Implement parallel indexing with rayon
+  - Add parser pool for reuse
+  - Batch database operations
+  - Profile and optimize hot paths
 
-### MVP Success Criteria
-- [ ] Can index entire Rust project (multiple files)
-- [x] Detects all major relationship types (calls, implements, uses, defines) ✅
-- [ ] Relationships work across file boundaries
-- [x] Can query impact of changes ✅
-- [x] Can find all implementations of a trait ✅
-- [ ] Index persists between runs
-- [ ] MCP server works with Claude Desktop
-- [ ] Performance: 1000+ files/second on single thread
+### 4. 🔲 JavaScript/TypeScript Parser
+- **Why**: Most requested language after Rust
+- **Tasks**:
+  - Implement parser using tree-sitter-javascript/typescript
+  - Handle JSX/TSX syntax
+  - Extract ES6 modules, classes, functions
+  - Test on popular JS frameworks
 
-### After MVP
-- Parser pool optimization
-- Additional languages (Python, TypeScript)
-- Full-text search integration
-- Semantic search with embeddings
-- Advanced MCP tools (refactoring, code generation)
+### 5. 🔲 Python Parser
+- **Why**: Essential for data science and ML codebases
+- **Tasks**:
+  - Implement parser using tree-sitter-python
+  - Handle type hints and docstrings
+  - Extract classes, functions, imports
+  - Test on major Python projects
 
-## 🔲 Phase 7: Persistence Layer
+## 📊 Current Metrics
 
-### 🔲 7.1 Binary Serialization
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test serializing symbol store
-  2. Test serializing graph
-  3. Test zero-copy deserialization with rkyv
-  4. Test file size efficiency
-- **Implementation Plan**:
-  - Implement rkyv traits for all types
-  - Create versioned file format
-  - Add compression with lz4
-- **Why**: Persistence enables reusing indexes across sessions
+- **Test count**: 50+ tests passing
+- **Supported languages**: Rust (fully implemented)
+- **Language infrastructure**: Ready for Python, JavaScript, TypeScript, Go
+- **Index scope**: Single files and full directories
+- **Relationship types**: Calls, Implements, Uses, Defines
+- **Performance**: ~19 files/second (not optimized)
+- **Persistence**: SQLite-based, functional
+- **MCP Server**: Implemented with 5 tools
+- **Progress reporting**: Real-time with ETA
 
-### 🔲 7.2 SQLite Metadata Store
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test storing file metadata
-  2. Test querying by various attributes
-  3. Test transaction performance
-- **Implementation Plan**:
-  - Create schema with sqlx migrations
-  - Store non-critical metadata
-  - Implement async queries
-- **Why**: SQLite provides flexible querying for metadata without impacting core performance
+## 🚀 Post-MVP Roadmap
 
-## 🔲 Phase 8: Search Features
+### Phase 1: Language Support
+1. JavaScript/TypeScript parser
+2. Python parser
+3. Go parser
+4. Java parser
+5. C/C++ parser
 
-### 🔲 8.1 Full-Text Search
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test indexing symbol names and docs
-  2. Test search query parsing
-  3. Test ranking algorithms
-  4. Benchmark search performance
-- **Implementation Plan**:
-  - Create `src/search/text.rs`
-  - Build tantivy schema
-  - Implement custom tokenizers for code
-- **Why**: Text search complements structural queries
+### Phase 2: Advanced Features
+1. Semantic search with embeddings
+2. Incremental indexing
+3. Real-time file watching
+4. Advanced refactoring tools
+5. Code generation assistance
 
-### 🔲 8.2 Semantic Search
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test embedding generation for symbols
-  2. Test HNSW index building
-  3. Test similarity search accuracy
-  4. Test <10ms query performance
-- **Implementation Plan**:
-  - Create `src/search/semantic.rs`
-  - Use candle for embeddings
-  - Build HNSW index
-  - Implement batched processing
-- **Why**: Semantic search finds conceptually similar code
-
-## 🔲 Phase 9: MCP Server
-
-### 🔲 9.1 MCP Tool Implementation
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test tool registration
-  2. Test request/response handling
-  3. Test error handling
-- **Implementation Plan**:
-  - Create `src/mcp/mod.rs`
-  - Implement rmcp tool traits
-  - Define tool schemas
-- **Why**: MCP integration enables AI assistants to use our tools
-
-### 🔲 9.2 MCP Server Mode
-- **Status**: NOT STARTED
-- **Next Steps**:
-  1. Test server startup and shutdown
-  2. Test concurrent request handling
-  3. Test memory management under load
-- **Implementation Plan**:
-  - Add MCP server to main.rs
-  - Implement connection handling
-  - Add request routing
-- **Why**: Server mode provides always-ready code intelligence
-
-## Performance Benchmarks to Implement
-
-1. **Indexing Throughput**: Target 10,000+ files/second
-2. **Memory Usage**: Target ~100 bytes per symbol
-3. **Search Latency**: Target <10ms for queries
-4. **Incremental Update**: Target <100ms per file
-5. **Startup Time**: Target <1s with cache
+### Phase 3: Integrations
+1. VS Code extension
+2. IntelliJ plugin
+3. GitHub integration
+4. CI/CD integration
+5. Cloud deployment
 
 ## Testing Strategy
 
-- Each module has unit tests (current: 33 passing)
-- Integration tests for end-to-end workflows
-- Property-based tests for data structures
-- Benchmarks for performance-critical paths
-- Fuzzing for parser robustness
+- Unit tests for each module
+- Integration tests for multi-file scenarios
+- Performance benchmarks
+- Language-specific test suites
+- MCP integration tests
 
-## Notes for Future Sessions
+## Development Guidelines
 
-1. Always run `cargo test` before starting new work
-2. Check this TODO.md for next tasks
-3. Follow TDD: Write test → See it fail → Implement → See it pass
-4. Update this file after completing tasks
-5. Keep performance targets in mind during implementation
+1. Always run `cargo test` before committing
+2. Update CLI.md when adding new commands
+3. Follow the LanguageParser trait when adding languages
+4. Maintain backward compatibility for persistence
+5. Keep performance targets in mind
+6. Document public APIs
 
-## Current State Summary (Updated)
+## Success Criteria Checklist
 
-### ✅ Completed
-- Core data structures implemented and tested
-- Storage layer with concurrent access ready
-- Rust parser with comprehensive relationship detection
-- Single file indexer with all relationship types
-- Full-featured CLI with 8 different query types
-- Demo script showcasing POC capabilities
-
-### 🎯 What Works Now
-- Can index single Rust files
-- Extracts functions, methods, structs, and traits
-- Detects ALL major relationship types:
-  - Function calls (who calls whom)
-  - Trait implementations (type implements trait)
-  - Type usage (in fields, parameters, returns)
-  - Method definitions (trait/type defines methods)
-- Comprehensive queries:
-  - Find symbols by name
-  - Show function call graphs (calls/callers)
-  - Find trait implementations
-  - Show type usage
-  - Show method definitions
-  - Impact analysis (what breaks if I change X)
-  - Full dependency analysis (incoming/outgoing)
-- Basic state persistence between commands
-
-### 🚧 Next Priority Items (Following Recommended Strategy)
-1. **Directory walking** - Index multiple files recursively (MVP CRITICAL)
-2. **Basic Persistence** - Save/load index between runs (MVP CRITICAL)
-3. **Cross-file relationships** - Resolve symbols across files (MVP CRITICAL)
-4. **Basic MCP Server** - Deliver value to AI assistants (MVP CRITICAL)
-5. **Additional languages** - Python, TypeScript, Go (POST-MVP)
-
-### Recommended Strategy Updates:
-- **Skip for MVP**: Parser pool optimization, full language detection system
-- **Focus on**: Getting multi-file indexing working with basic persistence
-- **Incremental approach**: Add languages one at a time based on user needs
-
-### 📊 Metrics
-- **Current test count**: 48 tests passing
-- **Supported languages**: Rust only
-- **Index scope**: Single file at a time
-- **Relationship types**: Calls, Implements, Uses, Defines
-- **Performance**: Not yet optimized
+- [x] Can index entire Rust project ✅
+- [x] Detects all major relationship types ✅
+- [ ] Relationships work across file boundaries ❌
+- [x] Can query impact of changes ✅
+- [x] Can find all implementations ✅
+- [x] Index persists between runs ✅
+- [x] MCP server works ✅
+- [ ] MCP tested with Claude Desktop ❌
+- [ ] Performance: 1000+ files/second ❌
+- [ ] Documentation search with Tantivy ❌
+- [ ] Multiple language support ❌ (only Rust)

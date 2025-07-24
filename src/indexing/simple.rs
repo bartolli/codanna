@@ -4,15 +4,18 @@ use crate::{
     Settings,
 };
 use crate::parsing::{Language, ParserFactory};
+use crate::indexing::{FileWalker, IndexStats};
 use std::path::Path;
 use std::fs;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct SimpleIndexer {
     pub symbol_store: SymbolStore,
     pub graph: DependencyGraph,
     parser_factory: ParserFactory,
     data: IndexData,
+    settings: Arc<Settings>,
 }
 
 impl SimpleIndexer {
@@ -25,8 +28,9 @@ impl SimpleIndexer {
         Self {
             symbol_store: SymbolStore::new(),
             graph: DependencyGraph::new(),
-            parser_factory: ParserFactory::new(settings),
+            parser_factory: ParserFactory::new(settings.clone()),
             data: IndexData::new(),
+            settings,
         }
     }
     
@@ -245,6 +249,86 @@ impl SimpleIndexer {
         self.data.file_map.iter()
             .find(|(_, &id)| id == file_id)
             .map(|(path, _)| path.as_str())
+    }
+    
+    /// Index all files in a directory recursively
+    pub fn index_directory(
+        &mut self, 
+        root: &Path, 
+        show_progress: bool,
+        dry_run: bool,
+        max_files: Option<usize>,
+    ) -> Result<IndexStats, String> {
+        let mut stats = IndexStats::new();
+        let walker = FileWalker::new(self.settings.clone());
+        
+        // Collect all files to index
+        let files: Vec<_> = if let Some(max) = max_files {
+            walker.walk(root).take(max).collect()
+        } else {
+            walker.walk(root).collect()
+        };
+        
+        let total_files = files.len();
+        if total_files == 0 {
+            stats.stop_timing();
+            return Ok(stats);
+        }
+        
+        if dry_run {
+            println!("Would index {} files:", total_files);
+            for (i, file) in files.iter().enumerate() {
+                if i < 20 {
+                    println!("  {}", file.display());
+                } else if i == 20 {
+                    println!("  ... and {} more files", total_files - 20);
+                    break;
+                }
+            }
+            stats.stop_timing();
+            return Ok(stats);
+        }
+        
+        let _processed = AtomicUsize::new(0);
+        let last_progress = AtomicUsize::new(0);
+        let progress_interval = 100; // Update every 100 files
+        
+        // Process files in parallel chunks
+        let _chunk_size = self.settings.indexing.parallel_threads.max(1) * 4;
+        
+        // Since we need mutable access to self, we can't parallelize directly
+        // For now, process sequentially with progress reporting
+        for (i, file_path) in files.iter().enumerate() {
+            match self.index_file(file_path) {
+                Ok(file_id) => {
+                    stats.files_indexed += 1;
+                    
+                    // Update symbol count
+                    let new_symbols = self.symbol_store.find_by_file(file_id).len();
+                    stats.symbols_found += new_symbols;
+                }
+                Err(e) => {
+                    stats.add_error(file_path.clone(), e);
+                }
+            }
+            
+            // Progress reporting
+            if show_progress {
+                let current = i + 1;
+                let last = last_progress.load(Ordering::Relaxed);
+                
+                if current - last >= progress_interval || current == total_files {
+                    last_progress.store(current, Ordering::Relaxed);
+                    eprint!("\r{}", stats.progress_line(current, total_files));
+                    if current == total_files {
+                        eprintln!(); // Final newline
+                    }
+                }
+            }
+        }
+        
+        stats.stop_timing();
+        Ok(stats)
     }
 }
 

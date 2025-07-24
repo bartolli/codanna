@@ -23,10 +23,10 @@ enum Commands {
         force: bool,
     },
     
-    /// Index a Rust source file
+    /// Index source files or directories
     Index {
-        /// Path to the Rust file to index
-        file: PathBuf,
+        /// Path to file or directory to index
+        path: PathBuf,
         
         /// Number of threads to use (overrides config)
         #[arg(short, long)]
@@ -35,6 +35,18 @@ enum Commands {
         /// Force re-indexing even if index exists
         #[arg(short, long)]
         force: bool,
+        
+        /// Show progress during indexing
+        #[arg(short, long)]
+        progress: bool,
+        
+        /// Dry run - show what would be indexed without indexing
+        #[arg(long)]
+        dry_run: bool,
+        
+        /// Maximum number of files to index
+        #[arg(long)]
+        max_files: Option<usize>,
     },
     
     /// Retrieve information from the index
@@ -272,57 +284,91 @@ async fn main() {
             }).unwrap();
         }
         
-        Commands::Index { file, force: _, .. } => {
-            match indexer.index_file(&file) {
-                Ok(file_id) => {
-                    // Save the indexed file path for retrieve commands
-                    if let Err(e) = fs::write(INDEX_STATE_FILE, file.to_string_lossy().as_ref()) {
-                        eprintln!("Warning: Could not save index state: {}", e);
-                    }
-                    
-                    let language_name = codebase_intelligence::parsing::Language::from_path(&file)
-                        .map(|l| l.to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    println!("Successfully indexed: {} [{}]", file.display(), language_name);
-                    println!("File ID: {}", file_id.value());
-                    
-                    let symbol_count = indexer.symbol_count();
-                    println!("Found {} symbols", symbol_count);
-                    
-                    // Show summary of what was found
-                    let symbols = indexer.get_all_symbols();
-                    let functions = symbols.iter()
-                        .filter(|s| s.kind == SymbolKind::Function)
-                        .count();
-                    let methods = symbols.iter()
-                        .filter(|s| s.kind == SymbolKind::Method)
-                        .count();
-                    let structs = symbols.iter()
-                        .filter(|s| s.kind == SymbolKind::Struct)
-                        .count();
-                    let traits = symbols.iter()
-                        .filter(|s| s.kind == SymbolKind::Trait)
-                        .count();
-                    
-                    println!("  Functions: {}", functions);
-                    println!("  Methods: {}", methods);
-                    println!("  Structs: {}", structs);
-                    println!("  Traits: {}", traits);
-                    
-                    // Save the index
-                    eprintln!("DEBUG: Saving index with {} symbols", indexer.symbol_count());
-                    match persistence.save(&indexer) {
-                        Ok(_) => {
-                            println!("\nIndex saved to: {}", config.index_path.display());
-                            eprintln!("DEBUG: Index saved successfully");
+        Commands::Index { path, force: _, progress, dry_run, max_files, .. } => {
+            // Determine if path is a file or directory
+            if path.is_file() {
+                // Single file indexing
+                match indexer.index_file(&path) {
+                    Ok(file_id) => {
+                        // Save the indexed file path for retrieve commands
+                        if let Err(e) = fs::write(INDEX_STATE_FILE, path.to_string_lossy().as_ref()) {
+                            eprintln!("Warning: Could not save index state: {}", e);
                         }
-                        Err(e) => eprintln!("\nWarning: Could not save index: {}", e),
+                        
+                        let language_name = codebase_intelligence::parsing::Language::from_path(&path)
+                            .map(|l| l.to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        println!("Successfully indexed: {} [{}]", path.display(), language_name);
+                        println!("File ID: {}", file_id.value());
+                        
+                        let symbol_count = indexer.symbol_count();
+                        println!("Found {} symbols", symbol_count);
+                        
+                        // Show summary of what was found
+                        let symbols = indexer.get_all_symbols();
+                        let functions = symbols.iter()
+                            .filter(|s| s.kind == SymbolKind::Function)
+                            .count();
+                        let methods = symbols.iter()
+                            .filter(|s| s.kind == SymbolKind::Method)
+                            .count();
+                        let structs = symbols.iter()
+                            .filter(|s| s.kind == SymbolKind::Struct)
+                            .count();
+                        let traits = symbols.iter()
+                            .filter(|s| s.kind == SymbolKind::Trait)
+                            .count();
+                        
+                        println!("  Functions: {}", functions);
+                        println!("  Methods: {}", methods);
+                        println!("  Structs: {}", structs);
+                        println!("  Traits: {}", traits);
+                        
+                        // Save the index
+                        eprintln!("DEBUG: Saving index with {} symbols", indexer.symbol_count());
+                        match persistence.save(&indexer) {
+                            Ok(_) => {
+                                println!("\nIndex saved to: {}", config.index_path.display());
+                                eprintln!("DEBUG: Index saved successfully");
+                            }
+                            Err(e) => eprintln!("\nWarning: Could not save index: {}", e),
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error indexing file: {}", e);
+                        std::process::exit(1);
                     }
                 }
-                Err(e) => {
-                    eprintln!("Error indexing file: {}", e);
-                    std::process::exit(1);
+            } else if path.is_dir() {
+                // Directory indexing
+                println!("Indexing directory: {}", path.display());
+                
+                match indexer.index_directory(&path, progress, dry_run, max_files.clone()) {
+                    Ok(stats) => {
+                        stats.display();
+                        
+                        if !dry_run && stats.files_indexed > 0 {
+                            // Save the index
+                            eprintln!("\nSaving index with {} symbols...", indexer.symbol_count());
+                            match persistence.save(&indexer) {
+                                Ok(_) => {
+                                    println!("Index saved to: {}", config.index_path.display());
+                                }
+                                Err(e) => {
+                                    eprintln!("Error: Could not save index: {}", e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error indexing directory: {}", e);
+                        std::process::exit(1);
+                    }
                 }
+            } else {
+                eprintln!("Error: Path does not exist: {}", path.display());
+                std::process::exit(1);
             }
         }
         

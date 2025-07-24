@@ -24,45 +24,21 @@ cargo run -- <command>
 
 ## CLI Commands
 
-### Currently Implemented
+For comprehensive CLI documentation, see [CLI.md](./CLI.md).
+
+### Quick Examples
 ```bash
-# Index a single Rust file
-./target/debug/codebase-intelligence index <file.rs>
+# Index entire directory with progress
+./target/debug/codebase-intelligence index src --progress
 
 # Find a symbol by name
-./target/debug/codebase-intelligence retrieve symbol <name>
+./target/debug/codebase-intelligence retrieve symbol SimpleIndexer
 
-# Show what functions a given function calls
-./target/debug/codebase-intelligence retrieve calls <function>
+# Show function dependencies
+./target/debug/codebase-intelligence retrieve dependencies parse_function
 
-# Show what functions call a given function
-./target/debug/codebase-intelligence retrieve callers <function>
-```
-
-### Example Usage
-```bash
-# Index a file
-./target/debug/codebase-intelligence index src/types/mod.rs
-
-# Find the "new" method
-./target/debug/codebase-intelligence retrieve symbol new
-
-# See what "process_batch" calls
-./target/debug/codebase-intelligence retrieve calls process_batch
-
-# See what calls "helper"
-./target/debug/codebase-intelligence retrieve callers helper
-```
-
-**Note**: The CLI currently indexes single files only. The last indexed file is remembered and automatically re-indexed for retrieve commands.
-
-### Planned Commands (from README)
-```bash
-# Index entire directory (not yet implemented)
-./target/release/codebase-intelligence index /path/to/code
-
-# Start as MCP server (not yet implemented)
-codebase-intelligence serve --mcp --port 7777
+# Start MCP server
+./target/debug/codebase-intelligence serve
 ```
 
 ## Architecture Overview
@@ -108,31 +84,27 @@ codebase-intelligence serve --mcp --port 7777
 - Memory-mapped files for instant loading
 - Cache-line aligned structures (32 bytes, 2 per cache line)
 
-## Development Status
+## Current Capabilities
 
-### ✅ Completed Components
+The system can:
+- Index both single files and entire directory trees
+- Extract symbols (functions, methods, structs, traits) from Rust code
+- Detect and track relationships between symbols (calls, implements, uses, defines)
+- Persist and load indexes from disk
+- Provide comprehensive querying capabilities via CLI
+- Serve as an MCP server for AI assistant integration
+- Report progress and performance metrics during indexing
 
-- Core data structures (Symbol, Relationship, Storage)
-- Basic Rust parser using tree-sitter
-- Single file indexer with relationship detection
-- Basic CLI with index and retrieve commands
-- 42 tests passing
+## Development Guidelines
 
-### 🚧 Current Implementation
-
-- Indexes single Rust files
-- Extracts functions, methods, structs, and traits
-- Detects function call relationships
-- Provides symbol search and call graph queries
-
-### 📋 Next Steps
-
-1. Directory walking for multi-file indexing
-2. Persistent index storage
-3. Parser pool for performance
-4. Language detection and multi-language support
-5. Parallel indexing pipeline
-6. MCP server implementation
+When implementing new features:
+1. Always check CLI.md for existing command documentation
+2. Update CLI.md when adding new commands or options
+3. Follow the existing pattern in the parser trait for new languages
+4. Ensure all file paths are stored with symbols for navigation
+5. Run tests with `cargo test` before committing
+6. Use `cargo clippy` for linting
+7. Track development progress in TODO.md, not here
 
 ## Important Notes
 
