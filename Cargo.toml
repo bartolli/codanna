@@ -23,7 +23,7 @@ parking_lot = "0.12.4"
 petgraph = "0.8.2"
 rayon = "1.10.0"
 rkyv = { version = "0.8.10", features = ["bytecheck", "std"] }
-rmcp = "0.2.0"
+rmcp = { version = "0.2.0", features = ["server", "client", "transport-io", "transport-child-process"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.141"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls", "sqlite"] }

@@ -1,3 +1,7 @@
 /target
 .codebase-intelligence-index
 .code-intelligence/index/
+
+# Reference repositories (temporary)
+/reference/
+/rust-sdk-reference/

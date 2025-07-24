@@ -5,6 +5,7 @@ pub mod storage;
 pub mod parsing;
 pub mod indexing;
 pub mod config;
+pub mod mcp;
 
 pub use types::*;
 pub use symbol::{Symbol, CompactSymbol, StringTable};

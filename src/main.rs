@@ -44,6 +44,38 @@ enum Commands {
     
     /// Show current configuration
     Config,
+    
+    /// Start MCP server for AI assistants
+    Serve {
+        /// Port to listen on (overrides config)
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
+    
+    /// Test MCP client functionality
+    McpTest {
+        /// Path to server binary (defaults to current binary)
+        #[arg(long)]
+        server_binary: Option<PathBuf>,
+        
+        /// Tool to call (if not specified, just lists tools)
+        #[arg(long)]
+        tool: Option<String>,
+        
+        /// Tool arguments as JSON
+        #[arg(long)]
+        args: Option<String>,
+    },
+    
+    /// Call MCP tools directly without spawning a server (embedded mode)
+    Mcp {
+        /// Tool to call
+        tool: String,
+        
+        /// Tool arguments as JSON
+        #[arg(long)]
+        args: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -100,7 +132,8 @@ enum RetrieveQuery {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     
     // For non-init commands, check if project is initialized
@@ -157,6 +190,11 @@ fn main() {
             }
         }
         
+        Commands::Serve { port } => {
+            // Port override is handled in the serve command itself
+            let _ = port; // Suppress unused warning
+        }
+        
         _ => {}
     }
     
@@ -164,35 +202,72 @@ fn main() {
     let index_path = config.index_path.clone();
     let persistence = IndexPersistence::new(index_path);
     
-    // Load existing index or create new one
-    let force_reindex = matches!(cli.command, Commands::Index { force: true, .. });
-    let mut indexer = if persistence.exists() && !force_reindex {
-        eprintln!("DEBUG: Found existing index at {}", config.index_path.display());
-        match persistence.load() {
-            Ok(loaded) => {
-                eprintln!("DEBUG: Successfully loaded index from disk");
-                eprintln!("Loaded existing index ({} symbols)", loaded.symbol_count());
-                loaded
-            }
-            Err(e) => {
-                eprintln!("Warning: Could not load index: {}. Creating new index.", e);
-                SimpleIndexer::new()
-            }
-        }
+    // Skip loading index for mcp-test (thin client mode)
+    let skip_index_load = matches!(cli.command, Commands::McpTest { .. });
+    
+    // Load existing index or create new one (unless we're in thin client mode)
+    let mut indexer = if skip_index_load {
+        SimpleIndexer::new() // Empty indexer, won't be used
     } else {
-        if force_reindex && persistence.exists() {
-            eprintln!("Force re-indexing requested, creating new index");
-        } else if !persistence.exists() {
-            eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
+        let force_reindex = matches!(cli.command, Commands::Index { force: true, .. });
+        if persistence.exists() && !force_reindex {
+            eprintln!("DEBUG: Found existing index at {}", config.index_path.display());
+            match persistence.load() {
+                Ok(loaded) => {
+                    eprintln!("DEBUG: Successfully loaded index from disk");
+                    eprintln!("Loaded existing index ({} symbols)", loaded.symbol_count());
+                    loaded
+                }
+                Err(e) => {
+                    eprintln!("Warning: Could not load index: {}. Creating new index.", e);
+                    SimpleIndexer::new()
+                }
+            }
+        } else {
+            if force_reindex && persistence.exists() {
+                eprintln!("Force re-indexing requested, creating new index");
+            } else if !persistence.exists() {
+                eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
+            }
+            eprintln!("DEBUG: Creating new index");
+            SimpleIndexer::new()
         }
-        eprintln!("DEBUG: Creating new index");
-        SimpleIndexer::new()
     };
     
     match cli.command {
         Commands::Init { .. } | Commands::Config => {
             // Already handled above
             unreachable!()
+        }
+        
+        Commands::Serve { port } => {
+            // Override port from config if provided
+            let server_port = port.unwrap_or(config.mcp.port);
+            
+            eprintln!("Starting MCP server on stdio transport");
+            eprintln!("Port configuration: {} (not used for stdio)", server_port);
+            eprintln!("To test: npx @modelcontextprotocol/inspector cargo run -- serve");
+            
+            // Create MCP server from existing index
+            let server = codebase_intelligence::mcp::CodeIntelligenceServer::from_persistence(&config)
+                .await
+                .map_err(|e| {
+                    eprintln!("Failed to create MCP server: {}", e);
+                    std::process::exit(1);
+                }).unwrap();
+            
+            // Start server with stdio transport
+            use rmcp::{ServiceExt, transport::stdio};
+            let service = server.serve(stdio()).await.map_err(|e| {
+                eprintln!("Failed to start MCP server: {}", e);
+                std::process::exit(1);
+            }).unwrap();
+            
+            // Wait for server to complete
+            service.waiting().await.map_err(|e| {
+                eprintln!("MCP server error: {}", e);
+                std::process::exit(1);
+            }).unwrap();
         }
         
         Commands::Index { file, force: _, .. } => {
@@ -458,6 +533,132 @@ fn main() {
                             println!("Symbol not found: {}", symbol);
                         }
                     }
+                }
+            }
+        }
+        
+        Commands::McpTest { server_binary, tool: _, args: _ } => {
+            use codebase_intelligence::mcp::client::CodeIntelligenceClient;
+            
+            // Get server binary path (default to current executable)
+            let server_path = server_binary.unwrap_or_else(|| {
+                std::env::current_exe()
+                    .expect("Failed to get current executable path")
+            });
+            
+            // Run the test
+            if let Err(e) = CodeIntelligenceClient::test_server(server_path).await {
+                eprintln!("MCP test failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        
+        Commands::Mcp { tool, args } => {
+            // Embedded mode - use already loaded indexer directly
+            let server = codebase_intelligence::mcp::CodeIntelligenceServer::new(indexer);
+            
+            // Parse arguments if provided
+            let arguments = if let Some(args_str) = args {
+                match serde_json::from_str::<serde_json::Value>(&args_str) {
+                    Ok(serde_json::Value::Object(map)) => Some(map),
+                    Ok(_) => {
+                        eprintln!("Error: Arguments must be a JSON object");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error parsing arguments: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+            
+            // Call the tool directly
+            use codebase_intelligence::mcp::*;
+            use rmcp::handler::server::tool::Parameters;
+            
+            let result = match tool.as_str() {
+                "find_symbol" => {
+                    let name = arguments.as_ref()
+                        .and_then(|m| m.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: find_symbol requires 'name' parameter");
+                            std::process::exit(1);
+                        });
+                    server.find_symbol(Parameters(FindSymbolRequest {
+                        name: name.to_string()
+                    })).await
+                }
+                "get_calls" => {
+                    let function_name = arguments.as_ref()
+                        .and_then(|m| m.get("function_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: get_calls requires 'function_name' parameter");
+                            std::process::exit(1);
+                        });
+                    server.get_calls(Parameters(GetCallsRequest {
+                        function_name: function_name.to_string()
+                    })).await
+                }
+                "find_callers" => {
+                    let function_name = arguments.as_ref()
+                        .and_then(|m| m.get("function_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: find_callers requires 'function_name' parameter");
+                            std::process::exit(1);
+                        });
+                    server.find_callers(Parameters(FindCallersRequest {
+                        function_name: function_name.to_string()
+                    })).await
+                }
+                "analyze_impact" => {
+                    let symbol_name = arguments.as_ref()
+                        .and_then(|m| m.get("symbol_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: analyze_impact requires 'symbol_name' parameter");
+                            std::process::exit(1);
+                        });
+                    let max_depth = arguments.as_ref()
+                        .and_then(|m| m.get("max_depth"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(3) as usize;
+                    server.analyze_impact(Parameters(AnalyzeImpactRequest {
+                        symbol_name: symbol_name.to_string(),
+                        max_depth,
+                    })).await
+                }
+                "get_index_info" => {
+                    server.get_index_info().await
+                }
+                _ => {
+                    eprintln!("Unknown tool: {}", tool);
+                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info");
+                    std::process::exit(1);
+                }
+            };
+            
+            // Print result
+            match result {
+                Ok(call_result) => {
+                    for content in &call_result.content {
+                        match &**content {
+                            rmcp::model::RawContent::Text(text_content) => {
+                                println!("{}", text_content.text);
+                            }
+                            _ => {
+                                eprintln!("Warning: Non-text content returned");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error calling tool: {}", e.message);
+                    std::process::exit(1);
                 }
             }
         }
