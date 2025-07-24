@@ -1,0 +1,44 @@
+version = 1
+index_path = ".code-intelligence/index"
+
+[indexing]
+parallel_threads = 16
+ignore_patterns = [
+    "target/**",
+    "node_modules/**",
+    ".git/**",
+    "*.generated.*",
+]
+include_tests = true
+include_docs = false
+
+[languages.typescript]
+enabled = false
+extensions = [
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+]
+
+[languages.typescript.parser_options]
+
+[languages.python]
+enabled = false
+extensions = [
+    "py",
+    "pyi",
+]
+
+[languages.python.parser_options]
+
+[languages.rust]
+enabled = true
+extensions = ["rs"]
+
+[languages.rust.parser_options]
+
+[mcp]
+port = 7777
+max_context_size = 100000
+debug = false

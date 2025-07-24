@@ -192,6 +192,86 @@ impl DependencyGraph {
         visited.insert(current, false);
     }
 
+    pub fn get_impact_radius(&self, symbol_id: SymbolId, max_depth: Option<usize>) -> Vec<SymbolId> {
+        let max_depth = max_depth.unwrap_or(5);
+        let graph = self.graph.read().unwrap();
+        let node_map = self.node_map.read().unwrap();
+        
+        let mut impacted = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        
+        if let Some(&start_idx) = node_map.get(&symbol_id) {
+            let mut current_level = vec![start_idx];
+            visited.insert(start_idx);
+            let mut depth = 0;
+            
+            while !current_level.is_empty() && depth < max_depth {
+                let mut next_level = Vec::new();
+                
+                for node_idx in current_level {
+                    // Look at incoming edges (who depends on this symbol)
+                    for edge in graph.edges_directed(node_idx, petgraph::Direction::Incoming) {
+                        let source = edge.source();
+                        if !visited.contains(&source) {
+                            visited.insert(source);
+                            next_level.push(source);
+                            if let Some(&impacted_id) = graph.node_weight(source) {
+                                impacted.push(impacted_id);
+                            }
+                        }
+                    }
+                }
+                
+                current_level = next_level;
+                depth += 1;
+            }
+        }
+        
+        impacted
+    }
+
+    pub fn get_dependencies(&self, symbol_id: SymbolId) -> std::collections::HashMap<RelationKind, Vec<SymbolId>> {
+        let graph = self.graph.read().unwrap();
+        let node_map = self.node_map.read().unwrap();
+        let mut dependencies = std::collections::HashMap::new();
+        
+        if let Some(&node_idx) = node_map.get(&symbol_id) {
+            // Group outgoing edges by relationship kind
+            for edge in graph.edges(node_idx) {
+                let target_id = graph.node_weight(edge.target()).copied();
+                if let Some(target_id) = target_id {
+                    dependencies
+                        .entry(edge.weight().kind)
+                        .or_insert_with(Vec::new)
+                        .push(target_id);
+                }
+            }
+        }
+        
+        dependencies
+    }
+    
+    pub fn get_dependents(&self, symbol_id: SymbolId) -> std::collections::HashMap<RelationKind, Vec<SymbolId>> {
+        let graph = self.graph.read().unwrap();
+        let node_map = self.node_map.read().unwrap();
+        let mut dependents = std::collections::HashMap::new();
+        
+        if let Some(&node_idx) = node_map.get(&symbol_id) {
+            // Group incoming edges by relationship kind
+            for edge in graph.edges_directed(node_idx, petgraph::Direction::Incoming) {
+                let source_id = graph.node_weight(edge.source()).copied();
+                if let Some(source_id) = source_id {
+                    dependents
+                        .entry(edge.weight().kind)
+                        .or_insert_with(Vec::new)
+                        .push(source_id);
+                }
+            }
+        }
+        
+        dependents
+    }
+
     pub fn clear(&self) {
         let mut graph = self.graph.write().unwrap();
         let mut node_map = self.node_map.write().unwrap();
@@ -299,5 +379,78 @@ mod tests {
             assert_eq!(path.last(), Some(&id4));
             assert_eq!(path.len(), 3);
         }
+    }
+    
+    #[test]
+    fn test_get_impact_radius() {
+        let graph = DependencyGraph::new();
+        
+        // Create a graph: 1 -> 2 -> 3
+        //                  |    |-> 4 -> 5
+        //                  |-> 6
+        let id1 = SymbolId::new(1).unwrap();
+        let id2 = SymbolId::new(2).unwrap();
+        let id3 = SymbolId::new(3).unwrap();
+        let id4 = SymbolId::new(4).unwrap();
+        let id5 = SymbolId::new(5).unwrap();
+        let id6 = SymbolId::new(6).unwrap();
+        
+        graph.add_relationship(id1, id2, Relationship::new(RelationKind::Calls));
+        graph.add_relationship(id2, id3, Relationship::new(RelationKind::Calls));
+        graph.add_relationship(id2, id4, Relationship::new(RelationKind::Uses));
+        graph.add_relationship(id4, id5, Relationship::new(RelationKind::Calls));
+        graph.add_relationship(id1, id6, Relationship::new(RelationKind::Uses));
+        
+        // Get impact of changing id3 (who depends on id3?)
+        let impact = graph.get_impact_radius(id3, Some(4));
+        assert!(impact.contains(&id2));  // id2 calls id3
+        
+        // Get impact of changing id2 (who depends on id2?)
+        let impact = graph.get_impact_radius(id2, Some(4));
+        assert!(impact.contains(&id1));  // id1 calls id2
+        
+        // Get impact of changing id5 (who depends on id5?)
+        let impact = graph.get_impact_radius(id5, Some(4));
+        assert!(impact.contains(&id4));  // id4 calls id5
+        assert!(impact.contains(&id2));  // id2 uses id4 which calls id5 (depth 2)
+        assert!(impact.contains(&id1));  // id1 calls id2 which uses id4 which calls id5 (depth 3)
+    }
+    
+    #[test]
+    fn test_get_dependencies_and_dependents() {
+        let graph = DependencyGraph::new();
+        
+        // Create a graph with mixed relationships
+        let id1 = SymbolId::new(1).unwrap();
+        let id2 = SymbolId::new(2).unwrap();
+        let id3 = SymbolId::new(3).unwrap();
+        let id4 = SymbolId::new(4).unwrap();
+        
+        graph.add_relationship(id1, id2, Relationship::new(RelationKind::Calls));
+        graph.add_relationship(id1, id3, Relationship::new(RelationKind::Uses));
+        graph.add_relationship(id4, id1, Relationship::new(RelationKind::Implements));
+        graph.add_relationship(id2, id3, Relationship::new(RelationKind::Uses));
+        
+        // Test dependencies of id1
+        let deps = graph.get_dependencies(id1);
+        assert_eq!(deps.get(&RelationKind::Calls).unwrap().len(), 1);
+        assert!(deps.get(&RelationKind::Calls).unwrap().contains(&id2));
+        assert_eq!(deps.get(&RelationKind::Uses).unwrap().len(), 1);
+        assert!(deps.get(&RelationKind::Uses).unwrap().contains(&id3));
+        
+        // Test dependents of id1
+        let dependents = graph.get_dependents(id1);
+        assert_eq!(dependents.get(&RelationKind::Implements).unwrap().len(), 1);
+        assert!(dependents.get(&RelationKind::Implements).unwrap().contains(&id4));
+        
+        // Test dependencies of id3 (should have none)
+        let deps = graph.get_dependencies(id3);
+        assert!(deps.is_empty());
+        
+        // Test dependents of id3 (should have uses from id1 and id2)
+        let dependents = graph.get_dependents(id3);
+        assert_eq!(dependents.get(&RelationKind::Uses).unwrap().len(), 2);
+        assert!(dependents.get(&RelationKind::Uses).unwrap().contains(&id1));
+        assert!(dependents.get(&RelationKind::Uses).unwrap().contains(&id2));
     }
 }

@@ -124,6 +124,48 @@ impl RustParser {
         calls
     }
     
+    pub fn find_implementations(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut implementations = Vec::new();
+        
+        self.find_implementations_in_node(root_node, code, &mut implementations);
+        
+        implementations
+    }
+    
+    pub fn find_uses(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut uses = Vec::new();
+        
+        self.find_uses_in_node(root_node, code, &mut uses);
+        
+        uses
+    }
+    
+    pub fn find_defines(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut defines = Vec::new();
+        
+        self.find_defines_in_node(root_node, code, &mut defines);
+        
+        defines
+    }
+    
     fn find_calls_in_node(&self, node: Node, code: &str, calls: &mut Vec<(String, String, Range)>) {
         // Find the containing function
         let containing_function = self.find_containing_function(node, code);
@@ -163,6 +205,211 @@ impl RustParser {
                 Some(parent) => node = parent,
                 None => return None,
             }
+        }
+    }
+    
+    fn find_implementations_in_node(&self, node: Node, code: &str, implementations: &mut Vec<(String, String, Range)>) {
+        if node.kind() == "impl_item" {
+            // Check if this is a trait implementation (has trait field)
+            if let Some(trait_node) = node.child_by_field_name("trait") {
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    let trait_name = self.extract_type_name(trait_node, code);
+                    let type_name = self.extract_type_name(type_node, code);
+                    
+                    if let (Some(trait_name), Some(type_name)) = (trait_name, type_name) {
+                        let range = Range::new(
+                            node.start_position().row as u32,
+                            node.start_position().column as u16,
+                            node.end_position().row as u32,
+                            node.end_position().column as u16,
+                        );
+                        implementations.push((type_name, trait_name, range));
+                    }
+                }
+            }
+        }
+        
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_implementations_in_node(child, code, implementations);
+        }
+    }
+    
+    fn extract_type_name(&self, node: Node, code: &str) -> Option<String> {
+        match node.kind() {
+            "type_identifier" => Some(code[node.byte_range()].to_string()),
+            "primitive_type" => Some(code[node.byte_range()].to_string()),  // Added for i32, f64, etc.
+            "generic_type" => {
+                // For generic types like Option<T>, extract the base type
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    self.extract_type_name(type_node, code)
+                } else {
+                    None
+                }
+            }
+            "scoped_type_identifier" => {
+                // For types like std::fmt::Display, get the full path
+                Some(code[node.byte_range()].to_string())
+            }
+            _ => {
+                // Try to find a type_identifier child
+                for child in node.children(&mut node.walk()) {
+                    if let Some(name) = self.extract_type_name(child, code) {
+                        return Some(name);
+                    }
+                }
+                None
+            }
+        }
+    }
+    
+    fn find_uses_in_node(&self, node: Node, code: &str, uses: &mut Vec<(String, String, Range)>) {
+        match node.kind() {
+            "struct_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let struct_name = &code[name_node.byte_range()];
+                    
+                    // Find field list
+                    if let Some(body) = node.child_by_field_name("body") {
+                        for child in body.children(&mut body.walk()) {
+                            if child.kind() == "field_declaration" {
+                                if let Some(type_node) = child.child_by_field_name("type") {
+                                    if let Some(type_name) = self.extract_type_name(type_node, code) {
+                                        let range = Range::new(
+                                            type_node.start_position().row as u32,
+                                            type_node.start_position().column as u16,
+                                            type_node.end_position().row as u32,
+                                            type_node.end_position().column as u16,
+                                        );
+                                        uses.push((struct_name.to_string(), type_name, range));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "function_item" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let fn_name = &code[name_node.byte_range()];
+                    
+                    // Check if this is a method (inside impl block)
+                    let context_name = if let Some(parent) = node.parent() {
+                        if parent.kind() == "impl_item" {
+                            // Get the type being implemented
+                            if let Some(type_node) = parent.child_by_field_name("type") {
+                                if let Some(type_name) = self.extract_type_name(type_node, code) {
+                                    format!("{}::{}", type_name, fn_name)
+                                } else {
+                                    fn_name.to_string()
+                                }
+                            } else {
+                                fn_name.to_string()
+                            }
+                        } else {
+                            fn_name.to_string()
+                        }
+                    } else {
+                        fn_name.to_string()
+                    };
+                    
+                    // Find parameters
+                    if let Some(params) = node.child_by_field_name("parameters") {
+                        for param in params.children(&mut params.walk()) {
+                            if param.kind() == "parameter" {
+                                if let Some(type_node) = param.child_by_field_name("type") {
+                                    if let Some(type_name) = self.extract_type_name(type_node, code) {
+                                        let range = Range::new(
+                                            type_node.start_position().row as u32,
+                                            type_node.start_position().column as u16,
+                                            type_node.end_position().row as u32,
+                                            type_node.end_position().column as u16,
+                                        );
+                                        uses.push((context_name.clone(), type_name, range));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Find return type - check the return_type field
+                    if let Some(return_type_node) = node.child_by_field_name("return_type") {
+                        if let Some(type_name) = self.extract_type_name(return_type_node, code) {
+                            let range = Range::new(
+                                return_type_node.start_position().row as u32,
+                                return_type_node.start_position().column as u16,
+                                return_type_node.end_position().row as u32,
+                                return_type_node.end_position().column as u16,
+                            );
+                            uses.push((context_name, type_name, range));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_uses_in_node(child, code, uses);
+        }
+    }
+    
+    fn find_defines_in_node(&self, node: Node, code: &str, defines: &mut Vec<(String, String, Range)>) {
+        match node.kind() {
+            "trait_item" => {
+                if let Some(trait_name_node) = node.child_by_field_name("name") {
+                    let trait_name = &code[trait_name_node.byte_range()];
+                    
+                    // Find all methods defined in this trait
+                    if let Some(body) = node.child_by_field_name("body") {
+                        for child in body.children(&mut body.walk()) {
+                            if child.kind() == "function_signature_item" {
+                                if let Some(method_name_node) = child.child_by_field_name("name") {
+                                    let method_name = &code[method_name_node.byte_range()];
+                                    let range = Range::new(
+                                        child.start_position().row as u32,
+                                        child.start_position().column as u16,
+                                        child.end_position().row as u32,
+                                        child.end_position().column as u16,
+                                    );
+                                    defines.push((trait_name.to_string(), method_name.to_string(), range));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "impl_item" => {
+                // Get the type being implemented
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    if let Some(type_name) = self.extract_type_name(type_node, code) {
+                        // Find all methods defined in this impl block
+                        if let Some(body) = node.child_by_field_name("body") {
+                            for child in body.children(&mut body.walk()) {
+                                if child.kind() == "function_item" {
+                                    if let Some(method_name_node) = child.child_by_field_name("name") {
+                                        let method_name = &code[method_name_node.byte_range()];
+                                        let range = Range::new(
+                                            child.start_position().row as u32,
+                                            child.start_position().column as u16,
+                                            child.end_position().row as u32,
+                                            child.end_position().column as u16,
+                                        );
+                                        defines.push((type_name.clone(), method_name.to_string(), range));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_defines_in_node(child, code, defines);
         }
     }
     
@@ -308,7 +555,9 @@ mod tests {
     #[test]
     fn test_parse_test_fixture() {
         let mut parser = RustParser::new().unwrap();
-        let code = std::fs::read_to_string("tests/fixtures/simple.rs").unwrap();
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let test_file = std::path::Path::new(manifest_dir).join("tests/fixtures/simple.rs");
+        let code = std::fs::read_to_string(test_file).unwrap();
         let file_id = FileId::new(1).unwrap();
         
         let symbols = parser.parse(&code, file_id);
@@ -324,5 +573,169 @@ mod tests {
         
         assert!(function_names.contains(&"add"));
         assert!(function_names.contains(&"multiply"));
+    }
+    
+    #[test]
+    fn test_find_uses() {
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+            struct Point {
+                x: f64,
+                y: f64,
+            }
+            
+            struct Rectangle {
+                top_left: Point,
+                bottom_right: Point,
+            }
+            
+            fn distance(p1: Point, p2: Point) -> f64 {
+                ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt()
+            }
+            
+            fn get_center(rect: Rectangle) -> Point {
+                Point {
+                    x: (rect.top_left.x + rect.bottom_right.x) / 2.0,
+                    y: (rect.top_left.y + rect.bottom_right.y) / 2.0,
+                }
+            }
+        "#;
+        
+        let uses = parser.find_uses(code);
+        
+        // Debug print all uses
+        println!("All uses found:");
+        for (user, used, _) in &uses {
+            println!("  {} uses {}", user, used);
+        }
+        
+        // Rectangle uses Point (twice)
+        let rect_uses: Vec<_> = uses.iter()
+            .filter(|(user, _, _)| user == "Rectangle")
+            .collect();
+        assert_eq!(rect_uses.len(), 2);
+        assert!(rect_uses.iter().all(|(_, used, _)| used == "Point"));
+        
+        // distance uses Point (twice for params) and f64 (once for return)
+        let distance_uses: Vec<_> = uses.iter()
+            .filter(|(user, _, _)| user == "distance")
+            .collect();
+        
+        // Check we have Point parameters and f64 return
+        assert!(distance_uses.iter().filter(|(_, used, _)| used == "Point").count() >= 2);
+        assert!(distance_uses.iter().filter(|(_, used, _)| used == "f64").count() >= 1);
+        
+        // get_center uses Rectangle and Point
+        let center_uses: Vec<_> = uses.iter()
+            .filter(|(user, _, _)| user == "get_center")
+            .collect();
+        assert_eq!(center_uses.len(), 2);
+        assert!(center_uses.iter().any(|(_, used, _)| used == "Rectangle"));
+        assert!(center_uses.iter().any(|(_, used, _)| used == "Point"));
+    }
+    
+    #[test]
+    fn test_find_defines() {
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+            trait Iterator {
+                type Item;
+                fn next(&mut self) -> Option<Self::Item>;
+                fn size_hint(&self) -> (usize, Option<usize>);
+            }
+            
+            struct Counter {
+                count: u32,
+            }
+            
+            impl Counter {
+                fn new() -> Self {
+                    Self { count: 0 }
+                }
+                
+                fn increment(&mut self) {
+                    self.count += 1;
+                }
+            }
+            
+            impl Iterator for Counter {
+                type Item = u32;
+                
+                fn next(&mut self) -> Option<Self::Item> {
+                    self.count += 1;
+                    Some(self.count)
+                }
+                
+                fn size_hint(&self) -> (usize, Option<usize>) {
+                    (usize::MAX, None)
+                }
+            }
+        "#;
+        
+        let defines = parser.find_defines(code);
+        
+        // Iterator trait defines methods
+        let iterator_defines: Vec<_> = defines.iter()
+            .filter(|(definer, _, _)| definer == "Iterator")
+            .collect();
+        assert_eq!(iterator_defines.len(), 2); // next and size_hint
+        assert!(iterator_defines.iter().any(|(_, defined, _)| defined == "next"));
+        assert!(iterator_defines.iter().any(|(_, defined, _)| defined == "size_hint"));
+        
+        // Counter impl defines methods
+        let counter_defines: Vec<_> = defines.iter()
+            .filter(|(definer, _, _)| definer == "Counter")
+            .collect();
+        assert_eq!(counter_defines.len(), 4); // new, increment, next, size_hint
+        assert!(counter_defines.iter().any(|(_, defined, _)| defined == "new"));
+        assert!(counter_defines.iter().any(|(_, defined, _)| defined == "increment"));
+        assert!(counter_defines.iter().any(|(_, defined, _)| defined == "next"));
+        assert!(counter_defines.iter().any(|(_, defined, _)| defined == "size_hint"));
+    }
+    
+    #[test]
+    fn test_find_implementations() {
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+            trait Display {
+                fn fmt(&self) -> String;
+            }
+            
+            struct Point {
+                x: i32,
+                y: i32,
+            }
+            
+            impl Display for Point {
+                fn fmt(&self) -> String {
+                    format!("({}, {})", self.x, self.y)
+                }
+            }
+            
+            impl std::fmt::Debug for Point {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "Point({}, {})", self.x, self.y)
+                }
+            }
+        "#;
+        
+        let implementations = parser.find_implementations(code);
+        
+        // Should find two implementations
+        assert_eq!(implementations.len(), 2);
+        
+        // Check Point implements Display
+        let display_impl = implementations.iter()
+            .find(|(type_name, trait_name, _)| type_name == "Point" && trait_name == "Display")
+            .expect("Should find Point implements Display");
+        assert_eq!(display_impl.0, "Point");
+        assert_eq!(display_impl.1, "Display");
+        
+        // Check Point implements std::fmt::Debug
+        let debug_impl = implementations.iter()
+            .find(|(type_name, trait_name, _)| type_name == "Point" && trait_name == "std::fmt::Debug")
+            .expect("Should find Point implements std::fmt::Debug");
+        assert_eq!(debug_impl.0, "Point");
+        assert_eq!(debug_impl.1, "std::fmt::Debug");
     }
 }

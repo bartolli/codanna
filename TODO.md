@@ -59,12 +59,15 @@ This document tracks the development progress following TDD principles. Each tas
 ### ✅ 3.2 Basic Rust Parser
 - **Status**: COMPLETED
 - **Files**: `src/parsing/rust.rs`
-- **Tests**: 5 tests passing
+- **Tests**: 9 tests passing
 - **What we built**:
   - Tree-sitter based Rust parser
   - Extracts functions, methods, structs, and traits
   - Detects function calls for relationship building
   - Correctly distinguishes between functions and methods in impl blocks
+  - Detects trait implementations (`impl Trait for Type`)
+  - Detects type usage in struct fields and function signatures
+  - Detects method definitions in traits and impl blocks
 - **Why**: Starting with Rust allows us to test on our own codebase
 
 ### 🔲 3.3 Language Detection
@@ -97,11 +100,15 @@ This document tracks the development progress following TDD principles. Each tas
 ### ✅ 4.2 Single File Indexer
 - **Status**: COMPLETED
 - **Files**: `src/indexing/simple.rs`
-- **Tests**: 4 tests passing
+- **Tests**: 6 tests passing
 - **What we built**:
   - SimpleIndexer that indexes single Rust files
   - Extracts symbols and stores them in SymbolStore
-  - Builds function call relationships in DependencyGraph
+  - Builds all relationship types in DependencyGraph:
+    - Function calls (Calls)
+    - Trait implementations (Implements)
+    - Type usage (Uses)
+    - Method definitions (Defines)
   - Provides queries for symbols and relationships
 - **Why**: Single file indexing is the atomic unit that will be parallelized
   2. Test symbol extraction accuracy
@@ -212,11 +219,16 @@ This document tracks the development progress following TDD principles. Each tas
   - `retrieve symbol <name>` - Find symbols by name
   - `retrieve calls <function>` - Show what a function calls
   - `retrieve callers <function>` - Show what calls a function
+  - `retrieve implementations <trait>` - Show types implementing a trait
+  - `retrieve uses <symbol>` - Show what types a symbol uses
+  - `retrieve defines <symbol>` - Show what methods a type/trait defines
+  - `retrieve impact <symbol>` - Show impact radius of changes
+  - `retrieve dependencies <symbol>` - Show comprehensive dependency analysis
   - Auto re-indexes the last indexed file on retrieve
 - **Next Steps**:
-  1. Add more query types (by kind, by file, etc.)
-  2. Add JSON output format
-  3. Support regex patterns
+  1. Add JSON output format
+  2. Support regex patterns
+  3. Add cross-file query support
 - **Why**: Interactive querying helps users explore codebases
 
 ## 🎯 MVP Completion Tasks (HIGH PRIORITY)
@@ -224,32 +236,33 @@ This document tracks the development progress following TDD principles. Each tas
 ### Critical Missing Pieces for Robust MVP
 
 **Suggested Implementation Order:**
-1. Enhanced Relationship Detection (foundation)
+1. ✅ Enhanced Relationship Detection (foundation) - COMPLETED
 2. Directory Walking (multi-file support)
 3. Multi-File Relationship Building (cross-file deps)
 4. Basic Persistence (practical usage)
-5. Essential Graph Queries (leverage the graph)
+5. ✅ Essential Graph Queries (leverage the graph) - COMPLETED
 6. Basic MCP Server (deliver value to AI)
 
-#### 🔲 Enhanced Relationship Detection
+#### ✅ Enhanced Relationship Detection (COMPLETED)
 - **Why Critical**: Currently only detecting function calls, missing 80% of relationship types
-- **Tasks**:
-  1. **Detect `impl Trait for Type`** → Creates "Implements" relationships
+- **Status**: COMPLETED
+- **What we built**:
+  1. **Detect `impl Trait for Type`** → Creates "Implements" relationships ✅
      - Parse impl blocks with trait bounds
      - Link trait to implementing type
      - Test with standard traits (Debug, Clone, etc.)
-  2. **Detect struct field types** → Creates "Uses" relationships
+  2. **Detect struct field types** → Creates "Uses" relationships ✅
      - Parse struct field declarations
      - Create relationship to field type
      - Handle generic parameters
-  3. **Detect function parameter/return types** → Creates "Uses" relationships
+  3. **Detect function parameter/return types** → Creates "Uses" relationships ✅
      - Parse function signatures
      - Link to parameter and return types
      - Handle references and lifetimes
-  4. **Detect trait definitions** → Creates "Defines" relationships
+  4. **Detect trait definitions** → Creates "Defines" relationships ✅
      - Parse trait method signatures
      - Link trait to its methods
-  5. **Test relationship detection**
+  5. **Test relationship detection** ✅
      - Create comprehensive test fixtures
      - Verify all relationship types work
 
@@ -267,30 +280,35 @@ This document tracks the development progress following TDD principles. Each tas
      - Create multi-file test project
      - Verify relationships span files
 
-#### 🔲 Essential Graph Queries
+#### ✅ Essential Graph Queries (COMPLETED)
 - **Why Critical**: The graph's value is in traversal and analysis
-- **Tasks**:
-  1. **Impact analysis query**
+- **Status**: COMPLETED
+- **What we built**:
+  1. **Impact analysis query** ✅
      ```rust
      pub fn get_impact_radius(&self, symbol: SymbolId, max_depth: usize) -> Vec<SymbolId>
      ```
      - Find all symbols affected by changing one symbol
      - Use BFS with relationship filtering
-  2. **Dependency analysis query**
+  2. **Dependency analysis query** ✅
      ```rust
-     pub fn get_all_dependencies(&self, symbol: SymbolId) -> Vec<SymbolId>
+     pub fn get_dependencies(&self, symbol_id: SymbolId) -> HashMap<RelationKind, Vec<SymbolId>>
+     pub fn get_dependents(&self, symbol_id: SymbolId) -> HashMap<RelationKind, Vec<SymbolId>>
      ```
      - Find all symbols that a given symbol depends on
-     - Recursive traversal with cycle detection
-  3. **Find implementations query**
+     - Find all symbols that depend on a given symbol
+     - Group by relationship type for clarity
+  3. **Find implementations query** ✅
      ```rust
-     pub fn find_implementations(&self, trait_id: SymbolId) -> Vec<SymbolId>
+     pub fn get_implementations(&self, trait_id: SymbolId) -> Vec<Symbol>
      ```
      - Find all types implementing a trait
-  4. **Add to CLI**
+  4. **Add to CLI** ✅
      - `retrieve impact <symbol>` command
      - `retrieve dependencies <symbol>` command
      - `retrieve implementations <trait>` command
+     - `retrieve uses <symbol>` command
+     - `retrieve defines <symbol>` command
 
 #### 🔲 Basic Persistence
 - **Why Critical**: Re-indexing on every command is not scalable
@@ -361,10 +379,10 @@ This document tracks the development progress following TDD principles. Each tas
 
 ### MVP Success Criteria
 - [ ] Can index entire Rust project (multiple files)
-- [ ] Detects all major relationship types (calls, implements, uses)
+- [x] Detects all major relationship types (calls, implements, uses, defines) ✅
 - [ ] Relationships work across file boundaries
-- [ ] Can query impact of changes
-- [ ] Can find all implementations of a trait
+- [x] Can query impact of changes ✅
+- [x] Can find all implementations of a trait ✅
 - [ ] Index persists between runs
 - [ ] MCP server works with Claude Desktop
 - [ ] Performance: 1000+ files/second on single thread
@@ -485,29 +503,46 @@ This document tracks the development progress following TDD principles. Each tas
 ## Current State Summary (Updated)
 
 ### ✅ Completed
-- Core data structures implemented and tested (33 tests)
+- Core data structures implemented and tested
 - Storage layer with concurrent access ready
-- Basic Rust parser using tree-sitter (5 tests)
-- Single file indexer with relationship detection (4 tests)
-- Basic CLI with index and retrieve commands (42 total tests passing)
+- Rust parser with comprehensive relationship detection
+- Single file indexer with all relationship types
+- Full-featured CLI with 8 different query types
+- Demo script showcasing POC capabilities
 
 ### 🎯 What Works Now
 - Can index single Rust files
 - Extracts functions, methods, structs, and traits
-- Detects function call relationships
-- Query symbols by name
-- Query function calls and callers
+- Detects ALL major relationship types:
+  - Function calls (who calls whom)
+  - Trait implementations (type implements trait)
+  - Type usage (in fields, parameters, returns)
+  - Method definitions (trait/type defines methods)
+- Comprehensive queries:
+  - Find symbols by name
+  - Show function call graphs (calls/callers)
+  - Find trait implementations
+  - Show type usage
+  - Show method definitions
+  - Impact analysis (what breaks if I change X)
+  - Full dependency analysis (incoming/outgoing)
 - Basic state persistence between commands
 
-### 🚧 Next Priority Items
-1. **Directory walking** - Index multiple files recursively
-2. **Persistent index** - Save/load full index from disk
-3. **Parser pool** - Optimize parser reuse for performance
-4. **Language detection** - Support multiple languages
-5. **Parallel indexing** - Process files concurrently
+### 🚧 Next Priority Items (Following Recommended Strategy)
+1. **Directory walking** - Index multiple files recursively (MVP CRITICAL)
+2. **Basic Persistence** - Save/load index between runs (MVP CRITICAL)
+3. **Cross-file relationships** - Resolve symbols across files (MVP CRITICAL)
+4. **Basic MCP Server** - Deliver value to AI assistants (MVP CRITICAL)
+5. **Additional languages** - Python, TypeScript, Go (POST-MVP)
+
+### Recommended Strategy Updates:
+- **Skip for MVP**: Parser pool optimization, full language detection system
+- **Focus on**: Getting multi-file indexing working with basic persistence
+- **Incremental approach**: Add languages one at a time based on user needs
 
 ### 📊 Metrics
-- **Current test count**: 42 tests passing
+- **Current test count**: 48 tests passing
 - **Supported languages**: Rust only
 - **Index scope**: Single file at a time
+- **Relationship types**: Calls, Implements, Uses, Defines
 - **Performance**: Not yet optimized

@@ -130,6 +130,7 @@ impl Default for SymbolStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Range;
 
     fn create_test_symbol(id: u32, name: &str, file_id: u32) -> Symbol {
         Symbol::new(
