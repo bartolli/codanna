@@ -44,6 +44,15 @@ impl DependencyGraph {
         
         Some(())
     }
+    
+    pub fn remove_symbol(&self, symbol_id: SymbolId) {
+        let mut graph = self.graph.write().unwrap();
+        let mut node_map = self.node_map.write().unwrap();
+        
+        if let Some(node_idx) = node_map.remove(&symbol_id) {
+            graph.remove_node(node_idx);
+        }
+    }
 
     pub fn get_relationships(&self, symbol_id: SymbolId, kind: RelationKind) -> Vec<SymbolId> {
         let graph = self.graph.read().unwrap();

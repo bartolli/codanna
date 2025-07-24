@@ -4,7 +4,7 @@ use crate::{
     Settings, Visibility,
 };
 use crate::parsing::{Language, ParserFactory, RustParser};
-use crate::indexing::{FileWalker, IndexStats, ImportResolver};
+use crate::indexing::{FileWalker, IndexStats, ImportResolver, calculate_hash, get_utc_timestamp};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::sync::Arc;
@@ -77,27 +77,77 @@ impl SimpleIndexer {
         let path = path.as_ref();
         let path_str = path.to_string_lossy().to_string();
         
+        // Read file content first
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+        
+        // Calculate hash of the content
+        let content_hash = calculate_hash(&content);
+        
         // Check if we've already indexed this file
         if let Some(&file_id) = self.data.file_map.get(&path_str) {
-            return Ok(file_id);
+            // Check if the file hash has changed
+            if let Some(existing_hash) = self.data.file_hashes.get(&file_id) {
+                if existing_hash == &content_hash {
+                    // File hasn't changed, skip re-indexing
+                    return Ok(file_id);
+                }
+                // File has changed, we need to re-index
+                // First, remove old symbols from this file
+                self.remove_file_symbols(file_id);
+            }
+            // Use existing file_id for re-indexing
+            self.data.file_hashes.insert(file_id, content_hash);
+            self.data.file_timestamps.insert(file_id, get_utc_timestamp());
+            
+            // Continue with re-indexing using existing file_id
+            return self.reindex_file_content(path, &path_str, file_id, &content);
         }
         
+        // New file - create file ID and store hash
+        let file_id = FileId::new(self.data.file_counter)
+            .ok_or_else(|| "Failed to create file ID".to_string())?;
+        self.data.file_counter += 1;
+        self.data.file_map.insert(path_str.clone(), file_id);
+        self.data.file_hashes.insert(file_id, content_hash);
+        self.data.file_timestamps.insert(file_id, get_utc_timestamp());
+        
+        // Index the file content
+        self.reindex_file_content(path, &path_str, file_id, &content)
+    }
+    
+    /// Remove all symbols from a file (used before re-indexing)
+    fn remove_file_symbols(&mut self, file_id: FileId) {
+        // Get all symbols for this file
+        let symbols_to_remove: Vec<SymbolId> = self.symbol_store
+            .find_by_file(file_id)
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        
+        // Remove symbols from symbol store
+        for symbol_id in &symbols_to_remove {
+            self.symbol_store.remove(*symbol_id);
+            self.graph.remove_symbol(*symbol_id);
+        }
+        
+        // Remove from data.symbols
+        self.data.symbols.retain(|s| s.file_id != file_id);
+        
+        // Remove relationships involving these symbols
+        self.data.relationships.retain(|(from, to, _)| {
+            !symbols_to_remove.contains(from) && !symbols_to_remove.contains(to)
+        });
+    }
+    
+    /// Index or re-index file content
+    fn reindex_file_content(&mut self, path: &Path, _path_str: &str, file_id: FileId, content: &str) -> Result<FileId, String> {
         // Detect language from file extension
         let language = Language::from_path(path)
             .ok_or_else(|| format!("Unsupported file type: {}", path.display()))?;
         
         // Create parser for this language
         let mut parser = self.parser_factory.create_parser(language)?;
-        
-        // Read file content
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-        
-        // Create file ID
-        let file_id = FileId::new(self.data.file_counter)
-            .ok_or_else(|| "Failed to create file ID".to_string())?;
-        self.data.file_counter += 1;
-        self.data.file_map.insert(path_str, file_id);
         
         // Determine module path for this file
         let module_path = if let Some(root) = &self.project_root {
@@ -118,7 +168,7 @@ impl SimpleIndexer {
         );
         
         // Parse symbols
-        let mut symbols = parser.parse(&content, file_id);
+        let mut symbols = parser.parse(&content, file_id, &mut self.data.symbol_counter);
         
         // Update symbols with module path and visibility
         for symbol in &mut symbols {

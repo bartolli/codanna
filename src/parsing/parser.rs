@@ -9,7 +9,7 @@ use tree_sitter::Node;
 /// Common interface for all language parsers
 pub trait LanguageParser: Send + Sync {
     /// Parse source code and extract symbols
-    fn parse(&mut self, code: &str, file_id: FileId) -> Vec<Symbol>;
+    fn parse(&mut self, code: &str, file_id: FileId, symbol_counter: &mut u32) -> Vec<Symbol>;
     
     /// Extract documentation comment for a node
     /// 

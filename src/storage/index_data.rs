@@ -12,7 +12,10 @@ pub struct IndexData {
     pub symbols: Vec<Symbol>,
     pub relationships: Vec<(SymbolId, SymbolId, Relationship)>,
     pub file_map: HashMap<String, FileId>,
+    pub file_hashes: HashMap<FileId, String>,
+    pub file_timestamps: HashMap<FileId, u64>,
     pub file_counter: u32,
+    pub symbol_counter: u32,
 }
 
 impl IndexData {
@@ -21,7 +24,10 @@ impl IndexData {
             symbols: Vec::new(),
             relationships: Vec::new(),
             file_map: HashMap::new(),
+            file_hashes: HashMap::new(),
+            file_timestamps: HashMap::new(),
             file_counter: 1,
+            symbol_counter: 1,
         }
     }
 }

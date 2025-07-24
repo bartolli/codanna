@@ -12,5 +12,5 @@ pub use symbol::{Symbol, CompactSymbol, StringTable, Visibility};
 pub use relationship::{Relationship, RelationKind, RelationshipEdge};
 pub use storage::{SymbolStore, DependencyGraph, IndexPersistence, IndexData};
 pub use parsing::RustParser;
-pub use indexing::SimpleIndexer;
+pub use indexing::{SimpleIndexer, calculate_hash};
 pub use config::Settings;

@@ -127,7 +127,7 @@ impl RustParser {
         }
     }
     
-    pub fn parse(&mut self, code: &str, file_id: FileId) -> Vec<Symbol> {
+    pub fn parse(&mut self, code: &str, file_id: FileId, symbol_counter: &mut u32) -> Vec<Symbol> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
             None => return Vec::new(),
@@ -135,10 +135,9 @@ impl RustParser {
         
         let root_node = tree.root_node();
         let mut symbols = Vec::new();
-        let mut symbol_id_counter = 1u32;
         
         // Walk the tree manually to find symbols
-        self.extract_symbols_from_node(root_node, code, file_id, &mut symbols, &mut symbol_id_counter);
+        self.extract_symbols_from_node(root_node, code, file_id, &mut symbols, symbol_counter);
         
         symbols
     }
@@ -610,8 +609,8 @@ impl RustParser {
 }
 
 impl LanguageParser for RustParser {
-    fn parse(&mut self, code: &str, file_id: FileId) -> Vec<Symbol> {
-        self.parse(code, file_id)
+    fn parse(&mut self, code: &str, file_id: FileId, symbol_counter: &mut u32) -> Vec<Symbol> {
+        self.parse(code, file_id, symbol_counter)
     }
     
     fn extract_doc_comment(&self, node: &Node, code: &str) -> Option<String> {
@@ -649,7 +648,8 @@ mod tests {
         let code = "fn add(a: i32, b: i32) -> i32 { a + b }";
         let file_id = FileId::new(1).unwrap();
         
-        let symbols = parser.parse(code, file_id);
+        let mut counter = 1u32;
+        let symbols = parser.parse(code, file_id, &mut counter);
         
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name.as_ref(), "add");
@@ -667,7 +667,8 @@ mod tests {
         "#;
         let file_id = FileId::new(1).unwrap();
         
-        let symbols = parser.parse(code, file_id);
+        let mut counter = 1u32;
+        let symbols = parser.parse(code, file_id, &mut counter);
         
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name.as_ref(), "Point");
@@ -694,7 +695,8 @@ mod tests {
         "#;
         let file_id = FileId::new(1).unwrap();
         
-        let symbols = parser.parse(code, file_id);
+        let mut counter = 1u32;
+        let symbols = parser.parse(code, file_id, &mut counter);
         
         assert_eq!(symbols.len(), 4);
         
@@ -756,7 +758,8 @@ mod tests {
         let code = std::fs::read_to_string(test_file).unwrap();
         let file_id = FileId::new(1).unwrap();
         
-        let symbols = parser.parse(&code, file_id);
+        let mut counter = 1u32;
+        let symbols = parser.parse(&code, file_id, &mut counter);
         
         // Should find: add, multiply, Point, Point::new, Point::distance, 
         // Rectangle, Rectangle::width, Rectangle::height, Rectangle::area
@@ -967,7 +970,8 @@ fn simple_doc() {}
         "#;
         
         let file_id = FileId::new(1).unwrap();
-        let symbols = parser.parse(code, file_id);
+        let mut counter = 1u32;
+        let symbols = parser.parse(code, file_id, &mut counter);
         
         // Find documented_function
         let doc_fn = symbols.iter()
@@ -1037,7 +1041,8 @@ fn trim_test() {}
         "#;
         
         let file_id = FileId::new(1).unwrap();
-        let symbols = parser.parse(code, file_id);
+        let mut counter = 1u32;
+        let symbols = parser.parse(code, file_id, &mut counter);
         
         // Test multi-line joining
         let multi = symbols.iter()

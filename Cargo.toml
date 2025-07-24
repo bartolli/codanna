@@ -26,6 +26,7 @@ rkyv = { version = "0.8.10", features = ["bytecheck", "std"] }
 rmcp = { version = "0.2.0", features = ["server", "client", "transport-io", "transport-child-process"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.141"
+sha2 = "0.10"
 sqlx = { version = "0.8.6", features = ["runtime-tokio-native-tls", "sqlite"] }
 tantivy = "0.24.2"
 thiserror = "2.0.12"
