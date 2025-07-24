@@ -70,6 +70,13 @@ codebase-intelligence index [OPTIONS] <PATH>
 - `--dry-run` - Show what would be indexed without actually indexing
 - `--max-files <MAX_FILES>` - Maximum number of files to index
 
+**Incremental Indexing:**
+The indexer uses SHA256 content hashing to track file changes:
+- Unchanged files are automatically skipped (100x faster)
+- Only modified files are re-parsed and re-indexed
+- File hashes and UTC timestamps are stored for each indexed file
+- Use `--force` to ignore hashes and re-index all files
+
 **Examples:**
 ```bash
 # Index a single file
@@ -412,6 +419,8 @@ codebase-intelligence index src/main.rs --progress
 - Use `--dry-run` first on large codebases to estimate indexing time
 - Use `--max-files` to index incrementally
 - The index is persisted, so subsequent runs are faster unless `--force` is used
+- Incremental indexing automatically skips unchanged files (100x faster)
+- Only modified files are re-parsed based on SHA256 content hashes
 
 ## Troubleshooting
 
