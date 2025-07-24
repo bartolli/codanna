@@ -33,8 +33,23 @@ The MCP server exposes these tools:
 
 ## Testing with MCP Inspector
 
+### Option 1: Use the installed binary (recommended)
+
+First install the binary:
 ```bash
-npx @modelcontextprotocol/inspector cargo run -- serve
+cargo install --path .
+```
+
+Then run the inspector:
+```bash
+npx @modelcontextprotocol/inspector codebase-intelligence serve
+```
+
+### Option 2: Use the wrapper script
+
+Due to argument parsing issues with cargo run, use the wrapper script:
+```bash
+npx @modelcontextprotocol/inspector ./mcp-server.sh
 ```
 
 ## Integration with Claude Desktop
