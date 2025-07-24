@@ -1,5 +1,6 @@
 use crate::{Symbol, SymbolId, SymbolKind, FileId, Range};
 use crate::parsing::{Language, LanguageParser};
+use crate::indexing::Import;
 use tree_sitter::{Parser, Node};
 
 pub struct RustParser {
@@ -14,6 +15,116 @@ impl RustParser {
             .map_err(|e| format!("Failed to set Rust language: {}", e))?;
         
         Ok(Self { parser })
+    }
+    
+    /// Extract import statements from the code
+    pub fn extract_imports(&mut self, code: &str, file_id: FileId) -> Vec<Import> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut imports = Vec::new();
+        
+        self.extract_imports_from_node(root_node, code, file_id, &mut imports);
+        
+        imports
+    }
+    
+    fn extract_imports_from_node(
+        &self,
+        node: Node,
+        code: &str,
+        file_id: FileId,
+        imports: &mut Vec<Import>,
+    ) {
+        match node.kind() {
+            "use_declaration" => {
+                // Extract the use path
+                if let Some(use_tree) = node.children(&mut node.walk()).find(|n| n.kind() == "use_tree") {
+                    self.extract_use_tree(use_tree, code, file_id, String::new(), imports);
+                }
+            }
+            _ => {
+                // Recursively check children
+                for child in node.children(&mut node.walk()) {
+                    self.extract_imports_from_node(child, code, file_id, imports);
+                }
+            }
+        }
+    }
+    
+    fn extract_use_tree(
+        &self,
+        node: Node,
+        code: &str,
+        file_id: FileId,
+        prefix: String,
+        imports: &mut Vec<Import>,
+    ) {
+        match node.kind() {
+            "use_tree" => {
+                // Handle different use patterns
+                let mut path = prefix.clone();
+                
+                for child in node.children(&mut node.walk()) {
+                    match child.kind() {
+                        "identifier" | "scoped_identifier" => {
+                            let segment = &code[child.byte_range()];
+                            if !path.is_empty() {
+                                path.push_str("::");
+                            }
+                            path.push_str(segment);
+                        }
+                        "use_as_clause" => {
+                            // Handle "as" aliases
+                            if let Some(alias_node) = child.child_by_field_name("alias") {
+                                let alias = code[alias_node.byte_range()].to_string();
+                                imports.push(Import {
+                                    path: path.clone(),
+                                    alias: Some(alias),
+                                    file_id,
+                                    is_glob: false,
+                                });
+                                return;
+                            }
+                        }
+                        "use_wildcard" => {
+                            // Handle glob imports (use foo::*)
+                            imports.push(Import {
+                                path: path.clone(),
+                                alias: None,
+                                file_id,
+                                is_glob: true,
+                            });
+                            return;
+                        }
+                        "use_list" => {
+                            // Handle grouped imports (use foo::{bar, baz})
+                            for list_item in child.children(&mut child.walk()) {
+                                if list_item.kind() == "use_tree" {
+                                    self.extract_use_tree(list_item, code, file_id, path.clone(), imports);
+                                }
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+                
+                // Simple import without alias or glob
+                if !path.is_empty() && path != prefix {
+                    imports.push(Import {
+                        path,
+                        alias: None,
+                        file_id,
+                        is_glob: false,
+                    });
+                }
+            }
+            _ => {}
+        }
     }
     
     pub fn parse(&mut self, code: &str, file_id: FileId) -> Vec<Symbol> {

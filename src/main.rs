@@ -349,7 +349,7 @@ async fn main() {
                         
                         if !dry_run && stats.files_indexed > 0 {
                             // Save the index
-                            eprintln!("\nSaving index with {} symbols...", indexer.symbol_count());
+                            eprintln!("\nSaving index with {} symbols (data: {})...", indexer.symbol_count(), indexer.data_symbol_count());
                             match persistence.save(&indexer) {
                                 Ok(_) => {
                                     println!("Index saved to: {}", config.index_path.display());

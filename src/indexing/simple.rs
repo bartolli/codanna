@@ -1,11 +1,11 @@
 use crate::{
     SymbolStore, DependencyGraph, 
     FileId, SymbolId, Relationship, RelationKind, Symbol, IndexData,
-    Settings,
+    Settings, Visibility,
 };
-use crate::parsing::{Language, ParserFactory};
-use crate::indexing::{FileWalker, IndexStats};
-use std::path::Path;
+use crate::parsing::{Language, ParserFactory, RustParser};
+use crate::indexing::{FileWalker, IndexStats, ImportResolver};
+use std::path::{Path, PathBuf};
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,8 +14,10 @@ pub struct SimpleIndexer {
     pub symbol_store: SymbolStore,
     pub graph: DependencyGraph,
     parser_factory: ParserFactory,
+    import_resolver: ImportResolver,
     data: IndexData,
     settings: Arc<Settings>,
+    project_root: Option<PathBuf>,
 }
 
 impl SimpleIndexer {
@@ -29,8 +31,10 @@ impl SimpleIndexer {
             symbol_store: SymbolStore::new(),
             graph: DependencyGraph::new(),
             parser_factory: ParserFactory::new(settings.clone()),
+            import_resolver: ImportResolver::new(),
             data: IndexData::new(),
             settings,
+            project_root: None,
         }
     }
     
@@ -54,12 +58,19 @@ impl SimpleIndexer {
             indexer.graph.add_relationship(*from, *to, rel.clone());
         }
         
+        // TODO: Rebuild import resolver from stored data
+        
         indexer
     }
     
     /// Get the data for persistence
     pub fn data(&self) -> &IndexData {
         &self.data
+    }
+    
+    /// Set the project root for module path calculation
+    pub fn set_project_root(&mut self, root: PathBuf) {
+        self.project_root = Some(root);
     }
     
     pub fn index_file(&mut self, path: impl AsRef<Path>) -> Result<FileId, String> {
@@ -88,8 +99,47 @@ impl SimpleIndexer {
         self.data.file_counter += 1;
         self.data.file_map.insert(path_str, file_id);
         
+        // Determine module path for this file
+        let module_path = if let Some(root) = &self.project_root {
+            ImportResolver::module_path_from_file(path, root)
+        } else {
+            // Try to guess project root from path
+            let root = path.ancestors()
+                .find(|p| p.join("Cargo.toml").exists() || p.join("src").exists())
+                .unwrap_or_else(|| path.parent().unwrap_or(path));
+            ImportResolver::module_path_from_file(path, root)
+        }.unwrap_or_else(|| "crate".to_string());
+        
+        // Register file with the import resolver
+        self.import_resolver.register_file(
+            path.to_path_buf(),
+            file_id,
+            module_path.clone()
+        );
+        
         // Parse symbols
-        let symbols = parser.parse(&content, file_id);
+        let mut symbols = parser.parse(&content, file_id);
+        
+        // Update symbols with module path and visibility
+        for symbol in &mut symbols {
+            symbol.module_path = Some(format!("{}::{}", module_path, symbol.name).into());
+            
+            // TODO: Parse actual visibility from AST
+            // For now, assume pub items in lib.rs/mod.rs are public
+            if path.ends_with("lib.rs") || path.ends_with("mod.rs") {
+                symbol.visibility = Visibility::Public;
+            }
+        }
+        
+        // Extract imports if this is a Rust file
+        if language == Language::Rust {
+            if let Ok(mut rust_parser) = RustParser::new() {
+                let imports = rust_parser.extract_imports(&content, file_id);
+                for import in imports {
+                    self.import_resolver.add_import(import);
+                }
+            }
+        }
         
         // Store symbols and add to graph
         for symbol in symbols {
@@ -243,6 +293,11 @@ impl SimpleIndexer {
         self.symbol_store.len()
     }
     
+    /// Get the data symbol count (for debugging)
+    pub fn data_symbol_count(&self) -> usize {
+        self.data.symbols.len()
+    }
+    
     /// Get the file path for a given FileId
     pub fn get_file_path(&self, file_id: FileId) -> Option<&str> {
         // Find the path in the file_map by searching for the FileId
@@ -259,6 +314,9 @@ impl SimpleIndexer {
         dry_run: bool,
         max_files: Option<usize>,
     ) -> Result<IndexStats, String> {
+        // Set project root for module path calculation
+        self.set_project_root(root.to_path_buf());
+        
         let mut stats = IndexStats::new();
         let walker = FileWalker::new(self.settings.clone());
         
@@ -327,8 +385,44 @@ impl SimpleIndexer {
             }
         }
         
+        // After indexing all files, resolve cross-file relationships
+        if !dry_run && stats.files_indexed > 0 {
+            self.resolve_cross_file_relationships();
+        }
+        
         stats.stop_timing();
         Ok(stats)
+    }
+    
+    /// Resolve cross-file relationships using imports
+    fn resolve_cross_file_relationships(&mut self) {
+        // Get all unresolved relationships (where we only matched by name within the same file)
+        let relationships_to_check: Vec<_> = self.data.relationships.clone();
+        
+        for (from_id, _to_id, rel) in relationships_to_check {
+            // Get the symbol that's making the reference
+            let _from_symbol = match self.symbol_store.get(from_id) {
+                Some(s) => s,
+                None => continue,
+            };
+            
+            // For each relationship, try to resolve it across files
+            match rel.kind {
+                RelationKind::Calls => {
+                    // Already handled in find_calls - could be improved with import resolution
+                }
+                RelationKind::Uses | RelationKind::Implements => {
+                    // These relationships might reference types from other files
+                    // TODO: Use import resolver to find the actual symbol
+                }
+                _ => {}
+            }
+        }
+        
+        // TODO: This is a placeholder. Full implementation would:
+        // 1. For each unresolved symbol reference
+        // 2. Use import_resolver.resolve_symbol() to find the actual symbol
+        // 3. Create new relationships between symbols across files
     }
 }
 
