@@ -340,6 +340,72 @@ path = ".code-intelligence/index"
    codebase-intelligence serve
    ```
 
+## Testing Scenarios
+
+These examples demonstrate various indexing options and progress reporting:
+
+### Basic Progress Reporting
+```bash
+# Index with real-time progress updates
+codebase-intelligence index src --progress
+
+# Output shows:
+# Indexing: 15/22 files (68%) - 21 files/s - ETA: 1s
+```
+
+### Dry Run Testing
+```bash
+# Preview what would be indexed without actually indexing
+codebase-intelligence index . --dry-run
+
+# Shows list of files that would be indexed:
+# Would index 31 files:
+#   ./demo/example.rs
+#   ./tests/cli_config_test.rs
+#   ... and 29 more files
+```
+
+### Limited File Indexing
+```bash
+# Index only first 5 files (useful for testing)
+codebase-intelligence index src --max-files 5 --progress
+
+# Index limited files with dry run
+codebase-intelligence index src --dry-run --max-files 10
+```
+
+### Force Re-indexing
+```bash
+# Force complete re-index with progress
+codebase-intelligence index . --force --progress
+
+# Combine multiple options
+codebase-intelligence index src --force --max-files 20 --progress
+```
+
+### Performance Testing
+```bash
+# Index large directory to see performance metrics
+codebase-intelligence index /path/to/large/project --progress
+
+# Output includes performance stats:
+# Indexing Complete:
+#   Files indexed: 1000
+#   Performance: 25 files/second
+#   Average symbols/file: 12.3
+```
+
+### Error Handling
+```bash
+# Test with non-existent directory
+codebase-intelligence index nonexistent --progress
+# Error: Path does not exist: nonexistent
+
+# Test with file instead of directory
+codebase-intelligence index src/main.rs --progress
+# Successfully indexes single file
+```
+
 ## Performance Tips
 
 - Use `--threads` to control parallelism based on your CPU
