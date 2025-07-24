@@ -1,6 +1,19 @@
 use crate::types::{SymbolId, FileId, Range, SymbolKind, CompactString, compact_string};
 use serde::{Deserialize, Serialize};
 
+/// Visibility of a symbol
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Visibility {
+    /// Public visibility (pub)
+    Public,
+    /// Crate-level visibility (pub(crate))
+    Crate,
+    /// Module-level visibility (pub(super), pub(in path))
+    Module,
+    /// Private visibility (default)
+    Private,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Symbol {
     pub id: SymbolId,
@@ -11,6 +24,10 @@ pub struct Symbol {
     pub signature: Option<Box<str>>,
     /// Documentation comment extracted from source (e.g., /// or /** */ in Rust)
     pub doc_comment: Option<Box<str>>,
+    /// Full module path (e.g., "crate::storage::memory" or "std::collections")
+    pub module_path: Option<Box<str>>,
+    /// Visibility of the symbol
+    pub visibility: Visibility,
 }
 
 #[repr(C, align(32))]
@@ -44,6 +61,8 @@ impl Symbol {
             range,
             signature: None,
             doc_comment: None,
+            module_path: None,
+            visibility: Visibility::Private,
         }
     }
 
@@ -54,6 +73,16 @@ impl Symbol {
     
     pub fn with_doc(mut self, doc: impl Into<Box<str>>) -> Self {
         self.doc_comment = Some(doc.into());
+        self
+    }
+    
+    pub fn with_module_path(mut self, path: impl Into<Box<str>>) -> Self {
+        self.module_path = Some(path.into());
+        self
+    }
+    
+    pub fn with_visibility(mut self, visibility: Visibility) -> Self {
+        self.visibility = visibility;
         self
     }
 
@@ -166,6 +195,8 @@ impl CompactSymbol {
             ),
             signature: None,
             doc_comment: None,
+            module_path: None,
+            visibility: Visibility::Private,
         })
     }
 }

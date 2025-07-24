@@ -8,7 +8,7 @@ pub mod config;
 pub mod mcp;
 
 pub use types::*;
-pub use symbol::{Symbol, CompactSymbol, StringTable};
+pub use symbol::{Symbol, CompactSymbol, StringTable, Visibility};
 pub use relationship::{Relationship, RelationKind, RelationshipEdge};
 pub use storage::{SymbolStore, DependencyGraph, IndexPersistence, IndexData};
 pub use parsing::RustParser;
