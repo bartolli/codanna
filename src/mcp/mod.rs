@@ -126,12 +126,31 @@ impl CodeIntelligenceServer {
 
         let mut result = format!("Found {} symbol(s) named '{}':\n", symbols.len(), name);
         for symbol in symbols {
+            let file_path = indexer.get_file_path(symbol.file_id)
+                .unwrap_or("<unknown>");
             result.push_str(&format!(
-                "- {:?} at line {} in file_id {}\n", 
+                "- {:?} at {}:{}\n", 
                 symbol.kind, 
-                symbol.range.start_line + 1,
-                symbol.file_id.value()
+                file_path,
+                symbol.range.start_line + 1
             ));
+            
+            // Add documentation if available
+            if let Some(ref doc) = symbol.doc_comment {
+                // Show first 3 lines of documentation
+                let doc_preview: Vec<&str> = doc.lines().take(3).collect();
+                let preview = if doc.lines().count() > 3 {
+                    format!("{}...", doc_preview.join(" "))
+                } else {
+                    doc_preview.join(" ")
+                };
+                result.push_str(&format!("  Documentation: {}\n", preview));
+            }
+            
+            // Add signature if available
+            if let Some(ref sig) = symbol.signature {
+                result.push_str(&format!("  Signature: {}\n", sig));
+            }
         }
 
         Ok(CallToolResult::success(vec![Content::text(result)]))

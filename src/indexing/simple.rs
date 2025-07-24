@@ -218,6 +218,14 @@ impl SimpleIndexer {
     pub fn symbol_count(&self) -> usize {
         self.symbol_store.len()
     }
+    
+    /// Get the file path for a given FileId
+    pub fn get_file_path(&self, file_id: FileId) -> Option<&str> {
+        // Find the path in the file_map by searching for the FileId
+        self.data.file_map.iter()
+            .find(|(_, &id)| id == file_id)
+            .map(|(path, _)| path.as_str())
+    }
 }
 
 impl Default for SimpleIndexer {

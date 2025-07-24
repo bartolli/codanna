@@ -433,13 +433,67 @@ impl RustParser {
             name_node.end_position().column as u16,
         );
         
-        Some(Symbol::new(
+        // Find the parent node that might have doc comments
+        let doc_node = name_node.parent()?;
+        let doc_comment = self.extract_doc_comments(&doc_node, code);
+        
+        let mut symbol = Symbol::new(
             symbol_id,
             name,
             kind,
             file_id,
             range,
-        ))
+        );
+        
+        if let Some(doc) = doc_comment {
+            symbol = symbol.with_doc(doc);
+        }
+        
+        Some(symbol)
+    }
+    
+    fn extract_doc_comments(&self, node: &Node, code: &str) -> Option<String> {
+        let mut doc_lines = Vec::new();
+        let mut current = node.prev_sibling();
+        
+        while let Some(sibling) = current {
+            match sibling.kind() {
+                "line_comment" => {
+                    if let Ok(text) = sibling.utf8_text(code.as_bytes()) {
+                        // Check for exactly "///" not "////"
+                        if text.starts_with("///") && !text.starts_with("////") {
+                            let content = text.trim_start_matches("///").trim();
+                            doc_lines.push(content.to_string());
+                        } else {
+                            break; // Non-doc comment ends the sequence
+                        }
+                    }
+                }
+                "block_comment" => {
+                    if let Ok(text) = sibling.utf8_text(code.as_bytes()) {
+                        // Check for exactly "/**" not "/***" and not "/**/"
+                        if text.starts_with("/**") && !text.starts_with("/***") 
+                           && text != "/**/" {
+                            let content = text.trim_start_matches("/**")
+                                             .trim_end_matches("*/")
+                                             .trim();
+                            doc_lines.push(content.to_string());
+                        } else {
+                            break; // Non-doc comment ends the sequence
+                        }
+                    }
+                }
+                _ => break, // Non-comment node ends the sequence
+            }
+            current = sibling.prev_sibling();
+        }
+        
+        if doc_lines.is_empty() {
+            None
+        } else {
+            doc_lines.reverse(); // Restore original order
+            Some(doc_lines.join("\n"))
+        }
     }
 }
 
@@ -737,5 +791,138 @@ mod tests {
             .expect("Should find Point implements std::fmt::Debug");
         assert_eq!(debug_impl.0, "Point");
         assert_eq!(debug_impl.1, "std::fmt::Debug");
+    }
+    
+    #[test]
+    fn test_doc_comment_extraction() {
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+/// This is a well-documented function.
+/// 
+/// It has multiple lines of documentation
+/// explaining what it does.
+pub fn documented_function() {}
+
+//// This is NOT a doc comment (4 slashes)
+fn not_documented() {}
+
+/** This is a block doc comment.
+ * 
+ * It uses the block style.
+ */
+pub struct DocumentedStruct {
+    field: i32,
+}
+
+/*** This is NOT a doc comment (3 asterisks) ***/
+fn also_not_documented() {}
+
+/**/ // Empty 2-asterisk block is NOT a doc comment
+fn edge_case() {}
+
+/// Single line doc
+fn simple_doc() {}
+        "#;
+        
+        let file_id = FileId::new(1).unwrap();
+        let symbols = parser.parse(code, file_id);
+        
+        // Find documented_function
+        let doc_fn = symbols.iter()
+            .find(|s| s.name.as_ref() == "documented_function")
+            .expect("Should find documented_function");
+        assert!(doc_fn.doc_comment.is_some());
+        let doc = doc_fn.doc_comment.as_ref().unwrap();
+        assert!(doc.contains("well-documented function"));
+        assert!(doc.contains("multiple lines"));
+        
+        // Find not_documented - should have no docs
+        let no_doc_fn = symbols.iter()
+            .find(|s| s.name.as_ref() == "not_documented")
+            .expect("Should find not_documented");
+        assert!(no_doc_fn.doc_comment.is_none());
+        
+        // Find DocumentedStruct with block comment
+        let doc_struct = symbols.iter()
+            .find(|s| s.name.as_ref() == "DocumentedStruct")
+            .expect("Should find DocumentedStruct");
+        assert!(doc_struct.doc_comment.is_some());
+        let struct_doc = doc_struct.doc_comment.as_ref().unwrap();
+        assert!(struct_doc.contains("block doc comment"));
+        assert!(struct_doc.contains("block style"));
+        
+        // Find also_not_documented - should have no docs (3 asterisks)
+        let also_no_doc = symbols.iter()
+            .find(|s| s.name.as_ref() == "also_not_documented")
+            .expect("Should find also_not_documented");
+        assert!(also_no_doc.doc_comment.is_none());
+        
+        // Find edge_case - should have no docs (empty block)
+        let edge = symbols.iter()
+            .find(|s| s.name.as_ref() == "edge_case")
+            .expect("Should find edge_case");
+        assert!(edge.doc_comment.is_none());
+        
+        // Find simple_doc
+        let simple = symbols.iter()
+            .find(|s| s.name.as_ref() == "simple_doc")
+            .expect("Should find simple_doc");
+        assert!(simple.doc_comment.is_some());
+        assert_eq!(simple.doc_comment.as_ref().unwrap().as_ref(), "Single line doc");
+    }
+    
+    #[test]
+    fn test_doc_comment_edge_cases() {
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+/// Line 1
+/// Line 2
+/// Line 3
+fn multi_line_doc() {}
+
+///Empty doc
+///
+///After empty line
+fn empty_line_doc() {}
+
+///Compact
+///Lines
+///Together
+fn compact_doc() {}
+
+/// Trim test   
+fn trim_test() {}
+        "#;
+        
+        let file_id = FileId::new(1).unwrap();
+        let symbols = parser.parse(code, file_id);
+        
+        // Test multi-line joining
+        let multi = symbols.iter()
+            .find(|s| s.name.as_ref() == "multi_line_doc")
+            .unwrap();
+        let doc = multi.doc_comment.as_ref().unwrap();
+        assert_eq!(doc.as_ref(), "Line 1\nLine 2\nLine 3");
+        
+        // Test empty line preservation
+        let empty = symbols.iter()
+            .find(|s| s.name.as_ref() == "empty_line_doc")
+            .unwrap();
+        let doc = empty.doc_comment.as_ref().unwrap();
+        assert_eq!(doc.as_ref(), "Empty doc\n\nAfter empty line");
+        
+        // Test compact lines
+        let compact = symbols.iter()
+            .find(|s| s.name.as_ref() == "compact_doc")
+            .unwrap();
+        let doc = compact.doc_comment.as_ref().unwrap();
+        assert_eq!(doc.as_ref(), "Compact\nLines\nTogether");
+        
+        // Test trimming
+        let trim = symbols.iter()
+            .find(|s| s.name.as_ref() == "trim_test")
+            .unwrap();
+        let doc = trim.doc_comment.as_ref().unwrap();
+        assert_eq!(doc.as_ref(), "Trim test");
     }
 }

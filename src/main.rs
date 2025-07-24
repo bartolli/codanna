@@ -331,10 +331,30 @@ async fn main() {
                     } else {
                         println!("Found {} symbol(s) named '{}':", symbols.len(), name);
                         for symbol in symbols {
-                            println!("  {:?} at line {}", 
-                                symbol.kind, 
+                            let file_path = indexer.get_file_path(symbol.file_id)
+                                .unwrap_or("<unknown>");
+                            println!("  {:?} at {}:{}", 
+                                symbol.kind,
+                                file_path,
                                 symbol.range.start_line + 1
                             );
+                            
+                            // Show documentation if available
+                            if let Some(ref doc) = symbol.doc_comment {
+                                // Show first 3 lines or less
+                                let lines: Vec<&str> = doc.lines().take(3).collect();
+                                let preview = if doc.lines().count() > 3 {
+                                    format!("{}...", lines.join(" "))
+                                } else {
+                                    lines.join(" ")
+                                };
+                                println!("    Documentation: {}", preview);
+                            }
+                            
+                            // Show signature if available
+                            if let Some(ref sig) = symbol.signature {
+                                println!("    Signature: {}", sig);
+                            }
                         }
                     }
                 }
@@ -450,7 +470,9 @@ async fn main() {
                                 for (kind, symbols) in by_kind {
                                     println!("\n  {}s:", format!("{:?}", kind).to_lowercase());
                                     for sym in symbols {
-                                        println!("    - {}", sym.name);
+                                        let file_path = indexer.get_file_path(sym.file_id)
+                                            .unwrap_or("<unknown>");
+                                        println!("    - {} ({}:{})", sym.name, file_path, sym.range.start_line + 1);
                                     }
                                 }
                             }

@@ -9,6 +9,8 @@ pub struct Symbol {
     pub file_id: FileId,
     pub range: Range,
     pub signature: Option<Box<str>>,
+    /// Documentation comment extracted from source (e.g., /// or /** */ in Rust)
+    pub doc_comment: Option<Box<str>>,
 }
 
 #[repr(C, align(32))]
@@ -41,11 +43,17 @@ impl Symbol {
             file_id,
             range,
             signature: None,
+            doc_comment: None,
         }
     }
 
     pub fn with_signature(mut self, signature: impl Into<Box<str>>) -> Self {
         self.signature = Some(signature.into());
+        self
+    }
+    
+    pub fn with_doc(mut self, doc: impl Into<Box<str>>) -> Self {
+        self.doc_comment = Some(doc.into());
         self
     }
 
@@ -157,6 +165,7 @@ impl CompactSymbol {
                 self.end_col,
             ),
             signature: None,
+            doc_comment: None,
         })
     }
 }
