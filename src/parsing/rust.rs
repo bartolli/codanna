@@ -1,4 +1,5 @@
 use crate::{Symbol, SymbolId, SymbolKind, FileId, Range};
+use crate::parsing::{Language, LanguageParser};
 use tree_sitter::{Parser, Node};
 
 pub struct RustParser {
@@ -494,6 +495,36 @@ impl RustParser {
             doc_lines.reverse(); // Restore original order
             Some(doc_lines.join("\n"))
         }
+    }
+}
+
+impl LanguageParser for RustParser {
+    fn parse(&mut self, code: &str, file_id: FileId) -> Vec<Symbol> {
+        self.parse(code, file_id)
+    }
+    
+    fn extract_doc_comment(&self, node: &Node, code: &str) -> Option<String> {
+        self.extract_doc_comments(node, code)
+    }
+    
+    fn find_calls(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        self.find_calls(code)
+    }
+    
+    fn find_implementations(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        self.find_implementations(code)
+    }
+    
+    fn find_uses(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        self.find_uses(code)
+    }
+    
+    fn find_defines(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        self.find_defines(code)
+    }
+    
+    fn language(&self) -> Language {
+        Language::Rust
     }
 }
 

@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use codebase_intelligence::{SimpleIndexer, SymbolKind, RelationKind, Settings, IndexPersistence};
 use std::path::PathBuf;
 use std::fs;
+use std::sync::Arc;
 
 const INDEX_STATE_FILE: &str = ".codebase-intelligence-index";
 
@@ -206,13 +207,14 @@ async fn main() {
     let skip_index_load = matches!(cli.command, Commands::McpTest { .. });
     
     // Load existing index or create new one (unless we're in thin client mode)
+    let settings = Arc::new(config.clone());
     let mut indexer = if skip_index_load {
-        SimpleIndexer::new() // Empty indexer, won't be used
+        SimpleIndexer::with_settings(settings.clone()) // Empty indexer, won't be used
     } else {
         let force_reindex = matches!(cli.command, Commands::Index { force: true, .. });
         if persistence.exists() && !force_reindex {
             eprintln!("DEBUG: Found existing index at {}", config.index_path.display());
-            match persistence.load() {
+            match persistence.load_with_settings(settings.clone()) {
                 Ok(loaded) => {
                     eprintln!("DEBUG: Successfully loaded index from disk");
                     eprintln!("Loaded existing index ({} symbols)", loaded.symbol_count());
@@ -220,7 +222,7 @@ async fn main() {
                 }
                 Err(e) => {
                     eprintln!("Warning: Could not load index: {}. Creating new index.", e);
-                    SimpleIndexer::new()
+                    SimpleIndexer::with_settings(settings.clone())
                 }
             }
         } else {
@@ -230,7 +232,7 @@ async fn main() {
                 eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
             }
             eprintln!("DEBUG: Creating new index");
-            SimpleIndexer::new()
+            SimpleIndexer::with_settings(settings.clone())
         }
     };
     
@@ -278,7 +280,10 @@ async fn main() {
                         eprintln!("Warning: Could not save index state: {}", e);
                     }
                     
-                    println!("Successfully indexed: {}", file.display());
+                    let language_name = codebase_intelligence::parsing::Language::from_path(&file)
+                        .map(|l| l.to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    println!("Successfully indexed: {} [{}]", file.display(), language_name);
                     println!("File ID: {}", file_id.value());
                     
                     let symbol_count = indexer.symbol_count();

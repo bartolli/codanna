@@ -1,30 +1,43 @@
 use crate::{
-    SymbolStore, DependencyGraph, RustParser, 
-    FileId, SymbolId, Relationship, RelationKind, Symbol, IndexData
+    SymbolStore, DependencyGraph, 
+    FileId, SymbolId, Relationship, RelationKind, Symbol, IndexData,
+    Settings,
 };
+use crate::parsing::{Language, ParserFactory};
 use std::path::Path;
 use std::fs;
+use std::sync::Arc;
 
 pub struct SimpleIndexer {
     pub symbol_store: SymbolStore,
     pub graph: DependencyGraph,
-    parser: RustParser,
+    parser_factory: ParserFactory,
     data: IndexData,
 }
 
 impl SimpleIndexer {
     pub fn new() -> Self {
+        let settings = Arc::new(Settings::default());
+        Self::with_settings(settings)
+    }
+    
+    pub fn with_settings(settings: Arc<Settings>) -> Self {
         Self {
             symbol_store: SymbolStore::new(),
             graph: DependencyGraph::new(),
-            parser: RustParser::new().expect("Failed to create parser"),
+            parser_factory: ParserFactory::new(settings),
             data: IndexData::new(),
         }
     }
     
     /// Create from loaded data
     pub fn from_data(data: IndexData) -> Self {
-        let mut indexer = Self::new();
+        Self::from_data_with_settings(data, Arc::new(Settings::default()))
+    }
+    
+    /// Create from loaded data with custom settings
+    pub fn from_data_with_settings(data: IndexData, settings: Arc<Settings>) -> Self {
+        let mut indexer = Self::with_settings(settings);
         indexer.data = data;
         
         // Rebuild in-memory structures
@@ -54,6 +67,13 @@ impl SimpleIndexer {
             return Ok(file_id);
         }
         
+        // Detect language from file extension
+        let language = Language::from_path(path)
+            .ok_or_else(|| format!("Unsupported file type: {}", path.display()))?;
+        
+        // Create parser for this language
+        let mut parser = self.parser_factory.create_parser(language)?;
+        
         // Read file content
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read file: {}", e))?;
@@ -65,7 +85,7 @@ impl SimpleIndexer {
         self.data.file_map.insert(path_str, file_id);
         
         // Parse symbols
-        let symbols = self.parser.parse(&content, file_id);
+        let symbols = parser.parse(&content, file_id);
         
         // Store symbols and add to graph
         for symbol in symbols {
@@ -77,7 +97,7 @@ impl SimpleIndexer {
         }
         
         // Find and store relationships (function calls)
-        let calls = self.parser.find_calls(&content);
+        let calls = parser.find_calls(&content);
         for (caller_name, callee_name, _range) in calls {
             // Find symbols by name
             let callers = self.symbol_store.find_by_name(&caller_name);
@@ -101,7 +121,7 @@ impl SimpleIndexer {
         }
         
         // Find and store trait implementations
-        let implementations = self.parser.find_implementations(&content);
+        let implementations = parser.find_implementations(&content);
         for (type_name, trait_name, _range) in implementations {
             // Find symbols by name
             let types = self.symbol_store.find_by_name(&type_name);
@@ -125,7 +145,7 @@ impl SimpleIndexer {
         }
         
         // Find and store type uses (struct fields and function params/returns)
-        let uses = self.parser.find_uses(&content);
+        let uses = parser.find_uses(&content);
         for (user_name, used_name, _range) in uses {
             // Find symbols by name
             let users = self.symbol_store.find_by_name(&user_name);
@@ -151,7 +171,7 @@ impl SimpleIndexer {
         }
         
         // Find and store defines relationships (traits defining methods, impl blocks defining methods)
-        let defines = self.parser.find_defines(&content);
+        let defines = parser.find_defines(&content);
         for (definer_name, defined_name, _range) in defines {
             // Find symbols by name
             let definers = self.symbol_store.find_by_name(&definer_name);

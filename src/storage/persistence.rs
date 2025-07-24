@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 use std::fs;
-use crate::{IndexData, SimpleIndexer};
+use std::sync::Arc;
+use crate::{IndexData, SimpleIndexer, Settings};
 
 /// Manages persistence of the index
 pub struct IndexPersistence {
@@ -46,6 +47,15 @@ impl IndexPersistence {
         
         // Create indexer from loaded data
         Ok(SimpleIndexer::from_data(index_data))
+    }
+    
+    /// Load the indexer from disk with custom settings
+    pub fn load_with_settings(&self, settings: Arc<Settings>) -> Result<SimpleIndexer, Box<dyn std::error::Error>> {
+        let data = fs::read(self.index_path())?;
+        let index_data: IndexData = bincode::deserialize(&data)?;
+        
+        // Create indexer from loaded data with settings
+        Ok(SimpleIndexer::from_data_with_settings(index_data, settings))
     }
     
     /// Check if an index exists

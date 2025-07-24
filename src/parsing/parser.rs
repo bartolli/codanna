@@ -1,0 +1,50 @@
+//! Language parser trait
+//! 
+//! This module defines the common interface that all language parsers
+//! must implement to work with the indexing system.
+
+use crate::{Symbol, FileId, Range};
+use tree_sitter::Node;
+
+/// Common interface for all language parsers
+pub trait LanguageParser: Send + Sync {
+    /// Parse source code and extract symbols
+    fn parse(&mut self, code: &str, file_id: FileId) -> Vec<Symbol>;
+    
+    /// Extract documentation comment for a node
+    /// 
+    /// Each language has its own documentation conventions:
+    /// - Rust: `///` and `/** */`
+    /// - Python: Docstrings (first string literal)
+    /// - JavaScript/TypeScript: JSDoc `/** */`
+    fn extract_doc_comment(&self, node: &Node, code: &str) -> Option<String>;
+    
+    /// Find function/method calls in the code
+    /// 
+    /// Returns tuples of (caller_name, callee_name, range)
+    fn find_calls(&mut self, code: &str) -> Vec<(String, String, Range)>;
+    
+    /// Find trait/interface implementations
+    /// 
+    /// Returns tuples of (type_name, trait_name, range)
+    fn find_implementations(&mut self, code: &str) -> Vec<(String, String, Range)>;
+    
+    /// Find type usage (in fields, parameters, returns)
+    /// 
+    /// Returns tuples of (context_name, used_type, range)
+    fn find_uses(&mut self, code: &str) -> Vec<(String, String, Range)>;
+    
+    /// Find method definitions (in traits/interfaces or types)
+    /// 
+    /// Returns tuples of (definer_name, method_name, range)
+    fn find_defines(&mut self, code: &str) -> Vec<(String, String, Range)>;
+    
+    /// Get the language this parser handles
+    fn language(&self) -> crate::parsing::Language;
+}
+
+/// Trait for creating language parsers
+pub trait ParserFactory: Send + Sync {
+    /// Create a new parser instance
+    fn create(&self) -> Result<Box<dyn LanguageParser>, String>;
+}
