@@ -34,14 +34,28 @@ impl FileWalker {
             .git_global(true) // Respect global gitignore
             .git_exclude(true) // Respect .git/info/exclude
             .follow_links(false) // Don't follow symlinks by default
-            .max_depth(None); // No depth limit
+            .max_depth(None) // No depth limit
+            .require_git(false); // Allow gitignore to work in non-git directories
             
-        // Add custom ignore patterns from configuration
-        // Note: The ignore crate expects patterns in gitignore format
+        // If we have a project root configured, use it as the base for gitignore
+        if let Some(_project_root) = &self.settings.indexing.project_root {
+            // This helps the ignore crate understand the project structure
+            // even if it's not a git repository
+            builder.add_custom_ignore_filename(".code-intelligence-ignore");
+        }
+        
+        // Add custom ignore patterns using overrides
+        // This is the correct way to add glob patterns programmatically
+        let mut override_builder = ignore::overrides::OverrideBuilder::new(root);
         for pattern in &self.settings.indexing.ignore_patterns {
-            // ignore crate handles patterns differently than glob
-            // Convert glob patterns to gitignore format if needed
-            let _ = builder.add_ignore(pattern);
+            // Add as exclusion pattern (prefix with !)
+            if let Err(e) = override_builder.add(&format!("!{}", pattern)) {
+                eprintln!("Warning: Invalid ignore pattern '{}': {}", pattern, e);
+            }
+        }
+        
+        if let Ok(overrides) = override_builder.build() {
+            builder.overrides(overrides);
         }
         
         // Get enabled languages for filtering
@@ -147,15 +161,12 @@ mod tests {
         assert!(files[0].ends_with("visible.rs"));
     }
     
-    // TODO: The ignore crate's gitignore support might not work properly in temp directories
-    // For now, we'll skip this test and rely on manual testing
     #[test]
-    #[ignore = "gitignore handling in temp directories needs investigation"]
     fn test_gitignore_respected() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
         
-        // Create .gitignore
+        // Create .gitignore (should work without git init due to require_git(false))
         fs::write(root.join(".gitignore"), "ignored.rs\n").unwrap();
         
         // Create files

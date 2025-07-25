@@ -48,6 +48,11 @@ pub struct IndexingConfig {
     #[serde(default = "default_parallel_threads")]
     pub parallel_threads: usize,
     
+    /// Project root directory (defaults to workspace root)
+    /// Used for gitignore resolution and module path calculation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
+    
     /// Patterns to ignore during indexing
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
@@ -116,6 +121,7 @@ impl Default for IndexingConfig {
     fn default() -> Self {
         Self {
             parallel_threads: default_parallel_threads(),
+            project_root: None,
             ignore_patterns: vec![
                 "target/**".to_string(),
                 "node_modules/**".to_string(),
