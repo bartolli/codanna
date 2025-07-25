@@ -29,6 +29,10 @@ pub struct Settings {
     #[serde(default = "default_index_path")]
     pub index_path: PathBuf,
     
+    /// Workspace root directory (where .code-intelligence is located)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<PathBuf>,
+    
     /// Indexing configuration
     #[serde(default)]
     pub indexing: IndexingConfig,
@@ -110,6 +114,7 @@ impl Default for Settings {
         Self {
             version: default_version(),
             index_path: default_index_path(),
+            workspace_root: None,
             indexing: IndexingConfig::default(),
             languages: default_languages(),
             mcp: McpConfig::default(),
@@ -197,6 +202,13 @@ impl Settings {
             )
             // Extract into Settings struct
             .extract()
+            .map(|mut settings: Settings| {
+                // If workspace_root is not set in config, detect it
+                if settings.workspace_root.is_none() {
+                    settings.workspace_root = Self::workspace_root();
+                }
+                settings
+            })
     }
     
     /// Find the workspace root by looking for .code-intelligence directory
@@ -290,8 +302,15 @@ impl Settings {
             return Err("Configuration file already exists. Use --force to overwrite".into());
         }
         
-        let default_settings = Settings::default();
-        default_settings.save(&config_path)?;
+        // Create settings with detected workspace root
+        let mut settings = Settings::default();
+        
+        // Set workspace root to current directory
+        if let Ok(current_dir) = std::env::current_dir() {
+            settings.workspace_root = Some(current_dir);
+        }
+        
+        settings.save(&config_path)?;
         if force && config_path.exists() {
             println!("Overwrote configuration at: {}", config_path.display());
         } else {

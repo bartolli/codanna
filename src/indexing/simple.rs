@@ -27,6 +27,9 @@ impl SimpleIndexer {
     }
     
     pub fn with_settings(settings: Arc<Settings>) -> Self {
+        let project_root = settings.workspace_root.clone()
+            .or_else(|| settings.indexing.project_root.clone());
+            
         Self {
             symbol_store: SymbolStore::new(),
             graph: DependencyGraph::new(),
@@ -34,7 +37,7 @@ impl SimpleIndexer {
             import_resolver: ImportResolver::new(),
             data: IndexData::new(),
             settings,
-            project_root: None,
+            project_root,
         }
     }
     
