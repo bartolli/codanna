@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use crate::{SymbolId, SymbolKind};
 
 /// Schema fields for the document index
+#[derive(Debug)]
 pub struct IndexSchema {
     pub symbol_id: Field,
     pub name: Field,
@@ -111,6 +112,15 @@ pub struct DocumentIndex {
     schema: IndexSchema,
     index_path: PathBuf,
     writer: Mutex<Option<IndexWriter<Document>>>,
+}
+
+impl std::fmt::Debug for DocumentIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocumentIndex")
+            .field("index_path", &self.index_path)
+            .field("schema", &self.schema)
+            .finish()
+    }
 }
 
 impl DocumentIndex {

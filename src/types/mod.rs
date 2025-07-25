@@ -41,6 +41,16 @@ impl SymbolId {
     pub fn value(&self) -> u32 {
         self.0.get()
     }
+    
+    /// Convert to the underlying u32 value
+    pub fn to_u32(self) -> u32 {
+        self.0.get()
+    }
+    
+    /// Get the inner NonZeroU32
+    pub fn as_non_zero(&self) -> NonZeroU32 {
+        self.0
+    }
 }
 
 impl FileId {
@@ -50,6 +60,16 @@ impl FileId {
 
     pub fn value(&self) -> u32 {
         self.0.get()
+    }
+    
+    /// Convert to the underlying u32 value
+    pub fn to_u32(self) -> u32 {
+        self.0.get()
+    }
+    
+    /// Get the inner NonZeroU32
+    pub fn as_non_zero(&self) -> NonZeroU32 {
+        self.0
     }
 }
 

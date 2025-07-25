@@ -23,6 +23,7 @@ pub struct Import {
 }
 
 /// Tracks module structure and imports across files
+#[derive(Debug)]
 pub struct ImportResolver {
     /// Maps file paths to their module paths
     file_to_module: HashMap<PathBuf, String>,

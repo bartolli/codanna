@@ -4,6 +4,7 @@ use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+#[derive(Debug)]
 pub struct DependencyGraph {
     graph: RwLock<DiGraph<SymbolId, Relationship>>,
     node_map: RwLock<HashMap<SymbolId, NodeIndex>>,

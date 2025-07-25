@@ -6,6 +6,7 @@ pub mod parsing;
 pub mod indexing;
 pub mod config;
 pub mod mcp;
+pub mod error;
 
 pub use types::*;
 pub use symbol::{Symbol, CompactSymbol, StringTable, Visibility};
@@ -14,3 +15,4 @@ pub use storage::{SymbolStore, DependencyGraph, IndexPersistence, IndexData};
 pub use parsing::RustParser;
 pub use indexing::{SimpleIndexer, calculate_hash};
 pub use config::Settings;
+pub use error::{IndexError, ParseError, StorageError, McpError, IndexResult, ParseResult, StorageResult, McpResult};

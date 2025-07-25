@@ -7,6 +7,14 @@ pub struct RustParser {
     parser: Parser,
 }
 
+impl std::fmt::Debug for RustParser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RustParser")
+            .field("language", &"Rust")
+            .finish()
+    }
+}
+
 impl RustParser {
     pub fn new() -> Result<Self, String> {
         let mut parser = Parser::new();
@@ -43,7 +51,7 @@ impl RustParser {
             "use_declaration" => {
                 // Extract the use path
                 if let Some(use_tree) = node.children(&mut node.walk()).find(|n| n.kind() == "use_tree") {
-                    self.extract_use_tree(use_tree, code, file_id, String::new(), imports);
+                    self.extract_use_tree(use_tree, code, file_id, "", imports);
                 }
             }
             _ => {
@@ -60,13 +68,13 @@ impl RustParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        prefix: String,
+        prefix: &str,
         imports: &mut Vec<Import>,
     ) {
         match node.kind() {
             "use_tree" => {
                 // Handle different use patterns
-                let mut path = prefix.clone();
+                let mut path = prefix.to_string();
                 
                 for child in node.children(&mut node.walk()) {
                     match child.kind() {
@@ -104,7 +112,7 @@ impl RustParser {
                             // Handle grouped imports (use foo::{bar, baz})
                             for list_item in child.children(&mut child.walk()) {
                                 if list_item.kind() == "use_tree" {
-                                    self.extract_use_tree(list_item, code, file_id, path.clone(), imports);
+                                    self.extract_use_tree(list_item, code, file_id, &path, imports);
                                 }
                             }
                             return;

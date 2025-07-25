@@ -85,6 +85,31 @@ impl Symbol {
         self.visibility = visibility;
         self
     }
+    
+    /// Get the symbol name as a string slice
+    pub fn as_name(&self) -> &str {
+        &self.name
+    }
+    
+    /// Convert the symbol into its name, consuming the symbol
+    pub fn into_name(self) -> CompactString {
+        self.name
+    }
+    
+    /// Get a reference to the signature if present
+    pub fn as_signature(&self) -> Option<&str> {
+        self.signature.as_deref()
+    }
+    
+    /// Get a reference to the doc comment if present
+    pub fn as_doc_comment(&self) -> Option<&str> {
+        self.doc_comment.as_deref()
+    }
+    
+    /// Get a reference to the module path if present
+    pub fn as_module_path(&self) -> Option<&str> {
+        self.module_path.as_deref()
+    }
 
     pub fn to_compact(&self, string_table: &mut StringTable) -> CompactSymbol {
         let name_offset = string_table.intern(&self.name);

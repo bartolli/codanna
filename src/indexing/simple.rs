@@ -2,6 +2,7 @@ use crate::{
     SymbolStore, DependencyGraph, 
     FileId, SymbolId, Relationship, RelationKind, Symbol, IndexData,
     Settings, Visibility,
+    IndexError, IndexResult,
 };
 use crate::storage::{DocumentIndex, SearchResult};
 use crate::parsing::{Language, ParserFactory, RustParser};
@@ -11,6 +12,7 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[derive(Debug)]
 pub struct SimpleIndexer {
     pub symbol_store: SymbolStore,
     pub graph: DependencyGraph,
@@ -94,47 +96,60 @@ impl SimpleIndexer {
         self.project_root = Some(root);
     }
     
-    pub fn index_file(&mut self, path: impl AsRef<Path>) -> Result<FileId, String> {
+    #[must_use = "The result of indexing a file should be checked"]
+    pub fn index_file(&mut self, path: impl AsRef<Path>) -> IndexResult<FileId> {
         let path = path.as_ref();
         let path_str = path.to_string_lossy().to_string();
         
-        // Read file content first
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read file: {}", e))?;
+        // Read file content and calculate hash
+        let (content, content_hash) = self.read_file_with_hash(path)?;
         
-        // Calculate hash of the content
-        let content_hash = calculate_hash(&content);
-        
-        // Check if we've already indexed this file
+        // Check if file already exists
         if let Some(&file_id) = self.data.file_map.get(&path_str) {
-            // Check if the file hash has changed
+            // Check if content has changed
             if let Some(existing_hash) = self.data.file_hashes.get(&file_id) {
                 if existing_hash == &content_hash {
                     // File hasn't changed, skip re-indexing
                     return Ok(file_id);
                 }
-                // File has changed, we need to re-index
-                // First, remove old symbols from this file
+                // File has changed, remove old symbols
                 self.remove_file_symbols(file_id);
             }
-            // Use existing file_id for re-indexing
+            // Update hash and timestamp for re-indexing
             self.data.file_hashes.insert(file_id, content_hash);
             self.data.file_timestamps.insert(file_id, get_utc_timestamp());
-            
-            // Continue with re-indexing using existing file_id
+            // Reindex with existing file_id
             return self.reindex_file_content(path, &path_str, file_id, &content);
         }
         
-        // New file - create file ID and store hash
-        let file_id = FileId::new(self.data.file_counter)
-            .ok_or_else(|| "Failed to create file ID".to_string())?;
-        self.data.file_counter += 1;
-        self.data.file_map.insert(path_str.clone(), file_id);
-        self.data.file_hashes.insert(file_id, content_hash);
-        self.data.file_timestamps.insert(file_id, get_utc_timestamp());
+        // New file - create file ID and register
+        let file_id = self.register_file(&path_str, content_hash)?;
         
         // Index the file content
         self.reindex_file_content(path, &path_str, file_id, &content)
+    }
+    
+    /// Read file content and calculate its hash
+    fn read_file_with_hash(&self, path: &Path) -> IndexResult<(String, String)> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| IndexError::FileRead { 
+                path: path.to_path_buf(), 
+                source: e 
+            })?;
+        let hash = calculate_hash(&content);
+        Ok((content, hash))
+    }
+    
+    
+    /// Register a new file in the index
+    fn register_file(&mut self, path_str: &str, content_hash: String) -> IndexResult<FileId> {
+        let file_id = FileId::new(self.data.file_counter)
+            .ok_or(IndexError::FileIdExhausted)?;
+        self.data.file_counter += 1;
+        self.data.file_map.insert(path_str.to_string(), file_id);
+        self.data.file_hashes.insert(file_id, content_hash);
+        self.data.file_timestamps.insert(file_id, get_utc_timestamp());
+        Ok(file_id)
     }
     
     /// Remove all symbols from a file (used before re-indexing)
@@ -171,20 +186,20 @@ impl SimpleIndexer {
     }
     
     /// Start a batch operation for Tantivy indexing
-    pub fn start_tantivy_batch(&self) -> Result<(), String> {
+    pub fn start_tantivy_batch(&self) -> IndexResult<()> {
         if let Some(ref doc_index) = self.document_index {
             doc_index.start_batch()
-                .map_err(|e| format!("Failed to start Tantivy batch: {}", e))
+                .map_err(|e| IndexError::General(format!("Failed to start Tantivy batch: {}", e)))
         } else {
             Ok(())
         }
     }
     
     /// Commit the current Tantivy batch
-    pub fn commit_tantivy_batch(&self) -> Result<(), String> {
+    pub fn commit_tantivy_batch(&self) -> IndexResult<()> {
         if let Some(ref doc_index) = self.document_index {
             doc_index.commit_batch()
-                .map_err(|e| format!("Failed to commit Tantivy batch: {}", e))
+                .map_err(|e| IndexError::General(format!("Failed to commit Tantivy batch: {}", e)))
         } else {
             Ok(())
         }
@@ -248,10 +263,19 @@ impl SimpleIndexer {
     }
     
     /// Index or re-index file content
-    fn reindex_file_content(&mut self, path: &Path, _path_str: &str, file_id: FileId, content: &str) -> Result<FileId, String> {
+    fn reindex_file_content(&mut self, path: &Path, _path_str: &str, file_id: FileId, content: &str) -> IndexResult<FileId> {
         // Detect language from file extension
         let language = Language::from_path(path)
-            .ok_or_else(|| format!("Unsupported file type: {}", path.display()))?;
+            .ok_or_else(|| {
+                let extension = path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                IndexError::UnsupportedFileType {
+                    path: path.to_path_buf(),
+                    extension,
+                }
+            })?;
         
         // Create parser for this language
         let mut parser = self.parser_factory.create_parser(language)?;
@@ -488,49 +512,51 @@ impl SimpleIndexer {
     }
     
     /// Clear the Tantivy index (useful for force re-indexing)
-    pub fn clear_tantivy_index(&self) -> Result<(), String> {
+    pub fn clear_tantivy_index(&self) -> IndexResult<()> {
         if let Some(ref doc_index) = self.document_index {
             doc_index.clear()
-                .map_err(|e| format!("Failed to clear Tantivy index: {}", e))
+                .map_err(|e| IndexError::General(format!("Failed to clear Tantivy index: {}", e)))
         } else {
             Ok(())
         }
     }
     
     /// Search for symbols using full-text search
+    #[must_use = "Search results should be used"]
     pub fn search(
         &self, 
         query: &str, 
         limit: usize,
         kind_filter: Option<crate::types::SymbolKind>,
         module_filter: Option<&str>,
-    ) -> Result<Vec<SearchResult>, String> {
+    ) -> IndexResult<Vec<SearchResult>> {
         if let Some(ref doc_index) = self.document_index {
             doc_index.search(query, limit, kind_filter, module_filter)
-                .map_err(|e| format!("Search failed: {}", e))
+                .map_err(|e| IndexError::General(format!("Search failed: {}", e)))
         } else {
-            Err("Document index not available".to_string())
+            Err(IndexError::General("Document index not available. Check your index configuration.".to_string()))
         }
     }
     
     /// Get total number of indexed documents
-    pub fn document_count(&self) -> Result<u64, String> {
+    pub fn document_count(&self) -> IndexResult<u64> {
         if let Some(ref doc_index) = self.document_index {
             doc_index.document_count()
-                .map_err(|e| format!("Failed to get document count: {}", e))
+                .map_err(|e| IndexError::General(format!("Failed to get document count: {}", e)))
         } else {
             Ok(0)
         }
     }
     
     /// Index all files in a directory recursively
+    #[must_use = "The indexing result should be checked for errors"]
     pub fn index_directory(
         &mut self, 
         root: &Path, 
         show_progress: bool,
         dry_run: bool,
         max_files: Option<usize>,
-    ) -> Result<IndexStats, String> {
+    ) -> IndexResult<IndexStats> {
         // Set project root for module path calculation
         self.set_project_root(root.to_path_buf());
         
@@ -590,7 +616,7 @@ impl SimpleIndexer {
                     stats.symbols_found += new_symbols;
                 }
                 Err(e) => {
-                    stats.add_error(file_path.clone(), e);
+                    stats.add_error(file_path.clone(), e.to_string());
                 }
             }
             

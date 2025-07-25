@@ -13,6 +13,7 @@ use crate::parsing::Language;
 use crate::Settings;
 
 /// Walks directories to find source files to index
+#[derive(Debug)]
 pub struct FileWalker {
     settings: Arc<Settings>,
 }

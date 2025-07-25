@@ -2,7 +2,7 @@ use crate::{Symbol, SymbolId, FileId, SymbolKind};
 use dashmap::DashMap;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SymbolStore {
     symbols: Arc<DashMap<SymbolId, Symbol>>,
     by_name: Arc<DashMap<String, Vec<SymbolId>>>,
@@ -118,6 +118,16 @@ impl SymbolStore {
 
     pub fn iter(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.symbols.iter().map(|entry| entry.value().clone())
+    }
+    
+    /// Get all symbols as a Vec - prefer iter() to avoid allocation when possible
+    pub fn to_vec(&self) -> Vec<Symbol> {
+        self.iter().collect()
+    }
+    
+    /// Get a reference to all symbol IDs for a given name
+    pub fn as_ids_for_name(&self, name: &str) -> Option<Vec<SymbolId>> {
+        self.by_name.get(name).map(|ids| ids.clone())
     }
 }
 

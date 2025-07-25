@@ -4,10 +4,11 @@
 //! language detection and configuration settings.
 
 use std::sync::Arc;
-use crate::Settings;
+use crate::{Settings, IndexError, IndexResult};
 use super::{Language, LanguageParser, RustParser};
 
 /// Factory for creating language parsers based on configuration
+#[derive(Debug)]
 pub struct ParserFactory {
     settings: Arc<Settings>,
 }
@@ -19,31 +20,44 @@ impl ParserFactory {
     }
     
     /// Create a parser for the specified language
-    pub fn create_parser(&self, language: Language) -> Result<Box<dyn LanguageParser>, String> {
+    #[must_use = "Parser creation may fail and should be handled"]
+    pub fn create_parser(&self, language: Language) -> IndexResult<Box<dyn LanguageParser>> {
         // Check if language is enabled in settings
         let lang_key = language.config_key();
         if let Some(config) = self.settings.languages.get(lang_key) {
             if !config.enabled {
-                return Err(format!("Language {} is disabled in configuration", language.name()));
+                return Err(IndexError::ConfigError {
+                    reason: format!("Language {} is disabled in configuration. Enable it in your settings to use.", language.name()),
+                });
             }
         }
         
         match language {
             Language::Rust => {
-                let parser = RustParser::new()?;
+                let parser = RustParser::new()
+                    .map_err(|e| IndexError::General(e))?;
                 Ok(Box::new(parser))
             }
             Language::Python => {
                 // TODO: Implement PythonParser
-                Err("Python parser not yet implemented".to_string())
+                Err(IndexError::General(format!(
+                    "{} parser not yet implemented. Currently only Rust is supported.", 
+                    language.name()
+                )))
             }
             Language::JavaScript => {
                 // TODO: Implement JavaScriptParser
-                Err("JavaScript parser not yet implemented".to_string())
+                Err(IndexError::General(format!(
+                    "{} parser not yet implemented. Currently only Rust is supported.", 
+                    language.name()
+                )))
             }
             Language::TypeScript => {
                 // TODO: Implement TypeScriptParser
-                Err("TypeScript parser not yet implemented".to_string())
+                Err(IndexError::General(format!(
+                    "{} parser not yet implemented. Currently only Rust is supported.", 
+                    language.name()
+                )))
             }
         }
     }
@@ -94,8 +108,8 @@ mod tests {
         let result = factory.create_parser(Language::Rust);
         
         assert!(result.is_err());
-        if let Err(err_msg) = result {
-            assert!(err_msg.contains("disabled"));
+        if let Err(err) = result {
+            assert!(matches!(err, IndexError::ConfigError { reason } if reason.contains("disabled")));
         }
     }
     

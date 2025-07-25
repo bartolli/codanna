@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::fs;
 use std::sync::Arc;
-use crate::{IndexData, SimpleIndexer, Settings};
+use crate::{IndexData, SimpleIndexer, Settings, IndexError, IndexResult};
 
 /// Manages persistence of the index
 pub struct IndexPersistence {
@@ -25,34 +25,69 @@ impl IndexPersistence {
     }
     
     /// Save the indexer to disk
-    pub fn save(&self, indexer: &SimpleIndexer) -> Result<(), Box<dyn std::error::Error>> {
+    #[must_use = "Save errors should be handled to ensure data is persisted"]
+    pub fn save(&self, indexer: &SimpleIndexer) -> IndexResult<()> {
         // Create directory if it doesn't exist
-        fs::create_dir_all(&self.base_path)?;
+        fs::create_dir_all(&self.base_path)
+            .map_err(|e| IndexError::FileWrite {
+                path: self.base_path.clone(),
+                source: e,
+            })?;
         
         // Serialize only the data
-        let data = bincode::serialize(indexer.data())?;
+        let data = bincode::serialize(indexer.data())
+            .map_err(|e| IndexError::PersistenceError {
+                path: self.index_path(),
+                source: Box::new(e),
+            })?;
         
         // Write to file atomically (write to temp, then rename)
         let temp_path = self.index_path().with_extension("tmp");
-        fs::write(&temp_path, data)?;
-        fs::rename(temp_path, self.index_path())?;
+        fs::write(&temp_path, data)
+            .map_err(|e| IndexError::FileWrite {
+                path: temp_path.clone(),
+                source: e,
+            })?;
+        fs::rename(&temp_path, self.index_path())
+            .map_err(|e| IndexError::FileWrite {
+                path: self.index_path(),
+                source: e,
+            })?;
         
         Ok(())
     }
     
     /// Load the indexer from disk
-    pub fn load(&self) -> Result<SimpleIndexer, Box<dyn std::error::Error>> {
-        let data = fs::read(self.index_path())?;
-        let index_data: IndexData = bincode::deserialize(&data)?;
+    #[must_use = "Load errors should be handled appropriately"]
+    pub fn load(&self) -> IndexResult<SimpleIndexer> {
+        let data = fs::read(self.index_path())
+            .map_err(|e| IndexError::FileRead {
+                path: self.index_path(),
+                source: e,
+            })?;
+        let index_data: IndexData = bincode::deserialize(&data)
+            .map_err(|e| IndexError::LoadError {
+                path: self.index_path(),
+                source: Box::new(e),
+            })?;
         
         // Create indexer from loaded data
         Ok(SimpleIndexer::from_data(index_data))
     }
     
     /// Load the indexer from disk with custom settings
-    pub fn load_with_settings(&self, settings: Arc<Settings>) -> Result<SimpleIndexer, Box<dyn std::error::Error>> {
-        let data = fs::read(self.index_path())?;
-        let index_data: IndexData = bincode::deserialize(&data)?;
+    #[must_use = "Load errors should be handled appropriately"]
+    pub fn load_with_settings(&self, settings: Arc<Settings>) -> IndexResult<SimpleIndexer> {
+        let data = fs::read(self.index_path())
+            .map_err(|e| IndexError::FileRead {
+                path: self.index_path(),
+                source: e,
+            })?;
+        let index_data: IndexData = bincode::deserialize(&data)
+            .map_err(|e| IndexError::LoadError {
+                path: self.index_path(),
+                source: Box::new(e),
+            })?;
         
         // Create indexer from loaded data with settings
         Ok(SimpleIndexer::from_data_with_settings(index_data, settings))
