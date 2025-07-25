@@ -9,13 +9,13 @@ A high-performance code intelligence system for understanding codebases.
 cargo build --release
 
 # The binary will be available at:
-./target/release/codebase-intelligence
+./target/release/codanna
 ```
 
 ## Commands Overview
 
 ```
-codebase-intelligence <COMMAND>
+codanna <COMMAND>
 
 Commands:
   init      Initialize configuration file
@@ -35,7 +35,7 @@ Commands:
 Creates a configuration file with default settings.
 
 ```bash
-codebase-intelligence init [OPTIONS]
+codanna init [OPTIONS]
 ```
 
 **Options:**
@@ -44,20 +44,20 @@ codebase-intelligence init [OPTIONS]
 **Example:**
 ```bash
 # Create initial configuration
-codebase-intelligence init
+codanna init
 
 # Overwrite existing configuration
-codebase-intelligence init --force
+codanna init --force
 ```
 
-Creates `.code-intelligence/settings.toml` with default configuration.
+Creates `.codanna/settings.toml` with default configuration.
 
 ### `index` - Index Source Files
 
 Index source files or entire directories for code intelligence analysis.
 
 ```bash
-codebase-intelligence index [OPTIONS] <PATH>
+codanna index [OPTIONS] <PATH>
 ```
 
 **Arguments:**
@@ -80,19 +80,19 @@ The indexer uses SHA256 content hashing to track file changes:
 **Examples:**
 ```bash
 # Index a single file
-codebase-intelligence index src/main.rs
+codanna index src/main.rs
 
 # Index entire directory with progress
-codebase-intelligence index src --progress
+codanna index src --progress
 
 # Dry run to see what would be indexed
-codebase-intelligence index . --dry-run
+codanna index . --dry-run
 
 # Index with limited files
-codebase-intelligence index src --max-files 100 --progress
+codanna index src --max-files 100 --progress
 
 # Force re-index with custom thread count
-codebase-intelligence index . --force --threads 8
+codanna index . --force --threads 8
 ```
 
 ### `retrieve` - Query the Index
@@ -100,64 +100,64 @@ codebase-intelligence index . --force --threads 8
 Retrieve various information from the indexed codebase.
 
 ```bash
-codebase-intelligence retrieve <SUBCOMMAND>
+codanna retrieve <SUBCOMMAND>
 ```
 
 #### Subcommands:
 
 ##### `symbol` - Find symbols by name
 ```bash
-codebase-intelligence retrieve symbol <NAME>
+codanna retrieve symbol <NAME>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve symbol SimpleIndexer
+codanna retrieve symbol SimpleIndexer
 ```
 
 ##### `calls` - Show what functions a given function calls
 ```bash
-codebase-intelligence retrieve calls <FUNCTION>
+codanna retrieve calls <FUNCTION>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve calls process_file
+codanna retrieve calls process_file
 ```
 
 ##### `callers` - Show what functions call a given function
 ```bash
-codebase-intelligence retrieve callers <FUNCTION>
+codanna retrieve callers <FUNCTION>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve callers helper_function
+codanna retrieve callers helper_function
 ```
 
 ##### `implementations` - Show what types implement a given trait
 ```bash
-codebase-intelligence retrieve implementations <TRAIT_NAME>
+codanna retrieve implementations <TRAIT_NAME>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve implementations LanguageParser
+codanna retrieve implementations LanguageParser
 ```
 
 ##### `uses` - Show what types a given symbol uses
 ```bash
-codebase-intelligence retrieve uses <SYMBOL>
+codanna retrieve uses <SYMBOL>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve uses SimpleIndexer
+codanna retrieve uses SimpleIndexer
 ```
 
 ##### `impact` - Show the impact radius of changing a symbol
 ```bash
-codebase-intelligence retrieve impact [OPTIONS] <SYMBOL>
+codanna retrieve impact [OPTIONS] <SYMBOL>
 ```
 
 **Options:**
@@ -165,12 +165,12 @@ codebase-intelligence retrieve impact [OPTIONS] <SYMBOL>
 
 **Example:**
 ```bash
-codebase-intelligence retrieve impact parse_function --depth 3
+codanna retrieve impact parse_function --depth 3
 ```
 
 ##### `search` - Search for symbols using full-text search
 ```bash
-codebase-intelligence retrieve search [OPTIONS] <QUERY>
+codanna retrieve search [OPTIONS] <QUERY>
 ```
 
 **Arguments:**
@@ -190,36 +190,36 @@ codebase-intelligence retrieve search [OPTIONS] <QUERY>
 **Examples:**
 ```bash
 # Search for symbols containing "hash"
-codebase-intelligence retrieve search hash
+codanna retrieve search hash
 
 # Search for functions with "test" in the name
-codebase-intelligence retrieve search test --kind function
+codanna retrieve search test --kind function
 
 # Search with fuzzy matching (finds "symbol" even with typo)
-codebase-intelligence retrieve search symbl
+codanna retrieve search symbl
 
 # Limit results and filter by module
-codebase-intelligence retrieve search parser --limit 5 --module "crate::parsing"
+codanna retrieve search parser --limit 5 --module "crate::parsing"
 ```
 
 ##### `defines` - Show what methods a type or trait defines
 ```bash
-codebase-intelligence retrieve defines <SYMBOL>
+codanna retrieve defines <SYMBOL>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve defines LanguageParser
+codanna retrieve defines LanguageParser
 ```
 
 ##### `dependencies` - Show comprehensive dependency analysis
 ```bash
-codebase-intelligence retrieve dependencies <SYMBOL>
+codanna retrieve dependencies <SYMBOL>
 ```
 
 **Example:**
 ```bash
-codebase-intelligence retrieve dependencies SimpleIndexer
+codanna retrieve dependencies SimpleIndexer
 ```
 
 ### `config` - Show Configuration
@@ -227,12 +227,12 @@ codebase-intelligence retrieve dependencies SimpleIndexer
 Display the current configuration settings.
 
 ```bash
-codebase-intelligence config
+codanna config
 ```
 
 **Example:**
 ```bash
-codebase-intelligence config
+codanna config
 ```
 
 ### `serve` - Start MCP Server
@@ -240,7 +240,7 @@ codebase-intelligence config
 Start the Model Context Protocol (MCP) server for AI assistants.
 
 ```bash
-codebase-intelligence serve [OPTIONS]
+codanna serve [OPTIONS]
 ```
 
 **Options:**
@@ -249,10 +249,10 @@ codebase-intelligence serve [OPTIONS]
 **Example:**
 ```bash
 # Start with default settings
-codebase-intelligence serve
+codanna serve
 
 # Start on specific port
-codebase-intelligence serve --port 8080
+codanna serve --port 8080
 
 # Test with MCP inspector
 npx @modelcontextprotocol/inspector cargo run -- serve
@@ -263,7 +263,7 @@ npx @modelcontextprotocol/inspector cargo run -- serve
 Test MCP client functionality by connecting to a server.
 
 ```bash
-codebase-intelligence mcp-test [OPTIONS]
+codanna mcp-test [OPTIONS]
 ```
 
 **Options:**
@@ -274,10 +274,10 @@ codebase-intelligence mcp-test [OPTIONS]
 **Example:**
 ```bash
 # List available tools
-codebase-intelligence mcp-test
+codanna mcp-test
 
 # Test specific tool
-codebase-intelligence mcp-test --tool find_symbol --args '{"name": "main"}'
+codanna mcp-test --tool find_symbol --args '{"name": "main"}'
 ```
 
 ### `mcp` - Direct MCP Tool Calls
@@ -285,7 +285,7 @@ codebase-intelligence mcp-test --tool find_symbol --args '{"name": "main"}'
 Call MCP tools directly without spawning a server (embedded mode).
 
 ```bash
-codebase-intelligence mcp <TOOL> [OPTIONS]
+codanna mcp <TOOL> [OPTIONS]
 ```
 
 **Arguments:**
@@ -305,30 +305,30 @@ codebase-intelligence mcp <TOOL> [OPTIONS]
 **Examples:**
 ```bash
 # Find a symbol
-codebase-intelligence mcp find_symbol --args '{"name": "parse"}'
+codanna mcp find_symbol --args '{"name": "parse"}'
 
 # Get function calls
-codebase-intelligence mcp get_calls --args '{"function_name": "index_file"}'
+codanna mcp get_calls --args '{"function_name": "index_file"}'
 
 # Analyze impact with custom depth
-codebase-intelligence mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
+codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 
 # Get index information
-codebase-intelligence mcp get_index_info
+codanna mcp get_index_info
 
 # Search for symbols with fuzzy matching
-codebase-intelligence mcp search_symbols --args '{"query": "parse", "limit": 5}'
+codanna mcp search_symbols --args '{"query": "parse", "limit": 5}'
 
 # Search for functions only
-codebase-intelligence mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "function"}'
+codanna mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "function"}'
 
 # Search within a specific module
-codebase-intelligence mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
+codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
 ```
 
 ## Configuration File
 
-The configuration file is located at `.code-intelligence/settings.toml`:
+The configuration file is located at `.codanna/settings.toml`:
 
 ```toml
 [indexing]
@@ -353,42 +353,42 @@ port = 7777
 
 [index]
 type = "sqlite"
-path = ".code-intelligence/index"
+path = ".codanna/index"
 ```
 
 ## Typical Workflow
 
 1. **Initialize configuration**
    ```bash
-   codebase-intelligence init
+   codanna init
    ```
 
 2. **Edit configuration** (optional)
    ```bash
-   # Edit .code-intelligence/settings.toml to customize settings
+   # Edit .codanna/settings.toml to customize settings
    ```
 
 3. **Index your codebase**
    ```bash
-   codebase-intelligence index . --progress
+   codanna index . --progress
    ```
 
 4. **Query the index**
    ```bash
    # Find a symbol
-   codebase-intelligence retrieve symbol MyStruct
+   codanna retrieve symbol MyStruct
    
    # See what calls a function
-   codebase-intelligence retrieve callers important_function
+   codanna retrieve callers important_function
    
    # Analyze impact of changes
-   codebase-intelligence retrieve impact core_function --depth 3
+   codanna retrieve impact core_function --depth 3
    ```
 
 5. **Use with AI assistants** (optional)
    ```bash
    # Start MCP server
-   codebase-intelligence serve
+   codanna serve
    ```
 
 ## Testing Scenarios
@@ -398,7 +398,7 @@ These examples demonstrate various indexing options and progress reporting:
 ### Basic Progress Reporting
 ```bash
 # Index with real-time progress updates
-codebase-intelligence index src --progress
+codanna index src --progress
 
 # Output shows:
 # Indexing: 15/22 files (68%) - 21 files/s - ETA: 1s
@@ -407,7 +407,7 @@ codebase-intelligence index src --progress
 ### Dry Run Testing
 ```bash
 # Preview what would be indexed without actually indexing
-codebase-intelligence index . --dry-run
+codanna index . --dry-run
 
 # Shows list of files that would be indexed:
 # Would index 31 files:
@@ -419,25 +419,25 @@ codebase-intelligence index . --dry-run
 ### Limited File Indexing
 ```bash
 # Index only first 5 files (useful for testing)
-codebase-intelligence index src --max-files 5 --progress
+codanna index src --max-files 5 --progress
 
 # Index limited files with dry run
-codebase-intelligence index src --dry-run --max-files 10
+codanna index src --dry-run --max-files 10
 ```
 
 ### Force Re-indexing
 ```bash
 # Force complete re-index with progress
-codebase-intelligence index . --force --progress
+codanna index . --force --progress
 
 # Combine multiple options
-codebase-intelligence index src --force --max-files 20 --progress
+codanna index src --force --max-files 20 --progress
 ```
 
 ### Performance Testing
 ```bash
 # Index large directory to see performance metrics
-codebase-intelligence index /path/to/large/project --progress
+codanna index /path/to/large/project --progress
 
 # Output includes performance stats:
 # Indexing Complete:
@@ -449,11 +449,11 @@ codebase-intelligence index /path/to/large/project --progress
 ### Error Handling
 ```bash
 # Test with non-existent directory
-codebase-intelligence index nonexistent --progress
+codanna index nonexistent --progress
 # Error: Path does not exist: nonexistent
 
 # Test with file instead of directory
-codebase-intelligence index src/main.rs --progress
+codanna index src/main.rs --progress
 # Successfully indexes single file
 ```
 
@@ -471,4 +471,4 @@ codebase-intelligence index src/main.rs --progress
 - If indexing fails, check file permissions and ensure files are valid UTF-8
 - Use `--dry-run` to debug which files would be indexed
 - Check `.gitignore` rules if expected files aren't being indexed
-- Run `codebase-intelligence config` to verify your settings
+- Run `codanna config` to verify your settings

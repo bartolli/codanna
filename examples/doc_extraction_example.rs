@@ -1,6 +1,6 @@
 // Example of how documentation extraction would work
 
-use codebase_intelligence::{Symbol, SymbolKind, SymbolId, FileId, Range};
+use codanna::{Symbol, SymbolKind, SymbolId, FileId, Range};
 
 fn main() {
     // Example 1: Function with rich documentation

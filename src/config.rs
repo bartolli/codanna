@@ -29,7 +29,7 @@ pub struct Settings {
     #[serde(default = "default_index_path")]
     pub index_path: PathBuf,
     
-    /// Workspace root directory (where .code-intelligence is located)
+    /// Workspace root directory (where .codanna is located)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
     
@@ -102,7 +102,7 @@ pub struct McpConfig {
 
 // Default value functions
 fn default_version() -> u32 { 1 }
-fn default_index_path() -> PathBuf { PathBuf::from(".code-intelligence/index") }
+fn default_index_path() -> PathBuf { PathBuf::from(".codanna/index") }
 fn default_parallel_threads() -> usize { num_cpus::get() }
 fn default_true() -> bool { true }
 fn default_false() -> bool { false }
@@ -179,9 +179,9 @@ fn default_languages() -> HashMap<String, LanguageConfig> {
 impl Settings {
     /// Load configuration from all sources
     pub fn load() -> Result<Self, figment::Error> {
-        // Try to find the workspace root by looking for .code-intelligence directory
+        // Try to find the workspace root by looking for .codanna directory
         let config_path = Self::find_workspace_config()
-            .unwrap_or_else(|| PathBuf::from(".code-intelligence/settings.toml"));
+            .unwrap_or_else(|| PathBuf::from(".codanna/settings.toml"));
         
         Figment::new()
             // Start with defaults
@@ -211,13 +211,13 @@ impl Settings {
             })
     }
     
-    /// Find the workspace root by looking for .code-intelligence directory
+    /// Find the workspace root by looking for .codanna directory
     /// Searches from current directory up to root
     fn find_workspace_config() -> Option<PathBuf> {
         let current = std::env::current_dir().ok()?;
         
         for ancestor in current.ancestors() {
-            let config_dir = ancestor.join(".code-intelligence");
+            let config_dir = ancestor.join(".codanna");
             if config_dir.exists() && config_dir.is_dir() {
                 return Some(config_dir.join("settings.toml"));
             }
@@ -233,23 +233,23 @@ impl Settings {
             path
         } else {
             // No workspace found, check current directory
-            let current_config = PathBuf::from(".code-intelligence/settings.toml");
+            let current_config = PathBuf::from(".codanna/settings.toml");
             if !current_config.parent().unwrap().exists() {
-                return Err("No .code-intelligence directory found in current directory or any parent.\nRun 'codebase-intelligence init' to initialize this workspace.".to_string());
+                return Err("No .codanna directory found in current directory or any parent.\nRun 'codanna init' to initialize this workspace.".to_string());
             }
             current_config
         };
         
         // Check if settings.toml exists
         if !config_path.exists() {
-            return Err("No settings.toml found in .code-intelligence directory.\nRun 'codebase-intelligence init' to create one.".to_string());
+            return Err("No settings.toml found in .codanna directory.\nRun 'codanna init' to create one.".to_string());
         }
         
         // Try to parse the config file to check if it's valid
         match std::fs::read_to_string(&config_path) {
             Ok(content) => {
                 if let Err(e) = toml::from_str::<Settings>(&content) {
-                    return Err(format!("Configuration file is corrupted: {}\nRun 'codebase-intelligence init --force' to regenerate.", e));
+                    return Err(format!("Configuration file is corrupted: {}\nRun 'codanna init --force' to regenerate.", e));
                 }
             }
             Err(e) => {
@@ -260,12 +260,12 @@ impl Settings {
         Ok(())
     }
     
-    /// Get the workspace root directory (where .code-intelligence is located)
+    /// Get the workspace root directory (where .codanna is located)
     pub fn workspace_root() -> Option<PathBuf> {
         let current = std::env::current_dir().ok()?;
         
         for ancestor in current.ancestors() {
-            let config_dir = ancestor.join(".code-intelligence");
+            let config_dir = ancestor.join(".codanna");
             if config_dir.exists() && config_dir.is_dir() {
                 return Some(ancestor.to_path_buf());
             }
@@ -296,7 +296,7 @@ impl Settings {
     
     /// Create a default settings file
     pub fn init_config_file(force: bool) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let config_path = PathBuf::from(".code-intelligence/settings.toml");
+        let config_path = PathBuf::from(".codanna/settings.toml");
         
         if !force && config_path.exists() {
             return Err("Configuration file already exists. Use --force to overwrite".into());
@@ -331,7 +331,7 @@ mod tests {
     fn test_default_settings() {
         let settings = Settings::default();
         assert_eq!(settings.version, 1);
-        assert_eq!(settings.index_path, PathBuf::from(".code-intelligence/index"));
+        assert_eq!(settings.index_path, PathBuf::from(".codanna/index"));
         assert!(settings.indexing.parallel_threads > 0);
         assert!(settings.languages.contains_key("rust"));
     }
@@ -420,7 +420,7 @@ enabled = true
         std::env::set_current_dir(&temp_dir).unwrap();
         
         // Create config directory
-        let config_dir = temp_dir.path().join(".code-intelligence");
+        let config_dir = temp_dir.path().join(".codanna");
         fs::create_dir_all(&config_dir).unwrap();
         
         // Create a config file

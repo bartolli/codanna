@@ -10,7 +10,7 @@ fn test_init_command() {
     std::env::set_current_dir(temp_path).unwrap();
     
     // Run init command
-    let output = Command::new(env!("CARGO_BIN_EXE_codebase-intelligence"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codanna"))
         .arg("init")
         .output()
         .expect("Failed to run init command");
@@ -18,7 +18,7 @@ fn test_init_command() {
     assert!(output.status.success());
     
     // Check that config file was created
-    let config_path = temp_path.join(".code-intelligence/settings.toml");
+    let config_path = temp_path.join(".codanna/settings.toml");
     assert!(config_path.exists());
     
     // Verify config content
@@ -34,7 +34,7 @@ fn test_config_command() {
     let temp_path = temp_dir.path();
     
     // Create a custom config
-    let config_dir = temp_path.join(".code-intelligence");
+    let config_dir = temp_path.join(".codanna");
     std::fs::create_dir_all(&config_dir).unwrap();
     
     let config_content = r#"
@@ -49,7 +49,7 @@ parallel_threads = 99
     std::env::set_current_dir(temp_path).unwrap();
     
     // Run config command
-    let output = Command::new(env!("CARGO_BIN_EXE_codebase-intelligence"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codanna"))
         .arg("config")
         .output()
         .expect("Failed to run config command");

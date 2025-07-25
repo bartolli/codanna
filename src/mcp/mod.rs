@@ -389,7 +389,7 @@ impl ServerHandler for CodeIntelligenceServer {
                 .enable_tools()
                 .build(),
             server_info: Implementation {
-                name: "codebase-intelligence".to_string(),
+                name: "codanna".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             instructions: Some(

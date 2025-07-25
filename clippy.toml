@@ -1,0 +1,15 @@
+# Minimum supported Rust version
+# Since we use edition 2024, we require at least Rust 1.85
+msrv = "1.85"
+
+# Allow more arguments since we have functions with many parameters
+# (e.g., add_document in tantivy.rs has 11 arguments)
+too-many-arguments-threshold = 12
+
+# Don't lint private items - focus on public API
+check-private-items = false
+
+# Allow common patterns in tests
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-dbg-in-tests = true

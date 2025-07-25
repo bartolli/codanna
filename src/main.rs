@@ -1,13 +1,11 @@
 use clap::{Parser, Subcommand};
-use codebase_intelligence::{SimpleIndexer, SymbolKind, RelationKind, Settings, IndexPersistence};
+use codanna::{SimpleIndexer, SymbolKind, RelationKind, Settings, IndexPersistence};
 use std::path::PathBuf;
-use std::fs;
 use std::sync::Arc;
 
-const INDEX_STATE_FILE: &str = ".codebase-intelligence-index";
-
 #[derive(Parser)]
-#[command(name = "codebase-intelligence")]
+#[command(name = "codanna")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "A code intelligence system for understanding codebases")]
 struct Cli {
     #[command(subcommand)]
@@ -183,7 +181,7 @@ async fn main() {
     
     match &cli.command {
         Commands::Init { force } => {
-            let config_path = PathBuf::from(".code-intelligence/settings.toml");
+            let config_path = PathBuf::from(".codanna/settings.toml");
             
             if config_path.exists() && !force {
                 eprintln!("Configuration file already exists at: {}", config_path.display());
@@ -288,7 +286,7 @@ async fn main() {
             eprintln!("To test: npx @modelcontextprotocol/inspector cargo run -- serve");
             
             // Create MCP server from existing index
-            let server = codebase_intelligence::mcp::CodeIntelligenceServer::from_persistence(&config)
+            let server = codanna::mcp::CodeIntelligenceServer::from_persistence(&config)
                 .await
                 .map_err(|e| {
                     eprintln!("Failed to create MCP server: {}", e);
@@ -315,12 +313,8 @@ async fn main() {
                 // Single file indexing
                 match indexer.index_file(&path) {
                     Ok(file_id) => {
-                        // Save the indexed file path for retrieve commands
-                        if let Err(e) = fs::write(INDEX_STATE_FILE, path.to_string_lossy().as_ref()) {
-                            eprintln!("Warning: Could not save index state: {}", e);
-                        }
                         
-                        let language_name = codebase_intelligence::parsing::Language::from_path(&path)
+                        let language_name = codanna::parsing::Language::from_path(&path)
                             .map(|l| l.to_string())
                             .unwrap_or_else(|| "unknown".to_string());
                         println!("Successfully indexed: {} [{}]", path.display(), language_name);
@@ -681,7 +675,7 @@ async fn main() {
         }
         
         Commands::McpTest { server_binary, tool: _, args: _ } => {
-            use codebase_intelligence::mcp::client::CodeIntelligenceClient;
+            use codanna::mcp::client::CodeIntelligenceClient;
             
             // Get server binary path (default to current executable)
             let server_path = server_binary.unwrap_or_else(|| {
@@ -698,7 +692,7 @@ async fn main() {
         
         Commands::Mcp { tool, args } => {
             // Embedded mode - use already loaded indexer directly
-            let server = codebase_intelligence::mcp::CodeIntelligenceServer::new(indexer);
+            let server = codanna::mcp::CodeIntelligenceServer::new(indexer);
             
             // Parse arguments if provided
             let arguments = if let Some(args_str) = args {
@@ -718,7 +712,7 @@ async fn main() {
             };
             
             // Call the tool directly
-            use codebase_intelligence::mcp::*;
+            use codanna::mcp::*;
             use rmcp::handler::server::tool::Parameters;
             
             let result = match tool.as_str() {

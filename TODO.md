@@ -112,7 +112,7 @@ This document tracks the development progress following TDD principles. Each tas
 ### ✅ 5.4 Configuration
 - **Status**: COMPLETED
 - **Commands**: init, config
-- **Files**: Settings stored in `.code-intelligence/settings.toml`
+- **Files**: Settings stored in `.codanna/settings.toml`
 
 ## 🚧 Phase 6: MCP Integration (PARTIALLY COMPLETED)
 

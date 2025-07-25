@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Installing codebase-intelligence dependencies..."
+echo "Installing codanna dependencies..."
 
 # Core dependencies
 echo "Installing core dependencies..."

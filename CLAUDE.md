@@ -27,29 +27,32 @@ cargo run -- <command>
 For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 
 ### Quick Examples
+
 ```bash
 # Index entire directory with progress
-./target/debug/codebase-intelligence index src --progress
+./target/debug/codanna index src --progress
 
 # Find a symbol by name
-./target/debug/codebase-intelligence retrieve symbol SimpleIndexer
+./target/debug/codanna retrieve symbol SimpleIndexer
 
 # Show function dependencies
-./target/debug/codebase-intelligence retrieve dependencies parse_function
+./target/debug/codanna retrieve dependencies parse_function
 
 # Start MCP server
-./target/debug/codebase-intelligence serve
+./target/debug/codanna serve
 ```
 
 ## Architecture Overview
 
 ### Core Design Principles
+
 - **Type Safety First**: Pure Rust implementation with no dynamic types
 - **Performance Focused**: Target 10,000+ files/second indexing
 - **Memory Efficient**: ~100 bytes per symbol, compact representations
 - **Multi-Target**: Standalone binary, library, or MCP server
 
 ### Key Technology Stack
+
 - **tree-sitter**: Multi-language parsing
 - **petgraph**: Type-safe graph operations
 - **tantivy**: Full-text search optimized for code
@@ -59,6 +62,7 @@ For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 - **sqlx + SQLite**: Metadata persistence
 
 ### Performance Targets
+
 - Indexing: 10,000+ files/second
 - Search latency: <10ms for semantic search
 - Memory: ~100MB for 1M symbols
@@ -68,18 +72,21 @@ For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 ## Key Implementation Details
 
 ### Data Structures
+
 - `CompactSymbol`: 32-byte cache-line aligned structure
 - `CompactReference`: 16-byte reference structure
 - Use `NonZeroU32` for space optimization
 - String interning for efficient storage
 
 ### Parallel Processing Strategy
+
 - Work-stealing queues for file processing
 - Thread-local parser pools
 - Chunk size: `num_cpus::get() * 4`
 - Parallel git walk for file discovery
 
 ### Memory Optimization
+
 - Zero-copy serialization with rkyv
 - Memory-mapped files for instant loading
 - Cache-line aligned structures (32 bytes, 2 per cache line)
@@ -87,6 +94,7 @@ For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 ## Current Capabilities
 
 The system can:
+
 - Index both single files and entire directory trees
 - Extract symbols (functions, methods, structs, traits) from Rust code
 - Detect and track relationships between symbols (calls, implements, uses, defines)
@@ -97,7 +105,95 @@ The system can:
 
 ## Development Guidelines
 
+**Rust Coding Principles**
+
+**Function Signatures - Zero-Cost Abstractions**
+
+- Use `&str` over `String`, `&[T]` over `Vec<T>` in parameters - maximizes caller flexibility
+- Use `impl Trait` over trait objects when possible
+
+**The Rule:**
+
+- **Take owned types** (`String`, `Vec<T>`) when you need to **store or transform** the data
+- **Take borrowed types** (`&str`, `&[T]`) when you only need to **read or process** the data
+
+```rust
+// ✅ Flexible - accepts any string-like data
+fn parse_config(input: &str) -> Result<Config, Error> { ... }
+
+// ❌ Forces ownership transfer or expensive clones
+fn parse_config(input: String) -> Result<Config, Error> { ... }
+```
+
+**Functional Decomposition**
+
+- Break complex parsing into helper functions by responsibility
+- Use `iter().map().collect()` chains over manual loops
+- Narrow scope to avoid lifetime complexity
+
+**The Rule:**
+
+- **One function, one responsibility** - if you're doing lexing AND parsing AND validation, split it
+- **Break up when you hit nested pattern matching** deeper than 2 levels
+
+```rust
+pub fn parse_code(input: &str) -> Result<Ast, ParseError> {
+    let tokens = tokenize(input)?;        // Lexing responsibility
+    let ast = parse_tokens(&tokens)?;     // Parsing responsibility
+    validate_ast(&ast)?;                  // Validation responsibility
+    Ok(ast)
+}
+```
+
+**Error Handling**
+
+- Use `thiserror` for library errors with context
+- Make errors actionable - include suggestions when possible
+- Prefer `Result<T, E>` over panics; use `expect()` only for impossible states
+
+**The Rule:**
+
+- **Library code**: Use `thiserror` - callers need structured errors
+- **Application code**: `anyhow` is fine - you're handling errors finally
+- **Add context at boundaries** - when crossing module/crate boundaries
+
+**Type-Driven Design**
+
+- Use newtypes for domain modeling
+- Make invalid states unrepresentable at compile time
+- Leverage builder patterns for complex configuration
+
+**The Rule:**
+
+- **Primitive obsession is bad** - `UserId(u64)` instead of raw `u64`
+- **If it can be invalid, make it a type** - don't rely on runtime validation alone
+- **More than 3 constructor parameters** = time for a builder pattern
+
+**API Ergonomics**
+
+- Implement `Debug`, `Clone`, `PartialEq` where sensible
+- Use `#[must_use]` on important return values
+- Provide both owned/borrowed variants: `into_foo()` and `as_foo()`
+
+**The Rule:**
+
+- **Always implement `Debug`** unless you have a very good reason not to
+- **If users might ignore your Result, add `#[must_use]`**
+- **Conversion methods**: `into_` consumes, `as_` borrows, `to_` clones
+
+**Performance**
+
+- Prefer iterators over intermediate collections
+- Use `Cow<'_, str>` when you might need owned or borrowed data
+
+**The Rule:**
+
+- **Hot path = no allocations** - use iterators and borrowing
+- **One-time setup = allocations are fine** - optimize for readability
+- **When in doubt, measure** - don't optimize prematurely
+
 When implementing new features:
+
 1. Always check CLI.md for existing command documentation
 2. Update CLI.md when adding new commands or options
 3. Follow the existing pattern in the parser trait for new languages
@@ -112,3 +208,4 @@ When implementing new features:
 - Focus on maintaining the performance targets outlined above
 - Use Rust idioms and leverage the type system for safety
 - Prioritize zero-copy operations and memory efficiency
+- Ypu **MUST** follow "## Development Guidelines"

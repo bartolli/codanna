@@ -17,7 +17,7 @@ A high-performance, type-safe code indexing and intelligence system built in pur
 
 ```toml
 [package]
-name = "codebase-intelligence"
+name = "codanna"
 version = "0.1.0"
 edition = "2021"
 
@@ -359,7 +359,7 @@ impl IncrementalIndexer {
 ```bash
 # Single binary with everything
 cargo build --release
-./target/release/codebase-intelligence index /path/to/code
+./target/release/codanna index /path/to/code
 ```
 
 ### 2. Node.js Bindings
@@ -375,13 +375,13 @@ pub async fn find_similar_code(code: String) -> Result<String> {
 ### 3. MCP Server
 ```bash
 # Run as MCP server
-codebase-intelligence serve --mcp --port 7777
+codanna serve --mcp --port 7777
 ```
 
 ### 4. Library
 ```toml
 [dependencies]
-codebase-intelligence = "0.1"
+codanna = "0.1"
 ```
 
 ## Why This Architecture

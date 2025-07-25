@@ -42,7 +42,7 @@ cargo install --path .
 
 Then run the inspector:
 ```bash
-npx @modelcontextprotocol/inspector codebase-intelligence serve
+npx @modelcontextprotocol/inspector codanna serve
 ```
 
 ### Option 2: Use the wrapper script
@@ -59,8 +59,8 @@ Add to your Claude Desktop config:
 ```json
 {
   "mcpServers": {
-    "codebase-intelligence": {
-      "command": "/path/to/codebase-intelligence",
+    "codanna": {
+      "command": "/path/to/codanna",
       "args": ["serve"]
     }
   }

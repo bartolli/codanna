@@ -1,4 +1,4 @@
-use codebase_intelligence::Settings;
+use codanna::Settings;
 use std::env;
 use tempfile::TempDir;
 

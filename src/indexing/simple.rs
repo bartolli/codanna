@@ -38,7 +38,7 @@ impl SimpleIndexer {
             DocumentIndex::new(tantivy_path).ok()
         } else if let Some(ref root) = project_root {
             // Fallback to project root if index path doesn't exist
-            let index_path = root.join(".code-intelligence").join("tantivy");
+            let index_path = root.join(".codanna").join("tantivy");
             DocumentIndex::new(index_path).ok()
         } else {
             None
@@ -207,7 +207,7 @@ impl SimpleIndexer {
                     for symbol in &self.data.symbols {
                         // Get file path from file_map
                         let file_path = self.data.file_map.iter()
-                            .find(|(_, &id)| id == symbol.file_id)
+                            .find(|&(_, &id)| id == symbol.file_id)
                             .map(|(path, _)| path.as_str())
                             .unwrap_or("<unknown>");
                         
@@ -483,7 +483,7 @@ impl SimpleIndexer {
     pub fn get_file_path(&self, file_id: FileId) -> Option<&str> {
         // Find the path in the file_map by searching for the FileId
         self.data.file_map.iter()
-            .find(|(_, &id)| id == file_id)
+            .find(|&(_, &id)| id == file_id)
             .map(|(path, _)| path.as_str())
     }
     

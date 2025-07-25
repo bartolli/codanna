@@ -121,15 +121,15 @@ pub related_symbols: Vec<SymbolReference>,
 
 # Search documentation
 
-codebase-intelligence search docs "parse json"
+codanna search docs "parse json"
 
 # Semantic code search
 
-codebase-intelligence search code "error handling in async context"
+codanna search code "error handling in async context"
 
 # Get context around a location
 
-codebase-intelligence context src/main.rs:150 --radius 10
+codanna context src/main.rs:150 --radius 10
 
 Benefits for AI Assistants
 

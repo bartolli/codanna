@@ -397,6 +397,18 @@ impl DocumentIndex {
         self.reader.reload()?;
         Ok(())
     }
+    
+    /// Get the path where the index is stored
+    /// 
+    /// TODO: Potential use cases for this method:
+    /// - Recreating the index if corrupted
+    /// - Moving or copying the index to another location
+    /// - Displaying index location in diagnostics or status commands
+    /// - Cleaning up the entire index directory
+    /// - Backing up the index data
+    pub fn path(&self) -> &Path {
+        &self.index_path
+    }
 }
 
 #[cfg(test)]

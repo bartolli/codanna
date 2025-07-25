@@ -1,6 +1,6 @@
 //! Tests for incremental indexing functionality
 
-use codebase_intelligence::{SimpleIndexer, calculate_hash};
+use codanna::{SimpleIndexer, calculate_hash};
 use std::fs;
 use tempfile::TempDir;
 

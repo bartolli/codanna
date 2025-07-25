@@ -41,7 +41,7 @@ impl FileWalker {
         if let Some(_project_root) = &self.settings.indexing.project_root {
             // This helps the ignore crate understand the project structure
             // even if it's not a git repository
-            builder.add_custom_ignore_filename(".code-intelligence-ignore");
+            builder.add_custom_ignore_filename(".codanna-ignore");
         }
         
         // Add custom ignore patterns using overrides

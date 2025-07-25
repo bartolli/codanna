@@ -1,6 +1,6 @@
 version = 1
-index_path = ".code-intelligence/index"
-workspace_root = "/Users/bartolli/Projects/codebase-intelligence"
+index_path = ".codanna/index"
+workspace_root = "/Users/bartolli/Projects/codanna"
 
 [indexing]
 parallel_threads = 16
