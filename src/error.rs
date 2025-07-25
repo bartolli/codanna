@@ -74,9 +74,70 @@ pub enum IndexError {
         reason: String,
     },
     
+    /// Tantivy-specific errors
+    #[error("Tantivy operation failed during {operation}: {cause}")]
+    TantivyError {
+        operation: String,
+        cause: String,
+    },
+    
+    /// Transaction errors
+    #[error("Transaction failed after operations: {operations:?}. Cause: {cause}")]
+    TransactionFailed {
+        operations: Vec<String>,
+        cause: String,
+    },
+    
+    /// Mutex poisoned error
+    #[error("Internal mutex was poisoned, likely due to panic in another thread")]
+    MutexPoisoned,
+    
+    /// Corrupted index error
+    #[error("Index appears to be corrupted: {reason}")]
+    IndexCorrupted {
+        reason: String,
+    },
+    
     /// General errors for cases where we need to preserve existing behavior
     #[error("{0}")]
     General(String),
+}
+
+impl IndexError {
+    /// Get recovery suggestions for this error
+    pub fn recovery_suggestions(&self) -> Vec<&'static str> {
+        match self {
+            Self::TantivyError { .. } => vec![
+                "Try running 'codanna index --force' to rebuild the index",
+                "Check disk space and permissions in the index directory",
+            ],
+            Self::TransactionFailed { .. } => vec![
+                "The operation was rolled back, your index is in a consistent state",
+                "Try the operation again, it may succeed on retry",
+            ],
+            Self::MutexPoisoned => vec![
+                "Restart the application to clear the poisoned state",
+                "If the problem persists, run 'codanna index --force'",
+            ],
+            Self::IndexCorrupted { .. } => vec![
+                "Run 'codanna index --force' to rebuild from scratch",
+                "Check for disk errors or filesystem corruption",
+            ],
+            Self::LoadError { .. } | Self::PersistenceError { .. } => vec![
+                "The index will be loaded from Tantivy on next start",
+                "Run 'codanna index --force' if you continue to have issues",
+            ],
+            Self::FileRead { .. } => vec![
+                "Check that the file exists and you have read permissions",
+                "Ensure the file is not locked by another process",
+            ],
+            Self::UnsupportedFileType { .. } => vec![
+                "Currently only Rust files (.rs) are supported",
+                "Support for other languages is coming soon",
+            ],
+            _ => vec![],
+        }
+    }
 }
 
 /// Errors specific to parsing operations

@@ -12,6 +12,22 @@ ignore_patterns = [
 ]
 include_tests = true
 include_docs = false
+use_bincode_snapshots = false
+
+[languages.python]
+enabled = false
+extensions = [
+    "py",
+    "pyi",
+]
+
+[languages.python.parser_options]
+
+[languages.rust]
+enabled = true
+extensions = ["rs"]
+
+[languages.rust.parser_options]
 
 [languages.typescript]
 enabled = false
@@ -23,21 +39,6 @@ extensions = [
 ]
 
 [languages.typescript.parser_options]
-
-[languages.rust]
-enabled = true
-extensions = ["rs"]
-
-[languages.rust.parser_options]
-
-[languages.python]
-enabled = false
-extensions = [
-    "py",
-    "pyi",
-]
-
-[languages.python.parser_options]
 
 [mcp]
 port = 7777

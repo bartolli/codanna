@@ -68,6 +68,14 @@ pub struct IndexingConfig {
     /// Include doc comments in the index
     #[serde(default = "default_false")]
     pub include_docs: bool,
+    
+    /// Enable bincode snapshots for faster loading (optional)
+    #[serde(default = "default_false")]
+    pub use_bincode_snapshots: bool,
+    
+    /// Interval between automatic snapshots in seconds (if snapshots enabled)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -135,6 +143,8 @@ impl Default for IndexingConfig {
             ],
             include_tests: true,
             include_docs: false,
+            use_bincode_snapshots: false,
+            snapshot_interval_secs: None,
         }
     }
 }
@@ -233,16 +243,12 @@ impl Settings {
             path
         } else {
             // No workspace found, check current directory
-            let current_config = PathBuf::from(".codanna/settings.toml");
-            if !current_config.parent().unwrap().exists() {
-                return Err("No .codanna directory found in current directory or any parent.\nRun 'codanna init' to initialize this workspace.".to_string());
-            }
-            current_config
+            PathBuf::from(".codanna/settings.toml")
         };
         
         // Check if settings.toml exists
         if !config_path.exists() {
-            return Err("No settings.toml found in .codanna directory.\nRun 'codanna init' to create one.".to_string());
+            return Err("No configuration file found".to_string());
         }
         
         // Try to parse the config file to check if it's valid

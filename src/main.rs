@@ -165,8 +165,26 @@ enum RetrieveQuery {
 async fn main() {
     let cli = Cli::parse();
     
-    // For non-init commands, check if project is initialized
-    if !matches!(cli.command, Commands::Init { .. }) {
+    // For index command, auto-initialize if needed
+    if matches!(cli.command, Commands::Index { .. }) {
+        match Settings::check_init() {
+            Err(_) => {
+                // Auto-initialize for index command
+                eprintln!("Initializing project configuration...");
+                match Settings::init_config_file(false) {
+                    Ok(path) => {
+                        eprintln!("Created configuration file at: {}", path.display());
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: Could not create config file: {}", e);
+                        eprintln!("Using default configuration.");
+                    }
+                }
+            }
+            Ok(_) => {} // Config exists, continue
+        }
+    } else if !matches!(cli.command, Commands::Init { .. }) {
+        // For other commands, just warn
         if let Err(warning) = Settings::check_init() {
             eprintln!("Warning: {}", warning);
             eprintln!("Using default configuration for now.");
@@ -355,6 +373,16 @@ async fn main() {
                     }
                     Err(e) => {
                         eprintln!("Error indexing file: {}", e);
+                        
+                        // Display recovery suggestions
+                        let suggestions = e.recovery_suggestions();
+                        if !suggestions.is_empty() {
+                            eprintln!("\nSuggestions:");
+                            for suggestion in suggestions {
+                                eprintln!("  • {}", suggestion);
+                            }
+                        }
+                        
                         std::process::exit(1);
                     }
                 }
@@ -382,6 +410,16 @@ async fn main() {
                     }
                     Err(e) => {
                         eprintln!("Error indexing directory: {}", e);
+                        
+                        // Display recovery suggestions
+                        let suggestions = e.recovery_suggestions();
+                        if !suggestions.is_empty() {
+                            eprintln!("\nSuggestions:");
+                            for suggestion in suggestions {
+                                eprintln!("  • {}", suggestion);
+                            }
+                        }
+                        
                         std::process::exit(1);
                     }
                 }

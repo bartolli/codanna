@@ -274,7 +274,13 @@ impl DocumentIndex {
     
     /// Commit the current batch and reload the reader
     pub fn commit_batch(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut writer_lock = self.writer.lock().unwrap();
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer mutex in commit_batch");
+                poisoned.into_inner()
+            }
+        };
         if let Some(mut writer) = writer_lock.take() {
             writer.commit()?;
             // Reload the reader to see new documents
@@ -499,7 +505,13 @@ impl DocumentIndex {
         to: SymbolId,
         rel: &Relationship,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut writer_lock = self.writer.lock().unwrap();
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer mutex in store_relationship");
+                poisoned.into_inner()
+            }
+        };
         let writer = writer_lock.as_mut()
             .ok_or("No active batch. Call start_batch() first")?;
         
@@ -534,7 +546,13 @@ impl DocumentIndex {
         hash: &str,
         timestamp: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut writer_lock = self.writer.lock().unwrap();
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer mutex in store_file_info");
+                poisoned.into_inner()
+            }
+        };
         let writer = writer_lock.as_mut()
             .ok_or("No active batch. Call start_batch() first")?;
         
@@ -555,7 +573,13 @@ impl DocumentIndex {
         key: &str,
         value: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut writer_lock = self.writer.lock().unwrap();
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer mutex in store_metadata");
+                poisoned.into_inner()
+            }
+        };
         let writer = writer_lock.as_mut()
             .ok_or("No active batch. Call start_batch() first")?;
         

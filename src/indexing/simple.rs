@@ -6,7 +6,7 @@ use crate::{
 };
 use crate::storage::{DocumentIndex, SearchResult};
 use crate::parsing::{Language, ParserFactory, RustParser};
-use crate::indexing::{FileWalker, IndexStats, ImportResolver, calculate_hash, get_utc_timestamp};
+use crate::indexing::{FileWalker, IndexStats, ImportResolver, IndexTransaction, calculate_hash, get_utc_timestamp};
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::sync::Arc;
@@ -118,13 +118,60 @@ impl SimpleIndexer {
         &self.data
     }
     
+    /// Get the settings
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+    
     /// Set the project root for module path calculation
     pub fn set_project_root(&mut self, root: PathBuf) {
         self.project_root = Some(root);
     }
     
+    /// Begin a transaction for safe indexing
+    pub fn begin_transaction(&self) -> IndexTransaction {
+        IndexTransaction::new(&self.data)
+    }
+    
+    /// Commit a transaction (make changes permanent)
+    pub fn commit_transaction(&mut self, mut transaction: IndexTransaction) -> IndexResult<()> {
+        // Mark transaction as completed
+        transaction.complete();
+        
+        // Commit Tantivy changes if we have a document index
+        if self.document_index.is_some() {
+            self.commit_tantivy_batch()?;
+        }
+        
+        Ok(())
+    }
+    
+    /// Rollback a transaction (restore previous state)
+    pub fn rollback_transaction(&mut self, transaction: IndexTransaction) {
+        // Restore data from snapshot
+        self.data = transaction.snapshot().clone();
+        
+        // Rebuild in-memory structures
+        self.symbol_store = SymbolStore::new();
+        self.graph = DependencyGraph::new();
+        
+        for symbol in &self.data.symbols {
+            self.symbol_store.insert(symbol.clone());
+            self.graph.add_symbol(symbol.id);
+        }
+        
+        for (from, to, rel) in &self.data.relationships {
+            self.graph.add_relationship(*from, *to, rel.clone());
+        }
+        
+        // Note: Tantivy batch will be abandoned (rollback on drop)
+    }
+    
+    /// Index a file with automatic transaction management
     #[must_use = "The result of indexing a file should be checked"]
     pub fn index_file(&mut self, path: impl AsRef<Path>) -> IndexResult<FileId> {
+        let transaction = self.begin_transaction();
+        
         // Start a Tantivy batch for this file if not already in a batch
         let started_batch = if let Some(ref doc_index) = self.document_index {
             if let Ok(writer_lock) = doc_index.writer.try_lock() {
@@ -142,16 +189,27 @@ impl SimpleIndexer {
             false
         };
         
-        let result = self.index_file_internal(path);
-        
-        // Commit the batch if we started it
-        if started_batch {
-            if let Err(e) = self.commit_tantivy_batch() {
-                eprintln!("Warning: Failed to commit Tantivy batch: {}", e);
+        match self.index_file_internal(path) {
+            Ok(file_id) => {
+                // Commit the batch if we started it
+                if started_batch {
+                    if let Err(e) = self.commit_tantivy_batch() {
+                        eprintln!("Warning: Failed to commit Tantivy batch: {}", e);
+                        self.rollback_transaction(transaction);
+                        return Err(e);
+                    }
+                }
+                
+                // Commit the transaction
+                self.commit_transaction(transaction)?;
+                Ok(file_id)
+            }
+            Err(e) => {
+                // Rollback on error
+                self.rollback_transaction(transaction);
+                Err(e)
             }
         }
-        
-        result
     }
     
     fn index_file_internal(&mut self, path: impl AsRef<Path>) -> IndexResult<FileId> {
