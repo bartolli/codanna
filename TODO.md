@@ -143,7 +143,7 @@ This document tracks the development progress following TDD principles. Each tas
   - Link symbols across file boundaries
   - Test on multi-file projects
 
-### 2. 🔲 Tantivy Integration (Documentation Search)
+### 2. ✅ Tantivy Integration (Documentation Search)
 - **Why Critical**: Need to search documentation and comments
 - **Tasks**:
   - Create tantivy schema for code
@@ -184,7 +184,7 @@ This document tracks the development progress following TDD principles. Each tas
 - **Index scope**: Single files and full directories
 - **Relationship types**: Calls, Implements, Uses, Defines
 - **Performance**: ~19 files/second (not optimized)
-- **Persistence**: SQLite-based, functional
+- **Persistence**: SQLite-based, functional (TO DISCUSS: How does it work with Tantivy Integration?)
 - **MCP Server**: Implemented with 5 tools
 - **Progress reporting**: Real-time with ETA
 

@@ -64,8 +64,35 @@ impl SimpleIndexer {
     }
     
     /// Create from loaded data with custom settings
-    pub fn from_data_with_settings(data: IndexData, settings: Arc<Settings>) -> Self {
+    pub fn from_data_with_settings(mut data: IndexData, settings: Arc<Settings>) -> Self {
         let mut indexer = Self::with_settings(settings);
+        
+        // Check if we should load from Tantivy instead
+        if data.symbols.is_empty() && indexer.document_index.is_some() {
+            if let Some(ref doc_index) = indexer.document_index {
+                match doc_index.document_count() {
+                    Ok(count) if count > 0 => {
+                        eprintln!("Bincode data is empty but Tantivy has {} documents. Loading from Tantivy...", count);
+                        match doc_index.rebuild_index_data() {
+                            Ok(tantivy_data) => {
+                                eprintln!("Successfully loaded {} symbols from Tantivy", tantivy_data.symbols.len());
+                                data = tantivy_data;
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to rebuild from Tantivy: {}", e);
+                            }
+                        }
+                    }
+                    Ok(count) => {
+                        eprintln!("DEBUG: Tantivy has {} documents, bincode has {} symbols", count, data.symbols.len());
+                    }
+                    Err(e) => {
+                        eprintln!("DEBUG: Failed to get Tantivy document count: {}", e);
+                    }
+                }
+            }
+        }
+        
         indexer.data = data;
         
         // Rebuild in-memory structures
@@ -98,6 +125,36 @@ impl SimpleIndexer {
     
     #[must_use = "The result of indexing a file should be checked"]
     pub fn index_file(&mut self, path: impl AsRef<Path>) -> IndexResult<FileId> {
+        // Start a Tantivy batch for this file if not already in a batch
+        let started_batch = if let Some(ref doc_index) = self.document_index {
+            if let Ok(writer_lock) = doc_index.writer.try_lock() {
+                if writer_lock.is_none() {
+                    drop(writer_lock);
+                    self.start_tantivy_batch().ok();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        
+        let result = self.index_file_internal(path);
+        
+        // Commit the batch if we started it
+        if started_batch {
+            if let Err(e) = self.commit_tantivy_batch() {
+                eprintln!("Warning: Failed to commit Tantivy batch: {}", e);
+            }
+        }
+        
+        result
+    }
+    
+    fn index_file_internal(&mut self, path: impl AsRef<Path>) -> IndexResult<FileId> {
         let path = path.as_ref();
         let path_str = path.to_string_lossy().to_string();
         
@@ -116,8 +173,16 @@ impl SimpleIndexer {
                 self.remove_file_symbols(file_id);
             }
             // Update hash and timestamp for re-indexing
-            self.data.file_hashes.insert(file_id, content_hash);
-            self.data.file_timestamps.insert(file_id, get_utc_timestamp());
+            let timestamp = get_utc_timestamp();
+            self.data.file_hashes.insert(file_id, content_hash.clone());
+            self.data.file_timestamps.insert(file_id, timestamp);
+            
+            // Update in Tantivy if available
+            if let Some(ref doc_index) = self.document_index {
+                if let Err(e) = doc_index.store_file_info(file_id, &path_str, &content_hash, timestamp) {
+                    eprintln!("Failed to update file info in Tantivy: {}", e);
+                }
+            }
             // Reindex with existing file_id
             return self.reindex_file_content(path, &path_str, file_id, &content);
         }
@@ -146,9 +211,24 @@ impl SimpleIndexer {
         let file_id = FileId::new(self.data.file_counter)
             .ok_or(IndexError::FileIdExhausted)?;
         self.data.file_counter += 1;
+        let timestamp = get_utc_timestamp();
+        
+        // Store in IndexData
         self.data.file_map.insert(path_str.to_string(), file_id);
-        self.data.file_hashes.insert(file_id, content_hash);
-        self.data.file_timestamps.insert(file_id, get_utc_timestamp());
+        self.data.file_hashes.insert(file_id, content_hash.clone());
+        self.data.file_timestamps.insert(file_id, timestamp);
+        
+        // Store in Tantivy if available
+        if let Some(ref doc_index) = self.document_index {
+            if let Err(e) = doc_index.store_file_info(file_id, path_str, &content_hash, timestamp) {
+                eprintln!("Failed to store file info in Tantivy: {}", e);
+            }
+            // Update counters
+            if let Err(e) = doc_index.store_metadata("file_counter", self.data.file_counter as u64) {
+                eprintln!("Failed to update file_counter in Tantivy: {}", e);
+            }
+        }
+        
         Ok(file_id)
     }
     
@@ -205,6 +285,22 @@ impl SimpleIndexer {
         }
     }
     
+    /// Add a relationship to both graph and storage
+    fn add_relationship_internal(&mut self, from: SymbolId, to: SymbolId, rel: Relationship) {
+        // Add to graph
+        self.graph.add_relationship(from, to, rel.clone());
+        
+        // Store for serialization
+        self.data.relationships.push((from, to, rel.clone()));
+        
+        // Store in Tantivy if available
+        if let Some(ref doc_index) = self.document_index {
+            if let Err(e) = doc_index.store_relationship(from, to, &rel) {
+                eprintln!("Failed to store relationship in Tantivy: {}", e);
+            }
+        }
+    }
+    
     /// Sync Tantivy index with loaded symbols
     fn sync_tantivy_index(&self) {
         if let Some(ref doc_index) = self.document_index {
@@ -244,6 +340,31 @@ impl SimpleIndexer {
                         ) {
                             eprintln!("Failed to index symbol in Tantivy: {}", e);
                         }
+                    }
+                    
+                    // Also sync relationships
+                    for (from, to, rel) in &self.data.relationships {
+                        if let Err(e) = doc_index.store_relationship(*from, *to, rel) {
+                            eprintln!("Failed to store relationship in Tantivy: {}", e);
+                        }
+                    }
+                    
+                    // Also sync file info
+                    for (path, &file_id) in &self.data.file_map {
+                        if let Some(hash) = self.data.file_hashes.get(&file_id) {
+                            let timestamp = self.data.file_timestamps.get(&file_id).copied().unwrap_or(0);
+                            if let Err(e) = doc_index.store_file_info(file_id, path, hash, timestamp) {
+                                eprintln!("Failed to store file info in Tantivy: {}", e);
+                            }
+                        }
+                    }
+                    
+                    // Store counters
+                    if let Err(e) = doc_index.store_metadata("file_counter", self.data.file_counter as u64) {
+                        eprintln!("Failed to store file_counter: {}", e);
+                    }
+                    if let Err(e) = doc_index.store_metadata("symbol_counter", self.data.symbol_counter as u64) {
+                        eprintln!("Failed to store symbol_counter: {}", e);
                     }
                     
                     if let Err(e) = self.commit_tantivy_batch() {
@@ -301,6 +422,13 @@ impl SimpleIndexer {
         // Parse symbols
         let mut symbols = parser.parse(&content, file_id, &mut self.data.symbol_counter);
         
+        // Update symbol counter in Tantivy if available
+        if let Some(ref doc_index) = self.document_index {
+            if let Err(e) = doc_index.store_metadata("symbol_counter", self.data.symbol_counter as u64) {
+                eprintln!("Failed to update symbol_counter in Tantivy: {}", e);
+            }
+        }
+        
         // Update symbols with module path and visibility
         for symbol in &mut symbols {
             symbol.module_path = Some(format!("{}::{}", module_path, symbol.name).into());
@@ -345,7 +473,7 @@ impl SimpleIndexer {
                     module_path,
                     None, // context will be added later
                 ) {
-                    eprintln!("Failed to index symbol in Tantivy: {}", e);
+                    eprintln!("Failed to index symbol {} in Tantivy: {}", symbol.name, e);
                 }
             }
             
@@ -367,13 +495,7 @@ impl SimpleIndexer {
                 for callee in &callees {
                     if caller.file_id == file_id {
                         let rel = Relationship::new(RelationKind::Calls);
-                        self.graph.add_relationship(
-                            caller.id,
-                            callee.id,
-                            rel.clone(),
-                        );
-                        // Store for serialization
-                        self.data.relationships.push((caller.id, callee.id, rel));
+                        self.add_relationship_internal(caller.id, callee.id, rel);
                     }
                 }
             }
@@ -391,13 +513,7 @@ impl SimpleIndexer {
                 for trait_symbol in &traits {
                     if type_symbol.file_id == file_id && trait_symbol.kind == crate::SymbolKind::Trait {
                         let rel = Relationship::new(RelationKind::Implements);
-                        self.graph.add_relationship(
-                            type_symbol.id,
-                            trait_symbol.id,
-                            rel.clone(),
-                        );
-                        // Store for serialization
-                        self.data.relationships.push((type_symbol.id, trait_symbol.id, rel));
+                        self.add_relationship_internal(type_symbol.id, trait_symbol.id, rel);
                     }
                 }
             }
@@ -417,13 +533,7 @@ impl SimpleIndexer {
                     if user_symbol.file_id == file_id && 
                        user_symbol.id != used_symbol.id {
                         let rel = Relationship::new(RelationKind::Uses);
-                        self.graph.add_relationship(
-                            user_symbol.id,
-                            used_symbol.id,
-                            rel.clone(),
-                        );
-                        // Store for serialization
-                        self.data.relationships.push((user_symbol.id, used_symbol.id, rel));
+                        self.add_relationship_internal(user_symbol.id, used_symbol.id, rel);
                     }
                 }
             }
@@ -442,13 +552,7 @@ impl SimpleIndexer {
                     if definer_symbol.file_id == file_id && 
                        defined_symbol.file_id == file_id {
                         let rel = Relationship::new(RelationKind::Defines);
-                        self.graph.add_relationship(
-                            definer_symbol.id,
-                            defined_symbol.id,
-                            rel.clone(),
-                        );
-                        // Store for serialization
-                        self.data.relationships.push((definer_symbol.id, defined_symbol.id, rel));
+                        self.add_relationship_internal(definer_symbol.id, defined_symbol.id, rel);
                     }
                 }
             }
@@ -713,5 +817,64 @@ mod tests {
         let symbol = indexer.get_symbol(add_symbol.unwrap()).unwrap();
         assert_eq!(symbol.name.as_ref(), "add");
         assert_eq!(symbol.kind, SymbolKind::Function);
+    }
+    
+    #[test]
+    fn test_tantivy_rebuild() {
+        use tempfile::TempDir;
+        use std::fs;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        let index_path = temp_dir.path().join(".codanna");
+        
+        let code = r#"
+/// Add two numbers
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+/// Multiply two numbers
+fn multiply(x: i32, y: i32) -> i32 {
+    x * y
+}
+
+fn main() {
+    let result = add(5, 3);
+    let product = multiply(result, 2);
+}
+"#;
+        fs::write(&test_file, code).unwrap();
+        
+        // Create settings with our test index path
+        let mut settings = Settings::default();
+        settings.index_path = index_path.clone();
+        let settings = Arc::new(settings);
+        
+        // Index the file with Tantivy enabled
+        let mut indexer = SimpleIndexer::with_settings(settings.clone());
+        indexer.start_tantivy_batch().unwrap();
+        indexer.index_file(&test_file).unwrap();
+        indexer.commit_tantivy_batch().unwrap();
+        
+        // Get the original data
+        let original_symbols = indexer.symbol_count();
+        let original_relationships = indexer.data.relationships.len();
+        
+        // Create a new indexer with empty bincode data but existing Tantivy
+        let empty_data = IndexData::new();
+        let rebuilt_indexer = SimpleIndexer::from_data_with_settings(empty_data, settings);
+        
+        // Should have loaded from Tantivy
+        assert_eq!(rebuilt_indexer.symbol_count(), original_symbols);
+        assert_eq!(rebuilt_indexer.data.relationships.len(), original_relationships);
+        
+        // Verify we can find symbols
+        assert!(rebuilt_indexer.find_symbol("add").is_some());
+        assert!(rebuilt_indexer.find_symbol("multiply").is_some());
+        assert!(rebuilt_indexer.find_symbol("main").is_some());
+        
+        // Verify relationships were loaded (main calls add and multiply)
+        assert!(original_relationships >= 2, "Should have at least 2 call relationships");
     }
 }

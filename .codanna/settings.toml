@@ -1,6 +1,6 @@
 version = 1
 index_path = ".codanna/index"
-workspace_root = "/Users/bartolli/Projects/codanna"
+workspace_root = "/Users/bartolli/Projects/codebase-intelligence"
 
 [indexing]
 parallel_threads = 16
@@ -12,15 +12,6 @@ ignore_patterns = [
 ]
 include_tests = true
 include_docs = false
-
-[languages.python]
-enabled = false
-extensions = [
-    "py",
-    "pyi",
-]
-
-[languages.python.parser_options]
 
 [languages.typescript]
 enabled = false
@@ -38,6 +29,15 @@ enabled = true
 extensions = ["rs"]
 
 [languages.rust.parser_options]
+
+[languages.python]
+enabled = false
+extensions = [
+    "py",
+    "pyi",
+]
+
+[languages.python.parser_options]
 
 [mcp]
 port = 7777

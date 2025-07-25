@@ -60,42 +60,81 @@ impl IndexPersistence {
     /// Load the indexer from disk
     #[must_use = "Load errors should be handled appropriately"]
     pub fn load(&self) -> IndexResult<SimpleIndexer> {
-        let data = fs::read(self.index_path())
-            .map_err(|e| IndexError::FileRead {
-                path: self.index_path(),
-                source: e,
-            })?;
-        let index_data: IndexData = bincode::deserialize(&data)
-            .map_err(|e| IndexError::LoadError {
-                path: self.index_path(),
-                source: Box::new(e),
-            })?;
-        
-        // Create indexer from loaded data
-        Ok(SimpleIndexer::from_data(index_data))
+        // Try to load bincode first
+        match fs::read(self.index_path()) {
+            Ok(data) => {
+                let index_data: IndexData = bincode::deserialize(&data)
+                    .map_err(|e| IndexError::LoadError {
+                        path: self.index_path(),
+                        source: Box::new(e),
+                    })?;
+                
+                // Create indexer from loaded data
+                Ok(SimpleIndexer::from_data(index_data))
+            }
+            Err(_) => {
+                // If bincode doesn't exist, try loading from Tantivy
+                let tantivy_path = self.base_path.join("tantivy");
+                if tantivy_path.join("meta.json").exists() {
+                    // Create an empty IndexData, from_data will load from Tantivy
+                    Ok(SimpleIndexer::from_data(IndexData::new()))
+                } else {
+                    Err(IndexError::FileRead {
+                        path: self.index_path(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "Neither bincode nor Tantivy index found"
+                        ),
+                    })
+                }
+            }
+        }
     }
     
     /// Load the indexer from disk with custom settings
     #[must_use = "Load errors should be handled appropriately"]
     pub fn load_with_settings(&self, settings: Arc<Settings>) -> IndexResult<SimpleIndexer> {
-        let data = fs::read(self.index_path())
-            .map_err(|e| IndexError::FileRead {
-                path: self.index_path(),
-                source: e,
-            })?;
-        let index_data: IndexData = bincode::deserialize(&data)
-            .map_err(|e| IndexError::LoadError {
-                path: self.index_path(),
-                source: Box::new(e),
-            })?;
-        
-        // Create indexer from loaded data with settings
-        Ok(SimpleIndexer::from_data_with_settings(index_data, settings))
+        // Try to load bincode first
+        match fs::read(self.index_path()) {
+            Ok(data) => {
+                let index_data: IndexData = bincode::deserialize(&data)
+                    .map_err(|e| IndexError::LoadError {
+                        path: self.index_path(),
+                        source: Box::new(e),
+                    })?;
+                
+                // Create indexer from loaded data with settings
+                Ok(SimpleIndexer::from_data_with_settings(index_data, settings))
+            }
+            Err(_) => {
+                // If bincode doesn't exist, try loading from Tantivy
+                let tantivy_path = self.base_path.join("tantivy");
+                if tantivy_path.join("meta.json").exists() {
+                    // Create an empty IndexData, from_data_with_settings will load from Tantivy
+                    Ok(SimpleIndexer::from_data_with_settings(IndexData::new(), settings))
+                } else {
+                    Err(IndexError::FileRead {
+                        path: self.index_path(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "Neither bincode nor Tantivy index found"
+                        ),
+                    })
+                }
+            }
+        }
     }
     
-    /// Check if an index exists
+    /// Check if an index exists (either bincode or Tantivy)
     pub fn exists(&self) -> bool {
-        self.index_path().exists()
+        // Check if bincode exists
+        if self.index_path().exists() {
+            return true;
+        }
+        
+        // Check if Tantivy index exists
+        let tantivy_path = self.base_path.join("tantivy");
+        tantivy_path.join("meta.json").exists()
     }
     
     /// Delete the persisted index
