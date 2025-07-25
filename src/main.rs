@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use codanna::{SimpleIndexer, SymbolKind, RelationKind, Settings, IndexPersistence};
+use codanna::{SimpleIndexer, Symbol, IndexingResult, SymbolKind, RelationKind, Settings, IndexPersistence};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,6 +8,10 @@ use std::sync::Arc;
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "A code intelligence system for understanding codebases")]
 struct Cli {
+    /// Path to custom settings.toml file
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
+    
     #[command(subcommand)]
     command: Commands,
 }
@@ -192,10 +196,17 @@ async fn main() {
     }
     
     // Load configuration
-    let mut config = Settings::load().unwrap_or_else(|e| {
-        eprintln!("Configuration error: {}", e);
-        Settings::default()
-    });
+    let mut config = if let Some(config_path) = &cli.config {
+        Settings::load_from(config_path).unwrap_or_else(|e| {
+            eprintln!("Configuration error loading from {}: {}", config_path.display(), e);
+            std::process::exit(1);
+        })
+    } else {
+        Settings::load().unwrap_or_else(|e| {
+            eprintln!("Configuration error: {}", e);
+            Settings::default()
+        })
+    };
     
     match &cli.command {
         Commands::Init { force } => {
@@ -257,8 +268,8 @@ async fn main() {
     let mut indexer = if skip_index_load {
         SimpleIndexer::with_settings(settings.clone()) // Empty indexer, won't be used
     } else {
-        let force_reindex = matches!(cli.command, Commands::Index { force: true, .. });
-        if persistence.exists() && !force_reindex {
+        let force_recreate_index = matches!(cli.command, Commands::Index { force: true, ref path, .. } if path.is_dir());
+        if persistence.exists() && !force_recreate_index {
             eprintln!("DEBUG: Found existing index at {}", config.index_path.display());
             match persistence.load_with_settings(settings.clone()) {
                 Ok(loaded) => {
@@ -272,15 +283,15 @@ async fn main() {
                 }
             }
         } else {
-            if force_reindex && persistence.exists() {
+            if force_recreate_index && persistence.exists() {
                 eprintln!("Force re-indexing requested, creating new index");
             } else if !persistence.exists() {
                 eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
             }
             eprintln!("DEBUG: Creating new index");
             let new_indexer = SimpleIndexer::with_settings(settings.clone());
-            // Clear Tantivy index if force re-indexing
-            if force_reindex {
+            // Clear Tantivy index if force re-indexing directory
+            if force_recreate_index {
                 if let Err(e) = new_indexer.clear_tantivy_index() {
                     eprintln!("Warning: Failed to clear Tantivy index: {}", e);
                 }
@@ -325,18 +336,22 @@ async fn main() {
             }).unwrap();
         }
         
-        Commands::Index { path, force: _, progress, dry_run, max_files, .. } => {
+        Commands::Index { path, force, progress, dry_run, max_files, .. } => {
             // Determine if path is a file or directory
             if path.is_file() {
                 // Single file indexing
-                match indexer.index_file(&path) {
-                    Ok(file_id) => {
-                        
+                match indexer.index_file_with_force(&path, force) {
+                    Ok(result) => {
                         let language_name = codanna::parsing::Language::from_path(&path)
                             .map(|l| l.to_string())
                             .unwrap_or_else(|| "unknown".to_string());
-                        println!("Successfully indexed: {} [{}]", path.display(), language_name);
-                        println!("File ID: {}", file_id.value());
+                        
+                        if result.is_cached() {
+                            println!("Successfully loaded from cache: {} [{}]", path.display(), language_name);
+                        } else {
+                            println!("Successfully indexed: {} [{}]", path.display(), language_name);
+                        }
+                        println!("File ID: {}", result.file_id().value());
                         
                         let symbol_count = indexer.symbol_count();
                         println!("Found {} symbols", symbol_count);
@@ -388,15 +403,19 @@ async fn main() {
                 }
             } else if path.is_dir() {
                 // Directory indexing
-                println!("Indexing directory: {}", path.display());
+                if let Some(max) = max_files {
+                    println!("Indexing directory: {} (limited to {} files)", path.display(), max);
+                } else {
+                    println!("Indexing directory: {}", path.display());
+                }
                 
-                match indexer.index_directory(&path, progress, dry_run, max_files.clone()) {
+                match indexer.index_directory_with_options(&path, progress, dry_run, force, max_files) {
                     Ok(stats) => {
                         stats.display();
                         
                         if !dry_run && stats.files_indexed > 0 {
                             // Save the index
-                            eprintln!("\nSaving index with {} symbols (data: {})...", indexer.symbol_count(), indexer.data_symbol_count());
+                            eprintln!("\nSaving index with {} symbols, {} relationships...", indexer.symbol_count(), indexer.relationship_count());
                             match persistence.save(&indexer) {
                                 Ok(_) => {
                                     println!("Index saved to: {}", config.index_path.display());
@@ -440,7 +459,7 @@ async fn main() {
                         println!("Found {} symbol(s) named '{}':", symbols.len(), name);
                         for symbol in symbols {
                             let file_path = indexer.get_file_path(symbol.file_id)
-                                .unwrap_or("<unknown>");
+                                .unwrap_or_else(|| "<unknown>".to_string());
                             println!("  {:?} at {}:{}", 
                                 symbol.kind,
                                 file_path,
@@ -468,41 +487,65 @@ async fn main() {
                 }
                 
                 RetrieveQuery::Calls { function } => {
-                    match indexer.find_symbol(&function) {
-                        Some(symbol_id) => {
-                            let called = indexer.get_called_functions(symbol_id);
-                            
-                            if called.is_empty() {
-                                println!("{} doesn't call any functions", function);
-                            } else {
-                                println!("{} calls {} function(s):", function, called.len());
-                                for callee in called {
-                                    println!("  -> {}", callee.name);
+                    let symbols = indexer.find_symbols_by_name(&function);
+                    
+                    if symbols.is_empty() {
+                        println!("Function not found: {}", function);
+                    } else {
+                        let mut all_called = Vec::new();
+                        let mut checked_symbols = 0;
+                        
+                        // Check all symbols with this name
+                        for symbol in &symbols {
+                            checked_symbols += 1;
+                            let called = indexer.get_called_functions(symbol.id);
+                            for callee in called {
+                                if !all_called.iter().any(|c: &Symbol| c.id == callee.id) {
+                                    all_called.push(callee);
                                 }
                             }
                         }
-                        None => {
-                            println!("Function not found: {}", function);
+                        
+                        if all_called.is_empty() {
+                            println!("{} doesn't call any functions (checked {} symbol(s) with this name)", function, checked_symbols);
+                        } else {
+                            println!("{} calls {} function(s):", function, all_called.len());
+                            for callee in all_called {
+                                println!("  -> {}", callee.name);
+                            }
                         }
                     }
                 }
                 
                 RetrieveQuery::Callers { function } => {
-                    match indexer.find_symbol(&function) {
-                        Some(symbol_id) => {
-                            let callers = indexer.get_calling_functions(symbol_id);
-                            
-                            if callers.is_empty() {
-                                println!("No functions call {}", function);
-                            } else {
-                                println!("{} function(s) call {}:", callers.len(), function);
-                                for caller in callers {
-                                    println!("  <- {}", caller.name);
+                    let symbols = indexer.find_symbols_by_name(&function);
+                    
+                    if symbols.is_empty() {
+                        println!("Function not found: {}", function);
+                    } else {
+                        let mut all_callers = Vec::new();
+                        let mut checked_symbols = 0;
+                        
+                        // Check all symbols with this name
+                        for symbol in &symbols {
+                            checked_symbols += 1;
+                            let callers = indexer.get_calling_functions(symbol.id);
+                            for caller in callers {
+                                if !all_callers.iter().any(|c: &Symbol| c.id == caller.id) {
+                                    all_callers.push(caller);
                                 }
                             }
                         }
-                        None => {
-                            println!("Function not found: {}", function);
+                        
+                        if all_callers.is_empty() {
+                            println!("No functions call {} (checked {} symbol(s) with this name)", function, checked_symbols);
+                        } else {
+                            println!("{} function(s) call {}:", all_callers.len(), function);
+                            for caller in all_callers {
+                                let file_path = indexer.get_file_path(caller.file_id)
+                                    .unwrap_or_else(|| "<unknown>".to_string());
+                                println!("  <- {} ({}:{})", caller.name, file_path, caller.range.start_line + 1);
+                            }
                         }
                     }
                 }
@@ -536,10 +579,10 @@ async fn main() {
                 RetrieveQuery::Uses { symbol } => {
                     match indexer.find_symbol(&symbol) {
                         Some(symbol_id) => {
-                            let used_types = indexer.graph.get_relationships(symbol_id, RelationKind::Uses)
-                                .into_iter()
-                                .filter_map(|id| indexer.get_symbol(id))
-                                .collect::<Vec<_>>();
+                            let dependencies = indexer.get_dependencies(symbol_id);
+                            let used_types = dependencies.get(&RelationKind::Uses)
+                                .cloned()
+                                .unwrap_or_default();
                             
                             if used_types.is_empty() {
                                 println!("{} doesn't use any types", symbol);
@@ -559,7 +602,7 @@ async fn main() {
                 RetrieveQuery::Impact { symbol, depth } => {
                     match indexer.find_symbol(&symbol) {
                         Some(symbol_id) => {
-                            let impacted = indexer.graph.get_impact_radius(symbol_id, depth);
+                            let impacted = indexer.get_impact_radius(symbol_id, depth);
                             
                             if impacted.is_empty() {
                                 println!("No symbols would be impacted by changing {}", symbol);
@@ -579,7 +622,7 @@ async fn main() {
                                     println!("\n  {}s:", format!("{:?}", kind).to_lowercase());
                                     for sym in symbols {
                                         let file_path = indexer.get_file_path(sym.file_id)
-                                            .unwrap_or("<unknown>");
+                                            .unwrap_or_else(|| "<unknown>".to_string());
                                         println!("    - {} ({}:{})", sym.name, file_path, sym.range.start_line + 1);
                                     }
                                 }
@@ -639,10 +682,10 @@ async fn main() {
                 RetrieveQuery::Defines { symbol } => {
                     match indexer.find_symbol(&symbol) {
                         Some(symbol_id) => {
-                            let defined = indexer.graph.get_relationships(symbol_id, RelationKind::Defines)
-                                .into_iter()
-                                .filter_map(|id| indexer.get_symbol(id))
-                                .collect::<Vec<_>>();
+                            let dependencies = indexer.get_dependencies(symbol_id);
+                            let defined = dependencies.get(&RelationKind::Defines)
+                                .cloned()
+                                .unwrap_or_default();
                             
                             if defined.is_empty() {
                                 println!("{} doesn't define any methods", symbol);
@@ -667,15 +710,12 @@ async fn main() {
                             println!("{}", "=".repeat(50));
                             
                             // Outgoing dependencies (what this symbol depends on)
-                            let dependencies = indexer.graph.get_dependencies(symbol_id);
+                            let dependencies = indexer.get_dependencies(symbol_id);
                             if dependencies.is_empty() {
                                 println!("\nNo outgoing dependencies");
                             } else {
                                 println!("\nOutgoing Dependencies (what {} depends on):", symbol);
-                                for (kind, ids) in dependencies {
-                                    let symbols: Vec<_> = ids.into_iter()
-                                        .filter_map(|id| indexer.get_symbol(id))
-                                        .collect();
+                                for (kind, symbols) in dependencies {
                                     if !symbols.is_empty() {
                                         println!("\n  {:?}:", kind);
                                         for sym in symbols {
@@ -686,15 +726,12 @@ async fn main() {
                             }
                             
                             // Incoming dependencies (what depends on this symbol)
-                            let dependents = indexer.graph.get_dependents(symbol_id);
+                            let dependents = indexer.get_dependents(symbol_id);
                             if dependents.is_empty() {
                                 println!("\nNo incoming dependencies");
                             } else {
                                 println!("\nIncoming Dependencies (what depends on {}):", symbol);
-                                for (kind, ids) in dependents {
-                                    let symbols: Vec<_> = ids.into_iter()
-                                        .filter_map(|id| indexer.get_symbol(id))
-                                        .collect();
+                                for (kind, symbols) in dependents {
                                     if !symbols.is_empty() {
                                         println!("\n  {:?} by:", kind);
                                         for sym in symbols {

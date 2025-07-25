@@ -69,13 +69,6 @@ pub struct IndexingConfig {
     #[serde(default = "default_false")]
     pub include_docs: bool,
     
-    /// Enable bincode snapshots for faster loading (optional)
-    #[serde(default = "default_false")]
-    pub use_bincode_snapshots: bool,
-    
-    /// Interval between automatic snapshots in seconds (if snapshots enabled)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot_interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -143,8 +136,6 @@ impl Default for IndexingConfig {
             ],
             include_tests: true,
             include_docs: false,
-            use_bincode_snapshots: false,
-            snapshot_interval_secs: None,
         }
     }
 }

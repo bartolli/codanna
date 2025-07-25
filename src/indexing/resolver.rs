@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::{FileId, SymbolId, SymbolStore};
+use crate::{FileId, SymbolId};
+// TODO: Update to use Tantivy queries instead of SymbolStore
+// use crate::SymbolStore;
 
 /// Represents an import statement in a file
 #[derive(Debug, Clone)]
@@ -67,12 +69,18 @@ impl ImportResolver {
     /// 1. Direct imports in the file
     /// 2. Glob imports
     /// 3. Prelude items (for Rust)
+    /// 
+    /// TODO: Update to use Tantivy queries instead of SymbolStore
+    #[allow(dead_code)]
     pub fn resolve_symbol(
         &self,
         name: &str,
         from_file: FileId,
-        symbol_store: &SymbolStore,
+        // symbol_store: &SymbolStore,
     ) -> Option<SymbolId> {
+        // Temporarily disabled until updated to use Tantivy
+        None
+        /*
         // Check if there's a direct import for this name
         if let Some(imports) = self.imports_by_file.get(&from_file) {
             for import in imports {
@@ -106,10 +114,15 @@ impl ImportResolver {
         // TODO: Handle prelude items and other implicit imports
         
         None
+        */
     }
     
     /// Resolve an import path to a symbol
-    fn resolve_import_path(&self, path: &str, symbol_store: &SymbolStore) -> Option<SymbolId> {
+    #[allow(dead_code)]
+    fn resolve_import_path(&self, path: &str) -> Option<SymbolId> {
+        // Temporarily disabled until updated to use Tantivy
+        None
+        /*
         // Split the path into segments
         let segments: Vec<&str> = path.split("::").collect();
         if segments.is_empty() {
@@ -124,15 +137,19 @@ impl ImportResolver {
         
         // Find the symbol in the module
         self.find_symbol_in_module(symbol_name, &module_path, symbol_store)
+        */
     }
     
     /// Find a symbol by name within a specific module
+    #[allow(dead_code)]
     fn find_symbol_in_module(
         &self,
         name: &str,
         module_path: &str,
-        symbol_store: &SymbolStore,
     ) -> Option<SymbolId> {
+        // Temporarily disabled until updated to use Tantivy
+        None
+        /*
         // Find all symbols with this name
         let candidates = symbol_store.find_by_name(name);
         
@@ -146,6 +163,7 @@ impl ImportResolver {
         }
         
         None
+        */
     }
     
     /// Get the module path for a file

@@ -2,29 +2,32 @@
 //!
 //! This module provides transactional guarantees for index updates,
 //! ensuring that either all changes are committed or none are.
-
-use crate::{IndexData, FileId, SymbolId};
+//!
+//! With Tantivy-only architecture, transactions are handled by Tantivy's
+//! writer commit system, so this is now a lightweight compatibility layer.
 
 /// A transaction that can be committed or rolled back
+/// 
+/// In the Tantivy-only architecture, this is a lightweight wrapper
+/// since Tantivy handles transactions internally through its writer.
+#[derive(Debug)]
 pub struct IndexTransaction {
-    /// Snapshot of data before transaction started
-    snapshot: IndexData,
     /// Whether this transaction has been committed or rolled back
     completed: bool,
 }
 
 impl IndexTransaction {
-    /// Create a new transaction with a snapshot of current data
-    pub fn new(current_data: &IndexData) -> Self {
+    /// Create a new transaction
+    pub fn new(_data: &()) -> Self {
         Self {
-            snapshot: current_data.clone(),
             completed: false,
         }
     }
     
-    /// Get the snapshot data for rollback
-    pub fn snapshot(&self) -> &IndexData {
-        &self.snapshot
+    /// Get the snapshot data for rollback (no longer applicable)
+    #[deprecated(note = "Snapshot functionality is handled by Tantivy")]
+    pub fn snapshot(&self) -> &() {
+        &()
     }
     
     /// Mark transaction as completed
@@ -47,20 +50,34 @@ impl Drop for IndexTransaction {
 }
 
 /// Transaction context for atomic file operations
+/// 
+/// With Tantivy, file operations are atomic within a batch
 pub struct FileTransaction {
-    pub file_id: FileId,
-    pub path: String,
-    pub old_symbols: Vec<SymbolId>,
-    pub transaction: IndexTransaction,
+    file_id: Option<crate::FileId>,
+    completed: bool,
 }
 
 impl FileTransaction {
-    pub fn new(file_id: FileId, path: String, old_symbols: Vec<SymbolId>, data: &IndexData) -> Self {
+    /// Create a new file transaction
+    pub fn new() -> Self {
         Self {
-            file_id,
-            path,
-            old_symbols,
-            transaction: IndexTransaction::new(data),
+            file_id: None,
+            completed: false,
         }
+    }
+    
+    /// Set the file ID for this transaction
+    pub fn set_file_id(&mut self, file_id: crate::FileId) {
+        self.file_id = Some(file_id);
+    }
+    
+    /// Get the file ID if set
+    pub fn file_id(&self) -> Option<crate::FileId> {
+        self.file_id
+    }
+    
+    /// Mark transaction as completed
+    pub fn complete(&mut self) {
+        self.completed = true;
     }
 }

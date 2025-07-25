@@ -166,8 +166,7 @@ pub enum StorageError {
     #[error("Tantivy index error: {0}")]
     TantivyError(#[from] tantivy::TantivyError),
     
-    #[error("Serialization error: {0}")]
-    SerializationError(#[from] bincode::Error),
+    // Removed bincode error variant - no longer needed with Tantivy-only architecture
     
     #[error("Database error: {0}")]
     DatabaseError(String),

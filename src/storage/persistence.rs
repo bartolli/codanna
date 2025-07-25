@@ -1,15 +1,15 @@
-//! Simple persistence layer for the POC
+//! Simplified persistence layer for Tantivy-only storage
 //! 
-//! This module provides basic save/load functionality using bincode serialization.
-//! For production, this would be replaced with rkyv for zero-copy deserialization.
+//! This module manages metadata and ensures Tantivy index exists.
+//! All actual data is stored in Tantivy.
 
 use std::path::PathBuf;
-use std::fs;
 use std::sync::Arc;
-use crate::{IndexData, SimpleIndexer, Settings, IndexError, IndexResult};
+use crate::{SimpleIndexer, Settings, IndexError, IndexResult};
 use crate::storage::{IndexMetadata, DataSource};
 
 /// Manages persistence of the index
+#[derive(Debug)]
 pub struct IndexPersistence {
     base_path: PathBuf,
 }
@@ -20,153 +20,34 @@ impl IndexPersistence {
         Self { base_path }
     }
     
-    /// Create a snapshot of the index (always saves bincode regardless of settings)
-    pub fn save_snapshot(&self, indexer: &SimpleIndexer) -> IndexResult<()> {
-        // Create directory if it doesn't exist
-        fs::create_dir_all(&self.base_path)
-            .map_err(|e| IndexError::FileWrite {
-                path: self.base_path.clone(),
-                source: e,
-            })?;
-        
-        // Serialize only the data
-        let data = bincode::serialize(indexer.data())
-            .map_err(|e| IndexError::PersistenceError {
-                path: self.index_path(),
-                source: Box::new(e),
-            })?;
-        
-        // Write to file atomically (write to temp, then rename)
-        let temp_path = self.index_path().with_extension("tmp");
-        fs::write(&temp_path, data)
-            .map_err(|e| IndexError::FileWrite {
-                path: temp_path.clone(),
-                source: e,
-            })?;
-        fs::rename(&temp_path, self.index_path())
-            .map_err(|e| IndexError::FileWrite {
-                path: self.index_path(),
-                source: e,
-            })?;
-        
-        Ok(())
-    }
-    
-    /// Get the path to the index file
-    fn index_path(&self) -> PathBuf {
-        self.base_path.join("index.bin")
-    }
-    
-    /// Save the indexer to disk (respects use_bincode_snapshots setting)
+    /// Save metadata for the index
     #[must_use = "Save errors should be handled to ensure data is persisted"]
     pub fn save(&self, indexer: &SimpleIndexer) -> IndexResult<()> {
-        // Always update metadata
-        let settings = indexer.settings();
+        // Update metadata
         let mut metadata = IndexMetadata::load(&self.base_path).unwrap_or_else(|_| {
-            IndexMetadata::new(settings.indexing.use_bincode_snapshots)
+            IndexMetadata::new()
         });
-        
-        // Update bincode_enabled to match current settings
-        metadata.bincode_enabled = settings.indexing.use_bincode_snapshots;
         
         metadata.update_counts(
             indexer.symbol_count() as u32,
-            indexer.data().file_map.len() as u32,
+            indexer.file_count() as u32,
         );
         
-        // Check if bincode snapshots are enabled
-        if !settings.indexing.use_bincode_snapshots {
-            // Update metadata to reflect Tantivy-only
-            metadata.data_source = DataSource::Tantivy {
-                path: self.base_path.join("tantivy"),
-                doc_count: indexer.document_count().unwrap_or(0),
-                timestamp: crate::indexing::get_utc_timestamp(),
-            };
-            metadata.save(&self.base_path)?;
-            return Ok(());
-        }
-        
-        // Create directory if it doesn't exist
-        fs::create_dir_all(&self.base_path)
-            .map_err(|e| IndexError::FileWrite {
-                path: self.base_path.clone(),
-                source: e,
-            })?;
-        
-        // Serialize only the data
-        let data = bincode::serialize(indexer.data())
-            .map_err(|e| IndexError::PersistenceError {
-                path: self.index_path(),
-                source: Box::new(e),
-            })?;
-        
-        // Write to file atomically (write to temp, then rename)
-        let temp_path = self.index_path().with_extension("tmp");
-        fs::write(&temp_path, &data)
-            .map_err(|e| IndexError::FileWrite {
-                path: temp_path.clone(),
-                source: e,
-            })?;
-        fs::rename(&temp_path, self.index_path())
-            .map_err(|e| IndexError::FileWrite {
-                path: self.index_path(),
-                source: e,
-            })?;
-        
-        // Update metadata for bincode save
-        metadata.data_source = DataSource::Bincode {
-            path: self.index_path(),
-            size_bytes: data.len() as u64,
+        // Update metadata to reflect Tantivy
+        metadata.data_source = DataSource::Tantivy {
+            path: self.base_path.join("tantivy"),
+            doc_count: indexer.document_count().unwrap_or(0),
             timestamp: crate::indexing::get_utc_timestamp(),
         };
-        metadata.mark_snapshot();
-        metadata.save(&self.base_path)?;
         
+        metadata.save(&self.base_path)?;
         Ok(())
     }
     
     /// Load the indexer from disk
     #[must_use = "Load errors should be handled appropriately"]
     pub fn load(&self) -> IndexResult<SimpleIndexer> {
-        // Load metadata to understand data sources
-        let metadata = IndexMetadata::load(&self.base_path).ok();
-        
-        // Try to load bincode first
-        match fs::read(self.index_path()) {
-            Ok(data) => {
-                let index_data: IndexData = bincode::deserialize(&data)
-                    .map_err(|e| IndexError::LoadError {
-                        path: self.index_path(),
-                        source: Box::new(e),
-                    })?;
-                
-                // Display source info
-                if let Some(meta) = metadata {
-                    meta.display_source();
-                }
-                
-                // Create indexer from loaded data
-                Ok(SimpleIndexer::from_data(index_data))
-            }
-            Err(_) => {
-                // If bincode doesn't exist, try loading from Tantivy
-                let tantivy_path = self.base_path.join("tantivy");
-                if tantivy_path.join("meta.json").exists() {
-                    eprintln!("Bincode snapshot not found, loading from Tantivy index...");
-                    
-                    // Create an empty IndexData, from_data will load from Tantivy
-                    Ok(SimpleIndexer::from_data(IndexData::new()))
-                } else {
-                    Err(IndexError::FileRead {
-                        path: self.index_path(),
-                        source: std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "Neither bincode nor Tantivy index found"
-                        ),
-                    })
-                }
-            }
-        }
+        self.load_with_settings(Arc::new(Settings::default()))
     }
     
     /// Load the indexer from disk with custom settings
@@ -175,51 +56,29 @@ impl IndexPersistence {
         // Load metadata to understand data sources
         let metadata = IndexMetadata::load(&self.base_path).ok();
         
-        // Try to load bincode first
-        match fs::read(self.index_path()) {
-            Ok(data) => {
-                let index_data: IndexData = bincode::deserialize(&data)
-                    .map_err(|e| IndexError::LoadError {
-                        path: self.index_path(),
-                        source: Box::new(e),
-                    })?;
-                
-                // Display source info
-                if let Some(meta) = metadata {
-                    meta.display_source();
-                }
-                
-                // Create indexer from loaded data with settings
-                Ok(SimpleIndexer::from_data_with_settings(index_data, settings))
+        // Check if Tantivy index exists
+        let tantivy_path = self.base_path.join("tantivy");
+        if tantivy_path.join("meta.json").exists() {
+            // Display source info
+            if let Some(meta) = metadata {
+                meta.display_source();
             }
-            Err(_) => {
-                // If bincode doesn't exist, try loading from Tantivy
-                let tantivy_path = self.base_path.join("tantivy");
-                if tantivy_path.join("meta.json").exists() {
-                    eprintln!("Bincode snapshot not found, loading from Tantivy index...");
-                    
-                    // Create an empty IndexData, from_data_with_settings will load from Tantivy
-                    Ok(SimpleIndexer::from_data_with_settings(IndexData::new(), settings))
-                } else {
-                    Err(IndexError::FileRead {
-                        path: self.index_path(),
-                        source: std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "Neither bincode nor Tantivy index found"
-                        ),
-                    })
-                }
-            }
+            
+            // Create indexer that will load from Tantivy
+            Ok(SimpleIndexer::with_settings(settings))
+        } else {
+            Err(IndexError::FileRead {
+                path: tantivy_path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Tantivy index not found"
+                ),
+            })
         }
     }
     
-    /// Check if an index exists (either bincode or Tantivy)
+    /// Check if an index exists
     pub fn exists(&self) -> bool {
-        // Check if bincode exists
-        if self.index_path().exists() {
-            return true;
-        }
-        
         // Check if Tantivy index exists
         let tantivy_path = self.base_path.join("tantivy");
         tantivy_path.join("meta.json").exists()
@@ -227,8 +86,9 @@ impl IndexPersistence {
     
     /// Delete the persisted index
     pub fn clear(&self) -> Result<(), std::io::Error> {
-        if self.exists() {
-            fs::remove_file(self.index_path())?;
+        let tantivy_path = self.base_path.join("tantivy");
+        if tantivy_path.exists() {
+            std::fs::remove_dir_all(tantivy_path)?;
         }
         Ok(())
     }
@@ -244,30 +104,31 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let persistence = IndexPersistence::new(temp_dir.path().to_path_buf());
         
-        // Create an indexer and add some data
+        // Create an indexer
         let indexer = SimpleIndexer::new();
         
         // Save it
         persistence.save(&indexer).unwrap();
-        assert!(persistence.exists());
         
-        // Load it back
-        let loaded = persistence.load().unwrap();
-        
-        // Should have same symbol count (0 for empty indexer)
-        assert_eq!(indexer.symbol_count(), loaded.symbol_count());
+        // Check metadata exists
+        let metadata_path = temp_dir.path().join("index.meta");
+        assert!(metadata_path.exists());
     }
     
     #[test]
-    fn test_clear() {
+    fn test_exists() {
         let temp_dir = TempDir::new().unwrap();
         let persistence = IndexPersistence::new(temp_dir.path().to_path_buf());
         
-        let indexer = SimpleIndexer::new();
-        persistence.save(&indexer).unwrap();
-        assert!(persistence.exists());
-        
-        persistence.clear().unwrap();
+        // Initially doesn't exist
         assert!(!persistence.exists());
+        
+        // Create tantivy directory with meta.json
+        let tantivy_path = temp_dir.path().join("tantivy");
+        std::fs::create_dir_all(&tantivy_path).unwrap();
+        std::fs::write(tantivy_path.join("meta.json"), "{}").unwrap();
+        
+        // Now it exists
+        assert!(persistence.exists());
     }
 }

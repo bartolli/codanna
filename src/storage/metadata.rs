@@ -26,34 +26,16 @@ pub struct IndexMetadata {
     /// Optional checksum for validation
     pub checksum: Option<String>,
     
-    /// Whether bincode snapshots are enabled
-    pub bincode_enabled: bool,
-    
-    /// Last bincode snapshot timestamp (if any)
-    pub last_snapshot: Option<u64>,
 }
 
 /// Describes where the index data came from
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DataSource {
-    /// Loaded from bincode snapshot
-    Bincode { 
-        path: PathBuf, 
-        size_bytes: u64,
-        timestamp: u64,
-    },
-    
     /// Loaded from Tantivy index
     Tantivy { 
         path: PathBuf, 
         doc_count: u64,
         timestamp: u64,
-    },
-    
-    /// Hybrid: primary source with fallback
-    Hybrid { 
-        primary: Box<DataSource>, 
-        fallback: Box<DataSource>,
     },
     
     /// Fresh index (not loaded)
@@ -62,16 +44,14 @@ pub enum DataSource {
 
 impl IndexMetadata {
     /// Create new metadata for a fresh index
-    pub fn new(bincode_enabled: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             version: 1,
             data_source: DataSource::Fresh,
             symbol_count: 0,
             file_count: 0,
             last_modified: crate::indexing::get_utc_timestamp(),
-            checksum: None,
-            bincode_enabled,
-            last_snapshot: None,
+            checksum: None
         }
     }
     
@@ -82,10 +62,6 @@ impl IndexMetadata {
         self.last_modified = crate::indexing::get_utc_timestamp();
     }
     
-    /// Mark that a bincode snapshot was taken
-    pub fn mark_snapshot(&mut self) {
-        self.last_snapshot = Some(crate::indexing::get_utc_timestamp());
-    }
     
     /// Save metadata to file
     pub fn save(&self, base_path: &Path) -> IndexResult<()> {
@@ -107,7 +83,7 @@ impl IndexMetadata {
         let metadata_path = base_path.join("index.meta");
         
         if !metadata_path.exists() {
-            return Ok(Self::new(false));
+            return Ok(Self::new());
         }
         
         let json = fs::read_to_string(&metadata_path)
@@ -123,16 +99,8 @@ impl IndexMetadata {
     /// Display source information to the user
     pub fn display_source(&self) {
         match &self.data_source {
-            DataSource::Bincode { path, size_bytes, .. } => {
-                eprintln!("Loaded from bincode snapshot: {} ({} bytes)", path.display(), size_bytes);
-            }
             DataSource::Tantivy { path, doc_count, .. } => {
                 eprintln!("Loaded from Tantivy index: {} ({} documents)", path.display(), doc_count);
-            }
-            DataSource::Hybrid { primary, fallback } => {
-                eprintln!("Loaded from hybrid sources:");
-                eprintln!("  Primary: {:?}", primary);
-                eprintln!("  Fallback: {:?}", fallback);
             }
             DataSource::Fresh => {
                 eprintln!("Created fresh index");

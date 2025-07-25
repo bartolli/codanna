@@ -31,7 +31,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::{SimpleIndexer, IndexPersistence, Settings};
+use crate::{SimpleIndexer, IndexPersistence, Settings, Symbol};
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct FindSymbolRequest {
@@ -146,7 +146,7 @@ impl CodeIntelligenceServer {
         let mut result = format!("Found {} symbol(s) named '{}':\n", symbols.len(), name);
         for symbol in symbols {
             let file_path = indexer.get_file_path(symbol.file_id)
-                .unwrap_or("<unknown>");
+                .unwrap_or_else(|| "<unknown>".to_string());
             result.push_str(&format!(
                 "- {:?} at {}:{}\n", 
                 symbol.kind, 
@@ -182,29 +182,39 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.indexer.read().await;
         
-        match indexer.find_symbol(&function_name) {
-            Some(symbol_id) => {
-                let called = indexer.get_called_functions(symbol_id);
-                
-                if called.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        format!("{} doesn't call any functions", function_name)
-                    )]));
+        let symbols = indexer.find_symbols_by_name(&function_name);
+        
+        if symbols.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                format!("Function not found: {}", function_name)
+            )]));
+        }
+        
+        let mut all_called = Vec::new();
+        let mut checked_symbols = 0;
+        
+        // Check all symbols with this name
+        for symbol in &symbols {
+            checked_symbols += 1;
+            let called = indexer.get_called_functions(symbol.id);
+            for callee in called {
+                if !all_called.iter().any(|c: &Symbol| c.id == callee.id) {
+                    all_called.push(callee);
                 }
-
-                let mut result = format!("{} calls {} function(s):\n", function_name, called.len());
-                for callee in called {
-                    result.push_str(&format!("  -> {}\n", callee.name));
-                }
-
-                Ok(CallToolResult::success(vec![Content::text(result)]))
-            }
-            None => {
-                Ok(CallToolResult::success(vec![Content::text(
-                    format!("Function not found: {}", function_name)
-                )]))
             }
         }
+        
+        if all_called.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                format!("{} doesn't call any functions (checked {} symbol(s) with this name)", function_name, checked_symbols)
+            )]));
+        }
+        
+        let mut result = format!("{} calls {} function(s):\n", function_name, all_called.len());
+        for callee in all_called {
+            result.push_str(&format!("  -> {}\n", callee.name));
+        }
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     #[tool(description = "Find all functions that call a given function")]
@@ -214,29 +224,39 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.indexer.read().await;
         
-        match indexer.find_symbol(&function_name) {
-            Some(symbol_id) => {
-                let callers = indexer.get_calling_functions(symbol_id);
-                
-                if callers.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        format!("No functions call {}", function_name)
-                    )]));
+        let symbols = indexer.find_symbols_by_name(&function_name);
+        
+        if symbols.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                format!("Function not found: {}", function_name)
+            )]));
+        }
+        
+        let mut all_callers = Vec::new();
+        let mut checked_symbols = 0;
+        
+        // Check all symbols with this name
+        for symbol in &symbols {
+            checked_symbols += 1;
+            let callers = indexer.get_calling_functions(symbol.id);
+            for caller in callers {
+                if !all_callers.iter().any(|c: &Symbol| c.id == caller.id) {
+                    all_callers.push(caller);
                 }
-
-                let mut result = format!("{} function(s) call {}:\n", callers.len(), function_name);
-                for caller in callers {
-                    result.push_str(&format!("  <- {}\n", caller.name));
-                }
-
-                Ok(CallToolResult::success(vec![Content::text(result)]))
-            }
-            None => {
-                Ok(CallToolResult::success(vec![Content::text(
-                    format!("Function not found: {}", function_name)
-                )]))
             }
         }
+        
+        if all_callers.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                format!("No functions call {} (checked {} symbol(s) with this name)", function_name, checked_symbols)
+            )]));
+        }
+        
+        let mut result = format!("{} function(s) call {}:\n", all_callers.len(), function_name);
+        for caller in all_callers {
+            result.push_str(&format!("  <- {}\n", caller.name));
+        }
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
     #[tool(description = "Analyze the impact radius of changing a symbol")]
@@ -248,7 +268,7 @@ impl CodeIntelligenceServer {
         
         match indexer.find_symbol(&symbol_name) {
             Some(symbol_id) => {
-                let impacted = indexer.graph.get_impact_radius(symbol_id, Some(max_depth));
+                let impacted = indexer.get_impact_radius(symbol_id, Some(max_depth));
                 
                 if impacted.is_empty() {
                     return Ok(CallToolResult::success(vec![Content::text(

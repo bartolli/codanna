@@ -9,7 +9,8 @@ use tantivy::{
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery},
     schema::{
         Field, IndexRecordOption, Schema, SchemaBuilder,
-        TextFieldIndexing, TextOptions, Value, FAST, STORED, STRING,
+        TextFieldIndexing, TextOptions, Value, NumericOptions,
+        FAST, STORED, STRING, INDEXED,
     },
     Index, IndexReader, IndexWriter, IndexSettings, ReloadPolicy, Term,
     TantivyDocument as Document,
@@ -18,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use crate::{SymbolId, SymbolKind, FileId, RelationKind, Relationship};
 use crate::relationship::RelationshipMetadata;
+use super::{StorageError, StorageResult, MetadataKey};
 
 /// Schema fields for the document index
 #[derive(Debug)]
@@ -64,8 +66,14 @@ impl IndexSchema {
         // Document type discriminator (for symbols, relationships, files, metadata)
         let doc_type = builder.add_text_field("doc_type", STRING | STORED | FAST);
         
+        // Numeric options for indexed u64 fields
+        let indexed_u64_options = NumericOptions::default()
+            .set_indexed()
+            .set_stored()
+            .set_fast();
+            
         // Symbol fields (existing)
-        let symbol_id = builder.add_u64_field("symbol_id", STORED | FAST);
+        let symbol_id = builder.add_u64_field("symbol_id", indexed_u64_options.clone());
         let file_path = builder.add_text_field("file_path", STRING | STORED);
         let line_number = builder.add_u64_field("line_number", STORED | FAST);
         let column = builder.add_u64_field("column", STORED);
@@ -89,8 +97,8 @@ impl IndexSchema {
         let kind = builder.add_text_field("kind", STRING | STORED);
         
         // Relationship fields
-        let from_symbol_id = builder.add_u64_field("from_symbol_id", STORED | FAST);
-        let to_symbol_id = builder.add_u64_field("to_symbol_id", STORED | FAST);
+        let from_symbol_id = builder.add_u64_field("from_symbol_id", indexed_u64_options.clone());
+        let to_symbol_id = builder.add_u64_field("to_symbol_id", indexed_u64_options.clone());
         let relation_kind = builder.add_text_field("relation_kind", STRING | STORED | FAST);
         let relation_weight = builder.add_f64_field("relation_weight", STORED);
         let relation_line = builder.add_u64_field("relation_line", STORED);
@@ -98,7 +106,7 @@ impl IndexSchema {
         let relation_context = builder.add_text_field("relation_context", text_options);
         
         // File info fields
-        let file_id = builder.add_u64_field("file_id", STORED | FAST);
+        let file_id = builder.add_u64_field("file_id", indexed_u64_options.clone());
         let file_hash = builder.add_text_field("file_hash", STRING | STORED);
         let file_timestamp = builder.add_u64_field("file_timestamp", STORED | FAST);
         
@@ -182,7 +190,7 @@ impl std::fmt::Debug for DocumentIndex {
 
 impl DocumentIndex {
     /// Create a new document index
-    pub fn new(index_path: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(index_path: impl AsRef<Path>) -> StorageResult<Self> {
         let index_path = index_path.as_ref().to_path_buf();
         std::fs::create_dir_all(&index_path)?;
         
@@ -216,8 +224,8 @@ impl DocumentIndex {
     }
     
     /// Start a batch operation for adding multiple documents
-    pub fn start_batch(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let mut writer_lock = self.writer.lock().unwrap();
+    pub fn start_batch(&self) -> StorageResult<()> {
+        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
         if writer_lock.is_none() {
             let writer = self.index.writer::<Document>(100_000_000)?; // 100MB buffer
             *writer_lock = Some(writer);
@@ -231,6 +239,7 @@ impl DocumentIndex {
         symbol_id: SymbolId,
         name: &str,
         kind: SymbolKind,
+        file_id: FileId,
         file_path: &str,
         line: u32,
         column: u16,
@@ -238,14 +247,15 @@ impl DocumentIndex {
         signature: Option<&str>,
         module_path: &str,
         context: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut writer_lock = self.writer.lock().unwrap();
+    ) -> StorageResult<()> {
+        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
         let writer = writer_lock.as_mut()
-            .ok_or("No active batch. Call start_batch() first")?;
+            .ok_or(StorageError::NoActiveBatch)?;
         
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "symbol");
         doc.add_u64(self.schema.symbol_id, symbol_id.value() as u64);
+        doc.add_u64(self.schema.file_id, file_id.value() as u64);
         doc.add_text(self.schema.name, name);
         doc.add_text(self.schema.file_path, file_path);
         doc.add_u64(self.schema.line_number, line as u64);
@@ -273,7 +283,7 @@ impl DocumentIndex {
     }
     
     /// Commit the current batch and reload the reader
-    pub fn commit_batch(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn commit_batch(&self) -> StorageResult<()> {
         let mut writer_lock = match self.writer.lock() {
             Ok(lock) => lock,
             Err(poisoned) => {
@@ -290,9 +300,9 @@ impl DocumentIndex {
     }
     
     /// Remove documents for a specific file
-    pub fn remove_file_documents(&self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn remove_file_documents(&self, file_path: &str) -> StorageResult<()> {
         // Use existing batch writer if available, otherwise create temporary one
-        let mut writer_lock = self.writer.lock().unwrap();
+        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
         let term = Term::from_field_text(self.schema.file_path, file_path);
         
         if let Some(writer) = writer_lock.as_mut() {
@@ -316,7 +326,7 @@ impl DocumentIndex {
         limit: usize,
         kind_filter: Option<SymbolKind>,
         module_filter: Option<&str>,
-    ) -> Result<Vec<SearchResult>, Box<dyn std::error::Error>> {
+    ) -> StorageResult<Vec<SearchResult>> {
         let searcher = self.reader.searcher();
         
         // Build the query
@@ -397,7 +407,7 @@ impl DocumentIndex {
             let symbol_id = doc.get_first(self.schema.symbol_id)
                 .and_then(|v| v.as_u64())
                 .and_then(|id| SymbolId::new(id as u32))
-                .ok_or("Invalid symbol_id")?;
+                .ok_or(StorageError::InvalidFieldValue { field: "symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
                 
             let name = doc.get_first(self.schema.name)
                 .and_then(|v| v.as_str())
@@ -470,18 +480,400 @@ impl DocumentIndex {
     }
     
     /// Get total number of indexed documents
-    pub fn document_count(&self) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn document_count(&self) -> StorageResult<u64> {
         let searcher = self.reader.searcher();
         Ok(searcher.num_docs())
     }
     
     /// Clear all documents from the index
-    pub fn clear(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn clear(&self) -> StorageResult<()> {
         let mut writer = self.index.writer::<Document>(50_000_000)?;
         writer.delete_all_documents()?;
         writer.commit()?;
         self.reader.reload()?;
         Ok(())
+    }
+    
+    /// Find a symbol by its ID
+    pub fn find_symbol_by_id(&self, id: SymbolId) -> StorageResult<Option<crate::Symbol>> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_u64(self.schema.symbol_id, id.0 as u64),
+            IndexRecordOption::Basic,
+        );
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        
+        if let Some((_score, doc_address)) = top_docs.first() {
+            let doc = searcher.doc::<Document>(*doc_address)?;
+            Ok(Some(self.document_to_symbol(&doc)?))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Find symbols by name
+    pub fn find_symbols_by_name(&self, name: &str) -> StorageResult<Vec<crate::Symbol>> {
+        let searcher = self.reader.searcher();
+        
+        // Create a simple term query for the name field
+        // This avoids issues with special characters in symbol names
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.name, &name.to_lowercase()),
+            IndexRecordOption::Basic,
+        );
+        
+        // First search for exact matches
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
+        let mut symbols = Vec::new();
+        
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            // Only include symbol documents
+            if let Some(doc_type) = doc.get_first(self.schema.doc_type) {
+                if doc_type.as_str() == Some("symbol") {
+                    symbols.push(self.document_to_symbol(&doc)?);
+                }
+            }
+        }
+        
+        Ok(symbols)
+    }
+    
+    /// Find symbols by file ID
+    pub fn find_symbols_by_file(&self, file_id: FileId) -> StorageResult<Vec<crate::Symbol>> {
+        let searcher = self.reader.searcher();
+        let query = BooleanQuery::from(vec![
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "symbol"),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_u64(self.schema.file_id, file_id.0 as u64),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+        ]);
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let mut symbols = Vec::new();
+        
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            symbols.push(self.document_to_symbol(&doc)?);
+        }
+        
+        Ok(symbols)
+    }
+    
+    /// Get all symbols (use with caution on large indexes)
+    pub fn get_all_symbols(&self, limit: usize) -> StorageResult<Vec<crate::Symbol>> {
+        let searcher = self.reader.searcher();
+        let all_query = BooleanQuery::from(vec![]);
+        
+        let top_docs = searcher.search(&all_query, &TopDocs::with_limit(limit))?;
+        let mut symbols = Vec::new();
+        
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            if let Some(doc_type) = doc.get_first(self.schema.doc_type) {
+                if doc_type.as_str() == Some("symbol") {
+                    symbols.push(self.document_to_symbol(&doc)?);
+                }
+            }
+        }
+        
+        Ok(symbols)
+    }
+    
+    /// Convert a Tantivy document to a Symbol
+    fn document_to_symbol(&self, doc: &Document) -> StorageResult<crate::Symbol> {
+        use crate::{Symbol, Range, SymbolKind, Visibility};
+        
+        let symbol_id = doc.get_first(self.schema.symbol_id)
+            .and_then(|v| v.as_u64())
+            .ok_or(StorageError::InvalidFieldValue { field: "symbol_id".to_string(), reason: "missing from document".to_string() })?;
+            
+        let name = doc.get_first(self.schema.name)
+            .and_then(|v| v.as_str())
+            .ok_or(StorageError::InvalidFieldValue { field: "name".to_string(), reason: "missing from document".to_string() })?
+            .to_string();
+            
+        let kind_str = doc.get_first(self.schema.kind)
+            .and_then(|v| v.as_str())
+            .ok_or(StorageError::InvalidFieldValue { field: "kind".to_string(), reason: "missing from document".to_string() })?;
+        let kind = SymbolKind::from_str(kind_str);
+        
+        let file_id = doc.get_first(self.schema.file_id)
+            .and_then(|v| v.as_u64())
+            .ok_or(StorageError::InvalidFieldValue { field: "file_id".to_string(), reason: "missing from document".to_string() })?;
+            
+        let start_line = doc.get_first(self.schema.line_number)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+            
+        let start_col = doc.get_first(self.schema.column)
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u16;
+            
+        let end_line = start_line; // We don't store end_line separately
+            
+        let end_col = 0u16; // We don't store end_col separately
+            
+        let signature = doc.get_first(self.schema.signature)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+            
+        let doc_comment = doc.get_first(self.schema.doc_comment)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+            
+        let module_path = doc.get_first(self.schema.module_path)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+            
+        // Check if symbol is public based on signature containing "pub "
+        let is_public = signature.as_ref()
+            .map(|sig| sig.contains("pub "))
+            .unwrap_or(false);
+            
+        Ok(Symbol {
+            id: SymbolId(symbol_id as u32),
+            name: name.into(),
+            kind,
+            file_id: FileId(file_id as u32),
+            range: Range {
+                start_line,
+                start_column: start_col,
+                end_line,
+                end_column: end_col,
+            },
+            signature: signature.map(|s| s.into()),
+            doc_comment: doc_comment.map(|s| s.into()),
+            module_path: module_path.map(|s| s.into()),
+            visibility: if is_public { Visibility::Public } else { Visibility::Private },
+        })
+    }
+    
+    /// Get file info by path
+    pub fn get_file_info(&self, path: &str) -> StorageResult<Option<(FileId, String)>> {
+        let searcher = self.reader.searcher();
+        let query = BooleanQuery::from(vec![
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "file_info"),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.file_path, path),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+        ]);
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        
+        if let Some((_score, doc_address)) = top_docs.first() {
+            let doc = searcher.doc::<Document>(*doc_address)?;
+            
+            let file_id = doc.get_first(self.schema.file_id)
+                .and_then(|v| v.as_u64())
+                .and_then(|id| FileId::new(id as u32))
+                .ok_or(StorageError::InvalidFieldValue { field: "file_id".to_string(), reason: "not a valid u32".to_string() })?;
+                
+            let hash = doc.get_first(self.schema.file_hash)
+                .and_then(|v| v.as_str())
+                .ok_or(StorageError::InvalidFieldValue { field: "file_hash".to_string(), reason: "missing from document".to_string() })?
+                .to_string();
+                
+            Ok(Some((file_id, hash)))
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Get next file ID
+    pub fn get_next_file_id(&self) -> StorageResult<u32> {
+        let current = self.query_metadata(MetadataKey::FileCounter)?.unwrap_or(0) as u32;
+        Ok(current + 1)
+    }
+    
+    /// Get next symbol ID
+    pub fn get_next_symbol_id(&self) -> StorageResult<u32> {
+        let current = self.query_metadata(MetadataKey::SymbolCounter)?.unwrap_or(0) as u32;
+        Ok(current + 1)
+    }
+    
+    /// Delete a symbol
+    pub fn delete_symbol(&self, id: SymbolId) -> StorageResult<()> {
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer mutex in delete_symbol");
+                poisoned.into_inner()
+            }
+        };
+        let writer = writer_lock.as_mut()
+            .ok_or(StorageError::NoActiveBatch)?;
+            
+        let term = Term::from_field_u64(self.schema.symbol_id, id.0 as u64);
+        writer.delete_term(term);
+        Ok(())
+    }
+    
+    /// Delete relationships for a symbol
+    pub fn delete_relationships_for_symbol(&self, id: SymbolId) -> StorageResult<()> {
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer mutex in delete_relationships");
+                poisoned.into_inner()
+            }
+        };
+        let writer = writer_lock.as_mut()
+            .ok_or(StorageError::NoActiveBatch)?;
+            
+        // Delete where from_symbol_id = id
+        let from_term = Term::from_field_u64(self.schema.from_symbol_id, id.0 as u64);
+        writer.delete_term(from_term);
+        
+        // Delete where to_symbol_id = id
+        let to_term = Term::from_field_u64(self.schema.to_symbol_id, id.0 as u64);
+        writer.delete_term(to_term);
+        
+        Ok(())
+    }
+    
+    /// Count symbols
+    pub fn count_symbols(&self) -> StorageResult<usize> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "symbol"),
+            IndexRecordOption::Basic,
+        );
+        
+        let count = searcher.search(&query, &tantivy::collector::Count)?;
+        Ok(count)
+    }
+    
+    /// Count total number of relationships
+    pub fn count_relationships(&self) -> StorageResult<usize> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "relationship"),
+            IndexRecordOption::Basic,
+        );
+        
+        let count = searcher.search(&query, &tantivy::collector::Count)?;
+        Ok(count)
+    }
+    
+    /// Count files
+    pub fn count_files(&self) -> StorageResult<usize> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "file_info"),
+            IndexRecordOption::Basic,
+        );
+        
+        let count = searcher.search(&query, &tantivy::collector::Count)?;
+        Ok(count)
+    }
+    
+    /// Get relationships from a symbol
+    pub fn get_relationships_from(&self, from_id: SymbolId, kind: RelationKind) -> StorageResult<Vec<(SymbolId, SymbolId, Relationship)>> {
+        let searcher = self.reader.searcher();
+        let query = BooleanQuery::from(vec![
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "relationship"),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_u64(self.schema.from_symbol_id, from_id.0 as u64),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.relation_kind, &format!("{:?}", kind)),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+        ]);
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let mut relationships = Vec::new();
+        
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            
+            let to_id = doc.get_first(self.schema.to_symbol_id)
+                .and_then(|v| v.as_u64())
+                .and_then(|id| SymbolId::new(id as u32))
+                .ok_or(StorageError::InvalidFieldValue { field: "to_symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
+                
+            relationships.push((from_id, to_id, Relationship::new(kind)));
+        }
+        
+        Ok(relationships)
+    }
+    
+    /// Get relationships to a symbol
+    pub fn get_relationships_to(&self, to_id: SymbolId, kind: RelationKind) -> StorageResult<Vec<(SymbolId, SymbolId, Relationship)>> {
+        let searcher = self.reader.searcher();
+        let query = BooleanQuery::from(vec![
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "relationship"),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_u64(self.schema.to_symbol_id, to_id.0 as u64),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.relation_kind, &format!("{:?}", kind)),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+        ]);
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let mut relationships = Vec::new();
+        
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            
+            let from_id = doc.get_first(self.schema.from_symbol_id)
+                .and_then(|v| v.as_u64())
+                .and_then(|id| SymbolId::new(id as u32))
+                .ok_or(StorageError::InvalidFieldValue { field: "from_symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
+                
+            relationships.push((from_id, to_id, Relationship::new(kind)));
+        }
+        
+        Ok(relationships)
+    }
+    
+    /// Get file path by ID
+    pub fn get_file_path(&self, file_id: FileId) -> StorageResult<Option<String>> {
+        let searcher = self.reader.searcher();
+        let query = BooleanQuery::from(vec![
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "file_info"),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_u64(self.schema.file_id, file_id.0 as u64),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+        ]);
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        
+        if let Some((_score, doc_address)) = top_docs.first() {
+            let doc = searcher.doc::<Document>(*doc_address)?;
+            
+            let path = doc.get_first(self.schema.file_path)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+                
+            Ok(path)
+        } else {
+            Ok(None)
+        }
     }
     
     /// Get the path where the index is stored
@@ -504,7 +896,7 @@ impl DocumentIndex {
         from: SymbolId,
         to: SymbolId,
         rel: &Relationship,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> StorageResult<()> {
         let mut writer_lock = match self.writer.lock() {
             Ok(lock) => lock,
             Err(poisoned) => {
@@ -513,7 +905,7 @@ impl DocumentIndex {
             }
         };
         let writer = writer_lock.as_mut()
-            .ok_or("No active batch. Call start_batch() first")?;
+            .ok_or(StorageError::NoActiveBatch)?;
         
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "relationship");
@@ -538,6 +930,23 @@ impl DocumentIndex {
         Ok(())
     }
     
+    /// Index a symbol from a Symbol struct
+    pub fn index_symbol(&self, symbol: &crate::Symbol, file_path: &str) -> StorageResult<()> {
+        self.add_document(
+            symbol.id,
+            &symbol.name,
+            symbol.kind,
+            symbol.file_id,
+            file_path,
+            symbol.range.start_line,
+            symbol.range.start_column,
+            symbol.doc_comment.as_ref().map(|s| s.as_ref()),
+            symbol.signature.as_ref().map(|s| s.as_ref()),
+            symbol.module_path.as_ref().map(|s| s.as_ref()).unwrap_or(""),
+            None, // context not stored in Symbol struct
+        )
+    }
+    
     /// Store file information
     pub(crate) fn store_file_info(
         &self,
@@ -545,7 +954,7 @@ impl DocumentIndex {
         path: &str,
         hash: &str,
         timestamp: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> StorageResult<()> {
         let mut writer_lock = match self.writer.lock() {
             Ok(lock) => lock,
             Err(poisoned) => {
@@ -554,7 +963,7 @@ impl DocumentIndex {
             }
         };
         let writer = writer_lock.as_mut()
-            .ok_or("No active batch. Call start_batch() first")?;
+            .ok_or(StorageError::NoActiveBatch)?;
         
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "file_info");
@@ -570,9 +979,9 @@ impl DocumentIndex {
     /// Store metadata (counters, etc.)
     pub(crate) fn store_metadata(
         &self,
-        key: &str,
+        key: MetadataKey,
         value: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> StorageResult<()> {
         let mut writer_lock = match self.writer.lock() {
             Ok(lock) => lock,
             Err(poisoned) => {
@@ -581,15 +990,16 @@ impl DocumentIndex {
             }
         };
         let writer = writer_lock.as_mut()
-            .ok_or("No active batch. Call start_batch() first")?;
+            .ok_or(StorageError::NoActiveBatch)?;
         
         // First delete any existing metadata with this key
-        let term = Term::from_field_text(self.schema.meta_key, key);
+        let key_str = key.as_str();
+        let term = Term::from_field_text(self.schema.meta_key, key_str);
         writer.delete_term(term);
         
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "metadata");
-        doc.add_text(self.schema.meta_key, key);
+        doc.add_text(self.schema.meta_key, key_str);
         doc.add_u64(self.schema.meta_value, value);
         
         writer.add_document(doc)?;
@@ -597,7 +1007,7 @@ impl DocumentIndex {
     }
     
     /// Query all relationships from the index
-    pub(crate) fn query_relationships(&self) -> Result<Vec<(SymbolId, SymbolId, crate::Relationship)>, Box<dyn std::error::Error>> {
+    pub(crate) fn query_relationships(&self) -> StorageResult<Vec<(SymbolId, SymbolId, crate::Relationship)>> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
             Term::from_field_text(self.schema.doc_type, "relationship"),
@@ -615,16 +1025,16 @@ impl DocumentIndex {
             let from_id = doc.get_first(self.schema.from_symbol_id)
                 .and_then(|v| v.as_u64())
                 .and_then(|id| SymbolId::new(id as u32))
-                .ok_or("Invalid from_symbol_id")?;
+                .ok_or(StorageError::InvalidFieldValue { field: "from_symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
                 
             let to_id = doc.get_first(self.schema.to_symbol_id)
                 .and_then(|v| v.as_u64())
                 .and_then(|id| SymbolId::new(id as u32))
-                .ok_or("Invalid to_symbol_id")?;
+                .ok_or(StorageError::InvalidFieldValue { field: "to_symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
                 
             let kind_str = doc.get_first(self.schema.relation_kind)
                 .and_then(|v| v.as_str())
-                .ok_or("Missing relation_kind")?;
+                .ok_or(StorageError::InvalidFieldValue { field: "relation_kind".to_string(), reason: "missing from document".to_string() })?;
                 
             let weight = doc.get_first(self.schema.relation_weight)
                 .and_then(|v| v.as_f64())
@@ -677,7 +1087,7 @@ impl DocumentIndex {
     }
     
     /// Query all file information from the index
-    pub(crate) fn query_file_info(&self) -> Result<Vec<(FileId, String, String, u64)>, Box<dyn std::error::Error>> {
+    pub(crate) fn query_file_info(&self) -> StorageResult<Vec<(FileId, String, String, u64)>> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
             Term::from_field_text(self.schema.doc_type, "file_info"),
@@ -694,7 +1104,7 @@ impl DocumentIndex {
             let file_id = doc.get_first(self.schema.file_id)
                 .and_then(|v| v.as_u64())
                 .and_then(|id| FileId::new(id as u32))
-                .ok_or("Invalid file_id")?;
+                .ok_or(StorageError::InvalidFieldValue { field: "file_id".to_string(), reason: "not a valid u32".to_string() })?;
                 
             let path = doc.get_first(self.schema.file_path)
                 .and_then(|v| v.as_str())
@@ -716,109 +1126,27 @@ impl DocumentIndex {
         Ok(files)
     }
     
-    /// Rebuild IndexData from Tantivy (for loading when bincode is missing or corrupt)
-    pub(crate) fn rebuild_index_data(&self) -> Result<crate::IndexData, Box<dyn std::error::Error>> {
-        let mut data = crate::IndexData::new();
-        
-        // First, load counters
-        if let Some(file_counter) = self.query_metadata("file_counter")? {
-            data.file_counter = file_counter as u32;
-        }
-        if let Some(symbol_counter) = self.query_metadata("symbol_counter")? {
-            data.symbol_counter = symbol_counter as u32;
-        }
-        
-        // Load all file info
-        for (file_id, path, hash, timestamp) in self.query_file_info()? {
-            data.file_map.insert(path, file_id);
-            data.file_hashes.insert(file_id, hash);
-            data.file_timestamps.insert(file_id, timestamp);
-        }
-        
-        // Load all symbols - we need to query symbol documents
+    /// Count symbols in Tantivy index
+    pub(crate) fn count_symbol_documents(&self) -> StorageResult<u64> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
             Term::from_field_text(self.schema.doc_type, "symbol"),
             IndexRecordOption::Basic,
         );
         
-        let collector = TopDocs::with_limit(1_000_000);
-        let top_docs = searcher.search(&query, &collector)?;
-        
-        eprintln!("DEBUG: Found {} symbol documents in Tantivy", top_docs.len());
-        
-        for (_score, doc_address) in top_docs {
-            let doc: Document = searcher.doc(doc_address)?;
-            
-            let symbol_id = doc.get_first(self.schema.symbol_id)
-                .and_then(|v| v.as_u64())
-                .and_then(|id| SymbolId::new(id as u32))
-                .ok_or("Invalid symbol_id")?;
-                
-            let name = doc.get_first(self.schema.name)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-                
-            // For symbols, the file path is stored, we need to look it up
-            let file_path = doc.get_first(self.schema.file_path)
-                .and_then(|v| v.as_str())
-                .ok_or("Missing file_path")?;
-            
-            // Find the file_id from the file_map we just loaded
-            let file_id = data.file_map.get(file_path)
-                .copied()
-                .ok_or_else(|| format!("File not found in map: {}", file_path))?;
-                
-            let line = doc.get_first(self.schema.line_number)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-                
-            let column = doc.get_first(self.schema.column)
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u16;
-                
-            // Parse kind
-            let kind_str = doc.get_first(self.schema.kind)
-                .and_then(|v| v.as_str())
-                .unwrap_or("Function");
-            let kind = match kind_str {
-                "Function" => SymbolKind::Function,
-                "Struct" => SymbolKind::Struct,
-                "Trait" => SymbolKind::Trait,
-                "Method" => SymbolKind::Method,
-                "Field" => SymbolKind::Field,
-                "Module" => SymbolKind::Module,
-                "Constant" => SymbolKind::Constant,
-                _ => SymbolKind::Function,
-            };
-            
-            let range = crate::Range::new(line, column, line, column); // TODO: Store end position too
-            
-            let mut symbol = crate::Symbol::new(symbol_id, name, kind, file_id, range);
-            
-            // Add optional fields
-            if let Some(doc_comment) = doc.get_first(self.schema.doc_comment).and_then(|v| v.as_str()) {
-                symbol = symbol.with_doc(doc_comment);
-            }
-            if let Some(signature) = doc.get_first(self.schema.signature).and_then(|v| v.as_str()) {
-                symbol = symbol.with_signature(signature);
-            }
-            if let Some(module_path) = doc.get_first(self.schema.module_path).and_then(|v| v.as_str()) {
-                symbol = symbol.with_module_path(module_path);
-            }
-            
-            data.symbols.push(symbol);
-        }
-        
-        // Load all relationships
-        data.relationships = self.query_relationships()?;
-        
-        Ok(data)
+        let count = searcher.search(&query, &tantivy::collector::Count)?;
+        Ok(count as u64)
+    }
+    
+    /// DEPRECATED: This method is no longer needed with Tantivy-only architecture
+    #[deprecated(note = "Use Tantivy queries directly instead of rebuilding IndexData")]
+    pub(crate) fn rebuild_index_data(&self) -> StorageResult<()> {
+        // This method is kept temporarily for compatibility but does nothing
+        Ok(())
     }
     
     /// Query metadata value by key
-    pub(crate) fn query_metadata(&self, key: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
+    pub(crate) fn query_metadata(&self, key: MetadataKey) -> StorageResult<Option<u64>> {
         let searcher = self.reader.searcher();
         
         // Build a compound query for doc_type="metadata" AND meta_key=key
@@ -827,7 +1155,7 @@ impl DocumentIndex {
             IndexRecordOption::Basic,
         );
         let key_query = TermQuery::new(
-            Term::from_field_text(self.schema.meta_key, key),
+            Term::from_field_text(self.schema.meta_key, key.as_str()),
             IndexRecordOption::Basic,
         );
         
@@ -872,15 +1200,17 @@ mod tests {
         
         // Add a document
         let symbol_id = SymbolId::new(1).unwrap();
+        let file_id = FileId::new(1).unwrap();
         index.add_document(
             symbol_id,
             "parse_json",
             SymbolKind::Function,
+            file_id,
             "src/parser.rs",
             42,
             5,
             Some("Parse JSON string into a Value"),
-            Some("fn parse_json(input: &str) -> Result<Value, Error>"),
+            Some("fn parse_json(input: &str) -> StorageResult<Value, Error>"),
             "crate::parser",
             None,
         ).unwrap();
@@ -907,10 +1237,12 @@ mod tests {
         index.start_batch().unwrap();
         
         let symbol_id = SymbolId::new(1).unwrap();
+        let file_id = FileId::new(1).unwrap();
         index.add_document(
             symbol_id,
             "handle_request",
             SymbolKind::Function,
+            file_id,
             "src/server.rs",
             100,
             0,
@@ -994,15 +1326,14 @@ mod tests {
         // Start batch
         index.start_batch().unwrap();
         
-        index.store_metadata("file_counter", 42).unwrap();
-        index.store_metadata("symbol_counter", 100).unwrap();
+        index.store_metadata(MetadataKey::FileCounter, 42).unwrap();
+        index.store_metadata(MetadataKey::SymbolCounter, 100).unwrap();
         
         // Commit batch
         index.commit_batch().unwrap();
         
         // Query metadata
-        assert_eq!(index.query_metadata("file_counter").unwrap(), Some(42));
-        assert_eq!(index.query_metadata("symbol_counter").unwrap(), Some(100));
-        assert_eq!(index.query_metadata("missing_key").unwrap(), None);
+        assert_eq!(index.query_metadata(MetadataKey::FileCounter).unwrap(), Some(42));
+        assert_eq!(index.query_metadata(MetadataKey::SymbolCounter).unwrap(), Some(100));
     }
 }

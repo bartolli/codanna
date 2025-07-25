@@ -1,11 +1,32 @@
-use std::num::NonZeroU32;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SymbolId(NonZeroU32);
+pub struct SymbolId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct FileId(NonZeroU32);
+pub struct FileId(pub u32);
+
+/// Result of an indexing operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexingResult {
+    /// File was newly indexed
+    Indexed(FileId),
+    /// File was loaded from cache (unchanged)
+    Cached(FileId),
+}
+
+impl IndexingResult {
+    pub fn file_id(&self) -> FileId {
+        match self {
+            IndexingResult::Indexed(id) => *id,
+            IndexingResult::Cached(id) => *id,
+        }
+    }
+    
+    pub fn is_cached(&self) -> bool {
+        matches!(self, IndexingResult::Cached(_))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Range {
@@ -35,40 +56,38 @@ pub enum SymbolKind {
 
 impl SymbolId {
     pub fn new(value: u32) -> Option<Self> {
-        NonZeroU32::new(value).map(Self)
+        if value == 0 {
+            None
+        } else {
+            Some(Self(value))
+        }
     }
 
     pub fn value(&self) -> u32 {
-        self.0.get()
+        self.0
     }
     
     /// Convert to the underlying u32 value
     pub fn to_u32(self) -> u32 {
-        self.0.get()
-    }
-    
-    /// Get the inner NonZeroU32
-    pub fn as_non_zero(&self) -> NonZeroU32 {
         self.0
     }
 }
 
 impl FileId {
     pub fn new(value: u32) -> Option<Self> {
-        NonZeroU32::new(value).map(Self)
+        if value == 0 {
+            None
+        } else {
+            Some(Self(value))
+        }
     }
 
     pub fn value(&self) -> u32 {
-        self.0.get()
+        self.0
     }
     
     /// Convert to the underlying u32 value
     pub fn to_u32(self) -> u32 {
-        self.0.get()
-    }
-    
-    /// Get the inner NonZeroU32
-    pub fn as_non_zero(&self) -> NonZeroU32 {
         self.0
     }
 }
@@ -97,6 +116,28 @@ impl Range {
         }
         
         true
+    }
+}
+
+impl SymbolKind {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "Function" => SymbolKind::Function,
+            "Method" => SymbolKind::Method,
+            "Struct" => SymbolKind::Struct,
+            "Enum" => SymbolKind::Enum,
+            "Trait" => SymbolKind::Trait,
+            "Interface" => SymbolKind::Interface,
+            "Class" => SymbolKind::Class,
+            "Module" => SymbolKind::Module,
+            "Variable" => SymbolKind::Variable,
+            "Constant" => SymbolKind::Constant,
+            "Field" => SymbolKind::Field,
+            "Parameter" => SymbolKind::Parameter,
+            "TypeAlias" => SymbolKind::TypeAlias,
+            "Macro" => SymbolKind::Macro,
+            _ => SymbolKind::Function, // Default fallback
+        }
     }
 }
 
