@@ -3,6 +3,7 @@ use crate::{
     FileId, SymbolId, Relationship, RelationKind, Symbol, IndexData,
     Settings, Visibility,
 };
+use crate::storage::{DocumentIndex, SearchResult};
 use crate::parsing::{Language, ParserFactory, RustParser};
 use crate::indexing::{FileWalker, IndexStats, ImportResolver, calculate_hash, get_utc_timestamp};
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ pub struct SimpleIndexer {
     data: IndexData,
     settings: Arc<Settings>,
     project_root: Option<PathBuf>,
+    document_index: Option<DocumentIndex>,
 }
 
 impl SimpleIndexer {
@@ -30,6 +32,18 @@ impl SimpleIndexer {
         let project_root = settings.workspace_root.clone()
             .or_else(|| settings.indexing.project_root.clone());
             
+        // Use the configured index path for Tantivy
+        let document_index = if settings.index_path.exists() || settings.index_path.parent().map_or(false, |p| p.exists()) {
+            let tantivy_path = settings.index_path.join("tantivy");
+            DocumentIndex::new(tantivy_path).ok()
+        } else if let Some(ref root) = project_root {
+            // Fallback to project root if index path doesn't exist
+            let index_path = root.join(".code-intelligence").join("tantivy");
+            DocumentIndex::new(index_path).ok()
+        } else {
+            None
+        };
+        
         Self {
             symbol_store: SymbolStore::new(),
             graph: DependencyGraph::new(),
@@ -38,6 +52,7 @@ impl SimpleIndexer {
             data: IndexData::new(),
             settings,
             project_root,
+            document_index,
         }
     }
     
@@ -60,6 +75,9 @@ impl SimpleIndexer {
         for (from, to, rel) in &indexer.data.relationships {
             indexer.graph.add_relationship(*from, *to, rel.clone());
         }
+        
+        // Rebuild Tantivy index if it's empty or missing
+        indexer.sync_tantivy_index();
         
         // TODO: Rebuild import resolver from stored data
         
@@ -141,6 +159,92 @@ impl SimpleIndexer {
         self.data.relationships.retain(|(from, to, _)| {
             !symbols_to_remove.contains(from) && !symbols_to_remove.contains(to)
         });
+        
+        // Remove documents from Tantivy index if available
+        if let Some(ref doc_index) = self.document_index {
+            if let Some(file_path) = self.get_file_path(file_id) {
+                if let Err(e) = doc_index.remove_file_documents(file_path) {
+                    eprintln!("Failed to remove documents from Tantivy index: {}", e);
+                }
+            }
+        }
+    }
+    
+    /// Start a batch operation for Tantivy indexing
+    pub fn start_tantivy_batch(&self) -> Result<(), String> {
+        if let Some(ref doc_index) = self.document_index {
+            doc_index.start_batch()
+                .map_err(|e| format!("Failed to start Tantivy batch: {}", e))
+        } else {
+            Ok(())
+        }
+    }
+    
+    /// Commit the current Tantivy batch
+    pub fn commit_tantivy_batch(&self) -> Result<(), String> {
+        if let Some(ref doc_index) = self.document_index {
+            doc_index.commit_batch()
+                .map_err(|e| format!("Failed to commit Tantivy batch: {}", e))
+        } else {
+            Ok(())
+        }
+    }
+    
+    /// Sync Tantivy index with loaded symbols
+    fn sync_tantivy_index(&self) {
+        if let Some(ref doc_index) = self.document_index {
+            // Check if Tantivy index is empty
+            match doc_index.document_count() {
+                Ok(0) => {
+                    // Tantivy is empty, rebuild from loaded symbols
+                    eprintln!("Rebuilding Tantivy index from {} loaded symbols...", self.data.symbols.len());
+                    
+                    if let Err(e) = self.start_tantivy_batch() {
+                        eprintln!("Failed to start Tantivy batch: {}", e);
+                        return;
+                    }
+                    
+                    for symbol in &self.data.symbols {
+                        // Get file path from file_map
+                        let file_path = self.data.file_map.iter()
+                            .find(|(_, &id)| id == symbol.file_id)
+                            .map(|(path, _)| path.as_str())
+                            .unwrap_or("<unknown>");
+                        
+                        let module_path = symbol.module_path.as_deref().unwrap_or("");
+                        let doc_comment = symbol.doc_comment.as_deref();
+                        let signature = symbol.signature.as_deref();
+                        
+                        if let Err(e) = doc_index.add_document(
+                            symbol.id,
+                            &symbol.name,
+                            symbol.kind,
+                            file_path,
+                            symbol.range.start_line,
+                            symbol.range.start_column,
+                            doc_comment,
+                            signature,
+                            module_path,
+                            None,
+                        ) {
+                            eprintln!("Failed to index symbol in Tantivy: {}", e);
+                        }
+                    }
+                    
+                    if let Err(e) = self.commit_tantivy_batch() {
+                        eprintln!("Failed to commit Tantivy batch: {}", e);
+                    } else {
+                        eprintln!("Tantivy index rebuilt successfully");
+                    }
+                }
+                Ok(count) => {
+                    eprintln!("Tantivy index already has {} documents", count);
+                }
+                Err(e) => {
+                    eprintln!("Failed to check Tantivy document count: {}", e);
+                }
+            }
+        }
     }
     
     /// Index or re-index file content
@@ -197,6 +301,30 @@ impl SimpleIndexer {
         // Store symbols and add to graph
         for symbol in symbols {
             let symbol_id = symbol.id;
+            
+            // Add to Tantivy index if available
+            if let Some(ref doc_index) = self.document_index {
+                let file_path = path.to_string_lossy();
+                let module_path = symbol.module_path.as_deref().unwrap_or("");
+                let doc_comment = symbol.doc_comment.as_deref();
+                let signature = symbol.signature.as_deref();
+                
+                if let Err(e) = doc_index.add_document(
+                    symbol_id,
+                    &symbol.name,
+                    symbol.kind,
+                    &file_path,
+                    symbol.range.start_line,
+                    symbol.range.start_column,
+                    doc_comment,
+                    signature,
+                    module_path,
+                    None, // context will be added later
+                ) {
+                    eprintln!("Failed to index symbol in Tantivy: {}", e);
+                }
+            }
+            
             self.symbol_store.insert(symbol.clone());
             self.graph.add_symbol(symbol_id);
             // Also store for serialization
@@ -359,6 +487,42 @@ impl SimpleIndexer {
             .map(|(path, _)| path.as_str())
     }
     
+    /// Clear the Tantivy index (useful for force re-indexing)
+    pub fn clear_tantivy_index(&self) -> Result<(), String> {
+        if let Some(ref doc_index) = self.document_index {
+            doc_index.clear()
+                .map_err(|e| format!("Failed to clear Tantivy index: {}", e))
+        } else {
+            Ok(())
+        }
+    }
+    
+    /// Search for symbols using full-text search
+    pub fn search(
+        &self, 
+        query: &str, 
+        limit: usize,
+        kind_filter: Option<crate::types::SymbolKind>,
+        module_filter: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String> {
+        if let Some(ref doc_index) = self.document_index {
+            doc_index.search(query, limit, kind_filter, module_filter)
+                .map_err(|e| format!("Search failed: {}", e))
+        } else {
+            Err("Document index not available".to_string())
+        }
+    }
+    
+    /// Get total number of indexed documents
+    pub fn document_count(&self) -> Result<u64, String> {
+        if let Some(ref doc_index) = self.document_index {
+            doc_index.document_count()
+                .map_err(|e| format!("Failed to get document count: {}", e))
+        } else {
+            Ok(0)
+        }
+    }
+    
     /// Index all files in a directory recursively
     pub fn index_directory(
         &mut self, 
@@ -404,6 +568,13 @@ impl SimpleIndexer {
         let last_progress = AtomicUsize::new(0);
         let progress_interval = 100; // Update every 100 files
         
+        // Start Tantivy batch for efficient indexing
+        if !dry_run {
+            if let Err(e) = self.start_tantivy_batch() {
+                eprintln!("Warning: Failed to start Tantivy batch: {}", e);
+            }
+        }
+        
         // Process files in parallel chunks
         let _chunk_size = self.settings.indexing.parallel_threads.max(1) * 4;
         
@@ -435,6 +606,13 @@ impl SimpleIndexer {
                         eprintln!(); // Final newline
                     }
                 }
+            }
+        }
+        
+        // After indexing all files, commit Tantivy batch
+        if !dry_run {
+            if let Err(e) = self.commit_tantivy_batch() {
+                eprintln!("Warning: Failed to commit Tantivy batch: {}", e);
             }
         }
         

@@ -132,6 +132,24 @@ enum RetrieveQuery {
         depth: Option<usize>,
     },
     
+    /// Search for symbols using full-text search
+    Search {
+        /// Search query
+        query: String,
+        
+        /// Maximum number of results
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+        
+        /// Filter by symbol kind (e.g., Function, Struct, Trait)
+        #[arg(short, long)]
+        kind: Option<String>,
+        
+        /// Filter by module path
+        #[arg(short, long)]
+        module: Option<String>,
+    },
+    
     /// Show what methods a type or trait defines
     Defines {
         /// Name of the type or trait
@@ -244,7 +262,14 @@ async fn main() {
                 eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
             }
             eprintln!("DEBUG: Creating new index");
-            SimpleIndexer::with_settings(settings.clone())
+            let new_indexer = SimpleIndexer::with_settings(settings.clone());
+            // Clear Tantivy index if force re-indexing
+            if force_reindex {
+                if let Err(e) = new_indexer.clear_tantivy_index() {
+                    eprintln!("Warning: Failed to clear Tantivy index: {}", e);
+                }
+            }
+            new_indexer
         }
     };
     
@@ -534,6 +559,51 @@ async fn main() {
                     }
                 }
                 
+                RetrieveQuery::Search { query, limit, kind, module } => {
+                    // Parse the kind filter if provided
+                    let kind_filter = kind.as_ref().and_then(|k| {
+                        match k.to_lowercase().as_str() {
+                            "function" => Some(SymbolKind::Function),
+                            "struct" => Some(SymbolKind::Struct),
+                            "trait" => Some(SymbolKind::Trait),
+                            "method" => Some(SymbolKind::Method),
+                            "field" => Some(SymbolKind::Field),
+                            "module" => Some(SymbolKind::Module),
+                            "constant" => Some(SymbolKind::Constant),
+                            _ => {
+                                eprintln!("Warning: Unknown symbol kind '{}', ignoring filter", k);
+                                None
+                            }
+                        }
+                    });
+                    
+                    match indexer.search(&query, limit, kind_filter, module.as_deref()) {
+                        Ok(results) => {
+                            if results.is_empty() {
+                                println!("No results found for query: {}", query);
+                            } else {
+                                println!("Found {} result(s) for query '{}':\n", results.len(), query);
+                                
+                                for (i, result) in results.iter().enumerate() {
+                                    println!("{}. {} ({})", i + 1, result.name, format!("{:?}", result.kind));
+                                    println!("   File: {}:{}", result.file_path, result.line);
+                                    if !result.module_path.is_empty() {
+                                        println!("   Module: {}", result.module_path);
+                                    }
+                                    if let Some(ref doc) = result.doc_comment {
+                                        println!("   Doc: {}", doc.lines().next().unwrap_or(""));
+                                    }
+                                    println!("   Score: {:.2}", result.score);
+                                    println!();
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Search failed: {}", e);
+                        }
+                    }
+                }
+                
                 RetrieveQuery::Defines { symbol } => {
                     match indexer.find_symbol(&symbol) {
                         Some(symbol_id) => {
@@ -708,9 +778,36 @@ async fn main() {
                 "get_index_info" => {
                     server.get_index_info().await
                 }
+                "search_symbols" => {
+                    let query = arguments.as_ref()
+                        .and_then(|m| m.get("query"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: search_symbols requires 'query' parameter");
+                            std::process::exit(1);
+                        });
+                    let limit = arguments.as_ref()
+                        .and_then(|m| m.get("limit"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(10) as usize;
+                    let kind = arguments.as_ref()
+                        .and_then(|m| m.get("kind"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let module = arguments.as_ref()
+                        .and_then(|m| m.get("module"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    server.search_symbols(Parameters(SearchSymbolsRequest {
+                        query: query.to_string(),
+                        limit,
+                        kind,
+                        module,
+                    })).await
+                }
                 _ => {
                     eprintln!("Unknown tool: {}", tool);
-                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info");
+                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols");
                     std::process::exit(1);
                 }
             };

@@ -60,8 +60,27 @@ pub struct AnalyzeImpactRequest {
     pub max_depth: usize,
 }
 
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct SearchSymbolsRequest {
+    /// Search query (supports fuzzy matching)
+    pub query: String,
+    /// Maximum number of results (default: 10)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Filter by symbol kind (e.g., "Function", "Struct", "Trait")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Filter by module path
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+}
+
 fn default_depth() -> usize {
     3
+}
+
+fn default_limit() -> usize {
+    10
 }
 
 #[derive(Clone)]
@@ -296,6 +315,69 @@ impl CodeIntelligenceServer {
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
+
+    #[tool(description = "Search for symbols using full-text search with fuzzy matching")]
+    pub async fn search_symbols(
+        &self,
+        Parameters(SearchSymbolsRequest { query, limit, kind, module }): Parameters<SearchSymbolsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let indexer = self.indexer.read().await;
+        
+        // Parse the kind filter if provided
+        let kind_filter = kind.as_ref().and_then(|k| {
+            match k.to_lowercase().as_str() {
+                "function" => Some(crate::SymbolKind::Function),
+                "struct" => Some(crate::SymbolKind::Struct),
+                "trait" => Some(crate::SymbolKind::Trait),
+                "method" => Some(crate::SymbolKind::Method),
+                "field" => Some(crate::SymbolKind::Field),
+                "module" => Some(crate::SymbolKind::Module),
+                "constant" => Some(crate::SymbolKind::Constant),
+                _ => None
+            }
+        });
+        
+        match indexer.search(&query, limit, kind_filter, module.as_deref()) {
+            Ok(results) => {
+                if results.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        format!("No results found for query: {}", query)
+                    )]));
+                }
+                
+                let mut result = format!("Found {} result(s) for query '{}':\n\n", results.len(), query);
+                
+                for (i, search_result) in results.iter().enumerate() {
+                    result.push_str(&format!("{}. {} ({})\n", i + 1, search_result.name, format!("{:?}", search_result.kind)));
+                    result.push_str(&format!("   File: {}:{}\n", search_result.file_path, search_result.line));
+                    
+                    if !search_result.module_path.is_empty() {
+                        result.push_str(&format!("   Module: {}\n", search_result.module_path));
+                    }
+                    
+                    if let Some(ref doc) = search_result.doc_comment {
+                        // Show first line of doc comment
+                        let first_line = doc.lines().next().unwrap_or("");
+                        result.push_str(&format!("   Doc: {}\n", first_line));
+                    }
+                    
+                    if let Some(ref sig) = search_result.signature {
+                        result.push_str(&format!("   Signature: {}\n", sig));
+                    }
+                    
+                    result.push_str(&format!("   Score: {:.2}\n", search_result.score));
+                    result.push('\n');
+                }
+                
+                Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+            Err(e) => {
+                Ok(CallToolResult::error(vec![Content::text(
+                    format!("Search failed: {}", e)
+                )]))
+            }
+        }
+    }
 }
 
 #[tool_handler]
@@ -312,9 +394,10 @@ impl ServerHandler for CodeIntelligenceServer {
             },
             instructions: Some(
                 "This server provides code intelligence tools for analyzing Rust codebases. \
-                Use 'find_symbol' to locate symbols, 'get_calls' to see what a function calls, \
-                'find_callers' to see what calls a function, and 'analyze_impact' to understand \
-                the impact of changes. Use 'get_index_info' to see what's in the index."
+                Use 'search_symbols' for full-text search with fuzzy matching, 'find_symbol' to locate specific symbols, \
+                'get_calls' to see what a function calls, 'find_callers' to see what calls a function, \
+                and 'analyze_impact' to understand the impact of changes. \
+                Use 'get_index_info' to see what's in the index."
                 .to_string()
             ),
         }

@@ -168,6 +168,40 @@ codebase-intelligence retrieve impact [OPTIONS] <SYMBOL>
 codebase-intelligence retrieve impact parse_function --depth 3
 ```
 
+##### `search` - Search for symbols using full-text search
+```bash
+codebase-intelligence retrieve search [OPTIONS] <QUERY>
+```
+
+**Arguments:**
+- `<QUERY>` - Search query (supports fuzzy matching for typos)
+
+**Options:**
+- `-l, --limit <LIMIT>` - Maximum number of results (default: 10)
+- `-k, --kind <KIND>` - Filter by symbol kind (e.g., Function, Struct, Trait)
+- `-m, --module <MODULE>` - Filter by module path
+
+**Features:**
+- Full-text search across symbol names, documentation, and signatures
+- Fuzzy search with typo tolerance (e.g., "symbl" finds "symbol")
+- Rich metadata in results (file path, line number, module path, documentation)
+- Relevance-based scoring
+
+**Examples:**
+```bash
+# Search for symbols containing "hash"
+codebase-intelligence retrieve search hash
+
+# Search for functions with "test" in the name
+codebase-intelligence retrieve search test --kind function
+
+# Search with fuzzy matching (finds "symbol" even with typo)
+codebase-intelligence retrieve search symbl
+
+# Limit results and filter by module
+codebase-intelligence retrieve search parser --limit 5 --module "crate::parsing"
+```
+
 ##### `defines` - Show what methods a type or trait defines
 ```bash
 codebase-intelligence retrieve defines <SYMBOL>
@@ -266,6 +300,7 @@ codebase-intelligence mcp <TOOL> [OPTIONS]
 - `find_callers` - Find functions that call a given function
 - `analyze_impact` - Analyze impact of changing a symbol
 - `get_index_info` - Get information about the index
+- `search_symbols` - Search for symbols using full-text search with fuzzy matching
 
 **Examples:**
 ```bash
@@ -280,6 +315,15 @@ codebase-intelligence mcp analyze_impact --args '{"symbol_name": "Symbol", "max_
 
 # Get index information
 codebase-intelligence mcp get_index_info
+
+# Search for symbols with fuzzy matching
+codebase-intelligence mcp search_symbols --args '{"query": "parse", "limit": 5}'
+
+# Search for functions only
+codebase-intelligence mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "function"}'
+
+# Search within a specific module
+codebase-intelligence mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
 ```
 
 ## Configuration File
