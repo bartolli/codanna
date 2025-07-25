@@ -23,9 +23,6 @@ pub struct IndexMetadata {
     /// Last modification timestamp
     pub last_modified: u64,
     
-    /// Optional checksum for validation
-    pub checksum: Option<String>,
-    
 }
 
 /// Describes where the index data came from
@@ -51,7 +48,6 @@ impl IndexMetadata {
             symbol_count: 0,
             file_count: 0,
             last_modified: crate::indexing::get_utc_timestamp(),
-            checksum: None
         }
     }
     

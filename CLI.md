@@ -12,6 +12,25 @@ cargo build --release
 ./target/release/codanna
 ```
 
+## Quick Start with Target Binary
+
+```bash
+# Initialize configuration
+./target/release/codanna init
+
+# Index current directory with progress
+./target/release/codanna index . --progress
+
+# Find a symbol
+./target/release/codanna retrieve symbol main
+
+# Show function calls
+./target/release/codanna retrieve calls main
+
+# Search for symbols
+./target/release/codanna retrieve search "parse" --limit 5
+```
+
 ## Commands Overview
 
 ```
@@ -48,6 +67,15 @@ codanna init
 
 # Overwrite existing configuration
 codanna init --force
+```
+
+**Local Development:**
+```bash
+# Create initial configuration
+./target/release/codanna init
+
+# Overwrite existing configuration
+./target/release/codanna init --force
 ```
 
 Creates `.codanna/settings.toml` with default configuration.
@@ -95,6 +123,24 @@ codanna index src --max-files 100 --progress
 codanna index . --force --threads 8
 ```
 
+**Local Development:**
+```bash
+# Index a single file
+./target/release/codanna index src/main.rs
+
+# Index entire directory with progress
+./target/release/codanna index src --progress
+
+# Dry run to see what would be indexed
+./target/release/codanna index . --dry-run
+
+# Index with limited files
+./target/release/codanna index src --max-files 100 --progress
+
+# Force re-index with custom thread count
+./target/release/codanna index . --force --threads 8
+```
+
 ### `retrieve` - Query the Index
 
 Retrieve various information from the indexed codebase.
@@ -113,6 +159,11 @@ codanna retrieve symbol <NAME>
 **Example:**
 ```bash
 codanna retrieve symbol SimpleIndexer
+```
+
+**Local Development:**
+```bash
+./target/release/codanna retrieve symbol SimpleIndexer
 ```
 
 ##### `calls` - Show what functions a given function calls
@@ -235,6 +286,11 @@ codanna config
 codanna config
 ```
 
+**Local Development:**
+```bash
+./target/release/codanna config
+```
+
 ### `serve` - Start MCP Server
 
 Start the Model Context Protocol (MCP) server for AI assistants.
@@ -326,6 +382,39 @@ codanna mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "functi
 codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
 ```
 
+**Local Development:**
+```bash
+# Find a symbol
+./target/release/codanna mcp find_symbol --args '{"name": "parse"}'
+
+# Get function calls
+./target/release/codanna mcp get_calls --args '{"function_name": "index_file"}'
+
+# Find callers
+./target/release/codanna mcp find_callers --args '{"function_name": "main"}'
+
+# Analyze impact with custom depth
+./target/release/codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
+
+# Get index information
+./target/release/codanna mcp get_index_info
+
+# Search for symbols with fuzzy matching
+./target/release/codanna mcp search_symbols --args '{"query": "parse", "limit": 5}'
+
+# Search for functions only
+./target/release/codanna mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "function"}'
+
+# Search within a specific module
+./target/release/codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
+
+# Test with actual symbols from your codebase
+./target/release/codanna mcp find_symbol --args '{"name": "SimpleIndexer"}'
+./target/release/codanna mcp get_calls --args '{"function_name": "reindex_file_content"}'
+./target/release/codanna mcp find_callers --args '{"function_name": "parse_file"}'
+./target/release/codanna mcp search_symbols --args '{"query": "tantivy", "limit": 10}'
+```
+
 ## Configuration File
 
 The configuration file is located at `.codanna/settings.toml`:
@@ -389,6 +478,46 @@ path = ".codanna/index"
    ```bash
    # Start MCP server
    codanna serve
+   ```
+
+## Local Development Workflow
+
+For testing during development, use the target binary:
+
+1. **Initialize configuration**
+   ```bash
+   ./target/release/codanna init
+   ```
+
+2. **Index your codebase**
+   ```bash
+   ./target/release/codanna index . --progress
+   ```
+
+3. **Query the index**
+   ```bash
+   # Find a symbol
+   ./target/release/codanna retrieve symbol MyStruct
+   
+   # See what calls a function
+   ./target/release/codanna retrieve callers important_function
+   
+   # Test search functionality
+   ./target/release/codanna retrieve search "parse" --limit 5
+   ```
+
+4. **Test MCP functionality**
+   ```bash
+   # Start MCP server
+   ./target/release/codanna serve
+   
+   # Test MCP client
+   ./target/release/codanna mcp-test
+   
+   # Test specific MCP tools directly
+   ./target/release/codanna mcp find_symbol --args '{"name": "main"}'
+   ./target/release/codanna mcp get_calls --args '{"function_name": "main"}'
+   ./target/release/codanna mcp search_symbols --args '{"query": "index", "limit": 5}'
    ```
 
 ## Testing Scenarios
