@@ -107,7 +107,10 @@ async fn test_embedding_storage() -> Result<()> {
     let retrieved_vector: Vector = row.get(2);
     
     assert_eq!(retrieved_name, "parse_function");
-    assert_eq!(retrieved_vector.as_slice().len(), 384);
+    // Vector type doesn't expose len() directly, but we know it's 384 dimensions
+    // We can verify by converting back to slice
+    let vector_slice: &[f32] = retrieved_vector.as_slice();
+    assert_eq!(vector_slice.len(), 384);
     
     // Calculate storage size
     let size_result = client.query_one(
