@@ -1,0 +1,5 @@
+[tool.markdownlint]
+# Disable specific rules by their ID
+MD041 = false # Line length
+MD032 = false # Dirst line ehading
+MD033 = false # No inline html
