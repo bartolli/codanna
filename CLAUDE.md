@@ -208,4 +208,17 @@ When implementing new features:
 - Focus on maintaining the performance targets outlined above
 - Use Rust idioms and leverage the type system for safety
 - Prioritize zero-copy operations and memory efficiency
-- Ypu **MUST** follow "## Development Guidelines"
+- You **MUST** follow "## Development Guidelines"
+
+## PostgreSQL and pgvector Setup
+
+**IMPORTANT**: pgvector installation via Homebrew often doesn't support all PostgreSQL versions.
+If you encounter pgvector extension errors, see [docs/PGVECTOR_SETUP.md](./docs/PGVECTOR_SETUP.md) for the solution.
+
+Quick fix:
+```bash
+git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+make PG_CONFIG=/opt/homebrew/opt/postgresql@16/bin/pg_config
+make install PG_CONFIG=/opt/homebrew/opt/postgresql@16/bin/pg_config
+```
