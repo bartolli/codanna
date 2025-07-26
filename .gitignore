@@ -5,3 +5,5 @@
 # Reference repositories (temporary)
 /reference/
 /rust-sdk-reference/
+
+.fastembed_cache/
