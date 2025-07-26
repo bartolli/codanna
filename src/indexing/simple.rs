@@ -40,6 +40,7 @@ struct UnresolvedRelationship {
 #[derive(Debug)]
 pub struct SimpleIndexer {
     parser_factory: ParserFactory,
+    #[allow(dead_code)]
     import_resolver: ImportResolver,
     settings: Arc<Settings>,
     project_root: Option<PathBuf>,
@@ -762,7 +763,7 @@ impl SimpleIndexer {
         // Start a batch for relationship updates
         self.start_tantivy_batch()?;
         
-        let mut resolved_count = 0;
+        let mut _resolved_count = 0;
         for rel in unresolved {
             // Try to find the target symbol again (it might have been indexed in a later file)
             let to_symbols = self.document_index.find_symbols_by_name(&rel.to_name)
@@ -783,7 +784,7 @@ impl SimpleIndexer {
                     if from_symbol.file_id == rel.file_id {
                         for to_symbol in &to_symbols {
                             self.add_relationship_internal(from_symbol.id, to_symbol.id, Relationship::new(rel.kind))?;
-                            resolved_count += 1;
+                            _resolved_count += 1;
                         }
                     }
                 }

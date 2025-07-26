@@ -74,8 +74,8 @@ impl ImportResolver {
     #[allow(dead_code)]
     pub fn resolve_symbol(
         &self,
-        name: &str,
-        from_file: FileId,
+        _name: &str,
+        _from_file: FileId,
         // symbol_store: &SymbolStore,
     ) -> Option<SymbolId> {
         // Temporarily disabled until updated to use Tantivy
@@ -119,7 +119,7 @@ impl ImportResolver {
     
     /// Resolve an import path to a symbol
     #[allow(dead_code)]
-    fn resolve_import_path(&self, path: &str) -> Option<SymbolId> {
+    fn resolve_import_path(&self, _path: &str) -> Option<SymbolId> {
         // Temporarily disabled until updated to use Tantivy
         None
         /*
@@ -144,8 +144,8 @@ impl ImportResolver {
     #[allow(dead_code)]
     fn find_symbol_in_module(
         &self,
-        name: &str,
-        module_path: &str,
+        _name: &str,
+        _module_path: &str,
     ) -> Option<SymbolId> {
         // Temporarily disabled until updated to use Tantivy
         None

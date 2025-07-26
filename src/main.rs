@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use codanna::{SimpleIndexer, Symbol, IndexingResult, SymbolKind, RelationKind, Settings, IndexPersistence};
+use codanna::{SimpleIndexer, Symbol, SymbolKind, RelationKind, Settings, IndexPersistence};
 use std::path::PathBuf;
 use std::sync::Arc;
 

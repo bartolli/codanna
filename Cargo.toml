@@ -44,8 +44,15 @@ tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
 
 [dev-dependencies]
+bincode = "2.0.1"
 fastembed = "5.0.0"
+linfa = "0.7.1"
+linfa-clustering = "0.7.1"
+memmap2 = "0.9.7"
+ndarray = "0.15"
 pgvector = { version = "0.4", features = ["postgres"] }
+rand = "0.9.2"
 tempfile = "3.20.0"
 testcontainers = "0.15"
 tokio-postgres = "0.7"
+

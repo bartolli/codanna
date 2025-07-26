@@ -10,7 +10,7 @@ use tantivy::{
     schema::{
         Field, IndexRecordOption, Schema, SchemaBuilder,
         TextFieldIndexing, TextOptions, Value, NumericOptions,
-        FAST, STORED, STRING, INDEXED,
+        FAST, STORED, STRING,
     },
     Index, IndexReader, IndexWriter, IndexSettings, ReloadPolicy, Term,
     TantivyDocument as Document,
@@ -1007,6 +1007,7 @@ impl DocumentIndex {
     }
     
     /// Query all relationships from the index
+    #[allow(dead_code)]
     pub(crate) fn query_relationships(&self) -> StorageResult<Vec<(SymbolId, SymbolId, crate::Relationship)>> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
@@ -1087,6 +1088,7 @@ impl DocumentIndex {
     }
     
     /// Query all file information from the index
+    #[allow(dead_code)]
     pub(crate) fn query_file_info(&self) -> StorageResult<Vec<(FileId, String, String, u64)>> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
@@ -1127,6 +1129,7 @@ impl DocumentIndex {
     }
     
     /// Count symbols in Tantivy index
+    #[allow(dead_code)]
     pub(crate) fn count_symbol_documents(&self) -> StorageResult<u64> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
@@ -1140,6 +1143,7 @@ impl DocumentIndex {
     
     /// DEPRECATED: This method is no longer needed with Tantivy-only architecture
     #[deprecated(note = "Use Tantivy queries directly instead of rebuilding IndexData")]
+    #[allow(dead_code)]
     pub(crate) fn rebuild_index_data(&self) -> StorageResult<()> {
         // This method is kept temporarily for compatibility but does nothing
         Ok(())
