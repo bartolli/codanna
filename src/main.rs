@@ -1,8 +1,16 @@
+//! CLI entry point for the codebase intelligence system.
+//! 
+//! Provides commands for indexing, querying, and serving code intelligence data.
+//! Main components: Cli parser, Commands enum, and async runtime with MCP server support.
+
 use clap::{Parser, Subcommand};
 use codanna::{SimpleIndexer, Symbol, SymbolKind, RelationKind, Settings, IndexPersistence};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Main CLI structure for codanna code intelligence system.
+/// 
+/// Supports custom config path and subcommands for indexing/querying/serving.
 #[derive(Parser)]
 #[command(name = "codanna")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -16,6 +24,12 @@ struct Cli {
     command: Commands,
 }
 
+/// Available CLI commands.
+/// 
+/// Indexing: init, index
+/// Querying: retrieve (symbol, calls, callers, implementations, uses, impact, search, defines, dependencies)
+/// Serving: serve (MCP), mcp (embedded), mcp-test (client testing)
+/// Utility: config
 #[derive(Subcommand)]
 enum Commands {
     /// Initialize configuration file
@@ -93,6 +107,9 @@ enum Commands {
     },
 }
 
+/// Query types for retrieving indexed information.
+/// 
+/// Supports symbol lookups, relationship queries, impact analysis, and full-text search.
 #[derive(Subcommand)]
 enum RetrieveQuery {
     /// Find a symbol by name
@@ -165,6 +182,10 @@ enum RetrieveQuery {
     },
 }
 
+/// Entry point with tokio async runtime.
+/// 
+/// Handles config initialization, index loading/creation, and command dispatch.
+/// Auto-initializes config for index command. Persists index after modifications.
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -909,6 +930,9 @@ mod tests {
     use super::*;
     use clap::CommandFactory;
     
+    /// Verifies CLI structure is valid at compile time.
+    /// 
+    /// Uses clap's debug_assert to catch configuration errors.
     #[test]
     fn verify_cli() {
         // This test ensures the CLI structure is valid

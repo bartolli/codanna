@@ -54,12 +54,16 @@ For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 ### Key Technology Stack
 
 - **tree-sitter**: Multi-language parsing
-- **petgraph**: Type-safe graph operations
-- **tantivy**: Full-text search optimized for code
-- **candle**: Pure Rust ML inference for embeddings
+- **tantivy**: Full-text search with integrated vector capabilities
+- **fastembed**: High-performance embedding generation
+- **linfa**: K-means clustering for IVFFlat vector indexing
+- **candle**: Pure Rust ML inference and embeddings
+- **memmap2**: Memory-mapped storage for vector data
+- **bincode**: Efficient serialization for vector storage
+- **rkyv**: Zero-copy serialization for performance
 - **DashMap**: Lock-free concurrent data structures
 - **tokio**: Async runtime
-- **sqlx + SQLite**: Metadata persistence
+- **thiserror**: Structured error handling
 
 ### Performance Targets
 
