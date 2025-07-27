@@ -74,12 +74,14 @@ When implementing vector search features, you will:
    - Use External Cache pattern (better than warmers for global state)
    - Production deps only: fastembed, memmap2, candle (no linfa)
    - Maintain backward compatibility
-   - Follow POC test patterns from @tests/tantivy_ivfflat_poc_test.rs
+   - Follow developmen guidelines from CLAUDE.md
 
 10. **References**:
 
 - TDD Plan: @plans/TANTIVY_IVFFLAT_TDD_PLAN.md sections 3-6
+- Integration Test Plan: @plans/INTEGRATION_TEST_PLAN.md
 - POC Tests: Validated approach with 25-99.8% search reduction
+- Large Test Usage patterns: @VECTOR_TEST_REFERENCE.md
 
 Implementation Pipeline (from TANTIVY_IVFFLAT_TDD_PLAN.md)
 
@@ -102,59 +104,125 @@ Implementation Pipeline (from TANTIVY_IVFFLAT_TDD_PLAN.md)
 
 **Key Integration Points**:
 
-- Extend `DocumentIndex` struct with: - `cluster_cache: Arc<RwLock<HashMap<u32, ClusterMappings>>>` - `vector_storage: Arc<MmapVectorStorage>` - `centroids: Arc<Vec<Vec<f32>>>`
+- Create `VectorSearchEngine` that composes with `DocumentIndex`:
+  - `document_index: Arc<DocumentIndex>`
+  - `cluster_cache: Arc<DashMap<SegmentOrdinal, ClusterMappings>>`
+  - `vector_storage: Arc<MmapVectorStorage>`
+  - `centroids: Arc<Vec<Centroid>>`
 - Add `cluster_id` as FAST field in `IndexSchema`
-- Hook `warm_cluster_cache()` after `writer.commit()` in `commit_batch()`
+- Hook vector operations after `commit_batch()` via composition
 - Create `AnnQuery` implementing `tantivy::query::Query`
+- Use newtypes: `ClusterId(NonZeroU32)`, `VectorId(NonZeroU32)`, `SegmentOrdinal(u32)`
 
 <example>
-Architecture Examples (External Cache Pattern)
+Architecture Examples (Composition Pattern with DashMap)
 
 ```rust
-// Example: Smart cache invalidation
-impl DocumentIndex {
-    fn warm_cluster_cache(&self) -> Result<()> {
-        let current_gen = self.reader.searcher_generation();
-        let state = self.cluster_state.read().unwrap();
-
-        if state.generation == current_gen {
-            return Ok(()); // Already up to date
-        }
-        drop(state);
-
-        // Only process new segments
-        let mut state = self.cluster_state.write().unwrap();
-        for (ord, segment) in searcher.segment_readers().iter().enumerate() {
-            if !state.segment_mappings.contains_key(&ord) {
-                let mappings = self.build_segment_mappings(segment)?;
-                state.segment_mappings.insert(ord, mappings);
-            }
-        }
-        state.generation = current_gen;
-        Ok(())
-    }
+// Example: VectorSearchEngine composing with DocumentIndex
+pub struct VectorSearchEngine {
+    document_index: Arc<DocumentIndex>,
+    cluster_cache: Arc<DashMap<SegmentOrdinal, ClusterMappings>>,
+    vector_storage: Arc<MmapVectorStorage>,
+    centroids: Arc<Vec<Centroid>>,
+    reader_generation: AtomicU64,
 }
 
-// Example: Error handling
-self.warm_cluster_cache().map_err(|e| {
-    log::warn!("Cache warming failed, falling back: {}", e);
-    StorageError::CacheWarming(e)
-})?;
+impl VectorSearchEngine {
+    // Example: Smart cache invalidation with DashMap
+    fn warm_cluster_cache(&self) -> Result<(), VectorError> {
+        let searcher = self.document_index.searcher();
+        let current_gen = searcher.generation();
+        let stored_gen = self.reader_generation.load(Ordering::Relaxed);
+
+        if current_gen == stored_gen {
+            return Ok(()); // Already up to date
+        }
+
+        // Only process new segments
+        for (ord, segment) in searcher.segment_readers().iter().enumerate() {
+            let seg_ord = SegmentOrdinal(ord as u32);
+            if !self.cluster_cache.contains_key(&seg_ord) {
+                let mappings = self.build_segment_mappings(segment)?;
+                self.cluster_cache.insert(seg_ord, mappings);
+            }
+        }
+        
+        self.reader_generation.store(current_gen, Ordering::Relaxed);
+        Ok(())
+    }
+    
+    // Hook into DocumentIndex operations
+    pub fn on_commit(&self) -> Result<(), VectorError> {
+        self.warm_cluster_cache().map_err(|e| {
+            log::warn!("Cache warming failed, falling back: {}", e);
+            VectorError::CacheWarming(e.to_string())
+        })
+    }
+}
 ```
 
 </example>
 
 <example>
-Type Design
-  
-  ```rust
-  // Make invalid states unrepresentable
-  pub struct ClusterState {
-      centroids: Vec<Vec<f32>>,
-      mappings: HashMap<u32, ClusterMappings>,
-      generation: u64,  // Track reader version
-  }
-  ```
+Type Design with Newtypes and Error Handling
+
+```rust
+use thiserror::Error;
+use std::num::NonZeroU32;
+
+// Newtypes for type safety - NO primitive obsession
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ClusterId(NonZeroU32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VectorId(NonZeroU32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SegmentOrdinal(u32);
+
+// Make invalid states unrepresentable
+#[derive(Debug)]
+pub struct ClusterMappings {
+    cluster_id: ClusterId,
+    vector_ids: Vec<VectorId>,
+    centroid_version: u32,
+}
+
+// Proper error handling with thiserror
+#[derive(Error, Debug)]
+pub enum VectorError {
+    #[error("Vector dimension mismatch: expected {expected}, got {actual}")]
+    DimensionMismatch { expected: usize, actual: usize },
+    
+    #[error("Cache warming failed: {0}")]
+    CacheWarming(String),
+    
+    #[error("Invalid cluster ID: {0}")]
+    InvalidClusterId(u32),
+    
+    #[error("Storage error: {0}")]
+    Storage(#[from] std::io::Error),
+}
+
+// Centroid with validation
+#[derive(Debug, Clone)]
+pub struct Centroid {
+    id: ClusterId,
+    vector: Vec<f32>,  // Consider Arc<[f32]> for sharing
+}
+
+impl Centroid {
+    pub fn new(id: ClusterId, vector: Vec<f32>) -> Result<Self, VectorError> {
+        if vector.is_empty() {
+            return Err(VectorError::DimensionMismatch { 
+                expected: 1, 
+                actual: 0 
+            });
+        }
+        Ok(Self { id, vector })
+    }
+}
+```
 
 </example>
 
@@ -202,4 +270,5 @@ You MUST follow these rules when implementing code:
 - **Hot path = no allocations** - use iterators and borrowing
 - **Measure before optimizing** - don't guess
 
-These are NOT optional - they are project requirements that ensure consistency and quality.
+**These are NOT optional - they are project requirements that ensure consistency and quality.**
+
