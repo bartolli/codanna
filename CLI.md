@@ -12,6 +12,11 @@ cargo build --release
 ./target/release/codanna
 ```
 
+## Global Options
+
+All commands support:
+- `-c, --config <CONFIG>` - Path to custom settings.toml file (overrides default location)
+
 ## Quick Start with Target Binary
 
 ```bash
@@ -97,6 +102,12 @@ codanna index [OPTIONS] <PATH>
 - `-p, --progress` - Show progress during indexing
 - `--dry-run` - Show what would be indexed without actually indexing
 - `--max-files <MAX_FILES>` - Maximum number of files to index
+
+**Auto-initialization:**
+If no configuration exists, the index command will automatically:
+- Create `.codanna/settings.toml` with default settings
+- Initialize the index directory structure
+- Continue with indexing operation
 
 **Incremental Indexing:**
 The indexer uses SHA256 content hashing to track file changes:
@@ -232,25 +243,23 @@ codanna retrieve search [OPTIONS] <QUERY>
 - `-k, --kind <KIND>` - Filter by symbol kind (e.g., Function, Struct, Trait)
 - `-m, --module <MODULE>` - Filter by module path
 
-**Features:**
-- Full-text search across symbol names, documentation, and signatures
-- Fuzzy search with typo tolerance (e.g., "symbl" finds "symbol")
-- Rich metadata in results (file path, line number, module path, documentation)
-- Relevance-based scoring
-
 **Examples:**
 ```bash
-# Search for symbols containing "hash"
+# Basic search
 codanna retrieve search hash
 
-# Search for functions with "test" in the name
+# Filter by symbol kind
 codanna retrieve search test --kind function
+codanna retrieve search builder --kind struct
 
-# Search with fuzzy matching (finds "symbol" even with typo)
-codanna retrieve search symbl
+# Fuzzy matching (typo tolerance)
+codanna retrieve search symbl  # finds "symbol"
 
-# Limit results and filter by module
+# Filter by module
 codanna retrieve search parser --limit 5 --module "crate::parsing"
+
+# Phrase search
+codanna retrieve search "error handling" --limit 20
 ```
 
 ##### `defines` - Show what methods a type or trait defines
@@ -316,7 +325,7 @@ npx @modelcontextprotocol/inspector cargo run -- serve
 
 ### `mcp-test` - Test MCP Client
 
-Test MCP client functionality by connecting to a server.
+Test MCP client connectivity by spawning a server and listing available tools.
 
 ```bash
 codanna mcp-test [OPTIONS]
@@ -324,16 +333,16 @@ codanna mcp-test [OPTIONS]
 
 **Options:**
 - `--server-binary <PATH>` - Path to server binary (defaults to current binary)
-- `--tool <TOOL_NAME>` - Tool to call (if not specified, lists available tools)
-- `--args <JSON>` - Tool arguments as JSON
+
+**Note:** The `--tool` and `--args` options shown in the help are not implemented. This command currently only tests connectivity and lists available tools.
 
 **Example:**
 ```bash
-# List available tools
+# Test connectivity and list tools
 codanna mcp-test
 
-# Test specific tool
-codanna mcp-test --tool find_symbol --args '{"name": "main"}'
+# Use custom server binary
+codanna mcp-test --server-binary ./target/debug/codanna
 ```
 
 ### `mcp` - Direct MCP Tool Calls
@@ -356,62 +365,27 @@ codanna mcp <TOOL> [OPTIONS]
 - `find_callers` - Find functions that call a given function
 - `analyze_impact` - Analyze impact of changing a symbol
 - `get_index_info` - Get information about the index
-- `search_symbols` - Search for symbols using full-text search with fuzzy matching
+- `search_symbols` - Search for symbols using full-text search with fuzzy matching (same as `retrieve search`)
 
 **Examples:**
 ```bash
-# Find a symbol
+# Basic usage
 codanna mcp find_symbol --args '{"name": "parse"}'
-
-# Get function calls
 codanna mcp get_calls --args '{"function_name": "index_file"}'
-
-# Analyze impact with custom depth
-codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
-
-# Get index information
 codanna mcp get_index_info
 
-# Search for symbols with fuzzy matching
+# With parameters
+codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 codanna mcp search_symbols --args '{"query": "parse", "limit": 5}'
-
-# Search for functions only
-codanna mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "function"}'
-
-# Search within a specific module
-codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
 ```
 
 **Local Development:**
 ```bash
-# Find a symbol
-./target/release/codanna mcp find_symbol --args '{"name": "parse"}'
-
-# Get function calls
-./target/release/codanna mcp get_calls --args '{"function_name": "index_file"}'
-
-# Find callers
-./target/release/codanna mcp find_callers --args '{"function_name": "main"}'
-
-# Analyze impact with custom depth
-./target/release/codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
-
-# Get index information
-./target/release/codanna mcp get_index_info
-
-# Search for symbols with fuzzy matching
-./target/release/codanna mcp search_symbols --args '{"query": "parse", "limit": 5}'
-
-# Search for functions only
-./target/release/codanna mcp search_symbols --args '{"query": "test", "limit": 3, "kind": "function"}'
-
-# Search within a specific module
-./target/release/codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
-
-# Test with actual symbols from your codebase
+# Using local binary
 ./target/release/codanna mcp find_symbol --args '{"name": "SimpleIndexer"}'
 ./target/release/codanna mcp get_calls --args '{"function_name": "reindex_file_content"}'
 ./target/release/codanna mcp find_callers --args '{"function_name": "parse_file"}'
+./target/release/codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 ./target/release/codanna mcp search_symbols --args '{"query": "tantivy", "limit": 10}'
 ```
 
@@ -447,7 +421,7 @@ path = ".codanna/index"
 
 ## Typical Workflow
 
-1. **Initialize configuration**
+1. **Initialize configuration** (optional - auto-initialized on first index)
    ```bash
    codanna init
    ```
@@ -455,10 +429,13 @@ path = ".codanna/index"
 2. **Edit configuration** (optional)
    ```bash
    # Edit .codanna/settings.toml to customize settings
+   # Use global -c flag to specify custom config location
+   codanna -c custom-settings.toml index src
    ```
 
 3. **Index your codebase**
    ```bash
+   # Auto-initializes config if needed
    codanna index . --progress
    ```
 
@@ -519,6 +496,64 @@ For testing during development, use the target binary:
    ./target/release/codanna mcp get_calls --args '{"function_name": "main"}'
    ./target/release/codanna mcp search_symbols --args '{"query": "index", "limit": 5}'
    ```
+
+## Common Usage Patterns
+
+### Working with Custom Configurations
+
+```bash
+# Use a project-specific config
+codanna -c project-settings.toml index src --progress
+
+# Test performance with different thread counts
+codanna -c high-perf.toml index . --threads 16
+
+# Query using custom config
+codanna -c project-settings.toml retrieve symbol Parser
+```
+
+### Incremental Development Workflow
+
+```bash
+# Initial index of project
+codanna index src --progress
+
+# After making changes, re-index (only changed files)
+codanna index src --progress
+
+# Force complete re-index after major refactoring
+codanna index src --force --progress
+```
+
+### MCP Integration Examples
+
+```bash
+# Basic symbol lookup
+codanna mcp find_symbol --args '{"name": "SimpleIndexer"}'
+
+# Trace function calls
+codanna mcp get_calls --args '{"function_name": "parse_file"}'
+codanna mcp find_callers --args '{"function_name": "index_file"}'
+
+# Impact analysis
+codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
+
+# Get index statistics
+codanna mcp get_index_info
+
+# Search with filters
+codanna mcp search_symbols --args '{"query": "parse", "limit": 20}'
+codanna mcp search_symbols --args '{"query": "test", "kind": "function", "limit": 10}'
+codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
+
+# Multi-line JSON for complex queries
+codanna mcp search_symbols --args '{
+  "query": "handler",
+  "kind": "function",
+  "module": "crate::mcp",
+  "limit": 15
+}'
+```
 
 ## Testing Scenarios
 
@@ -594,6 +629,7 @@ codanna index src/main.rs --progress
 - The index is persisted, so subsequent runs are faster unless `--force` is used
 - Incremental indexing automatically skips unchanged files (100x faster)
 - Only modified files are re-parsed based on SHA256 content hashes
+- Use the global `-c` flag to test different configurations without modifying defaults
 
 ## Troubleshooting
 
@@ -601,3 +637,6 @@ codanna index src/main.rs --progress
 - Use `--dry-run` to debug which files would be indexed
 - Check `.gitignore` rules if expected files aren't being indexed
 - Run `codanna config` to verify your settings
+- Use `-c` flag to test with different configuration files
+- The index command auto-initializes config if missing
+- For MCP testing, `mcp-test` only verifies connectivity (doesn't execute tools)

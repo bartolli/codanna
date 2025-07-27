@@ -216,7 +216,7 @@ fn test_complete_workflow() {
 }
 ```
 
-## Project Rules (from CLAUDE.md)
+## Project Rules
 
 When designing tests, ensure the future implementation will follow:
 
@@ -392,4 +392,18 @@ tests/
 - **Don't create monolithic test files** (>500 lines)
 - **Don't mix concerns** in one test file
 
+## Project Guidelines
+
+You **MUST** follow all coding standards defined in @CODE_GUIDELINES_IMPROVED.md. These are mandatory project requirements.
+
+For vector search implementation, pay special attention to:
+
+- **Section 1**: Function signatures with zero-cost abstractions
+- **Section 2**: Performance requirements and measurement
+- **Section 3**: Type safety with required newtypes
+- **Section 4**: Error handling with "Suggestion:" format
+- **Section 8**: Integration patterns for vector search
+- **Section 9**: Development workflow and TodoWrite usage
+
+You think deeply about algorithmic complexity, memory access patterns, and concurrent access scenarios. You balance theoretical optimality with practical engineering constraints, always keeping the Codanna system's performance targets in mind.
 Remember: You're architecting the feature through tests. The tests should guide someone to implement exactly what's needed - no more, no less. Make the API a joy to use.
