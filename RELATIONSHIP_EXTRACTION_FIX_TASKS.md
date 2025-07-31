@@ -77,13 +77,20 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 - Add file registration to ImportResolver
 **Validation**: ImportResolver stores and retrieves imports correctly
 
-### Task 2.3: Connect ImportResolver to Tantivy
+### Task 2.3: Connect ImportResolver to Tantivy ✅
+**Status**: COMPLETED  
 **Duration**: 2 hours  
 **File**: `src/indexing/resolver.rs`
 **Description**: Update ImportResolver methods to use Tantivy:
 - `resolve_import_path` to query Tantivy
 - `find_symbol_in_module` to search by module path
-**Validation**: Can resolve imports to actual SymbolIds
+**Implementation**:
+- Updated `resolve_symbol` to accept DocumentIndex reference
+- Implemented `resolve_import_path` to parse paths and query symbols
+- Updated `find_symbol_in_module` to use `DocumentIndex::find_symbols_by_name`
+- Integrated import resolution into `resolve_cross_file_relationships`
+- Fixed module path calculation to use `ImportResolver::module_path_from_file` for Rust
+**Validation**: Import resolution correctly resolves symbols through Tantivy queries
 
 ### Task 2.4: Use Import Context in Relationship Resolution
 **Duration**: 1.5 hours  
@@ -93,6 +100,13 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 - Resolve through ImportResolver
 - Only fall back to global search if not found
 **Validation**: Relationships respect import boundaries
+
+## Phase 2 Progress Summary
+- **Tasks Completed**: 3 out of 4 (75%)
+- **Import Parsing**: ✅ Successfully extracts all import types
+- **ImportResolver Active**: ✅ Stores imports and file-to-module mappings
+- **Tantivy Integration**: ✅ ImportResolver queries Tantivy for symbol resolution
+- **Remaining**: Task 2.4 - Full integration into relationship resolution flow
 
 ## Phase 3: Advanced Resolution
 
