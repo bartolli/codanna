@@ -46,6 +46,13 @@ pub trait LanguageParser: Send + Sync {
     
     /// Get the language this parser handles
     fn language(&self) -> crate::parsing::Language;
+    
+    /// Extract variable bindings with their types
+    /// Returns tuples of (variable_name, type_name, range)
+    fn find_variable_types(&mut self, _code: &str) -> Vec<(String, String, Range)> {
+        // Default implementation returns empty - languages can override
+        Vec::new()
+    }
 }
 
 /// Trait for creating language parsers

@@ -414,9 +414,9 @@ impl RustParser {
                                     target_name = Some(format!("self.{}", method_name));
                                 }
                                 "identifier" => {
-                                    // variable.method() - just use method name for now
-                                    // In the future, we could track variable types
-                                    target_name = Some(method_name);
+                                    // variable.method() - prefix with variable name for context
+                                    let var_name = &code[value_node.byte_range()];
+                                    target_name = Some(format!("{}@{}", var_name, method_name));
                                 }
                                 "field_expression" => {
                                     // Chained calls like self.field.method()
@@ -495,6 +495,69 @@ impl RustParser {
         // Recurse into children
         for child in node.children(&mut node.walk()) {
             self.find_implementations_in_node(child, code, implementations);
+        }
+    }
+    
+    fn find_variable_types_in_node(&self, node: Node, code: &str, bindings: &mut Vec<(String, String, Range)>) {
+        if node.kind() == "let_declaration" {
+            // Extract variable name from pattern
+            if let Some(pattern_node) = node.child_by_field_name("pattern") {
+                if let Some(var_name) = self.extract_variable_name(pattern_node, code) {
+                    // Extract type from value expression
+                    if let Some(value_node) = node.child_by_field_name("value") {
+                        if let Some(type_name) = self.extract_value_type(value_node, code) {
+                            let range = Range::new(
+                                node.start_position().row as u32,
+                                node.start_position().column as u16,
+                                node.end_position().row as u32,
+                                node.end_position().column as u16,
+                            );
+                            bindings.push((var_name, type_name, range));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_variable_types_in_node(child, code, bindings);
+        }
+    }
+    
+    fn extract_variable_name(&self, node: Node, code: &str) -> Option<String> {
+        match node.kind() {
+            "identifier" => Some(code[node.byte_range()].to_string()),
+            _ => None,
+        }
+    }
+    
+    fn extract_value_type(&self, node: Node, code: &str) -> Option<String> {
+        match node.kind() {
+            // Direct struct construction: MyType { ... }
+            "struct_expression" => {
+                if let Some(type_node) = node.child_by_field_name("name") {
+                    self.extract_type_name(type_node, code)
+                } else {
+                    None
+                }
+            }
+            // Reference: &expr
+            "reference_expression" => {
+                if let Some(value_node) = node.child_by_field_name("value") {
+                    self.extract_value_type(value_node, code)
+                        .map(|t| format!("&{}", t))
+                } else {
+                    None
+                }
+            }
+            // Variable reference: x = y
+            "identifier" => {
+                // For now, return the identifier as a placeholder
+                // This won't give us the type but at least tracks the binding
+                Some(format!("@{}", &code[node.byte_range()]))
+            }
+            _ => None,
         }
     }
     
@@ -791,6 +854,20 @@ impl LanguageParser for RustParser {
     
     fn language(&self) -> Language {
         Language::Rust
+    }
+    
+    fn find_variable_types(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut bindings = Vec::new();
+        
+        self.find_variable_types_in_node(root_node, code, &mut bindings);
+        
+        bindings
     }
 }
 

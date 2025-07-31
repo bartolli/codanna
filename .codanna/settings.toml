@@ -13,12 +13,6 @@ ignore_patterns = [
 include_tests = true
 include_docs = false
 
-[languages.rust]
-enabled = true
-extensions = ["rs"]
-
-[languages.rust.parser_options]
-
 [languages.python]
 enabled = false
 extensions = [
@@ -27,6 +21,12 @@ extensions = [
 ]
 
 [languages.python.parser_options]
+
+[languages.rust]
+enabled = true
+extensions = ["rs"]
+
+[languages.rust.parser_options]
 
 [languages.typescript]
 enabled = false

@@ -46,6 +46,8 @@ pub struct SimpleIndexer {
     document_index: DocumentIndex,
     /// Unresolved relationships to be resolved in a second pass
     unresolved_relationships: Vec<UnresolvedRelationship>,
+    /// Variable type information for method resolution
+    variable_types: std::collections::HashMap<(FileId, String), String>,
     /// Optional vector search engine
     vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
     /// Optional embedding generator
@@ -83,6 +85,7 @@ impl SimpleIndexer {
             settings,
             document_index,
             unresolved_relationships: Vec::new(),
+            variable_types: std::collections::HashMap::new(),
             vector_engine: None,
             embedding_generator: None,
             pending_embeddings: Vec::new(),
@@ -517,6 +520,12 @@ impl SimpleIndexer {
                 }
             }
             self.add_relationships_by_name(&definer_name, &method_name, file_id, RelationKind::Defines)?;
+        }
+        
+        // Variable type tracking for method resolution
+        let var_types = parser.find_variable_types(content);
+        for (var_name, type_name, _range) in var_types {
+            self.variable_types.insert((file_id, var_name), type_name);
         }
         
         Ok(())
