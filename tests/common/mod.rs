@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use tempfile::TempDir;
 use std::fs;
+use std::sync::Arc;
+use codanna::{SimpleIndexer, Settings};
 
 pub struct TestProject {
     pub dir: TempDir,
@@ -25,6 +27,20 @@ impl TestProject {
     pub fn path(&self) -> &std::path::Path {
         self.dir.path()
     }
+}
+
+/// Creates a SimpleIndexer with an isolated index directory for testing.
+/// This prevents Tantivy lock conflicts when tests run in parallel.
+pub fn create_test_indexer() -> (SimpleIndexer, TempDir) {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let index_path = temp_dir.path().join("index");
+    
+    let mut settings = Settings::default();
+    settings.index_path = index_path;
+    settings.workspace_root = Some(temp_dir.path().to_path_buf());
+    
+    let indexer = SimpleIndexer::with_settings(Arc::new(settings));
+    (indexer, temp_dir)
 }
 
 pub mod sample_code {

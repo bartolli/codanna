@@ -1,7 +1,7 @@
 ---
 name: quality-reviewer
 description: Reviews Rust code for project coding principles: function signatures, error handling, type design, API ergonomics, performance. Use after writing/modifying Rust code. Examples: "I've implemented a parser function" → "I'll review with quality-reviewer for guidelines compliance." "Here's my builder pattern" → "Using quality-reviewer to check API ergonomics."
-tools: Task, Bash, Edit, MultiEdit, Write, NotebookEdit, mcp__ide__getDiagnostics, mcp__ide__executeCode, mcp__Context7__resolve-library-id, mcp__Context7__get-library-docs
+tools: Read, Write, Task, mcp__ide__getDiagnostics, mcp__ide__executeCode, mcp__Context7__resolve-library-id, mcp__Context7__get-library-docs
 color: cyan
 ---
 

@@ -9,9 +9,10 @@ use crate::{
 use crate::storage::{DocumentIndex, SearchResult};
 use crate::parsing::{Language, ParserFactory};
 use crate::indexing::{FileWalker, IndexStats, ImportResolver, IndexTransaction, calculate_hash, get_utc_timestamp};
+use crate::vector::{VectorSearchEngine, EmbeddingGenerator, create_symbol_text};
 use std::path::{Path, PathBuf};
 use std::fs;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Compatibility struct for transaction support
@@ -37,7 +38,6 @@ struct UnresolvedRelationship {
     kind: RelationKind,
 }
 
-#[derive(Debug)]
 pub struct SimpleIndexer {
     parser_factory: ParserFactory,
     #[allow(dead_code)]
@@ -47,6 +47,12 @@ pub struct SimpleIndexer {
     document_index: DocumentIndex,
     /// Unresolved relationships to be resolved in a second pass
     unresolved_relationships: Vec<UnresolvedRelationship>,
+    /// Optional vector search engine
+    vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
+    /// Optional embedding generator
+    embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
+    /// Symbols pending vector processing (SymbolId, symbol_text)
+    pending_embeddings: Vec<(SymbolId, String)>,
 }
 
 impl SimpleIndexer {
@@ -79,6 +85,9 @@ impl SimpleIndexer {
             project_root,
             document_index,
             unresolved_relationships: Vec::new(),
+            vector_engine: None,
+            embedding_generator: None,
+            pending_embeddings: Vec::new(),
         }
     }
     
@@ -105,6 +114,24 @@ impl SimpleIndexer {
         self.project_root = Some(root);
     }
     
+    /// Enable vector search with the given engine and generator
+    #[must_use = "Vector search configuration should be used"]
+    pub fn with_vector_search(
+        mut self, 
+        vector_engine: VectorSearchEngine,
+        embedding_generator: Arc<dyn EmbeddingGenerator>
+    ) -> Self {
+        self.vector_engine = Some(Arc::new(Mutex::new(vector_engine)));
+        self.embedding_generator = Some(embedding_generator);
+        self
+    }
+    
+    /// Check if vector search is enabled
+    #[must_use]
+    pub fn has_vector_search(&self) -> bool {
+        self.vector_engine.is_some() && self.embedding_generator.is_some()
+    }
+    
     /// Start a batch operation for Tantivy indexing
     pub fn start_tantivy_batch(&self) -> IndexResult<()> {
         self.document_index.start_batch()
@@ -115,12 +142,26 @@ impl SimpleIndexer {
     }
     
     /// Commit the current Tantivy batch
-    pub fn commit_tantivy_batch(&self) -> IndexResult<()> {
+    pub fn commit_tantivy_batch(&mut self) -> IndexResult<()> {
+        // First commit Tantivy batch
         self.document_index.commit_batch()
             .map_err(|e| IndexError::TantivyError {
                 operation: "commit_batch".to_string(),
                 cause: e.to_string(),
-            })
+            })?;
+            
+        // Process pending embeddings if vector search is enabled
+        match (&self.vector_engine, &self.embedding_generator) {
+            (Some(engine), Some(generator)) if !self.pending_embeddings.is_empty() => {
+                // Clone the Arc references to avoid borrow checker issues
+                let engine = engine.clone();
+                let generator = generator.clone();
+                self.process_pending_embeddings(&engine, &generator)?;
+            }
+            _ => {} // No vector support or no pending embeddings
+        }
+        
+        Ok(())
     }
     
     /// Begin a transaction (compatibility method)
@@ -364,11 +405,24 @@ impl SimpleIndexer {
     
     /// Store a single symbol in Tantivy
     fn store_symbol(&mut self, symbol: crate::Symbol, path_str: &str) -> IndexResult<()> {
+        // Store the symbol in Tantivy
         self.document_index.index_symbol(&symbol, path_str)
             .map_err(|e| IndexError::TantivyError {
                 operation: "store_symbol".to_string(),
                 cause: e.to_string(),
-            })
+            })?;
+            
+        // If vector support is enabled, prepare for embedding
+        if self.vector_engine.is_some() && self.embedding_generator.is_some() {
+            let symbol_text = create_symbol_text(
+                &symbol.name,
+                symbol.kind,
+                symbol.signature.as_deref()
+            );
+            self.pending_embeddings.push((symbol.id, symbol_text));
+        }
+        
+        Ok(())
     }
     
     /// Extract relationships from content and store them
@@ -425,10 +479,6 @@ impl SimpleIndexer {
     
     /// Helper method to add relationships by symbol names
     fn add_relationships_by_name(&mut self, from_name: &str, to_name: &str, file_id: FileId, kind: RelationKind) -> IndexResult<()> {
-        // Extract the last component of the name for simple matching
-        // e.g., "std::fmt::Debug" -> "Debug"
-        let simple_to_name = to_name.split("::").last().unwrap_or(to_name);
-        
         // Find symbols by name in Tantivy
         let from_symbols = self.document_index.find_symbols_by_name(from_name)
             .map_err(|e| IndexError::TantivyError {
@@ -436,7 +486,7 @@ impl SimpleIndexer {
                 cause: e.to_string(),
             })?;
         
-        let to_symbols = self.document_index.find_symbols_by_name(simple_to_name)
+        let to_symbols = self.document_index.find_symbols_by_name(to_name)
             .map_err(|e| IndexError::TantivyError {
                 operation: "find_symbols_by_name".to_string(),
                 cause: e.to_string(),
@@ -458,7 +508,7 @@ impl SimpleIndexer {
             // Store unresolved relationship for later cross-file resolution
             self.unresolved_relationships.push(UnresolvedRelationship {
                 from_name: from_name.into(),
-                to_name: simple_to_name.into(),
+                to_name: to_name.into(),
                 file_id,
                 kind,
             });
@@ -798,10 +848,74 @@ impl SimpleIndexer {
         
         Ok(())
     }
+    
+    /// Process pending embeddings after a successful Tantivy commit
+    fn process_pending_embeddings(
+        &mut self,
+        vector_engine: &Arc<Mutex<VectorSearchEngine>>,
+        embedding_generator: &Arc<dyn EmbeddingGenerator>
+    ) -> IndexResult<()> {
+        if self.pending_embeddings.is_empty() {
+            return Ok(());
+        }
+        
+        // Extract texts for embedding generation
+        let texts: Vec<&str> = self.pending_embeddings
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect();
+            
+        // Generate embeddings
+        let embeddings = embedding_generator.generate_embeddings(&texts)
+            .map_err(|e| IndexError::General(format!("Vector embedding generation failed: {}", e)))?;
+            
+        // Validate embedding count matches input
+        if embeddings.len() != texts.len() {
+            return Err(IndexError::General(format!(
+                "Embedding count mismatch: expected {}, got {}",
+                texts.len(),
+                embeddings.len()
+            )));
+        }
+            
+        // Create vector IDs and embeddings pairs
+        let mut vectors = Vec::with_capacity(self.pending_embeddings.len());
+        for (i, (symbol_id, _)) in self.pending_embeddings.iter().enumerate() {
+            // Convert SymbolId to VectorId (both wrap u32)
+            if let Some(vector_id) = crate::vector::VectorId::new(symbol_id.value()) {
+                vectors.push((vector_id, embeddings[i].clone()));
+            }
+        }
+        
+        // Index vectors
+        vector_engine.lock()
+            .map_err(|_| IndexError::General("Vector engine mutex poisoned".to_string()))?
+            .index_vectors(&vectors)
+            .map_err(|e| IndexError::General(format!("Vector indexing failed: {}", e)))?;
+            
+        // Clear pending embeddings
+        self.pending_embeddings.clear();
+        
+        Ok(())
+    }
 }
 
 impl Default for SimpleIndexer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl std::fmt::Debug for SimpleIndexer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimpleIndexer")
+            .field("settings", &self.settings)
+            .field("project_root", &self.project_root)
+            .field("document_index", &self.document_index)
+            .field("unresolved_relationships", &self.unresolved_relationships)
+            .field("vector_engine", &self.vector_engine.is_some())
+            .field("embedding_generator", &self.embedding_generator.is_some())
+            .field("pending_embeddings_count", &self.pending_embeddings.len())
+            .finish()
     }
 }

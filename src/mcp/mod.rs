@@ -212,7 +212,18 @@ impl CodeIntelligenceServer {
         
         let mut result = format!("{} calls {} function(s):\n", function_name, all_called.len());
         for callee in all_called {
-            result.push_str(&format!("  -> {}\n", callee.name));
+            let file_path = indexer.get_file_path(callee.file_id)
+                .unwrap_or_else(|| "<unknown>".to_string());
+            result.push_str(&format!(
+                "  -> {:?} {} at {}:{}\n",
+                callee.kind,
+                callee.name,
+                file_path,
+                callee.range.start_line + 1
+            ));
+            if let Some(ref sig) = callee.signature {
+                result.push_str(&format!("     Signature: {}\n", sig));
+            }
         }
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -254,7 +265,18 @@ impl CodeIntelligenceServer {
         
         let mut result = format!("{} function(s) call {}:\n", all_callers.len(), function_name);
         for caller in all_callers {
-            result.push_str(&format!("  <- {}\n", caller.name));
+            let file_path = indexer.get_file_path(caller.file_id)
+                .unwrap_or_else(|| "<unknown>".to_string());
+            result.push_str(&format!(
+                "  <- {:?} {} at {}:{}\n",
+                caller.kind,
+                caller.name,
+                file_path,
+                caller.range.start_line + 1
+            ));
+            if let Some(ref sig) = caller.signature {
+                result.push_str(&format!("     Signature: {}\n", sig));
+            }
         }
         Ok(CallToolResult::success(vec![Content::text(result)]))
     }
@@ -310,27 +332,28 @@ impl CodeIntelligenceServer {
     }
 
     #[tool(description = "Get information about the indexed codebase")]
-    pub async fn get_index_info(&self) -> Result<CallToolResult, McpError> {
+    pub async fn get_index_info(
+        &self,
+    ) -> Result<CallToolResult, McpError> {
         let indexer = self.indexer.read().await;
         let symbol_count = indexer.symbol_count();
-        
-        let symbols = indexer.get_all_symbols();
-        let functions = symbols.iter()
-            .filter(|s| s.kind == crate::SymbolKind::Function)
-            .count();
-        let methods = symbols.iter()
-            .filter(|s| s.kind == crate::SymbolKind::Method)
-            .count();
-        let structs = symbols.iter()
-            .filter(|s| s.kind == crate::SymbolKind::Struct)
-            .count();
-        let traits = symbols.iter()
-            .filter(|s| s.kind == crate::SymbolKind::Trait)
-            .count();
+        let file_count = indexer.file_count();
+        let relationship_count = indexer.relationship_count();
+
+        // Efficiently count symbols by kind in one pass
+        let mut kind_counts = std::collections::HashMap::new();
+        for symbol in indexer.get_all_symbols() {
+            *kind_counts.entry(symbol.kind).or_insert(0) += 1;
+        }
+
+        let functions = kind_counts.get(&crate::SymbolKind::Function).unwrap_or(&0);
+        let methods = kind_counts.get(&crate::SymbolKind::Method).unwrap_or(&0);
+        let structs = kind_counts.get(&crate::SymbolKind::Struct).unwrap_or(&0);
+        let traits = kind_counts.get(&crate::SymbolKind::Trait).unwrap_or(&0);
 
         let result = format!(
-            "Index contains {} symbols:\n  Functions: {}\n  Methods: {}\n  Structs: {}\n  Traits: {}",
-            symbol_count, functions, methods, structs, traits
+            "Index contains {} symbols across {} files.\n\nBreakdown:\n  - Symbols: {}\n  - Relationships: {}\n\nSymbol Kinds:\n  - Functions: {}\n  - Methods: {}\n  - Structs: {}\n  - Traits: {}",
+            symbol_count, file_count, symbol_count, relationship_count, functions, methods, structs, traits
         );
 
         Ok(CallToolResult::success(vec![Content::text(result)]))

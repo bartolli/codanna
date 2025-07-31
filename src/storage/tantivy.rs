@@ -19,7 +19,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use crate::{SymbolId, SymbolKind, FileId, RelationKind, Relationship};
 use crate::relationship::RelationshipMetadata;
+use crate::vector::{VectorId, ClusterId, VectorSearchEngine, SegmentOrdinal, EmbeddingGenerator};
 use super::{StorageError, StorageResult, MetadataKey};
+use serde::{Serialize, Deserialize};
+use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use tantivy::DocId;
 
 /// Schema fields for the document index
 #[derive(Debug)]
@@ -56,6 +61,11 @@ pub struct IndexSchema {
     // Metadata fields
     pub meta_key: Field,
     pub meta_value: Field,
+    
+    // Vector search fields
+    pub cluster_id: Field,
+    pub vector_id: Field,
+    pub has_vector: Field,
 }
 
 impl IndexSchema {
@@ -114,6 +124,11 @@ impl IndexSchema {
         let meta_key = builder.add_text_field("meta_key", STRING | STORED | FAST);
         let meta_value = builder.add_u64_field("meta_value", STORED);
         
+        // Vector search fields
+        let cluster_id = builder.add_u64_field("cluster_id", FAST | STORED);
+        let vector_id = builder.add_u64_field("vector_id", FAST | STORED);
+        let has_vector = builder.add_u64_field("has_vector", FAST | STORED); // Using u64 as bool for FAST field
+        
         let schema = builder.build();
         let index_schema = IndexSchema {
             doc_type,
@@ -139,9 +154,156 @@ impl IndexSchema {
             file_timestamp,
             meta_key,
             meta_value,
+            cluster_id,
+            vector_id,
+            has_vector,
         };
         
         (schema, index_schema)
+    }
+}
+
+/// Metadata for tracking vector-related information per document
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorMetadata {
+    /// The vector ID associated with this document (maps to SymbolId)
+    pub vector_id: Option<VectorId>,
+    /// The cluster assignment for this vector
+    pub cluster_id: Option<ClusterId>,
+    /// Version of the embedding model used to generate this vector
+    pub embedding_version: u32,
+}
+
+/// Internal representation for JSON serialization
+#[derive(Serialize, Deserialize)]
+struct VectorMetadataJson {
+    vector_id: Option<u32>,
+    cluster_id: Option<u32>,
+    embedding_version: u32,
+}
+
+impl VectorMetadata {
+    /// Creates a new VectorMetadata with no vector assignment
+    pub fn new(embedding_version: u32) -> Self {
+        Self {
+            vector_id: None,
+            cluster_id: None,
+            embedding_version,
+        }
+    }
+    
+    /// Creates VectorMetadata with full vector information
+    pub fn with_vector(vector_id: VectorId, cluster_id: ClusterId, embedding_version: u32) -> Self {
+        Self {
+            vector_id: Some(vector_id),
+            cluster_id: Some(cluster_id),
+            embedding_version,
+        }
+    }
+    
+    /// Checks if this document has an associated vector
+    pub fn has_vector(&self) -> bool {
+        self.vector_id.is_some()
+    }
+    
+    /// Serializes the metadata to a JSON string for storage in Tantivy
+    pub fn to_json(&self) -> StorageResult<String> {
+        let json_repr = VectorMetadataJson {
+            vector_id: self.vector_id.map(|id| id.get()),
+            cluster_id: self.cluster_id.map(|id| id.get()),
+            embedding_version: self.embedding_version,
+        };
+        serde_json::to_string(&json_repr)
+            .map_err(|e| StorageError::Serialization(format!("Failed to serialize VectorMetadata: {}", e)))
+    }
+    
+    /// Deserializes metadata from a JSON string
+    pub fn from_json(json: &str) -> StorageResult<Self> {
+        let json_repr: VectorMetadataJson = serde_json::from_str(json)
+            .map_err(|e| StorageError::Serialization(format!("Failed to deserialize VectorMetadata: {}", e)))?;
+        
+        Ok(Self {
+            vector_id: json_repr.vector_id.and_then(VectorId::new),
+            cluster_id: json_repr.cluster_id.and_then(ClusterId::new),
+            embedding_version: json_repr.embedding_version,
+        })
+    }
+}
+
+/// Cache for cluster assignments to enable efficient vector search
+/// 
+/// This cache maintains mappings from cluster IDs to document IDs within each segment,
+/// enabling the vector search to quickly find relevant documents without scanning
+/// all vectors. The cache is rebuilt when the index reader generation changes.
+#[derive(Debug, Clone)]
+struct ClusterCache {
+    /// The reader generation this cache was built for
+    generation: u64,
+    /// Mappings per segment: SegmentOrdinal -> (ClusterId -> [DocId])
+    segment_mappings: HashMap<SegmentOrdinal, HashMap<ClusterId, Vec<DocId>>>,
+}
+
+impl ClusterCache {
+    /// Creates a new empty cache
+    fn new(generation: u64) -> Self {
+        Self {
+            generation,
+            segment_mappings: HashMap::new(),
+        }
+    }
+    
+    /// Checks if the cache is valid for the given generation
+    fn is_valid_for_generation(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+    
+    /// Adds a document to the cache
+    fn add_document(&mut self, segment_ord: SegmentOrdinal, cluster_id: ClusterId, doc_id: DocId) {
+        self.segment_mappings
+            .entry(segment_ord)
+            .or_default()
+            .entry(cluster_id)
+            .or_default()
+            .push(doc_id);
+    }
+    
+    /// Gets all documents in a cluster for a specific segment
+    fn get_documents(&self, segment_ord: SegmentOrdinal, cluster_id: ClusterId) -> Option<&[DocId]> {
+        self.segment_mappings
+            .get(&segment_ord)
+            .and_then(|clusters| clusters.get(&cluster_id))
+            .map(|docs| docs.as_slice())
+    }
+    
+    /// Sorts all document lists for efficient searching
+    fn sort_all(&mut self) {
+        for segment_map in self.segment_mappings.values_mut() {
+            for doc_list in segment_map.values_mut() {
+                doc_list.sort_unstable();
+            }
+        }
+    }
+    
+    /// Gets the total number of cached documents
+    #[cfg(test)]
+    fn total_documents(&self) -> usize {
+        self.segment_mappings
+            .values()
+            .flat_map(|clusters| clusters.values())
+            .map(|docs| docs.len())
+            .sum()
+    }
+    
+    /// Gets all unique cluster IDs across all segments
+    fn all_cluster_ids(&self) -> Vec<ClusterId> {
+        let mut cluster_ids: Vec<ClusterId> = self.segment_mappings
+            .values()
+            .flat_map(|clusters| clusters.keys())
+            .copied()
+            .collect();
+        cluster_ids.sort_unstable_by_key(|id| id.get());
+        cluster_ids.dedup();
+        cluster_ids
     }
 }
 
@@ -177,6 +339,16 @@ pub struct DocumentIndex {
     schema: IndexSchema,
     index_path: PathBuf,
     pub(crate) writer: Mutex<Option<IndexWriter<Document>>>,
+    /// Optional path for vector storage files
+    vector_storage_path: Option<PathBuf>,
+    /// Optional vector search engine for semantic search
+    vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
+    /// Cache for cluster assignments (protected by RwLock for concurrent reads)
+    cluster_cache: Arc<RwLock<Option<ClusterCache>>>,
+    /// Optional embedding generator for vector search
+    embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
+    /// Symbols pending vector processing (SymbolId, symbol_text)
+    pub(crate) pending_embeddings: Mutex<Vec<(SymbolId, String)>>,
 }
 
 impl std::fmt::Debug for DocumentIndex {
@@ -184,6 +356,11 @@ impl std::fmt::Debug for DocumentIndex {
         f.debug_struct("DocumentIndex")
             .field("index_path", &self.index_path)
             .field("schema", &self.schema)
+            .field("vector_storage_path", &self.vector_storage_path)
+            .field("has_vector_engine", &self.vector_engine.is_some())
+            .field("has_embedding_generator", &self.embedding_generator.is_some())
+            .field("has_cluster_cache", &self.cluster_cache.read().unwrap().is_some())
+            .field("pending_embeddings_count", &self.pending_embeddings.lock().unwrap().len())
             .finish()
     }
 }
@@ -220,7 +397,185 @@ impl DocumentIndex {
             schema: index_schema,
             index_path,
             writer: Mutex::new(None),
+            vector_storage_path: None,
+            vector_engine: None,
+            cluster_cache: Arc::new(RwLock::new(None)),
+            embedding_generator: None,
+            pending_embeddings: Mutex::new(Vec::new()),
         })
+    }
+    
+    /// Enable vector search support with the given engine and storage path
+    pub fn with_vector_support(
+        mut self, 
+        vector_engine: Arc<Mutex<VectorSearchEngine>>,
+        vector_storage_path: impl AsRef<Path>
+    ) -> Self {
+        self.vector_storage_path = Some(vector_storage_path.as_ref().to_path_buf());
+        self.vector_engine = Some(vector_engine);
+        self
+    }
+    
+    /// Set the embedding generator for vector search
+    pub fn with_embedding_generator(mut self, generator: Arc<dyn EmbeddingGenerator>) -> Self {
+        self.embedding_generator = Some(generator);
+        self
+    }
+    
+    /// Check if vector search is enabled
+    pub fn has_vector_support(&self) -> bool {
+        self.vector_engine.is_some()
+    }
+    
+    /// Get the vector storage path if configured
+    pub fn vector_storage_path(&self) -> Option<&Path> {
+        self.vector_storage_path.as_deref()
+    }
+    
+    /// Get a reference to the vector engine if configured
+    pub fn vector_engine(&self) -> Option<&Arc<Mutex<VectorSearchEngine>>> {
+        self.vector_engine.as_ref()
+    }
+    
+    /// Process pending embeddings after a successful Tantivy commit
+    fn post_commit_vector_processing(&self) -> StorageResult<()> {
+        // Get pending embeddings
+        let pending_embeddings = {
+            let mut pending = self.pending_embeddings.lock()
+                .map_err(|_| StorageError::LockPoisoned)?;
+            std::mem::take(&mut *pending)
+        };
+        
+        if pending_embeddings.is_empty() {
+            return Ok(());
+        }
+        
+        // Get references to engine and generator
+        let vector_engine = self.vector_engine.as_ref()
+            .ok_or_else(|| StorageError::General("Vector engine not configured".to_string()))?;
+        let embedding_generator = self.embedding_generator.as_ref()
+            .ok_or_else(|| StorageError::General("Embedding generator not configured".to_string()))?;
+        
+        // Extract texts for embedding generation
+        let texts: Vec<&str> = pending_embeddings
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect();
+        
+        // Generate embeddings
+        let embeddings = embedding_generator.generate_embeddings(&texts)
+            .map_err(|e| StorageError::General(format!("Embedding generation failed: {}", e)))?;
+        
+        if embeddings.len() != pending_embeddings.len() {
+            return Err(StorageError::General(format!(
+                "Embedding count mismatch: expected {}, got {}",
+                pending_embeddings.len(),
+                embeddings.len()
+            )));
+        }
+        
+        // Create vector IDs and embeddings pairs
+        let mut vectors = Vec::with_capacity(pending_embeddings.len());
+        for (i, (symbol_id, _)) in pending_embeddings.iter().enumerate() {
+            // Convert SymbolId to VectorId (both wrap u32)
+            if let Some(vector_id) = crate::vector::VectorId::new(symbol_id.value()) {
+                vectors.push((vector_id, embeddings[i].clone()));
+            }
+        }
+        
+        // Index vectors in the engine
+        let mut engine = vector_engine.lock()
+            .map_err(|_| StorageError::LockPoisoned)?;
+        engine.index_vectors(&vectors)
+            .map_err(|e| StorageError::General(format!("Vector indexing failed: {}", e)))?;
+        
+        // TODO: Update documents with cluster assignments
+        // This will be implemented after we have the ability to update 
+        // documents with vector metadata
+        
+        Ok(())
+    }
+    
+    /// Build or rebuild the cluster cache from current segments
+    /// This should be called after commits when vector support is enabled
+    fn build_cluster_cache(&self) -> StorageResult<()> {
+        if !self.has_vector_support() {
+            return Ok(());
+        }
+        
+        let searcher = self.reader.searcher();
+        let generation = searcher.segment_readers().len() as u64; // Simple generation tracking
+        
+        // Check if cache is already valid
+        {
+            let cache = self.cluster_cache.read().map_err(|_| StorageError::LockPoisoned)?;
+            if let Some(ref existing_cache) = *cache {
+                if existing_cache.is_valid_for_generation(generation) {
+                    return Ok(());
+                }
+            }
+        }
+        
+        // Build new cache
+        let mut new_cache = ClusterCache::new(generation);
+        
+        // Iterate through all segments
+        for (segment_ord, segment_reader) in searcher.segment_readers().iter().enumerate() {
+            let segment_ord = SegmentOrdinal::new(segment_ord as u32);
+            
+            // Get the fast fields for this segment
+            let fast_fields = segment_reader.fast_fields();
+            let cluster_id_reader = fast_fields.u64("cluster_id")?
+                .first_or_default_col(0);
+            let has_vector_reader = fast_fields.u64("has_vector")?
+                .first_or_default_col(0);
+            
+            // Scan all documents in the segment
+            for doc_id in 0..segment_reader.num_docs() {
+                // Check if document has a vector
+                let has_vector_val = has_vector_reader.get_val(doc_id);
+                if has_vector_val == 1 {
+                    // Get cluster assignment
+                    let cluster_val = cluster_id_reader.get_val(doc_id);
+                    if let Some(cluster_id) = ClusterId::new(cluster_val as u32) {
+                        new_cache.add_document(segment_ord, cluster_id, doc_id);
+                    }
+                }
+            }
+        }
+        
+        // Sort all document lists for efficient searching
+        new_cache.sort_all();
+        
+        // Store the new cache
+        let mut cache = self.cluster_cache.write().map_err(|_| StorageError::LockPoisoned)?;
+        *cache = Some(new_cache);
+        
+        Ok(())
+    }
+    
+    /// Get documents in a specific cluster for a segment
+    pub fn get_cluster_documents(&self, segment_ord: SegmentOrdinal, cluster_id: ClusterId) -> StorageResult<Vec<DocId>> {
+        let cache = self.cluster_cache.read().map_err(|_| StorageError::LockPoisoned)?;
+        
+        if let Some(ref cluster_cache) = *cache {
+            Ok(cluster_cache.get_documents(segment_ord, cluster_id)
+                .map(|docs| docs.to_vec())
+                .unwrap_or_default())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+    
+    /// Get all unique cluster IDs in the index
+    pub fn get_all_cluster_ids(&self) -> StorageResult<Vec<ClusterId>> {
+        let cache = self.cluster_cache.read().map_err(|_| StorageError::LockPoisoned)?;
+        
+        if let Some(ref cluster_cache) = *cache {
+            Ok(cluster_cache.all_cluster_ids())
+        } else {
+            Ok(Vec::new())
+        }
     }
     
     /// Start a batch operation for adding multiple documents
@@ -279,6 +634,21 @@ impl DocumentIndex {
         
         writer.add_document(doc)?;
         
+        // Track symbol for vector embedding if vector support is enabled
+        if self.has_vector_support() && self.embedding_generator.is_some() {
+            // Create symbol text representation for embedding
+            let symbol_text = format!(
+                "{} {:?} {}",
+                name,
+                kind,
+                signature.unwrap_or("")
+            );
+            
+            let mut pending = self.pending_embeddings.lock()
+                .map_err(|_| StorageError::LockPoisoned)?;
+            pending.push((symbol_id, symbol_text));
+        }
+        
         Ok(())
     }
     
@@ -295,6 +665,14 @@ impl DocumentIndex {
             writer.commit()?;
             // Reload the reader to see new documents
             self.reader.reload()?;
+            
+            // Process pending vector embeddings if enabled
+            if self.has_vector_support() && self.embedding_generator.is_some() {
+                self.post_commit_vector_processing()?;
+            }
+            
+            // Build cluster cache if vector support is enabled
+            self.build_cluster_cache()?;
         }
         Ok(())
     }
@@ -329,20 +707,6 @@ impl DocumentIndex {
     ) -> StorageResult<Vec<SearchResult>> {
         let searcher = self.reader.searcher();
         
-        // Build the query
-        let mut subqueries: Vec<Box<dyn Query>> = Vec::new();
-        
-        // Always filter for symbol documents only
-        let doc_type_query = TermQuery::new(
-            Term::from_field_text(self.schema.doc_type, "symbol"),
-            IndexRecordOption::Basic,
-        );
-        subqueries.push(Box::new(doc_type_query));
-        
-        // Try multiple search strategies
-        let mut search_queries: Vec<Box<dyn Query>> = Vec::new();
-        
-        // First, try a regular query parser for exact matches
         let query_parser = QueryParser::for_index(
             &self.index,
             vec![
@@ -352,52 +716,46 @@ impl DocumentIndex {
                 self.schema.context,
             ],
         );
-        
-        if let Ok(parsed_query) = query_parser.parse_query(query_str) {
-            search_queries.push(parsed_query);
-        }
-        
-        // Also add fuzzy search on the name field for typo tolerance
+        let main_query = query_parser.parse_query(query_str)?;
+
+        // Fuzzy query for typo tolerance on the name field
         let term = Term::from_field_text(self.schema.name, query_str);
-        let fuzzy_query = FuzzyTermQuery::new(term, 1, true); // distance=1, transposition_cost_one=true
-        search_queries.push(Box::new(fuzzy_query));
-        
-        // Combine search queries with OR (Should) to get results from either
-        if !search_queries.is_empty() {
-            let mut bool_clauses = Vec::new();
-            for q in search_queries {
-                bool_clauses.push((Occur::Should, q));
-            }
-            subqueries.push(Box::new(BooleanQuery::new(bool_clauses)));
-        }
-        
-        // Add filters
+        let fuzzy_query = FuzzyTermQuery::new(term, 1, true);
+
+        // All queries will be collected here.
+        let mut all_clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+
+        // The text search part: must match either the main query or the fuzzy query.
+        all_clauses.push((
+            Occur::Must,
+            Box::new(BooleanQuery::new(vec![
+                (Occur::Should, main_query),
+                (Occur::Should, Box::new(fuzzy_query)),
+            ])),
+        ));
+
+        // Add mandatory filters.
+        all_clauses.push((
+            Occur::Must,
+            Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "symbol"),
+                IndexRecordOption::Basic,
+            )),
+        ));
+
         if let Some(kind) = kind_filter {
             let term = Term::from_field_text(self.schema.kind, &format!("{:?}", kind));
-            let term_query = TermQuery::new(term, IndexRecordOption::Basic);
-            subqueries.push(Box::new(term_query));
+            all_clauses.push((Occur::Must, Box::new(TermQuery::new(term, IndexRecordOption::Basic))));
         }
         
         if let Some(module) = module_filter {
             let term = Term::from_field_text(self.schema.module_path, module);
-            let term_query = TermQuery::new(term, IndexRecordOption::Basic);
-            subqueries.push(Box::new(term_query));
+            all_clauses.push((Occur::Must, Box::new(TermQuery::new(term, IndexRecordOption::Basic))));
         }
         
-        // Build the final query
-        let query: Box<dyn Query> = if subqueries.len() == 1 {
-            // If there's only one query, use it directly
-            subqueries.into_iter().next().unwrap()
-        } else {
-            // Multiple queries, combine with BooleanQuery
-            let mut bool_query_clauses = Vec::new();
-            for query in subqueries {
-                bool_query_clauses.push((Occur::Must, query));
-            }
-            Box::new(BooleanQuery::new(bool_query_clauses))
-        };
+        let final_query = BooleanQuery::new(all_clauses);
         
-        let top_docs = searcher.search(&*query, &TopDocs::with_limit(limit))?;
+        let top_docs = searcher.search(&final_query, &TopDocs::with_limit(limit))?;
         
         let mut results = Vec::new();
         for (score, doc_address) in top_docs {
@@ -516,25 +874,34 @@ impl DocumentIndex {
     pub fn find_symbols_by_name(&self, name: &str) -> StorageResult<Vec<crate::Symbol>> {
         let searcher = self.reader.searcher();
         
-        // Create a simple term query for the name field
-        // This avoids issues with special characters in symbol names
-        let query = TermQuery::new(
-            Term::from_field_text(self.schema.name, &name.to_lowercase()),
-            IndexRecordOption::Basic,
-        );
+        // Use a QueryParser to correctly handle tokenization of the symbol name.
+        let query_parser = QueryParser::for_index(&self.index, vec![self.schema.name]);
+        let query = match query_parser.parse_query(name) {
+            Ok(q) => q,
+            Err(_) => {
+                // If parsing fails (e.g., special characters), fall back to a simple term query.
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.name, name),
+                    IndexRecordOption::Basic,
+                ))
+            }
+        };
+
+        // Combine with a filter to ensure we only get symbol documents.
+        let final_query = BooleanQuery::new(vec![
+            (Occur::Must, query),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "symbol"),
+                IndexRecordOption::Basic,
+            ))),
+        ]);
         
-        // First search for exact matches
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
+        let top_docs = searcher.search(&final_query, &TopDocs::with_limit(100))?;
         let mut symbols = Vec::new();
         
         for (_score, doc_address) in top_docs {
             let doc = searcher.doc::<Document>(doc_address)?;
-            // Only include symbol documents
-            if let Some(doc_type) = doc.get_first(self.schema.doc_type) {
-                if doc_type.as_str() == Some("symbol") {
-                    symbols.push(self.document_to_symbol(&doc)?);
-                }
-            }
+            symbols.push(self.document_to_symbol(&doc)?);
         }
         
         Ok(symbols)
@@ -568,8 +935,8 @@ impl DocumentIndex {
     /// Get all symbols (use with caution on large indexes)
     pub fn get_all_symbols(&self, limit: usize) -> StorageResult<Vec<crate::Symbol>> {
         let searcher = self.reader.searcher();
-        let all_query = BooleanQuery::from(vec![]);
-        
+        let all_query = tantivy::query::AllQuery;
+
         let top_docs = searcher.search(&all_query, &TopDocs::with_limit(limit))?;
         let mut symbols = Vec::new();
         
@@ -1192,6 +1559,9 @@ mod tests {
         let index = DocumentIndex::new(temp_dir.path()).unwrap();
         
         assert_eq!(index.document_count().unwrap(), 0);
+        assert!(!index.has_vector_support());
+        assert!(index.vector_storage_path().is_none());
+        assert!(index.vector_engine().is_none());
     }
     
     #[test]
@@ -1339,5 +1709,427 @@ mod tests {
         // Query metadata
         assert_eq!(index.query_metadata(MetadataKey::FileCounter).unwrap(), Some(42));
         assert_eq!(index.query_metadata(MetadataKey::SymbolCounter).unwrap(), Some(100));
+    }
+    
+    #[test]
+    fn test_vector_metadata_creation() {
+        // Test creating metadata without vector
+        let metadata = VectorMetadata::new(1);
+        assert_eq!(metadata.vector_id, None);
+        assert_eq!(metadata.cluster_id, None);
+        assert_eq!(metadata.embedding_version, 1);
+        assert!(!metadata.has_vector());
+        
+        // Test creating metadata with vector
+        let vector_id = VectorId::new(42).unwrap();
+        let cluster_id = ClusterId::new(5).unwrap();
+        let metadata_with_vector = VectorMetadata::with_vector(vector_id, cluster_id, 2);
+        assert_eq!(metadata_with_vector.vector_id, Some(vector_id));
+        assert_eq!(metadata_with_vector.cluster_id, Some(cluster_id));
+        assert_eq!(metadata_with_vector.embedding_version, 2);
+        assert!(metadata_with_vector.has_vector());
+    }
+    
+    #[test]
+    fn test_vector_metadata_serialization() {
+        // Test serialization of metadata without vector
+        let metadata = VectorMetadata::new(1);
+        let json = metadata.to_json().unwrap();
+        let deserialized = VectorMetadata::from_json(&json).unwrap();
+        assert_eq!(metadata, deserialized);
+        
+        // Test serialization of metadata with vector
+        let vector_id = VectorId::new(123).unwrap();
+        let cluster_id = ClusterId::new(7).unwrap();
+        let metadata_with_vector = VectorMetadata::with_vector(vector_id, cluster_id, 3);
+        let json = metadata_with_vector.to_json().unwrap();
+        let deserialized = VectorMetadata::from_json(&json).unwrap();
+        assert_eq!(metadata_with_vector, deserialized);
+        
+        // Verify JSON structure
+        assert!(json.contains("\"vector_id\""));
+        assert!(json.contains("\"cluster_id\""));
+        assert!(json.contains("\"embedding_version\":3"));
+    }
+    
+    #[test]
+    fn test_vector_metadata_deserialization_error() {
+        // Test invalid JSON
+        let invalid_json = "{ invalid json }";
+        let result = VectorMetadata::from_json(invalid_json);
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::Serialization(msg)) => {
+                assert!(msg.contains("Failed to deserialize VectorMetadata"));
+            }
+            _ => panic!("Expected Serialization error"),
+        }
+    }
+    
+    #[test]
+    fn test_vector_metadata_tantivy_roundtrip() {
+        use tantivy::schema::{SchemaBuilder, STORED, TEXT};
+        use tantivy::{doc, Index, TantivyDocument};
+        
+        // Create a simple schema with a metadata field
+        let mut schema_builder = SchemaBuilder::default();
+        let metadata_field = schema_builder.add_text_field("vector_metadata", TEXT | STORED);
+        let schema = schema_builder.build();
+        
+        // Create an in-memory index
+        let index = Index::create_in_ram(schema);
+        let mut index_writer = index.writer(50_000_000).unwrap();
+        
+        // Create test metadata
+        let vector_id = VectorId::new(999).unwrap();
+        let cluster_id = ClusterId::new(42).unwrap();
+        let metadata = VectorMetadata::with_vector(vector_id, cluster_id, 5);
+        
+        // Serialize and store in document
+        let json = metadata.to_json().unwrap();
+        let doc = doc!(metadata_field => json.clone());
+        index_writer.add_document(doc).unwrap();
+        index_writer.commit().unwrap();
+        
+        // Read back from index
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let doc: TantivyDocument = searcher.doc(tantivy::DocAddress::new(0, 0)).unwrap();
+        
+        // Deserialize and verify
+        let stored_json = doc.get_first(metadata_field)
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let retrieved_metadata = VectorMetadata::from_json(stored_json).unwrap();
+        
+        assert_eq!(metadata, retrieved_metadata);
+        assert_eq!(json, stored_json);
+    }
+    
+    #[test]
+    fn test_document_index_with_vector_support() {
+        use crate::vector::{VectorSearchEngine, VectorDimension};
+        
+        let temp_dir = TempDir::new().unwrap();
+        let vector_dir = temp_dir.path().join("vectors");
+        
+        // Create vector engine
+        let vector_engine = VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap())
+            .unwrap();
+        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
+        
+        // Create index with vector support
+        let index = DocumentIndex::new(temp_dir.path())
+            .unwrap()
+            .with_vector_support(vector_engine_arc.clone(), &vector_dir);
+        
+        // Verify vector support is enabled
+        assert!(index.has_vector_support());
+        assert_eq!(index.vector_storage_path(), Some(vector_dir.as_ref()));
+        assert!(index.vector_engine().is_some());
+        
+        // Verify the engine reference is the same
+        let engine_ref = index.vector_engine().unwrap();
+        assert!(Arc::ptr_eq(engine_ref, &vector_engine_arc));
+    }
+    
+    #[test]
+    fn test_document_index_operations_with_and_without_vectors() {
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Test 1: Create index without vector support
+        let index_no_vectors = DocumentIndex::new(temp_dir.path().join("no_vectors")).unwrap();
+        
+        // Basic operations should work
+        index_no_vectors.start_batch().unwrap();
+        index_no_vectors.add_document(
+            SymbolId::new(1).unwrap(),
+            "test_func",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            "test.rs",
+            1,
+            1,
+            None,
+            None,
+            "test",
+            None,
+        ).unwrap();
+        index_no_vectors.commit_batch().unwrap();
+        
+        let results = index_no_vectors.search("test_func", 10, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(!index_no_vectors.has_vector_support());
+        
+        // Test 2: Create index with vector support
+        use crate::vector::{VectorSearchEngine, VectorDimension};
+        
+        let vector_dir = temp_dir.path().join("vectors");
+        let vector_engine = VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap())
+            .unwrap();
+        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
+        
+        let index_with_vectors = DocumentIndex::new(temp_dir.path().join("with_vectors"))
+            .unwrap()
+            .with_vector_support(vector_engine_arc, &vector_dir);
+        
+        // Same operations should work with vector support
+        index_with_vectors.start_batch().unwrap();
+        index_with_vectors.add_document(
+            SymbolId::new(2).unwrap(),
+            "vector_func",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            "test.rs",
+            10,
+            1,
+            None,
+            None,
+            "test",
+            None,
+        ).unwrap();
+        index_with_vectors.commit_batch().unwrap();
+        
+        let results = index_with_vectors.search("vector_func", 10, None, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(index_with_vectors.has_vector_support());
+    }
+    
+    #[test]
+    fn test_document_index_debug_impl() {
+        use crate::vector::{VectorSearchEngine, VectorDimension};
+        
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Test Debug without vector support
+        let index = DocumentIndex::new(temp_dir.path()).unwrap();
+        let debug_str = format!("{:?}", index);
+        assert!(debug_str.contains("DocumentIndex"));
+        assert!(debug_str.contains("index_path"));
+        assert!(debug_str.contains("vector_storage_path: None"));
+        assert!(debug_str.contains("has_vector_engine: false"));
+        
+        // Test Debug with vector support
+        let vector_dir = temp_dir.path().join("vectors");
+        let vector_engine = VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap())
+            .unwrap();
+        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
+        
+        let index_with_vectors = DocumentIndex::new(temp_dir.path())
+            .unwrap()
+            .with_vector_support(vector_engine_arc, &vector_dir);
+            
+        let debug_str = format!("{:?}", index_with_vectors);
+        assert!(debug_str.contains("DocumentIndex"));
+        assert!(debug_str.contains("has_vector_engine: true"));
+        assert!(debug_str.contains(&format!("vector_storage_path: Some(\"{}\")", vector_dir.display())));
+    }
+    
+    #[test]
+    fn test_cluster_cache_operations() {
+        use crate::vector::{VectorSearchEngine, VectorDimension};
+        use std::time::Instant;
+        
+        let temp_dir = TempDir::new().unwrap();
+        let vector_dir = temp_dir.path().join("vectors");
+        
+        // Create vector engine
+        let vector_engine = VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap())
+            .unwrap();
+        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
+        
+        // Create index with vector support
+        let index = DocumentIndex::new(temp_dir.path())
+            .unwrap()
+            .with_vector_support(vector_engine_arc, &vector_dir);
+        
+        // Start batch and add documents with cluster assignments
+        index.start_batch().unwrap();
+        
+        // Add documents to different clusters
+        let test_docs = vec![
+            (1, "parse_string", 0),    // cluster 0
+            (2, "parse_number", 0),    // cluster 0  
+            (3, "parse_json", 0),      // cluster 0
+            (4, "Parser", 1),          // cluster 1
+            (5, "JsonParser", 1),      // cluster 1
+            (6, "handle_error", 2),    // cluster 2
+            (7, "ParseError", 2),      // cluster 2
+        ];
+        
+        for (id, name, cluster) in &test_docs {
+            let mut doc = Document::new();
+            doc.add_text(index.schema.doc_type, "symbol");
+            doc.add_u64(index.schema.symbol_id, *id);
+            doc.add_text(index.schema.name, name);
+            doc.add_text(index.schema.kind, "function");
+            doc.add_u64(index.schema.file_id, 1);
+            doc.add_text(index.schema.file_path, "test.rs");
+            doc.add_u64(index.schema.line_number, (*id * 10) as u64);
+            doc.add_u64(index.schema.column, 1);
+            doc.add_text(index.schema.module_path, "test");
+            
+            // Add vector fields - cluster IDs need to be non-zero
+            doc.add_u64(index.schema.cluster_id, *cluster + 1); // Make 1-based
+            doc.add_u64(index.schema.vector_id, *id);
+            doc.add_u64(index.schema.has_vector, 1);
+            
+            index.writer.lock().unwrap()
+                .as_mut().unwrap()
+                .add_document(doc).unwrap();
+        }
+        
+        // Commit and trigger cache building
+        index.commit_batch().unwrap();
+        
+        // Verify cache was built
+        {
+            let cache = index.cluster_cache.read().unwrap();
+            assert!(cache.is_some(), "Cache should be built after commit");
+            
+            let cluster_cache = cache.as_ref().unwrap();
+            println!("Total documents in cache: {}", cluster_cache.total_documents());
+            
+            // Check cluster IDs
+            let cluster_ids = cluster_cache.all_cluster_ids();
+            println!("Found cluster IDs: {:?}", cluster_ids.iter().map(|id| id.get()).collect::<Vec<_>>());
+            
+            // Debug: print mappings
+            for (_seg_ord, clusters) in &cluster_cache.segment_mappings {
+                println!("Segment {}: clusters={:?}", _seg_ord.get(), 
+                    clusters.keys().map(|c| c.get()).collect::<Vec<_>>());
+                for (cluster_id, docs) in clusters {
+                    println!("  Cluster {}: {} docs", cluster_id.get(), docs.len());
+                }
+            }
+        }
+        
+        // Test document lookups - need to collect from all segments
+        let all_cluster_ids = index.get_all_cluster_ids().unwrap();
+        assert_eq!(all_cluster_ids.len(), 3);
+        
+        // Count total documents per cluster across all segments
+        let mut cluster1_total = 0;
+        let mut cluster2_total = 0;
+        let mut cluster3_total = 0;
+        
+        {
+            let cache = index.cluster_cache.read().unwrap();
+            let cluster_cache = cache.as_ref().unwrap();
+            
+            for (_seg_ord, clusters) in &cluster_cache.segment_mappings {
+                if let Some(docs) = clusters.get(&ClusterId::new(1).unwrap()) {
+                    cluster1_total += docs.len();
+                }
+                if let Some(docs) = clusters.get(&ClusterId::new(2).unwrap()) {
+                    cluster2_total += docs.len();
+                }
+                if let Some(docs) = clusters.get(&ClusterId::new(3).unwrap()) {
+                    cluster3_total += docs.len();
+                }
+            }
+        }
+        
+        assert_eq!(cluster1_total, 3);
+        assert_eq!(cluster2_total, 2);
+        assert_eq!(cluster3_total, 2);
+        
+        // Test performance of lookups (should be <10μs)
+        let cluster_id = ClusterId::new(1).unwrap();
+        let segment_ord = SegmentOrdinal::new(0);
+        let start = Instant::now();
+        for _ in 0..1000 {
+            let _ = index.get_cluster_documents(segment_ord, cluster_id).unwrap();
+        }
+        let elapsed = start.elapsed();
+        let per_lookup = elapsed / 1000;
+        println!("Cluster lookup performance: {:?} per lookup", per_lookup);
+        assert!(per_lookup.as_micros() < 10, "Lookup should be <10μs, was {:?}", per_lookup);
+        
+        // Test cache invalidation - add more documents
+        index.start_batch().unwrap();
+        
+        let mut doc = Document::new();
+        doc.add_text(index.schema.doc_type, "symbol");
+        doc.add_u64(index.schema.symbol_id, 8);
+        doc.add_text(index.schema.name, "new_function");
+        doc.add_text(index.schema.kind, "function");
+        doc.add_u64(index.schema.file_id, 1);
+        doc.add_text(index.schema.file_path, "test.rs");
+        doc.add_u64(index.schema.line_number, 80);
+        doc.add_u64(index.schema.column, 1);
+        doc.add_text(index.schema.module_path, "test");
+        doc.add_u64(index.schema.cluster_id, 1); // cluster_id must be non-zero
+        doc.add_u64(index.schema.vector_id, 8);
+        doc.add_u64(index.schema.has_vector, 1);
+        
+        index.writer.lock().unwrap()
+            .as_mut().unwrap()
+            .add_document(doc).unwrap();
+        
+        index.commit_batch().unwrap();
+        
+        // Verify cache was rebuilt
+        {
+            let cache = index.cluster_cache.read().unwrap();
+            let cluster_cache = cache.as_ref().unwrap();
+            assert_eq!(cluster_cache.total_documents(), 8);
+        }
+        
+        // Count documents again after update
+        {
+            let cache = index.cluster_cache.read().unwrap();
+            let cluster_cache = cache.as_ref().unwrap();
+            
+            let mut cluster1_updated = 0;
+            for (_seg_ord, clusters) in &cluster_cache.segment_mappings {
+                if let Some(docs) = clusters.get(&ClusterId::new(1).unwrap()) {
+                    cluster1_updated += docs.len();
+                }
+            }
+            assert_eq!(cluster1_updated, 4); // Should have one more
+        }
+    }
+    
+    #[test]
+    fn test_cluster_cache_unit_operations() {
+        // Test ClusterCache directly
+        let mut cache = ClusterCache::new(1);
+        
+        let seg0 = SegmentOrdinal::new(0);
+        let seg1 = SegmentOrdinal::new(1);
+        let cluster0 = ClusterId::new(1).unwrap();
+        let cluster1 = ClusterId::new(2).unwrap();
+        
+        // Add documents
+        cache.add_document(seg0, cluster0, 0);
+        cache.add_document(seg0, cluster0, 2);
+        cache.add_document(seg0, cluster0, 1);
+        cache.add_document(seg0, cluster1, 3);
+        cache.add_document(seg1, cluster0, 0);
+        
+        // Sort
+        cache.sort_all();
+        
+        // Test retrieval
+        let docs = cache.get_documents(seg0, cluster0).unwrap();
+        assert_eq!(docs, &[0, 1, 2]); // Should be sorted
+        
+        let docs = cache.get_documents(seg0, cluster1).unwrap();
+        assert_eq!(docs, &[3]);
+        
+        let docs = cache.get_documents(seg1, cluster0).unwrap();
+        assert_eq!(docs, &[0]);
+        
+        // Test missing lookups
+        assert!(cache.get_documents(seg1, cluster1).is_none());
+        
+        // Test metadata
+        assert_eq!(cache.total_documents(), 5);
+        assert_eq!(cache.all_cluster_ids().len(), 2);
+        
+        // Test generation check
+        assert!(cache.is_valid_for_generation(1));
+        assert!(!cache.is_valid_for_generation(2));
     }
 }

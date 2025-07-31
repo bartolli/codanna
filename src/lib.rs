@@ -7,8 +7,10 @@ pub mod indexing;
 pub mod config;
 pub mod mcp;
 pub mod error;
+pub mod vector;
 
-pub use types::*;
+// Explicit exports for better API clarity
+pub use types::{SymbolId, FileId, Range, SymbolKind, IndexingResult, CompactString, compact_string};
 pub use symbol::{Symbol, CompactSymbol, StringTable, Visibility};
 pub use relationship::{Relationship, RelationKind, RelationshipEdge};
 pub use storage::{IndexPersistence};

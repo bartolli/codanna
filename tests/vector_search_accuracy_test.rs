@@ -21,10 +21,7 @@ use codanna::Symbol;
 use codanna::storage::{DocumentIndex, SearchResult as CodannaSearchResult};
 use codanna::types::{SymbolKind, SymbolId, FileId, Range};
 use codanna::Visibility;
-
-// Import POC components from vector_integration_test
-mod vector_integration_test;
-use vector_integration_test::VectorError;
+use codanna::vector::VectorError;
 
 // ============================================================================
 // Test-specific Error Types
@@ -440,6 +437,7 @@ fn calculate_mock_relevance(symbol: &Symbol, query: &str, keywords: &[&str]) -> 
 struct AccuracyTestEnvironment {
     document_index: Arc<DocumentIndex>,
     runtime: tokio::runtime::Runtime,
+    _temp_dir: TempDir,  // Keep temp directory alive
 }
 
 fn setup_accuracy_test_environment() -> AccuracyTestEnvironment {
@@ -454,6 +452,7 @@ fn setup_accuracy_test_environment() -> AccuracyTestEnvironment {
     AccuracyTestEnvironment {
         document_index,
         runtime,
+        _temp_dir: temp_dir,
     }
 }
 

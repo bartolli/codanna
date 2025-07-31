@@ -104,13 +104,19 @@ impl RelationKind {
     }
 }
 
-impl RelationshipMetadata {
-    pub fn new() -> Self {
+impl Default for RelationshipMetadata {
+    fn default() -> Self {
         Self {
             line: None,
             column: None,
             context: None,
         }
+    }
+}
+
+impl RelationshipMetadata {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn at_position(mut self, line: u32, column: u16) -> Self {

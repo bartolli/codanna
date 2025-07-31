@@ -27,12 +27,12 @@ impl SymbolStore {
         
         self.by_name
             .entry(name)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(id);
             
         self.by_file
             .entry(file_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(id);
             
         id

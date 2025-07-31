@@ -39,9 +39,8 @@ pub enum DataSource {
     Fresh,
 }
 
-impl IndexMetadata {
-    /// Create new metadata for a fresh index
-    pub fn new() -> Self {
+impl Default for IndexMetadata {
+    fn default() -> Self {
         Self {
             version: 1,
             data_source: DataSource::Fresh,
@@ -49,6 +48,13 @@ impl IndexMetadata {
             file_count: 0,
             last_modified: crate::indexing::get_utc_timestamp(),
         }
+    }
+}
+
+impl IndexMetadata {
+    /// Create new metadata for a fresh index
+    pub fn new() -> Self {
+        Self::default()
     }
     
     /// Update counts from the indexer

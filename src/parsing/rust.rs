@@ -286,26 +286,41 @@ impl RustParser {
     }
     
     fn find_calls_in_node(&self, node: Node, code: &str, calls: &mut Vec<(String, String, Range)>) {
-        // Find the containing function
         let containing_function = self.find_containing_function(node, code);
-        
+
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
+                let mut target_name = None;
+
+                // Handle direct function calls (e.g., `my_function()`)
                 if function_node.kind() == "identifier" {
-                    let target_name = &code[function_node.byte_range()];
-                    if let Some(ref caller) = containing_function {
-                        let range = Range::new(
-                            node.start_position().row as u32,
-                            node.start_position().column as u16,
-                            node.end_position().row as u32,
-                            node.end_position().column as u16,
-                        );
-                        calls.push((caller.clone(), target_name.to_string(), range));
+                    target_name = Some(code[function_node.byte_range()].to_string());
+                }
+                // Handle method calls (e.g., `variable.method()`)
+                else if function_node.kind() == "field_expression" {
+                    if let Some(field_node) = function_node.child_by_field_name("field") {
+                        target_name = Some(code[field_node.byte_range()].to_string());
                     }
+                }
+                // Handle associated functions (e.g., `String::new()`)
+                else if function_node.kind() == "scoped_identifier" {
+                    if let Some(name_node) = function_node.child_by_field_name("name") {
+                        target_name = Some(code[name_node.byte_range()].to_string());
+                    }
+                }
+
+                if let (Some(target), Some(caller)) = (target_name, containing_function) {
+                    let range = Range::new(
+                        node.start_position().row as u32,
+                        node.start_position().column as u16,
+                        node.end_position().row as u32,
+                        node.end_position().column as u16,
+                    );
+                    calls.push((caller, target, range));
                 }
             }
         }
-        
+
         // Recurse into children
         for child in node.children(&mut node.walk()) {
             self.find_calls_in_node(child, code, calls);

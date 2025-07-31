@@ -134,12 +134,18 @@ pub struct StringTable {
     offsets: std::collections::HashMap<String, u32>,
 }
 
-impl StringTable {
-    pub fn new() -> Self {
+impl Default for StringTable {
+    fn default() -> Self {
         Self {
             data: vec![0], // Start with null terminator
             offsets: std::collections::HashMap::new(),
         }
+    }
+}
+
+impl StringTable {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn intern(&mut self, s: &str) -> u32 {

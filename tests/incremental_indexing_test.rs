@@ -1,8 +1,23 @@
 //! Tests for incremental indexing functionality
 
-use codanna::{SimpleIndexer, calculate_hash};
+use codanna::{SimpleIndexer, calculate_hash, Settings};
 use std::fs;
+use std::sync::Arc;
 use tempfile::TempDir;
+
+/// Creates a SimpleIndexer with an isolated index directory for testing.
+/// This prevents Tantivy lock conflicts when tests run in parallel.
+fn create_test_indexer() -> (SimpleIndexer, TempDir) {
+    let temp_dir = TempDir::new().unwrap();
+    let index_path = temp_dir.path().join("index");
+    
+    let mut settings = Settings::default();
+    settings.index_path = index_path;
+    settings.workspace_root = Some(temp_dir.path().to_path_buf());
+    
+    let indexer = SimpleIndexer::with_settings(Arc::new(settings));
+    (indexer, temp_dir)
+}
 
 #[test]
 fn test_hash_based_indexing() {
@@ -17,8 +32,8 @@ fn main() {
 "#;
     fs::write(&test_file, initial_content).unwrap();
     
-    // Index the file
-    let mut indexer = SimpleIndexer::new();
+    // Create indexer with isolated index directory
+    let (mut indexer, _index_dir) = create_test_indexer();
     let file_id = indexer.index_file(&test_file).unwrap();
     let initial_symbol_count = indexer.symbol_count();
     
@@ -77,8 +92,8 @@ impl Foo {
 "#;
     fs::write(&test_file, content).unwrap();
     
-    // Index the file
-    let mut indexer = SimpleIndexer::new();
+    // Create indexer with isolated index directory
+    let (mut indexer, _index_dir) = create_test_indexer();
     let _file_id = indexer.index_file(&test_file).unwrap();
     
     // Should have: Foo (struct), new (method), get_value (method)
@@ -130,8 +145,8 @@ fn test_incremental_indexing_performance() {
         files.push(file_path);
     }
     
-    // Index all files
-    let mut indexer = SimpleIndexer::new();
+    // Create indexer with isolated index directory
+    let (mut indexer, _index_dir) = create_test_indexer();
     for file in &files {
         indexer.index_file(file).unwrap();
     }

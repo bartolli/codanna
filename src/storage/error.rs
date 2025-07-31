@@ -1,11 +1,14 @@
 use thiserror::Error;
-use tantivy::TantivyError;
+use tantivy::{TantivyError, query::QueryParserError};
 use tantivy::directory::error::OpenDirectoryError;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
     #[error("Tantivy error: {0}")]
     Tantivy(#[from] TantivyError),
+    
+    #[error("Tantivy query parser error: {0}")]
+    QueryParser(#[from] QueryParserError),
     
     #[error("Tantivy operation error during {operation}: {cause}")]
     TantivyOperation {
@@ -42,6 +45,9 @@ pub enum StorageError {
     
     #[error("Directory error: {0}")]
     Directory(#[from] OpenDirectoryError),
+    
+    #[error("General error: {0}")]
+    General(String),
 }
 
 pub type StorageResult<T> = Result<T, StorageError>;

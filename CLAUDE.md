@@ -226,6 +226,17 @@ When implementing new features:
 6. Use `cargo clippy` for linting
 7. Track development progress in TODO.md, not here
 
+## Important Library Notes
+
+### Rand Crate API (v0.9.0+)
+The rand crate made breaking changes in v0.9.0 to prepare for Rust 2024:
+- Use `rand::rng()` NOT `rand::thread_rng()` (deprecated)
+- Use `rng.random()` NOT `rng.gen()` (deprecated)
+- Use `rng.random_range()` NOT `rng.gen_range()` (deprecated)
+- Use `rng.random_bool()` NOT `rng.gen_bool()` (deprecated)
+
+These changes avoid conflicts with Rust 2024's new `gen` keyword.
+
 ## Important Notes
 
 - The README file contains the complete technical architecture and should be consulted for detailed design decisions

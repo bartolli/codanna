@@ -47,9 +47,9 @@ fastembed = "5.0.0"
 linfa = "0.7.1"
 linfa-clustering = "0.7.1"
 ndarray = "0.15"
+rand = "0.9.2"
 
 [dev-dependencies]
-rand = "0.9.2"
 tempfile = "3.20.0"
 testcontainers = "0.15"
 
