@@ -390,6 +390,22 @@ impl RustParser {
         defines
     }
     
+    /// Find inherent methods (methods in impl blocks without traits)
+    /// Returns Vec<(type_name, method_name, range)>
+    pub fn find_inherent_methods(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut methods = Vec::new();
+        
+        self.find_inherent_methods_in_node(root_node, code, &mut methods);
+        
+        methods
+    }
+    
     fn find_calls_in_node(&self, node: Node, code: &str, calls: &mut Vec<(String, String, Range)>) {
         let containing_function = self.find_containing_function(node, code);
 
@@ -553,9 +569,8 @@ impl RustParser {
             }
             // Variable reference: x = y
             "identifier" => {
-                // For now, return the identifier as a placeholder
-                // This won't give us the type but at least tracks the binding
-                Some(format!("@{}", &code[node.byte_range()]))
+                // Direct type name without prefix
+                Some(code[node.byte_range()].to_string())
             }
             _ => None,
         }
@@ -707,6 +722,8 @@ impl RustParser {
                 }
             }
             "impl_item" => {
+                // NOTE: This method extracts ALL impl methods (inherent + trait)
+                // For trait-only methods, use find_implementations + trait method tracking
                 // Get the type being implemented
                 if let Some(type_node) = node.child_by_field_name("type") {
                     if let Some(type_name) = self.extract_type_name(type_node, code) {
@@ -736,6 +753,40 @@ impl RustParser {
         // Recurse into children
         for child in node.children(&mut node.walk()) {
             self.find_defines_in_node(child, code, defines);
+        }
+    }
+    
+    fn find_inherent_methods_in_node(&self, node: Node, code: &str, methods: &mut Vec<(String, String, Range)>) {
+        if node.kind() == "impl_item" {
+            // Check if this is an inherent impl (no trait field)
+            if node.child_by_field_name("trait").is_none() {
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    if let Some(type_name) = self.extract_type_name(type_node, code) {
+                        // Find method definitions in the impl body
+                        if let Some(body_node) = node.child_by_field_name("body") {
+                            for child in body_node.children(&mut body_node.walk()) {
+                                if child.kind() == "function_item" {
+                                    if let Some(method_name_node) = child.child_by_field_name("name") {
+                                        let method_name = &code[method_name_node.byte_range()];
+                                        let range = Range::new(
+                                            child.start_position().row as u32,
+                                            child.start_position().column as u16,
+                                            child.end_position().row as u32,
+                                            child.end_position().column as u16,
+                                        );
+                                        methods.push((type_name.clone(), method_name.to_string(), range));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_inherent_methods_in_node(child, code, methods);
         }
     }
     
@@ -828,6 +879,10 @@ impl LanguageParser for RustParser {
         self.parse(code, file_id, symbol_counter)
     }
     
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    
     fn extract_doc_comment(&self, node: &Node, code: &str) -> Option<String> {
         self.extract_doc_comments(node, code)
     }
@@ -868,6 +923,10 @@ impl LanguageParser for RustParser {
         self.find_variable_types_in_node(root_node, code, &mut bindings);
         
         bindings
+    }
+    
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 

@@ -5,11 +5,15 @@
 
 use crate::{Symbol, FileId, Range};
 use tree_sitter::Node;
+use std::any::Any;
 
 /// Common interface for all language parsers
 pub trait LanguageParser: Send + Sync {
     /// Parse source code and extract symbols
     fn parse(&mut self, code: &str, file_id: FileId, symbol_counter: &mut u32) -> Vec<Symbol>;
+    
+    /// Enable downcasting to concrete parser types
+    fn as_any(&self) -> &dyn Any;
     
     /// Extract documentation comment for a node
     /// 
@@ -53,6 +57,9 @@ pub trait LanguageParser: Send + Sync {
         // Default implementation returns empty - languages can override
         Vec::new()
     }
+    
+    /// Enable mutable downcasting to concrete parser types
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Trait for creating language parsers

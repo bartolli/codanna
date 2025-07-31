@@ -48,6 +48,8 @@ pub struct SimpleIndexer {
     unresolved_relationships: Vec<UnresolvedRelationship>,
     /// Variable type information for method resolution
     variable_types: std::collections::HashMap<(FileId, String), String>,
+    /// Trait symbols by file for relationship extraction
+    trait_symbols_by_file: std::collections::HashMap<FileId, std::collections::HashMap<String, crate::SymbolKind>>,
     /// Optional vector search engine
     vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
     /// Optional embedding generator
@@ -78,7 +80,7 @@ impl SimpleIndexer {
         let document_index = DocumentIndex::new(tantivy_path)
             .expect("Failed to create Tantivy index");
         
-        Self {
+        let mut indexer = Self {
             parser_factory: ParserFactory::new(settings.clone()),
             import_resolver: ImportResolver::new(),
             trait_resolver: TraitResolver::new(),
@@ -86,10 +88,19 @@ impl SimpleIndexer {
             document_index,
             unresolved_relationships: Vec::new(),
             variable_types: std::collections::HashMap::new(),
+            trait_symbols_by_file: std::collections::HashMap::new(),
             vector_engine: None,
             embedding_generator: None,
             pending_embeddings: Vec::new(),
+        };
+        
+        // Reconstruct TraitResolver state from stored relationships
+        eprintln!("DEBUG: Reconstructing trait resolver from stored relationships");
+        if let Err(e) = indexer.reconstruct_trait_resolver() {
+            eprintln!("WARNING: Failed to reconstruct trait resolver: {}", e);
         }
+        
+        indexer
     }
     
     /// Create from loaded data (compatibility method)
@@ -425,10 +436,19 @@ impl SimpleIndexer {
             self.import_resolver.add_import(import);
         }
         
+        // Track traits for later use in relationship extraction
+        let mut trait_symbols: std::collections::HashMap<String, crate::SymbolKind> = std::collections::HashMap::new();
+        
         for mut symbol in symbols {
+            // Track trait symbols
+            trait_symbols.insert(symbol.name.to_string(), symbol.kind);
+            
             self.configure_symbol(&mut symbol, module_path, language);
             self.store_symbol(symbol, path_str)?;
         }
+        
+        // Store trait symbols for this file
+        self.trait_symbols_by_file.insert(file_id, trait_symbols);
         
         Ok(())
     }
@@ -489,9 +509,32 @@ impl SimpleIndexer {
         // 2. Trait implementations
         let implementations = parser.find_implementations(content);
         for (type_name, trait_name, _range) in implementations {
+            eprintln!("DEBUG: Registering implementation: {} implements {}", type_name, trait_name);
             // Register with trait resolver
             self.trait_resolver.add_trait_impl(type_name.clone(), trait_name.clone(), file_id);
             self.add_relationships_by_name(&type_name, &trait_name, file_id, RelationKind::Implements)?;
+        }
+        
+        // 2.5. Inherent methods (for complex method resolution)
+        if parser.language() == Language::Rust {
+            // Downcast to RustParser to access find_inherent_methods
+            if let Some(rust_parser) = parser.as_any_mut().downcast_mut::<crate::parsing::rust::RustParser>() {
+                let inherent_methods = rust_parser.find_inherent_methods(content);
+                
+                // Group methods by type
+                let mut methods_by_type: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                for (type_name, method_name, _range) in inherent_methods {
+                    eprintln!("DEBUG: Found inherent method: {}::{}", type_name, method_name);
+                    methods_by_type.entry(type_name)
+                        .or_default()
+                        .push(method_name);
+                }
+                
+                // Register with trait resolver
+                for (type_name, methods) in methods_by_type {
+                    self.trait_resolver.add_inherent_methods(type_name, methods);
+                }
+            }
         }
         
         // 3. Type usage (in fields, parameters, returns)
@@ -503,10 +546,11 @@ impl SimpleIndexer {
         // 4. Method definitions (trait defines methods)
         let defines = parser.find_defines(content);
         for (definer_name, method_name, _range) in defines {
-            // If this is a trait defining methods, track them
-            if let Ok(symbols) = self.document_index.find_symbols_by_name(&definer_name) {
-                for symbol in &symbols {
-                    if symbol.kind == crate::types::SymbolKind::Trait {
+            // Check if definer is a trait using our cached symbol kinds
+            if let Some(symbol_kinds) = self.trait_symbols_by_file.get(&file_id) {
+                if let Some(kind) = symbol_kinds.get(&definer_name) {
+                    if *kind == crate::types::SymbolKind::Trait {
+                        eprintln!("DEBUG: Adding method '{}' to trait '{}'", method_name, definer_name);
                         // Update trait resolver with method info
                         let existing_methods = self.trait_resolver.get_trait_methods(&definer_name)
                             .unwrap_or_default();
@@ -515,7 +559,6 @@ impl SimpleIndexer {
                             methods.push(method_name.clone());
                             self.trait_resolver.add_trait_methods(definer_name.clone(), methods);
                         }
-                        break;
                     }
                 }
             }
@@ -868,6 +911,8 @@ impl SimpleIndexer {
     pub fn clear_tantivy_index(&mut self) -> IndexResult<()> {
         // Clear trait resolver data as well
         self.trait_resolver.clear();
+        self.trait_symbols_by_file.clear();
+        self.variable_types.clear();
         self.document_index.clear()
             .map_err(|e| IndexError::TantivyError {
                 operation: "clear_index".to_string(),
@@ -991,6 +1036,149 @@ impl SimpleIndexer {
         Ok(stats)
     }
     
+    /// Reconstruct TraitResolver state from stored relationships
+    fn reconstruct_trait_resolver(&mut self) -> IndexResult<()> {
+        // Reconstruct trait implementations
+        self.reconstruct_trait_implementations()?;
+        
+        // Reconstruct trait method definitions
+        self.reconstruct_trait_methods()?;
+        
+        Ok(())
+    }
+    
+    /// Reconstruct trait implementations from stored relationships
+    fn reconstruct_trait_implementations(&mut self) -> IndexResult<()> {
+        let implements_relationships = self.document_index
+            .get_all_relationships_by_kind(RelationKind::Implements)
+            .map_err(|e| IndexError::TantivyError {
+                operation: "get_all_relationships_by_kind".to_string(),
+                cause: e.to_string(),
+            })?;
+            
+        eprintln!("DEBUG: Found {} implements relationships", implements_relationships.len());
+            
+        for (type_id, trait_id, _) in implements_relationships {
+            // Get symbol names
+            let type_symbol = self.document_index.find_symbol_by_id(type_id)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbol_by_id".to_string(),
+                    cause: e.to_string(),
+                })?;
+            let trait_symbol = self.document_index.find_symbol_by_id(trait_id)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbol_by_id".to_string(),
+                    cause: e.to_string(),
+                })?;
+                
+            if let (Some(type_sym), Some(trait_sym)) = (type_symbol, trait_symbol) {
+                eprintln!("DEBUG: {} implements {}", type_sym.name, trait_sym.name);
+                self.trait_resolver.add_trait_impl(
+                    type_sym.name.to_string(),
+                    trait_sym.name.to_string(),
+                    type_sym.file_id,
+                );
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Reconstruct trait method definitions from stored relationships
+    fn reconstruct_trait_methods(&mut self) -> IndexResult<()> {
+        let defines_relationships = self.document_index
+            .get_all_relationships_by_kind(RelationKind::Defines)
+            .map_err(|e| IndexError::TantivyError {
+                operation: "get_all_relationships_by_kind".to_string(),
+                cause: e.to_string(),
+            })?;
+            
+        // Group methods by trait
+        let mut trait_methods: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        
+        for (definer_id, method_id, _) in defines_relationships {
+            let definer_symbol = self.document_index.find_symbol_by_id(definer_id)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbol_by_id".to_string(),
+                    cause: e.to_string(),
+                })?;
+            let method_symbol = self.document_index.find_symbol_by_id(method_id)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbol_by_id".to_string(),
+                    cause: e.to_string(),
+                })?;
+                
+            if let (Some(definer), Some(method)) = (definer_symbol, method_symbol) {
+                if definer.kind == crate::types::SymbolKind::Trait {
+                    eprintln!("DEBUG: Trait {} defines method {}", definer.name, method.name);
+                    trait_methods.entry(definer.name.to_string())
+                        .or_default()
+                        .push(method.name.to_string());
+                }
+            }
+        }
+        
+        // Update trait resolver
+        for (trait_name, methods) in trait_methods {
+            self.trait_resolver.add_trait_methods(trait_name, methods);
+        }
+        
+        Ok(())
+    }
+    
+    /// Resolve a method call using receiver type information
+    fn resolve_method_call(
+        &self,
+        call_target: &str,
+        file_id: FileId,
+        context: &ResolutionContext,
+    ) -> Option<SymbolId> {
+        // Check for receiver@method pattern
+        let (receiver, method_name) = match call_target.find('@') {
+            Some(pos) => (&call_target[..pos], &call_target[pos + 1..]),
+            None => return context.resolve(call_target), // Regular function call
+        };
+        
+        eprintln!("DEBUG: Resolving method call: receiver={}, method={}", receiver, method_name);
+        
+        // Look up receiver's type
+        let type_name = self.variable_types
+            .get(&(file_id, receiver.to_string()))?;
+        
+        eprintln!("DEBUG: Found type for {}: {}", receiver, type_name);
+        
+        // Check if method comes from a trait
+        match self.trait_resolver.resolve_method_trait(type_name, method_name) {
+            Some(trait_name) => {
+                eprintln!("DEBUG: Method {} comes from trait {}", method_name, trait_name);
+                // Try trait::method resolution first
+                let trait_method = format!("{}::{}", trait_name, method_name);
+                let result = context.resolve(&trait_method)
+                    .or_else(|| context.resolve(method_name));
+                eprintln!("DEBUG: Resolution result for {}: {:?}", method_name, result);
+                result
+            }
+            None => {
+                // Could be an inherent method or not exist
+                if self.trait_resolver.is_inherent_method(type_name, method_name) {
+                    eprintln!("DEBUG: Method {} is inherent on type {}", method_name, type_name);
+                    // Try Type::method format for inherent methods
+                    let type_method = format!("{}::{}", type_name, method_name);
+                    let result = context.resolve(&type_method)
+                        .or_else(|| context.resolve(method_name));
+                    eprintln!("DEBUG: Inherent method resolution result for {}: {:?}", method_name, result);
+                    result
+                } else {
+                    eprintln!("DEBUG: Method {} not found on type {}", method_name, type_name);
+                    // Last resort - try to resolve just the method name
+                    let result = context.resolve(method_name);
+                    eprintln!("DEBUG: Direct resolution result for {}: {:?}", method_name, result);
+                    result
+                }
+            }
+        }
+    }
+    
     /// Build resolution context for a file with all available symbols
     fn build_resolution_context(&self, file_id: FileId) -> IndexResult<ResolutionContext> {
         let mut context = ResolutionContext::new(file_id);
@@ -1025,6 +1213,7 @@ impl SimpleIndexer {
             // Only add top-level symbols (functions, structs, etc. not local variables)
             match symbol.kind {
                 crate::SymbolKind::Function | 
+                crate::SymbolKind::Method |  // Methods are also callable
                 crate::SymbolKind::Struct | 
                 crate::SymbolKind::Trait |
                 crate::SymbolKind::Enum |
@@ -1121,7 +1310,7 @@ impl SimpleIndexer {
                     // For Display->fmt, we want the first fmt
                     // For MyStruct->fmt, we want the second fmt
                     // This is a hack but works for our test case
-                    if from_symbols[0].kind == crate::types::SymbolKind::Trait {
+                    if !from_symbols.is_empty() && from_symbols[0].kind == crate::types::SymbolKind::Trait {
                         candidates.get(0).map(|s| s.id)
                     } else {
                         candidates.get(1).map(|s| s.id)
@@ -1147,19 +1336,7 @@ impl SimpleIndexer {
                     // Look for the method in the current module
                     context.resolve(method_name)
                 } else if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
-                    // For method calls, try trait resolution
-                    // First try normal resolution
-                    if let Some(id) = context.resolve(&rel.to_name) {
-                        Some(id)
-                    } else {
-                        // Try to resolve through traits
-                        // Get the type of the caller (if it's a method)
-                        let from_symbol = &from_symbols[0];
-                        
-                        // Check if this might be a method call on a type
-                        // This is a simplified approach - in a full implementation we'd need type inference
-                        None
-                    }
+                    self.resolve_method_call(&rel.to_name, file_id, &context)
                 } else {
                     context.resolve(&rel.to_name)
                 };
@@ -1277,6 +1454,7 @@ impl std::fmt::Debug for SimpleIndexer {
             .field("settings", &self.settings)
             .field("document_index", &self.document_index)
             .field("unresolved_relationships", &self.unresolved_relationships)
+            .field("trait_symbols_count", &self.trait_symbols_by_file.len())
             .field("vector_engine", &self.vector_engine.is_some())
             .field("embedding_generator", &self.embedding_generator.is_some())
             .field("pending_embeddings_count", &self.pending_embeddings.len())

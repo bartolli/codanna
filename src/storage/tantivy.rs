@@ -1344,6 +1344,42 @@ impl DocumentIndex {
         Ok(relationships)
     }
     
+    /// Get all relationships of a specific kind
+    pub fn get_all_relationships_by_kind(&self, kind: RelationKind) -> StorageResult<Vec<(SymbolId, SymbolId, Relationship)>> {
+        let searcher = self.reader.searcher();
+        let query = BooleanQuery::from(vec![
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.doc_type, "relationship"),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+            (Occur::Must, Box::new(TermQuery::new(
+                Term::from_field_text(self.schema.relation_kind, &format!("{:?}", kind)),
+                IndexRecordOption::Basic,
+            )) as Box<dyn Query>),
+        ]);
+        
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(10000))?;
+        let mut relationships = Vec::new();
+        
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            
+            let from_id = doc.get_first(self.schema.from_symbol_id)
+                .and_then(|v| v.as_u64())
+                .and_then(|id| SymbolId::new(id as u32))
+                .ok_or(StorageError::InvalidFieldValue { field: "from_symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
+                
+            let to_id = doc.get_first(self.schema.to_symbol_id)
+                .and_then(|v| v.as_u64())
+                .and_then(|id| SymbolId::new(id as u32))
+                .ok_or(StorageError::InvalidFieldValue { field: "to_symbol_id".to_string(), reason: "not a valid u32".to_string() })?;
+                
+            relationships.push((from_id, to_id, Relationship::new(kind)));
+        }
+        
+        Ok(relationships)
+    }
+    
     /// Get file path by ID
     pub fn get_file_path(&self, file_id: FileId) -> StorageResult<Option<String>> {
         let searcher = self.reader.searcher();
