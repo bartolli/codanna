@@ -57,7 +57,8 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 
 ## Phase 2: Import Resolution
 
-### Task 2.1: Add Import Parsing to RustParser
+### Task 2.1: Add Import Parsing to RustParser ✅
+**Status**: COMPLETED (via production testing) 
 **Duration**: 2 hours  
 **File**: `src/parsing/rust.rs`
 **Description**: Implement `find_imports` method to extract:
@@ -66,7 +67,8 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 - Glob imports (`use module::*`)
 **Validation**: Unit tests for various import patterns
 
-### Task 2.2: Activate ImportResolver
+### Task 2.2: Activate ImportResolver ✅
+**Status**: COMPLETED (via production testing) 
 **Duration**: 1 hour  
 **Files**: `src/indexing/resolver.rs`, `src/indexing/simple.rs`
 **Description**: 

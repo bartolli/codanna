@@ -49,9 +49,9 @@ impl RustParser {
     ) {
         match node.kind() {
             "use_declaration" => {
-                // Extract the use path
-                if let Some(use_tree) = node.children(&mut node.walk()).find(|n| n.kind() == "use_tree") {
-                    self.extract_use_tree(use_tree, code, file_id, "", imports);
+                // Extract the use path - look for the argument field which contains the import
+                if let Some(arg_node) = node.child_by_field_name("argument") {
+                    self.extract_import_from_node(arg_node, code, file_id, imports);
                 }
             }
             _ => {
@@ -63,7 +63,97 @@ impl RustParser {
         }
     }
     
-    fn extract_use_tree(
+    fn extract_import_from_node(
+        &self,
+        node: Node,
+        code: &str,
+        file_id: FileId,
+        imports: &mut Vec<Import>,
+    ) {
+        match node.kind() {
+            "identifier" => {
+                // Simple import like `use foo;`
+                let path = code[node.byte_range()].to_string();
+                imports.push(Import {
+                    path,
+                    alias: None,
+                    file_id,
+                    is_glob: false,
+                });
+            }
+            "scoped_identifier" => {
+                // Import like `use foo::bar::baz;`
+                let path = code[node.byte_range()].to_string();
+                imports.push(Import {
+                    path,
+                    alias: None,
+                    file_id,
+                    is_glob: false,
+                });
+            }
+            "use_as_clause" => {
+                // Import with alias like `use foo::bar as baz;`
+                if let Some(path_node) = node.child_by_field_name("path") {
+                    let path = code[path_node.byte_range()].to_string();
+                    if let Some(alias_node) = node.child_by_field_name("alias") {
+                        let alias = code[alias_node.byte_range()].to_string();
+                        imports.push(Import {
+                            path,
+                            alias: Some(alias),
+                            file_id,
+                            is_glob: false,
+                        });
+                    }
+                }
+            }
+            "use_wildcard" => {
+                // Glob import like `use foo::*;`
+                // The wildcard node has a scoped_identifier child containing the path
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "scoped_identifier" {
+                        let path = code[child.byte_range()].to_string();
+                        imports.push(Import {
+                            path,
+                            alias: None,
+                            file_id,
+                            is_glob: true,
+                        });
+                        break;
+                    }
+                }
+            }
+            "use_list" => {
+                // Grouped imports like `use foo::{bar, baz};`
+                if let Some(parent) = node.parent() {
+                    let prefix = if parent.kind() == "scoped_use_list" {
+                        if let Some(path_node) = parent.child_by_field_name("path") {
+                            code[path_node.byte_range()].to_string()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+                    
+                    // Process each item in the list
+                    for child in node.children(&mut node.walk()) {
+                        if child.kind() != "," && child.kind() != "{" && child.kind() != "}" {
+                            self.extract_import_from_list_item(child, code, file_id, &prefix, imports);
+                        }
+                    }
+                }
+            }
+            "scoped_use_list" => {
+                // Handle `use foo::{bar, baz}` pattern
+                if let Some(list_node) = node.child_by_field_name("list") {
+                    self.extract_import_from_node(list_node, code, file_id, imports);
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    fn extract_import_from_list_item(
         &self,
         node: Node,
         code: &str,
@@ -72,68 +162,43 @@ impl RustParser {
         imports: &mut Vec<Import>,
     ) {
         match node.kind() {
-            "use_tree" => {
-                // Handle different use patterns
-                let mut path = prefix.to_string();
-                
-                for child in node.children(&mut node.walk()) {
-                    match child.kind() {
-                        "identifier" | "scoped_identifier" => {
-                            let segment = &code[child.byte_range()];
-                            if !path.is_empty() {
-                                path.push_str("::");
-                            }
-                            path.push_str(segment);
-                        }
-                        "use_as_clause" => {
-                            // Handle "as" aliases
-                            if let Some(alias_node) = child.child_by_field_name("alias") {
-                                let alias = code[alias_node.byte_range()].to_string();
-                                imports.push(Import {
-                                    path: path.clone(),
-                                    alias: Some(alias),
-                                    file_id,
-                                    is_glob: false,
-                                });
-                                return;
-                            }
-                        }
-                        "use_wildcard" => {
-                            // Handle glob imports (use foo::*)
-                            imports.push(Import {
-                                path: path.clone(),
-                                alias: None,
-                                file_id,
-                                is_glob: true,
-                            });
-                            return;
-                        }
-                        "use_list" => {
-                            // Handle grouped imports (use foo::{bar, baz})
-                            for list_item in child.children(&mut child.walk()) {
-                                if list_item.kind() == "use_tree" {
-                                    self.extract_use_tree(list_item, code, file_id, &path, imports);
-                                }
-                            }
-                            return;
-                        }
-                        _ => {}
+            "identifier" => {
+                let name = code[node.byte_range()].to_string();
+                let path = if prefix.is_empty() {
+                    name
+                } else {
+                    format!("{}::{}", prefix, name)
+                };
+                imports.push(Import {
+                    path,
+                    alias: None,
+                    file_id,
+                    is_glob: false,
+                });
+            }
+            "use_as_clause" => {
+                if let Some(path_node) = node.child_by_field_name("path") {
+                    let name = code[path_node.byte_range()].to_string();
+                    let path = if prefix.is_empty() {
+                        name
+                    } else {
+                        format!("{}::{}", prefix, name)
+                    };
+                    if let Some(alias_node) = node.child_by_field_name("alias") {
+                        let alias = code[alias_node.byte_range()].to_string();
+                        imports.push(Import {
+                            path,
+                            alias: Some(alias),
+                            file_id,
+                            is_glob: false,
+                        });
                     }
-                }
-                
-                // Simple import without alias or glob
-                if !path.is_empty() && path != prefix {
-                    imports.push(Import {
-                        path,
-                        alias: None,
-                        file_id,
-                        is_glob: false,
-                    });
                 }
             }
             _ => {}
         }
     }
+    
     
     pub fn parse(&mut self, code: &str, file_id: FileId, symbol_counter: &mut u32) -> Vec<Symbol> {
         let tree = match self.parser.parse(code, None) {
@@ -656,6 +721,10 @@ impl LanguageParser for RustParser {
         self.find_defines(code)
     }
     
+    fn find_imports(&mut self, code: &str, file_id: FileId) -> Vec<Import> {
+        self.extract_imports(code, file_id)
+    }
+    
     fn language(&self) -> Language {
         Language::Rust
     }
@@ -696,6 +765,52 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name.as_ref(), "Point");
         assert_eq!(symbols[0].kind, SymbolKind::Struct);
+    }
+    
+    #[test]
+    fn test_find_imports() {
+        let mut parser = RustParser::new().unwrap();
+        let file_id = FileId::new(1).unwrap();
+        
+        // Test simple import
+        let code = "use std::vec::Vec;";
+        let imports = parser.find_imports(code, file_id);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "std::vec::Vec");
+        assert_eq!(imports[0].alias, None);
+        assert_eq!(imports[0].is_glob, false);
+        
+        // Test aliased import
+        let code = "use std::collections::HashMap as Map;";
+        let imports = parser.find_imports(code, file_id);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "std::collections::HashMap");
+        assert_eq!(imports[0].alias, Some("Map".to_string()));
+        assert_eq!(imports[0].is_glob, false);
+        
+        // Test glob import
+        let code = "use std::io::*;";
+        let imports = parser.find_imports(code, file_id);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "std::io");
+        assert_eq!(imports[0].alias, None);
+        assert_eq!(imports[0].is_glob, true);
+        
+        // Test grouped imports
+        let code = "use std::collections::{HashMap, HashSet};";
+        let imports = parser.find_imports(code, file_id);
+        assert_eq!(imports.len(), 2);
+        assert!(imports.iter().any(|i| i.path == "std::collections::HashMap"));
+        assert!(imports.iter().any(|i| i.path == "std::collections::HashSet"));
+        
+        // Test multiple imports
+        let code = r#"
+            use std::vec::Vec;
+            use std::io::{Read, Write};
+            use super::module::Type;
+        "#;
+        let imports = parser.find_imports(code, file_id);
+        assert_eq!(imports.len(), 4);
     }
     
     #[test]

@@ -8,8 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use crate::{FileId, SymbolId};
-// TODO: Update to use Tantivy queries instead of SymbolStore
-// use crate::SymbolStore;
+use crate::storage::DocumentIndex;
 
 /// Represents an import statement in a file
 #[derive(Debug, Clone)]
@@ -69,34 +68,33 @@ impl ImportResolver {
     /// 1. Direct imports in the file
     /// 2. Glob imports
     /// 3. Prelude items (for Rust)
-    /// 
-    /// TODO: Update to use Tantivy queries instead of SymbolStore
-    #[allow(dead_code)]
     pub fn resolve_symbol(
         &self,
-        _name: &str,
-        _from_file: FileId,
-        // symbol_store: &SymbolStore,
+        name: &str,
+        from_file: FileId,
+        document_index: &DocumentIndex,
     ) -> Option<SymbolId> {
-        // Temporarily disabled until updated to use Tantivy
-        None
-        /*
+        eprintln!("DEBUG ImportResolver: Trying to resolve '{}' from file {:?}", name, from_file);
+        
         // Check if there's a direct import for this name
         if let Some(imports) = self.imports_by_file.get(&from_file) {
+            eprintln!("DEBUG ImportResolver: Found {} imports in file", imports.len());
             for import in imports {
                 // Handle aliased imports
                 if let Some(alias) = &import.alias {
                     if alias == name {
                         // The import path might be like "crate::foo::Bar"
                         // We need to find the symbol "Bar" in the appropriate module
-                        return self.resolve_import_path(&import.path, symbol_store);
+                        return self.resolve_import_path(&import.path, document_index);
                     }
                 }
                 
                 // Handle direct imports (e.g., "use foo::Bar" and we're looking for "Bar")
                 if let Some(last_segment) = import.path.split("::").last() {
+                    eprintln!("DEBUG ImportResolver: Checking import path '{}', last segment: '{}'", import.path, last_segment);
                     if last_segment == name && !import.is_glob {
-                        return self.resolve_import_path(&import.path, symbol_store);
+                        eprintln!("DEBUG ImportResolver: Match! Resolving import path '{}'", import.path);
+                        return self.resolve_import_path(&import.path, document_index);
                     }
                 }
                 
@@ -104,7 +102,7 @@ impl ImportResolver {
                 if import.is_glob {
                     // Try to find the symbol in the glob-imported module
                     let module_path = &import.path;
-                    if let Some(symbol_id) = self.find_symbol_in_module(name, module_path, symbol_store) {
+                    if let Some(symbol_id) = self.find_symbol_in_module(name, module_path, document_index) {
                         return Some(symbol_id);
                     }
                 }
@@ -114,15 +112,12 @@ impl ImportResolver {
         // TODO: Handle prelude items and other implicit imports
         
         None
-        */
     }
     
     /// Resolve an import path to a symbol
-    #[allow(dead_code)]
-    fn resolve_import_path(&self, _path: &str) -> Option<SymbolId> {
-        // Temporarily disabled until updated to use Tantivy
-        None
-        /*
+    fn resolve_import_path(&self, path: &str, document_index: &DocumentIndex) -> Option<SymbolId> {
+        eprintln!("DEBUG resolve_import_path: Resolving path '{}'", path);
+        
         // Split the path into segments
         let segments: Vec<&str> = path.split("::").collect();
         if segments.is_empty() {
@@ -135,35 +130,31 @@ impl ImportResolver {
         // Build the module path (all segments except the last)
         let module_path = segments[..segments.len() - 1].join("::");
         
+        eprintln!("DEBUG resolve_import_path: Looking for symbol '{}' in module '{}'", symbol_name, module_path);
+        
         // Find the symbol in the module
-        self.find_symbol_in_module(symbol_name, &module_path, symbol_store)
-        */
+        self.find_symbol_in_module(symbol_name, &module_path, document_index)
     }
     
     /// Find a symbol by name within a specific module
-    #[allow(dead_code)]
     fn find_symbol_in_module(
         &self,
-        _name: &str,
-        _module_path: &str,
+        name: &str,
+        module_path: &str,
+        document_index: &DocumentIndex,
     ) -> Option<SymbolId> {
-        // Temporarily disabled until updated to use Tantivy
-        None
-        /*
-        // Find all symbols with this name
-        let candidates = symbol_store.find_by_name(name);
+        // Use Tantivy to find symbols with this name
+        let candidates = document_index.find_symbols_by_name(name).ok()?;
         
         // Filter by module path
-        for symbol in candidates {
-            if let Some(symbol_module) = &symbol.module_path {
-                if symbol_module.as_ref() == module_path {
-                    return Some(symbol.id);
-                }
-            }
-        }
-        
-        None
-        */
+        candidates.into_iter()
+            .find(|symbol| {
+                symbol.module_path
+                    .as_ref()
+                    .map(|m| m.as_ref() == module_path)
+                    .unwrap_or(false)
+            })
+            .map(|symbol| symbol.id)
     }
     
     /// Get the module path for a file
@@ -251,5 +242,33 @@ mod tests {
             ImportResolver::module_path_from_file(mod_path, root),
             Some("crate::foo".to_string())
         );
+    }
+    
+    #[test]
+    fn test_import_registration() {
+        let mut resolver = ImportResolver::new();
+        
+        // Register files
+        let file_id_1 = FileId::new(1).unwrap();
+        let file_id_2 = FileId::new(2).unwrap();
+        
+        resolver.register_file(PathBuf::from("src/module_a.rs"), file_id_1, "crate::module_a".to_string());
+        resolver.register_file(PathBuf::from("src/main.rs"), file_id_2, "crate".to_string());
+        
+        // Add an import
+        resolver.add_import(Import {
+            path: "crate::module_a::ConfigA".to_string(),
+            alias: None,
+            file_id: file_id_2,
+            is_glob: false,
+        });
+        
+        // Verify file registration
+        assert_eq!(resolver.get_module_path(Path::new("src/module_a.rs")), Some("crate::module_a"));
+        assert_eq!(resolver.get_module_path(Path::new("src/main.rs")), Some("crate"));
+        
+        // Verify import was stored
+        assert!(resolver.imports_by_file.contains_key(&file_id_2));
+        assert_eq!(resolver.imports_by_file[&file_id_2].len(), 1);
     }
 }

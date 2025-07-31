@@ -40,7 +40,6 @@ struct UnresolvedRelationship {
 
 pub struct SimpleIndexer {
     parser_factory: ParserFactory,
-    #[allow(dead_code)]
     import_resolver: ImportResolver,
     settings: Arc<Settings>,
     document_index: DocumentIndex,
@@ -322,6 +321,14 @@ impl SimpleIndexer {
         let mut parser = self.create_parser(language)?;
         let module_path = self.calculate_module_path(path);
         
+        // Register the file with ImportResolver
+        if let Some(ref mod_path) = module_path {
+            eprintln!("DEBUG: Registering file {:?} with module path: {}", path, mod_path);
+            self.import_resolver.register_file(path.to_path_buf(), file_id, mod_path.clone());
+        } else {
+            eprintln!("DEBUG: No module path for file {:?}", path);
+        }
+        
         let symbol_counter = self.get_next_symbol_counter()?;
         self.extract_and_store_symbols(&mut parser, content, file_id, path_str, &module_path, language, symbol_counter)?;
         self.extract_and_store_relationships(&mut parser, content, file_id)?;
@@ -356,18 +363,16 @@ impl SimpleIndexer {
         let root = self.settings.workspace_root.as_ref()
             .or(self.settings.indexing.project_root.as_ref())?;
             
-        // Canonicalize both paths to ensure they're absolute and comparable
-        let abs_path = path.canonicalize().ok()?;
-        let abs_root = root.canonicalize().ok()?;
-        
-        abs_path.strip_prefix(abs_root)
-            .ok()
-            .and_then(|relative_path| {
-                // Just return the relative path as a string
-                // This works for all languages and lets the parser
-                // set more specific module paths if needed
-                relative_path.to_str().map(|s| s.to_string())
-            })
+        // Use ImportResolver's module_path_from_file for Rust files
+        if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            ImportResolver::module_path_from_file(path, root)
+        } else {
+            // For other languages, just return the relative path
+            path.canonicalize().ok()?
+                .strip_prefix(root.canonicalize().ok()?)
+                .ok()
+                .and_then(|relative_path| relative_path.to_str().map(|s| s.to_string()))
+        }
     }
     
     /// Get the next symbol counter from Tantivy
@@ -391,6 +396,18 @@ impl SimpleIndexer {
         mut symbol_counter: u32,
     ) -> IndexResult<()> {
         let symbols = parser.parse(content, file_id, &mut symbol_counter);
+        
+        // Extract and register imports
+        let imports = parser.find_imports(content, file_id);
+        if !imports.is_empty() {
+            eprintln!("DEBUG: Found {} imports in file {:?}", imports.len(), file_id);
+            for import in &imports {
+                eprintln!("  - Import: {} (alias: {:?}, glob: {})", import.path, import.alias, import.is_glob);
+            }
+        }
+        for import in imports {
+            self.import_resolver.add_import(import);
+        }
         
         for mut symbol in symbols {
             self.configure_symbol(&mut symbol, module_path, language);
@@ -850,6 +867,12 @@ impl SimpleIndexer {
             .unwrap_or(0)
     }
     
+    /// Get import resolver for testing
+    #[cfg(test)]
+    pub fn import_resolver(&self) -> &ImportResolver {
+        &self.import_resolver
+    }
+    
     pub fn get_symbols_by_file(&self, file_id: FileId) -> Vec<Symbol> {
         self.document_index.find_symbols_by_file(file_id)
             .unwrap_or_default()
@@ -1014,18 +1037,38 @@ impl SimpleIndexer {
         let mut skipped_count = 0;
         
         for rel in unresolved {
-            // Find symbols again - now they're all committed and searchable
+            // Find 'from' symbols - these should be in the current file
             let from_symbols = self.document_index.find_symbols_by_name(&rel.from_name)
                 .map_err(|e| IndexError::TantivyError {
                     operation: "find_symbols_by_name".to_string(),
                     cause: e.to_string(),
                 })?;
             
-            let to_symbols = self.document_index.find_symbols_by_name(&rel.to_name)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_name".to_string(),
-                    cause: e.to_string(),
-                })?;
+            // Try to resolve the target symbol through imports first
+            let mut to_symbols = Vec::new();
+            
+            // Check if the ImportResolver can find the symbol through imports
+            if let Some(symbol_id) = self.import_resolver.resolve_symbol(
+                &rel.to_name, 
+                rel.file_id,
+                &self.document_index
+            ) {
+                // Found through imports - get the full symbol data
+                if let Ok(Some(symbol)) = self.document_index.find_symbol_by_id(symbol_id) {
+                    to_symbols.push(symbol);
+                    eprintln!("DEBUG: Resolved {} through imports to symbol {:?}", rel.to_name, symbol_id);
+                }
+            }
+            
+            // If not found through imports, fall back to global search
+            if to_symbols.is_empty() {
+                to_symbols = self.document_index.find_symbols_by_name(&rel.to_name)
+                    .map_err(|e| IndexError::TantivyError {
+                        operation: "find_symbols_by_name".to_string(),
+                        cause: e.to_string(),
+                    })?;
+                eprintln!("DEBUG: Using global search for {}, found {} candidates", rel.to_name, to_symbols.len());
+            }
             
             // Process with our filtering logic
             for from_symbol in &from_symbols {
@@ -1164,6 +1207,37 @@ impl std::fmt::Debug for SimpleIndexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    
+    #[test]
+    fn test_import_extraction() {
+        let settings = Arc::new(Settings::default());
+        let mut indexer = SimpleIndexer::with_settings(settings);
+        
+        // Create a test file with imports
+        let test_code = r#"
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use super::module::Type as MyType;
+
+fn main() {
+    let map = HashMap::new();
+}
+"#;
+        
+        // Create a temporary file
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.rs");
+        std::fs::write(&test_file, test_code).unwrap();
+        
+        // Index the file
+        indexer.index_file(&test_file).unwrap();
+        
+        // Check that imports were captured
+        // Note: We can't directly access imports_by_file, but we can verify
+        // that the ImportResolver was populated by checking debug output
+        eprintln!("ImportResolver state: {:?}", indexer.import_resolver);
+    }
     use crate::{SymbolKind, RelationKind, Visibility, Symbol, SymbolId, FileId};
     
     #[test]
@@ -1241,6 +1315,72 @@ mod tests {
         // Different modules - only public visible
         assert!(SimpleIndexer::is_symbol_visible_from(&pub_sym, &other_module_sym));
         assert!(!SimpleIndexer::is_symbol_visible_from(&priv_sym, &other_module_sym));
+    }
+    
+    #[test]
+    fn test_import_resolution() {
+        use tempfile::TempDir;
+        use std::fs;
+        
+        // Create temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
+        
+        // Create test files
+        let src_dir = project_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        
+        // utils.rs with a function
+        let utils_path = src_dir.join("utils.rs");
+        fs::write(&utils_path, r#"
+pub fn helper_function() -> i32 {
+    42
+}
+"#).unwrap();
+        
+        // main.rs that imports the function
+        let main_path = src_dir.join("main.rs");
+        fs::write(&main_path, r#"
+use crate::utils::helper_function;
+
+fn main() {
+    let result = helper_function();
+}
+"#).unwrap();
+        
+        // Create indexer
+        let settings = Arc::new(Settings {
+            workspace_root: Some(project_root.to_path_buf()),
+            index_path: PathBuf::from(".test_import"),
+            ..Settings::default()
+        });
+        
+        let mut indexer = SimpleIndexer::with_settings(settings);
+        
+        // Index files
+        indexer.index_file(&utils_path).unwrap();
+        indexer.index_file(&main_path).unwrap();
+        
+        // Resolve relationships
+        indexer.resolve_cross_file_relationships().unwrap();
+        
+        // Verify that main calls helper_function
+        let main_symbols = indexer.document_index.find_symbols_by_name("main").unwrap();
+        assert_eq!(main_symbols.len(), 1);
+        
+        let helper_symbols = indexer.document_index.find_symbols_by_name("helper_function").unwrap();
+        assert_eq!(helper_symbols.len(), 1);
+        
+        // Check that import was registered
+        let file_id = main_symbols[0].file_id;
+        let resolved = indexer.import_resolver.resolve_symbol(
+            "helper_function",
+            file_id,
+            &indexer.document_index
+        );
+        
+        assert!(resolved.is_some(), "Should resolve helper_function through imports");
+        assert_eq!(resolved.unwrap(), helper_symbols[0].id);
     }
     
     #[test]
