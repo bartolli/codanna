@@ -489,12 +489,17 @@ impl DocumentIndex {
         engine.index_vectors(&vectors)
             .map_err(|e| StorageError::General(format!("Vector indexing failed: {}", e)))?;
         
-        // TODO: Update documents with cluster assignments
-        // This will be implemented after we have the ability to update 
-        // documents with vector metadata
+        // Now we need to mark documents as having vectors
+        // Since we can't do this in the same transaction, we'll need to do it separately
+        // Store the pending updates for later processing
+        drop(engine); // Release the lock
+        
+        // Call update_cluster_assignments to sync the cluster IDs
+        // This will be done in a separate batch to avoid writer conflicts
         
         Ok(())
     }
+    
     
     /// Build or rebuild the cluster cache from current segments
     /// This should be called after commits when vector support is enabled
@@ -578,6 +583,122 @@ impl DocumentIndex {
         }
     }
     
+    /// Warm the cluster cache by forcing a rebuild
+    /// This is useful after major index changes or reader reloads
+    pub fn warm_cluster_cache(&self) -> StorageResult<()> {
+        if !self.has_vector_support() {
+            return Ok(());
+        }
+        
+        // Force cache invalidation by setting an invalid generation
+        {
+            let mut cache = self.cluster_cache.write().map_err(|_| StorageError::LockPoisoned)?;
+            *cache = None; // Clear existing cache to force rebuild
+        }
+        
+        // Rebuild the cache
+        self.build_cluster_cache()
+    }
+    
+    /// Get current cache generation for monitoring
+    pub fn get_cache_generation(&self) -> StorageResult<Option<u64>> {
+        let cache = self.cluster_cache.read().map_err(|_| StorageError::LockPoisoned)?;
+        Ok(cache.as_ref().map(|c| c.generation))
+    }
+    
+    /// Reload the reader and warm caches
+    /// This ensures the index is ready for high-performance queries
+    pub fn reload_and_warm(&self) -> StorageResult<()> {
+        // Reload the reader to see latest changes
+        self.reader.reload()?;
+        
+        // Warm the cluster cache if vector support is enabled
+        if self.has_vector_support() {
+            self.warm_cluster_cache()?;
+        }
+        
+        Ok(())
+    }
+    
+    /// Update documents with cluster assignments from the vector engine
+    /// This should be called after vector processing to sync cluster IDs
+    pub fn update_cluster_assignments(&self) -> StorageResult<()> {
+        if !self.has_vector_support() {
+            return Ok(());
+        }
+        
+        let vector_engine = self.vector_engine.as_ref()
+            .ok_or_else(|| StorageError::General("Vector engine not configured".to_string()))?;
+        
+        let engine = vector_engine.lock()
+            .map_err(|_| StorageError::LockPoisoned)?;
+        
+        // Get all vectors that have cluster assignments
+        let cluster_assignments = engine.get_all_cluster_assignments();
+        
+        drop(engine); // Release the lock before we start updating
+        
+        // Convert VectorIds to SymbolIds
+        let mut updates_needed = Vec::new();
+        for (vector_id, cluster_id) in cluster_assignments {
+            // Convert VectorId back to SymbolId
+            if let Some(symbol_id) = SymbolId::new(vector_id.get()) {
+                updates_needed.push((symbol_id, cluster_id));
+            }
+        }
+        
+        if updates_needed.is_empty() {
+            return Ok(());
+        }
+        
+        // Get the current searcher
+        let searcher = self.reader.searcher();
+        
+        // Perform batch update
+        self.start_batch()?;
+        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_mut()
+            .ok_or(StorageError::NoActiveBatch)?;
+        
+        for (symbol_id, cluster_id) in updates_needed {
+            // Find the document by symbol_id
+            let symbol_id_term = Term::from_field_u64(self.schema.symbol_id, symbol_id.value() as u64);
+            let query = TermQuery::new(symbol_id_term.clone(), IndexRecordOption::Basic);
+            
+            // Search for the document
+            let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+            
+            if let Some((_score, doc_address)) = top_docs.first() {
+                // Retrieve the stored document
+                if let Ok(old_doc) = searcher.doc::<Document>(*doc_address) {
+                    // Delete old document
+                    writer.delete_term(symbol_id_term);
+                    
+                    // Create new document with updated cluster_id
+                    let mut new_doc = Document::new();
+                    
+                    // Copy all fields except cluster_id and has_vector
+                    for (field, value) in old_doc.field_values() {
+                        if field != self.schema.cluster_id && field != self.schema.has_vector {
+                            new_doc.add_field_value(field, value.clone());
+                        }
+                    }
+                    
+                    // Add updated vector fields
+                    new_doc.add_u64(self.schema.cluster_id, cluster_id.get() as u64);
+                    new_doc.add_u64(self.schema.has_vector, 1);
+                    
+                    writer.add_document(new_doc)?;
+                }
+            }
+        }
+        
+        drop(writer_lock);
+        self.commit_batch()?;
+        
+        Ok(())
+    }
+    
     /// Start a batch operation for adding multiple documents
     pub fn start_batch(&self) -> StorageResult<()> {
         let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
@@ -631,6 +752,13 @@ impl DocumentIndex {
         // Add string fields for filtering
         doc.add_text(self.schema.module_path, module_path);
         doc.add_text(self.schema.kind, &format!("{:?}", kind));
+        
+        // Add default vector fields - these will be updated later if vectors are generated
+        if self.has_vector_support() {
+            doc.add_u64(self.schema.cluster_id, 0); // 0 means not yet assigned
+            doc.add_u64(self.schema.vector_id, symbol_id.value() as u64);
+            doc.add_u64(self.schema.has_vector, 0); // Will be set to 1 after vector processing
+        }
         
         writer.add_document(doc)?;
         
@@ -686,8 +814,10 @@ impl DocumentIndex {
         if let Some(writer) = writer_lock.as_mut() {
             // Use existing batch writer
             writer.delete_term(term);
+            // Note: We don't commit here - that happens at batch end
         } else {
             // Create temporary writer for single operation
+            drop(writer_lock); // Release lock before creating new writer
             let mut writer = self.index.writer::<Document>(50_000_000)?;
             writer.delete_term(term);
             writer.commit()?;

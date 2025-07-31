@@ -201,6 +201,15 @@ impl VectorSearchEngine {
     pub fn dimension(&self) -> VectorDimension {
         self.dimension
     }
+    
+    /// Gets all vector IDs that have cluster assignments.
+    #[must_use]
+    pub fn get_all_cluster_assignments(&self) -> Vec<(VectorId, ClusterId)> {
+        self.cluster_assignments
+            .iter()
+            .map(|(id, cluster)| (*id, *cluster))
+            .collect()
+    }
 }
 
 #[cfg(test)]

@@ -59,13 +59,28 @@ impl IndexPersistence {
         // Check if Tantivy index exists
         let tantivy_path = self.base_path.join("tantivy");
         if tantivy_path.join("meta.json").exists() {
-            // Display source info
+            // Create indexer that will load from Tantivy
+            let indexer = SimpleIndexer::with_settings(settings);
+            
+            // Display source info with fresh counts
             if let Some(meta) = metadata {
-                meta.display_source();
+                // Get fresh counts from the actual index
+                let fresh_symbol_count = indexer.symbol_count();
+                let fresh_file_count = indexer.file_count();
+                
+                // Display the metadata but with fresh counts
+                match &meta.data_source {
+                    DataSource::Tantivy { path, doc_count, .. } => {
+                        eprintln!("Loaded from Tantivy index: {} ({} documents)", path.display(), doc_count);
+                    }
+                    DataSource::Fresh => {
+                        eprintln!("Created fresh index");
+                    }
+                }
+                eprintln!("Index contains {} symbols from {} files", fresh_symbol_count, fresh_file_count);
             }
             
-            // Create indexer that will load from Tantivy
-            Ok(SimpleIndexer::with_settings(settings))
+            Ok(indexer)
         } else {
             Err(IndexError::FileRead {
                 path: tantivy_path,

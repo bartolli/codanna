@@ -236,8 +236,13 @@ impl SimpleIndexer {
                 return Ok(crate::IndexingResult::Cached(file_id));
             }
             
-            // File has changed or force re-indexing, remove old symbols
-            self.remove_file_symbols(file_id)?;
+            // File has changed or force re-indexing
+            // Use remove_file_documents to remove ALL documents for this file path
+            self.document_index.remove_file_documents(path_str)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "remove_file_documents".to_string(),
+                    cause: e.to_string(),
+                })?;
         }
         
         // Register or update file
@@ -287,12 +292,16 @@ impl SimpleIndexer {
     
     /// Remove all symbols from a file
     fn remove_file_symbols(&mut self, file_id: FileId) -> IndexResult<()> {
+        eprintln!("DEBUG remove_file_symbols: Removing symbols for file_id {:?}", file_id);
+        
         // Get all symbols for this file from Tantivy
         let symbols = self.document_index.find_symbols_by_file(file_id)
             .map_err(|e| IndexError::TantivyError {
                 operation: "find_symbols_by_file".to_string(),
                 cause: e.to_string(),
             })?;
+        
+        eprintln!("DEBUG: Found {} symbols to remove", symbols.len());
         
         // Remove each symbol and its relationships from Tantivy
         for symbol in symbols {
@@ -767,13 +776,13 @@ impl SimpleIndexer {
                         // Only count as indexed if it wasn't from cache
                         if !result.is_cached() {
                             stats.files_indexed += 1;
+                            
+                            // Update symbol count only for actually indexed files
+                            let new_symbols = self.document_index.find_symbols_by_file(file_id)
+                                .map(|symbols| symbols.len())
+                                .unwrap_or(0);
+                            stats.symbols_found += new_symbols;
                         }
-                        
-                        // Update symbol count
-                        let new_symbols = self.document_index.find_symbols_by_file(file_id)
-                            .map(|symbols| symbols.len())
-                            .unwrap_or(0);
-                        stats.symbols_found += new_symbols;
                     }
                     Err(e) => {
                         eprintln!("Failed to index {}: {}", file_path.display(), e);
