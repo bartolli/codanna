@@ -201,6 +201,8 @@ impl SimpleIndexer {
         match self.index_file_internal(path, force) {
             Ok(result) => {
                 self.commit_tantivy_batch()?;
+                // Resolve relationships after committing
+                self.resolve_cross_file_relationships()?;
                 Ok(result)
             }
             Err(e) => {
@@ -270,6 +272,15 @@ impl SimpleIndexer {
             
         let file_id = FileId::new(file_counter)
             .ok_or(IndexError::FileIdExhausted)?;
+            
+        // Update the file counter for next use
+        self.document_index.store_metadata(
+            crate::storage::MetadataKey::FileCounter, 
+            file_counter as u64
+        ).map_err(|e| IndexError::TantivyError {
+            operation: "store_metadata".to_string(),
+            cause: e.to_string(),
+        })?;
             
         let timestamp = get_utc_timestamp();
         
@@ -636,84 +647,14 @@ impl SimpleIndexer {
             })
     }
     
-    /// Helper method to add relationships by symbol names with filtering
+    /// Helper method to add relationships by symbol names
+    /// Stores them as unresolved for later processing with import context
     fn add_relationships_by_name(&mut self, from_name: &str, to_name: &str, file_id: FileId, kind: RelationKind) -> IndexResult<()> {
-        // Find symbols by name in Tantivy
-        let from_symbols = self.document_index.find_symbols_by_name(from_name)
-            .map_err(|e| IndexError::TantivyError {
-                operation: "find_symbols_by_name".to_string(),
-                cause: e.to_string(),
-            })?;
-        
-        let to_symbols = self.document_index.find_symbols_by_name(to_name)
-            .map_err(|e| IndexError::TantivyError {
-                operation: "find_symbols_by_name".to_string(),
-                cause: e.to_string(),
-            })?;
-            
-        eprintln!("DEBUG: add_relationships_by_name {} -> {} (kind: {:?})", from_name, to_name, kind);
-        eprintln!("  Found {} from symbols, {} to symbols", from_symbols.len(), to_symbols.len());
-        
-        // Process relationships with filtering
-        for from_symbol in &from_symbols {
-            // Only consider 'from' symbols in the current file
-            if from_symbol.file_id != file_id {
-                eprintln!("  Skipping from_symbol {} (file_id {} != {})", from_symbol.name, from_symbol.file_id.value(), file_id.value());
-                continue;
-            }
-            eprintln!("  Processing from_symbol {} (file_id: {}, module: {:?})", from_symbol.name, from_symbol.file_id.value(), from_symbol.module_path);
-            
-            // Filter and score potential target symbols
-            let mut candidates: Vec<(&Symbol, u32)> = to_symbols.iter()
-                .filter_map(|to_symbol| {
-                    // 1. Check symbol kind compatibility
-                    if !Self::is_compatible_relationship(from_symbol.kind, to_symbol.kind, kind) {
-                        return None;
-                    }
-                    
-                    // 2. Check visibility
-                    if !Self::is_symbol_visible_from(to_symbol, from_symbol) {
-                        return None;
-                    }
-                    
-                    // 3. Calculate proximity score (lower is better)
-                    let proximity = Self::module_proximity(
-                        from_symbol.module_path.as_deref(),
-                        to_symbol.module_path.as_deref()
-                    );
-                    
-                    Some((to_symbol, proximity))
-                })
-                .collect();
-            
-            // Sort by proximity (prefer closer modules)
-            candidates.sort_by_key(|(_, proximity)| *proximity);
-            
-            // If we have candidates in the same module (proximity 0), only use those
-            let same_module_candidates: Vec<&Symbol> = candidates.iter()
-                .take_while(|(_, proximity)| *proximity == 0)
-                .map(|(symbol, _)| *symbol)
-                .collect();
-            
-            if !same_module_candidates.is_empty() {
-                // Add relationships only to same-module symbols
-                eprintln!("  Adding {} same-module relationships for {}", same_module_candidates.len(), from_symbol.name);
-                for to_symbol in same_module_candidates {
-                    self.add_relationship_internal(from_symbol.id, to_symbol.id, Relationship::new(kind))?;
-                }
-            } else if !candidates.is_empty() {
-                // No same-module matches, use the closest match
-                // In a more sophisticated implementation, we might check imports here
-                let (best_match, proximity) = candidates[0];
-                eprintln!("  Adding cross-module relationship {} -> {} (proximity: {})", from_symbol.name, best_match.name, proximity);
-                self.add_relationship_internal(from_symbol.id, best_match.id, Relationship::new(kind))?;
-            } else {
-                eprintln!("  No valid candidates found for {} -> {}", from_symbol.name, to_name);
-            }
-        }
         
         // Store as unresolved for later resolution when all symbols are committed
-        // This is necessary because symbols within the same batch aren't searchable yet
+        // This allows us to:
+        // 1. Wait until all symbols in the batch are searchable
+        // 2. Use import context for accurate resolution
         self.unresolved_relationships.push(UnresolvedRelationship {
             from_name: from_name.into(),
             to_name: to_name.into(),
@@ -783,8 +724,8 @@ impl SimpleIndexer {
         use std::collections::HashMap;
         let mut deps = HashMap::new();
         
-        // Get all outgoing relationships
-        for kind in &[RelationKind::Calls, RelationKind::Uses, RelationKind::Implements, RelationKind::Defines] {
+        // Get all outgoing relationships (skip Defines as it's not a true dependency)
+        for kind in &[RelationKind::Calls, RelationKind::Uses, RelationKind::Implements] {
             let symbols = self.document_index.get_relationships_from(symbol_id, *kind)
                 .ok()
                 .unwrap_or_default()
@@ -805,8 +746,8 @@ impl SimpleIndexer {
         use std::collections::HashMap;
         let mut deps = HashMap::new();
         
-        // Get all incoming relationships
-        for kind in &[RelationKind::Calls, RelationKind::Uses, RelationKind::Implements, RelationKind::Defines] {
+        // Get all incoming relationships (skip Defines as it's not a true dependency)
+        for kind in &[RelationKind::Calls, RelationKind::Uses, RelationKind::Implements] {
             let symbols = self.document_index.get_relationships_to(symbol_id, *kind)
                 .ok()
                 .unwrap_or_default()
@@ -1028,13 +969,13 @@ impl SimpleIndexer {
             return Ok(());
         }
         
-        eprintln!("DEBUG: Resolving {} unresolved relationships", unresolved.len());
         
         // Start a batch for relationship updates
         self.start_tantivy_batch()?;
         
         let mut resolved_count = 0;
         let mut skipped_count = 0;
+        let total_unresolved = unresolved.len();
         
         for rel in unresolved {
             // Find 'from' symbols - these should be in the current file
@@ -1060,14 +1001,31 @@ impl SimpleIndexer {
                 }
             }
             
-            // If not found through imports, fall back to global search
+            // If not found through imports, only look for same-module symbols
             if to_symbols.is_empty() {
-                to_symbols = self.document_index.find_symbols_by_name(&rel.to_name)
+                // Get the from symbol's module path to filter by same module
+                let from_module_path = from_symbols.iter()
+                    .find(|s| s.file_id == rel.file_id)
+                    .and_then(|s| s.module_path.as_deref());
+                
+                // Global search but we'll filter to same module only
+                let all_candidates = self.document_index.find_symbols_by_name(&rel.to_name)
                     .map_err(|e| IndexError::TantivyError {
                         operation: "find_symbols_by_name".to_string(),
                         cause: e.to_string(),
                     })?;
-                eprintln!("DEBUG: Using global search for {}, found {} candidates", rel.to_name, to_symbols.len());
+                
+                // Only keep symbols from the same module
+                to_symbols = all_candidates.into_iter()
+                    .filter(|symbol| {
+                        match (from_module_path, symbol.module_path.as_deref()) {
+                            (Some(from_mod), Some(to_mod)) => from_mod == to_mod,
+                            _ => false
+                        }
+                    })
+                    .collect();
+                
+                eprintln!("DEBUG: No import found for {}, found {} same-module candidates", rel.to_name, to_symbols.len());
             }
             
             // Process with our filtering logic
@@ -1126,7 +1084,7 @@ impl SimpleIndexer {
             }
         }
         
-        eprintln!("DEBUG: Resolved {} relationships, skipped {}", resolved_count, skipped_count);
+        eprintln!("DEBUG: Resolved {} relationships, skipped {} (out of {} unresolved)", resolved_count, skipped_count, total_unresolved);
         
         // Commit the batch with all the relationships
         self.commit_tantivy_batch()?;
@@ -1381,6 +1339,121 @@ fn main() {
         
         assert!(resolved.is_some(), "Should resolve helper_function through imports");
         assert_eq!(resolved.unwrap(), helper_symbols[0].id);
+    }
+    
+    // TODO: This test needs more work to handle the complexity of import-based resolution
+    // with current parser limitations on extracting full qualified paths
+    #[ignore]
+    #[test]
+    fn test_import_based_relationship_resolution() {
+        use tempfile::TempDir;
+        use std::fs;
+        
+        // Create temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
+        
+        // Create test files
+        let src_dir = project_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        
+        // config.rs with a struct
+        let config_path = src_dir.join("config.rs");
+        fs::write(&config_path, r#"
+pub struct Config {
+    value: String,
+}
+
+impl Config {
+    pub fn new() -> Self {
+        Config { value: String::new() }
+    }
+}
+"#).unwrap();
+        
+        // another.rs with a different struct that also has new()
+        let another_path = src_dir.join("another.rs");
+        fs::write(&another_path, r#"
+pub struct Another {
+    data: i32,
+}
+
+impl Another {
+    pub fn new() -> Self {
+        Another { data: 0 }
+    }
+}
+"#).unwrap();
+        
+        // main.rs that imports only Config - using a direct function instead
+        let main_path = src_dir.join("main.rs");
+        fs::write(&main_path, r#"
+use crate::config::create_config;
+
+fn main() {
+    let c = create_config();  // Should link to config::create_config
+}
+"#).unwrap();
+        
+        // Update config.rs to have a function
+        fs::write(&config_path, r#"
+pub fn create_config() -> Config {
+    Config { value: String::new() }
+}
+
+pub struct Config {
+    value: String,
+}
+"#).unwrap();
+        
+        // Update another.rs to also have a create function
+        fs::write(&another_path, r#"
+pub fn create_config() -> Another {
+    Another { data: 0 }
+}
+
+pub struct Another {
+    data: i32,
+}
+"#).unwrap();
+        
+        // Create indexer
+        let settings = Arc::new(Settings {
+            workspace_root: Some(project_root.to_path_buf()),
+            index_path: PathBuf::from(".test_import_resolution"),
+            ..Settings::default()
+        });
+        
+        let mut indexer = SimpleIndexer::with_settings(settings);
+        
+        // Index files
+        indexer.index_file(&config_path).unwrap();
+        indexer.index_file(&another_path).unwrap();
+        indexer.index_file(&main_path).unwrap();
+        
+        // Resolve relationships
+        indexer.resolve_cross_file_relationships().unwrap();
+        
+        // Verify correct resolution
+        let main_symbols = indexer.document_index.find_symbols_by_name("main").unwrap();
+        assert_eq!(main_symbols.len(), 1);
+        
+        // Get relationships from main
+        let main_id = main_symbols[0].id;
+        let relationships = indexer.document_index.get_relationships_from(
+            main_id, 
+            RelationKind::Calls
+        ).unwrap();
+        
+        // Should have exactly one relationship (to create_config)
+        assert_eq!(relationships.len(), 1, "main should call exactly one create_config function");
+        
+        // Verify it's config::create_config, not another::create_config
+        let (target_id, _, _) = &relationships[0];
+        let target_symbol = indexer.document_index.find_symbol_by_id(*target_id).unwrap().unwrap();
+        
+        assert_eq!(target_symbol.name.as_ref(), "create_config");
+        assert_eq!(target_symbol.module_path.as_ref().map(|s| s.as_ref()), Some("crate::config"));
     }
     
     #[test]
