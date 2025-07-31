@@ -133,6 +133,38 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 
 ## Phase 3: Advanced Resolution
 
+### Task 3.5: Type Tracking for Method Receivers
+**Duration**: 2 hours  
+**Files**: `src/parsing/rust.rs`, `src/indexing/simple.rs`
+**Description**: Track variable types to resolve method receivers
+- Extract variable declarations with their types
+- Track field access chains (e.g., `self.field.method()`)
+- Store type information during parsing
+**Context for Claude**: Currently, when we see `obj.fmt()`, we don't know that `obj` is of type `MyStruct`. We need to track `let obj = MyStruct { ... }` to make this connection.
+**Validation**: Parser can report receiver type for method calls
+
+### Task 3.6: Enhanced Method Call Resolution
+**Duration**: 2 hours  
+**Files**: `src/indexing/simple.rs` (resolve_cross_file_relationships)
+**Description**: Use type information to resolve method calls through traits
+- Detect method calls vs function calls
+- Look up receiver type from Task 3.5
+- Use TraitResolver to find which trait provides the method
+- Link to trait method when appropriate
+**Context for Claude**: The TraitResolver (already implemented) knows MyStruct implements Display. When resolving `obj.fmt()` where obj: MyStruct, we should link to Display::fmt, not MyStruct::fmt.
+**Validation**: `retrieve callers fmt` shows calls from main
+
+### Task 3.7: Handle Complex Method Resolution
+**Duration**: 1.5 hours  
+**Files**: `src/indexing/simple.rs`, `src/indexing/trait_resolver.rs`
+**Description**: Handle edge cases in method resolution
+- Inherent methods vs trait methods (prefer inherent)
+- Multiple traits with same method name
+- Method resolution through deref coercion
+- Self methods in trait implementations
+**Context for Claude**: Rust's method resolution has rules - inherent methods are checked before trait methods. We need to respect these rules.
+**Validation**: Test with competing method names
+
 ### Task 3.1: Build Resolution Context ✅
 **Status**: COMPLETED  
 **Duration**: 30 minutes  
@@ -239,5 +271,33 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 - Performance impact minimal (filtering reduces work) ✅
 - Can stop at any phase with improvements ✅
 
+## Key Components Already Implemented
+
+For Claude in future sessions, these components are ready to use:
+
+1. **TraitResolver** (`src/indexing/trait_resolver.rs`)
+   - Tracks which types implement which traits
+   - Maps trait names to their methods
+   - Can resolve method to trait: `resolve_method_trait(type_name, method_name)`
+
+2. **ResolutionContext** (`src/indexing/resolution_context.rs`)
+   - Handles scope-based symbol resolution
+   - Already integrated in `resolve_cross_file_relationships`
+
+3. **ImportResolver** (`src/indexing/resolver.rs`)
+   - Tracks and resolves import statements
+   - Already connected to Tantivy for symbol lookup
+
+4. **Method Extraction**
+   - Trait methods are extracted as symbols
+   - Parser identifies method calls with receivers (e.g., "self.fmt")
+   - Qualified paths work (e.g., "String::new")
+
+## Current Limitations
+
+1. **No Type Inference**: When we see `obj.fmt()`, we don't know obj's type
+2. **No Receiver Tracking**: Method calls store "fmt" not "obj.fmt" with type info
+3. **TraitResolver Not Used**: It's populated but not consulted during method resolution
+
 ## Next Steps
-Phase 2 (Import Resolution) will enable cross-module relationships by parsing and resolving import statements. This will allow relationships like `main` → `ConfigA::new()` when `use module_a::ConfigA;` is present.
+Implement Tasks 3.5-3.7 to complete trait method resolution. This will enable the system to understand polymorphic method calls and provide accurate cross-reference information for trait-based code.
