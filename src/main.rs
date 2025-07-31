@@ -295,7 +295,7 @@ async fn main() {
             match persistence.load_with_settings(settings.clone()) {
                 Ok(loaded) => {
                     eprintln!("DEBUG: Successfully loaded index from disk");
-                    eprintln!("Loaded existing index ({} symbols)", loaded.symbol_count());
+                    eprintln!("Loaded existing index (total: {} symbols)", loaded.symbol_count());
                     loaded
                 }
                 Err(e) => {
@@ -374,21 +374,22 @@ async fn main() {
                         }
                         println!("File ID: {}", result.file_id().value());
                         
-                        let symbol_count = indexer.symbol_count();
-                        println!("Found {} symbols", symbol_count);
+                        // Get symbols for just this file
+                        let file_symbols = indexer.get_symbols_by_file(result.file_id());
+                        println!("Found {} symbols in this file", file_symbols.len());
+                        println!("Total symbols in index: {}", indexer.symbol_count());
                         
-                        // Show summary of what was found
-                        let symbols = indexer.get_all_symbols();
-                        let functions = symbols.iter()
+                        // Show summary of what was found in this file
+                        let functions = file_symbols.iter()
                             .filter(|s| s.kind == SymbolKind::Function)
                             .count();
-                        let methods = symbols.iter()
+                        let methods = file_symbols.iter()
                             .filter(|s| s.kind == SymbolKind::Method)
                             .count();
-                        let structs = symbols.iter()
+                        let structs = file_symbols.iter()
                             .filter(|s| s.kind == SymbolKind::Struct)
                             .count();
-                        let traits = symbols.iter()
+                        let traits = file_symbols.iter()
                             .filter(|s| s.kind == SymbolKind::Trait)
                             .count();
                         
@@ -436,7 +437,7 @@ async fn main() {
                         
                         if !dry_run && stats.files_indexed > 0 {
                             // Save the index
-                            eprintln!("\nSaving index with {} symbols, {} relationships...", indexer.symbol_count(), indexer.relationship_count());
+                            eprintln!("\nSaving index with {} total symbols, {} total relationships...", indexer.symbol_count(), indexer.relationship_count());
                             match persistence.save(&indexer) {
                                 Ok(_) => {
                                     println!("Index saved to: {}", config.index_path.display());

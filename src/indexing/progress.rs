@@ -55,7 +55,7 @@ impl IndexStats {
         println!("\nIndexing Complete:");
         println!("  Files indexed: {}", self.files_indexed);
         println!("  Files failed: {}", self.files_failed);
-        println!("  Total symbols: {}", self.symbols_found);
+        println!("  Symbols found: {}", self.symbols_found);
         println!("  Time elapsed: {:.2}s", self.elapsed.as_secs_f64());
         
         if self.files_indexed > 0 {

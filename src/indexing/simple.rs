@@ -10,7 +10,7 @@ use crate::storage::{DocumentIndex, SearchResult};
 use crate::parsing::{Language, ParserFactory};
 use crate::indexing::{FileWalker, IndexStats, ImportResolver, IndexTransaction, calculate_hash, get_utc_timestamp};
 use crate::vector::{VectorSearchEngine, EmbeddingGenerator, create_symbol_text};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::fs;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,7 +43,6 @@ pub struct SimpleIndexer {
     #[allow(dead_code)]
     import_resolver: ImportResolver,
     settings: Arc<Settings>,
-    project_root: Option<PathBuf>,
     document_index: DocumentIndex,
     /// Unresolved relationships to be resolved in a second pass
     unresolved_relationships: Vec<UnresolvedRelationship>,
@@ -62,18 +61,17 @@ impl SimpleIndexer {
     }
     
     pub fn with_settings(settings: Arc<Settings>) -> Self {
-        let project_root = settings.workspace_root.clone()
-            .or_else(|| settings.indexing.project_root.clone());
-            
-        // Use the configured index path for Tantivy
-        let tantivy_path = if settings.index_path.exists() || settings.index_path.parent().map_or(false, |p| p.exists()) {
-            settings.index_path.join("tantivy")
-        } else if let Some(ref root) = project_root {
-            // Fallback to project root if index path doesn't exist
-            root.join(".codanna").join("tantivy")
+        // Construct the full index path
+        let index_base = if let Some(ref workspace_root) = settings.workspace_root {
+            // If we have a workspace root, join it with the index path
+            workspace_root.join(&settings.index_path)
         } else {
-            PathBuf::from(".codanna/tantivy")
+            // Otherwise use the index path as-is (relative to current directory)
+            settings.index_path.clone()
         };
+        
+        // Tantivy data always goes under index_path/tantivy
+        let tantivy_path = index_base.join("tantivy");
         
         let document_index = DocumentIndex::new(tantivy_path)
             .expect("Failed to create Tantivy index");
@@ -82,7 +80,6 @@ impl SimpleIndexer {
             parser_factory: ParserFactory::new(settings.clone()),
             import_resolver: ImportResolver::new(),
             settings,
-            project_root,
             document_index,
             unresolved_relationships: Vec::new(),
             vector_engine: None,
@@ -110,9 +107,6 @@ impl SimpleIndexer {
     }
     
     /// Set the project root for module path calculation
-    pub fn set_project_root(&mut self, root: PathBuf) {
-        self.project_root = Some(root);
-    }
     
     /// Enable vector search with the given engine and generator
     #[must_use = "Vector search configuration should be used"]
@@ -354,14 +348,26 @@ impl SimpleIndexer {
         self.parser_factory.create_parser(language)
     }
     
-    /// Calculate module path relative to project root
+    /// Calculate module path relative to workspace root
+    /// This is language-agnostic - just returns the relative path
+    /// Language-specific parsers can override this in the symbol's module_path
     fn calculate_module_path(&self, path: &Path) -> Option<String> {
-        self.project_root.as_ref().and_then(|root| {
-            path.strip_prefix(root)
-                .ok()
-                .and_then(|p| p.to_str())
-                .map(|s| s.to_string())
-        })
+        // Use workspace_root from settings, or fall back to indexing.project_root
+        let root = self.settings.workspace_root.as_ref()
+            .or(self.settings.indexing.project_root.as_ref())?;
+            
+        // Canonicalize both paths to ensure they're absolute and comparable
+        let abs_path = path.canonicalize().ok()?;
+        let abs_root = root.canonicalize().ok()?;
+        
+        abs_path.strip_prefix(abs_root)
+            .ok()
+            .and_then(|relative_path| {
+                // Just return the relative path as a string
+                // This works for all languages and lets the parser
+                // set more specific module paths if needed
+                relative_path.to_str().map(|s| s.to_string())
+            })
     }
     
     /// Get the next symbol counter from Tantivy
@@ -477,6 +483,133 @@ impl SimpleIndexer {
             })
     }
     
+    /// Check if two symbols are in the same module
+    fn symbols_in_same_module(sym1: &Symbol, sym2: &Symbol) -> bool {
+        match (&sym1.module_path, &sym2.module_path) {
+            (Some(path1), Some(path2)) => path1 == path2,
+            // If either symbol lacks module info, we can't determine
+            _ => false
+        }
+    }
+    
+    /// Check if a symbol is visible from another symbol's context
+    fn is_symbol_visible_from(target: &Symbol, from: &Symbol) -> bool {
+        use crate::Visibility;
+        
+        // Same module = always visible
+        if Self::symbols_in_same_module(target, from) {
+            return true;
+        }
+        
+        // Different modules = target must be public
+        target.visibility == Visibility::Public
+    }
+    
+    /// Compare module paths to determine proximity
+    /// Returns a score: 0 = same module, 1 = parent/child, 2 = sibling, 3+ = distant
+    fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32 {
+        match (path1, path2) {
+            (Some(p1), Some(p2)) => {
+                if p1 == p2 {
+                    return 0; // Same module
+                }
+                
+                // Check if one is parent of the other
+                if p1.starts_with(p2) || p2.starts_with(p1) {
+                    return 1; // Parent/child relationship
+                }
+                
+                // Check if they're siblings (same parent)
+                let parts1: Vec<&str> = p1.split("::").collect();
+                let parts2: Vec<&str> = p2.split("::").collect();
+                
+                if parts1.len() > 1 && parts2.len() > 1 {
+                    // Compare parent paths
+                    let parent1 = &parts1[..parts1.len()-1].join("::");
+                    let parent2 = &parts2[..parts2.len()-1].join("::");
+                    
+                    if parent1 == parent2 {
+                        return 2; // Siblings
+                    }
+                }
+                
+                // Otherwise, they're distant
+                3
+            }
+            // Missing module info = assume distant
+            _ => 4
+        }
+    }
+    
+    /// Check if a relationship between two symbol kinds is valid
+    /// This is designed to be language-agnostic and permissive
+    fn is_compatible_relationship(from_kind: crate::SymbolKind, to_kind: crate::SymbolKind, rel_kind: crate::RelationKind) -> bool {
+        use crate::SymbolKind::*;
+        use crate::RelationKind::*;
+        
+        match rel_kind {
+            Calls | CalledBy => {
+                // Executable code can call other executable code
+                let callable = |k: &crate::SymbolKind| matches!(k, Function | Method | Macro);
+                callable(&from_kind) && callable(&to_kind)
+            }
+            Implements | ImplementedBy => {
+                // Types can implement interfaces/traits
+                let implementor = |k: &crate::SymbolKind| matches!(k, Struct | Enum | Class);
+                let interface = |k: &crate::SymbolKind| matches!(k, Trait | Interface);
+                
+                match rel_kind {
+                    Implements => implementor(&from_kind) && interface(&to_kind),
+                    ImplementedBy => interface(&from_kind) && implementor(&to_kind),
+                    _ => unreachable!()
+                }
+            }
+            Uses | UsedBy => {
+                // Most symbols can use/reference types and values
+                // Be permissive here as different languages have different rules
+                let can_use = |k: &crate::SymbolKind| {
+                    matches!(k, Function | Method | Struct | Class | Trait | Interface | Module | Enum)
+                };
+                let can_be_used = |k: &crate::SymbolKind| {
+                    matches!(k, Struct | Enum | Class | Trait | Interface | TypeAlias | Constant | Variable | Function | Method)
+                };
+                
+                match rel_kind {
+                    Uses => can_use(&from_kind) && can_be_used(&to_kind),
+                    UsedBy => can_be_used(&from_kind) && can_use(&to_kind),
+                    _ => unreachable!()
+                }
+            }
+            Defines | DefinedIn => {
+                // Containers can define members
+                let container = |k: &crate::SymbolKind| {
+                    matches!(k, Trait | Interface | Module | Struct | Enum | Class)
+                };
+                let member = |k: &crate::SymbolKind| {
+                    matches!(k, Method | Function | Constant | Field | Variable)
+                };
+                
+                match rel_kind {
+                    Defines => container(&from_kind) && member(&to_kind),
+                    DefinedIn => member(&from_kind) && container(&to_kind),
+                    _ => unreachable!()
+                }
+            }
+            Extends | ExtendedBy => {
+                // Types can extend other types (inheritance)
+                let extendable = |k: &crate::SymbolKind| {
+                    matches!(k, Class | Interface | Trait)
+                };
+                extendable(&from_kind) && extendable(&to_kind)
+            }
+            References | ReferencedBy => {
+                // Very permissive - almost anything can reference anything
+                // This is a catch-all for general references
+                true
+            }
+        }
+    }
+    
     /// Add a relationship to Tantivy
     fn add_relationship_internal(&mut self, from: SymbolId, to: SymbolId, rel: Relationship) -> IndexResult<()> {
         self.document_index.store_relationship(from, to, &rel)
@@ -486,7 +619,7 @@ impl SimpleIndexer {
             })
     }
     
-    /// Helper method to add relationships by symbol names
+    /// Helper method to add relationships by symbol names with filtering
     fn add_relationships_by_name(&mut self, from_name: &str, to_name: &str, file_id: FileId, kind: RelationKind) -> IndexResult<()> {
         // Find symbols by name in Tantivy
         let from_symbols = self.document_index.find_symbols_by_name(from_name)
@@ -500,28 +633,76 @@ impl SimpleIndexer {
                 operation: "find_symbols_by_name".to_string(),
                 cause: e.to_string(),
             })?;
+            
+        eprintln!("DEBUG: add_relationships_by_name {} -> {} (kind: {:?})", from_name, to_name, kind);
+        eprintln!("  Found {} from symbols, {} to symbols", from_symbols.len(), to_symbols.len());
         
-        // Add relationships for matching symbols
-        // For 'from' symbols, we only consider those in the current file
-        // For 'to' symbols, we consider all matches (cross-file references)
+        // Process relationships with filtering
         for from_symbol in &from_symbols {
-            if from_symbol.file_id == file_id {
-                for to_symbol in &to_symbols {
+            // Only consider 'from' symbols in the current file
+            if from_symbol.file_id != file_id {
+                eprintln!("  Skipping from_symbol {} (file_id {} != {})", from_symbol.name, from_symbol.file_id.value(), file_id.value());
+                continue;
+            }
+            eprintln!("  Processing from_symbol {} (file_id: {}, module: {:?})", from_symbol.name, from_symbol.file_id.value(), from_symbol.module_path);
+            
+            // Filter and score potential target symbols
+            let mut candidates: Vec<(&Symbol, u32)> = to_symbols.iter()
+                .filter_map(|to_symbol| {
+                    // 1. Check symbol kind compatibility
+                    if !Self::is_compatible_relationship(from_symbol.kind, to_symbol.kind, kind) {
+                        return None;
+                    }
+                    
+                    // 2. Check visibility
+                    if !Self::is_symbol_visible_from(to_symbol, from_symbol) {
+                        return None;
+                    }
+                    
+                    // 3. Calculate proximity score (lower is better)
+                    let proximity = Self::module_proximity(
+                        from_symbol.module_path.as_deref(),
+                        to_symbol.module_path.as_deref()
+                    );
+                    
+                    Some((to_symbol, proximity))
+                })
+                .collect();
+            
+            // Sort by proximity (prefer closer modules)
+            candidates.sort_by_key(|(_, proximity)| *proximity);
+            
+            // If we have candidates in the same module (proximity 0), only use those
+            let same_module_candidates: Vec<&Symbol> = candidates.iter()
+                .take_while(|(_, proximity)| *proximity == 0)
+                .map(|(symbol, _)| *symbol)
+                .collect();
+            
+            if !same_module_candidates.is_empty() {
+                // Add relationships only to same-module symbols
+                eprintln!("  Adding {} same-module relationships for {}", same_module_candidates.len(), from_symbol.name);
+                for to_symbol in same_module_candidates {
                     self.add_relationship_internal(from_symbol.id, to_symbol.id, Relationship::new(kind))?;
                 }
+            } else if !candidates.is_empty() {
+                // No same-module matches, use the closest match
+                // In a more sophisticated implementation, we might check imports here
+                let (best_match, proximity) = candidates[0];
+                eprintln!("  Adding cross-module relationship {} -> {} (proximity: {})", from_symbol.name, best_match.name, proximity);
+                self.add_relationship_internal(from_symbol.id, best_match.id, Relationship::new(kind))?;
+            } else {
+                eprintln!("  No valid candidates found for {} -> {}", from_symbol.name, to_name);
             }
         }
         
-        // If no 'to' symbols found, store as unresolved for later resolution
-        if to_symbols.is_empty() && !from_symbols.is_empty() {
-            // Store unresolved relationship for later cross-file resolution
-            self.unresolved_relationships.push(UnresolvedRelationship {
-                from_name: from_name.into(),
-                to_name: to_name.into(),
-                file_id,
-                kind,
-            });
-        }
+        // Store as unresolved for later resolution when all symbols are committed
+        // This is necessary because symbols within the same batch aren't searchable yet
+        self.unresolved_relationships.push(UnresolvedRelationship {
+            from_name: from_name.into(),
+            to_name: to_name.into(),
+            file_id,
+            kind,
+        });
         
         Ok(())
     }
@@ -667,6 +848,11 @@ impl SimpleIndexer {
     pub fn symbol_count(&self) -> usize {
         self.document_index.count_symbols()
             .unwrap_or(0)
+    }
+    
+    pub fn get_symbols_by_file(&self, file_id: FileId) -> Vec<Symbol> {
+        self.document_index.find_symbols_by_file(file_id)
+            .unwrap_or_default()
     }
     
     pub fn file_count(&self) -> u32 {
@@ -819,38 +1005,85 @@ impl SimpleIndexer {
             return Ok(());
         }
         
+        eprintln!("DEBUG: Resolving {} unresolved relationships", unresolved.len());
+        
         // Start a batch for relationship updates
         self.start_tantivy_batch()?;
         
-        let mut _resolved_count = 0;
+        let mut resolved_count = 0;
+        let mut skipped_count = 0;
+        
         for rel in unresolved {
-            // Try to find the target symbol again (it might have been indexed in a later file)
+            // Find symbols again - now they're all committed and searchable
+            let from_symbols = self.document_index.find_symbols_by_name(&rel.from_name)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbols_by_name".to_string(),
+                    cause: e.to_string(),
+                })?;
+            
             let to_symbols = self.document_index.find_symbols_by_name(&rel.to_name)
                 .map_err(|e| IndexError::TantivyError {
                     operation: "find_symbols_by_name".to_string(),
                     cause: e.to_string(),
                 })?;
             
-            if !to_symbols.is_empty() {
-                // Found the target symbol(s), create relationships
-                let from_symbols = self.document_index.find_symbols_by_name(&rel.from_name)
-                    .map_err(|e| IndexError::TantivyError {
-                        operation: "find_symbols_by_name".to_string(),
-                        cause: e.to_string(),
-                    })?;
+            // Process with our filtering logic
+            for from_symbol in &from_symbols {
+                // Only consider 'from' symbols in the correct file
+                if from_symbol.file_id != rel.file_id {
+                    continue;
+                }
                 
-                for from_symbol in &from_symbols {
-                    if from_symbol.file_id == rel.file_id {
-                        for to_symbol in &to_symbols {
-                            self.add_relationship_internal(from_symbol.id, to_symbol.id, Relationship::new(rel.kind))?;
-                            _resolved_count += 1;
+                // Filter and score potential target symbols
+                let mut candidates: Vec<(&Symbol, u32)> = to_symbols.iter()
+                    .filter_map(|to_symbol| {
+                        // 1. Check symbol kind compatibility
+                        if !Self::is_compatible_relationship(from_symbol.kind, to_symbol.kind, rel.kind) {
+                            return None;
                         }
+                        
+                        // 2. Check visibility
+                        if !Self::is_symbol_visible_from(to_symbol, from_symbol) {
+                            return None;
+                        }
+                        
+                        // 3. Calculate proximity score (lower is better)
+                        let proximity = Self::module_proximity(
+                            from_symbol.module_path.as_deref(),
+                            to_symbol.module_path.as_deref()
+                        );
+                        
+                        Some((to_symbol, proximity))
+                    })
+                    .collect();
+                
+                // Sort by proximity (prefer closer modules)
+                candidates.sort_by_key(|(_, proximity)| *proximity);
+                
+                // If we have candidates in the same module (proximity 0), only use those
+                let same_module_candidates: Vec<&Symbol> = candidates.iter()
+                    .take_while(|(_, proximity)| *proximity == 0)
+                    .map(|(symbol, _)| *symbol)
+                    .collect();
+                
+                if !same_module_candidates.is_empty() {
+                    // Add relationships only to same-module symbols
+                    for to_symbol in same_module_candidates {
+                        self.add_relationship_internal(from_symbol.id, to_symbol.id, Relationship::new(rel.kind))?;
+                        resolved_count += 1;
                     }
+                } else if !candidates.is_empty() {
+                    // No same-module matches, use the closest match
+                    let (best_match, _) = candidates[0];
+                    self.add_relationship_internal(from_symbol.id, best_match.id, Relationship::new(rel.kind))?;
+                    resolved_count += 1;
+                } else {
+                    skipped_count += 1;
                 }
             }
-            // If still not found, the symbol might be from an external crate or not indexed
         }
         
+        eprintln!("DEBUG: Resolved {} relationships, skipped {}", resolved_count, skipped_count);
         
         // Commit the batch with all the relationships
         self.commit_tantivy_batch()?;
@@ -919,12 +1152,333 @@ impl std::fmt::Debug for SimpleIndexer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SimpleIndexer")
             .field("settings", &self.settings)
-            .field("project_root", &self.project_root)
             .field("document_index", &self.document_index)
             .field("unresolved_relationships", &self.unresolved_relationships)
             .field("vector_engine", &self.vector_engine.is_some())
             .field("embedding_generator", &self.embedding_generator.is_some())
             .field("pending_embeddings_count", &self.pending_embeddings.len())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SymbolKind, RelationKind, Visibility, Symbol, SymbolId, FileId};
+    
+    #[test]
+    fn test_symbols_in_same_module() {
+        let sym1 = Symbol::new(
+            SymbolId::new(1).unwrap(),
+            "test1",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_a");
+        
+        let sym2 = Symbol::new(
+            SymbolId::new(2).unwrap(),
+            "test2",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_a");
+        
+        let sym3 = Symbol::new(
+            SymbolId::new(3).unwrap(),
+            "test3",
+            SymbolKind::Function,
+            FileId::new(2).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_b");
+        
+        let sym4 = Symbol::new(
+            SymbolId::new(4).unwrap(),
+            "test4",
+            SymbolKind::Function,
+            FileId::new(2).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ); // No module path
+        
+        assert!(SimpleIndexer::symbols_in_same_module(&sym1, &sym2));
+        assert!(!SimpleIndexer::symbols_in_same_module(&sym1, &sym3));
+        assert!(!SimpleIndexer::symbols_in_same_module(&sym1, &sym4));
+        assert!(!SimpleIndexer::symbols_in_same_module(&sym4, &sym4)); // Both have no module
+    }
+    
+    #[test]
+    fn test_is_symbol_visible_from() {
+        let pub_sym = Symbol::new(
+            SymbolId::new(1).unwrap(),
+            "public_fn",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_a")
+        .with_visibility(Visibility::Public);
+        
+        let priv_sym = Symbol::new(
+            SymbolId::new(2).unwrap(),
+            "private_fn",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_a")
+        .with_visibility(Visibility::Private);
+        
+        let other_module_sym = Symbol::new(
+            SymbolId::new(3).unwrap(),
+            "other_fn",
+            SymbolKind::Function,
+            FileId::new(2).unwrap(),
+            crate::Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_b");
+        
+        // Same module - both visible
+        assert!(SimpleIndexer::is_symbol_visible_from(&pub_sym, &priv_sym));
+        assert!(SimpleIndexer::is_symbol_visible_from(&priv_sym, &pub_sym));
+        
+        // Different modules - only public visible
+        assert!(SimpleIndexer::is_symbol_visible_from(&pub_sym, &other_module_sym));
+        assert!(!SimpleIndexer::is_symbol_visible_from(&priv_sym, &other_module_sym));
+    }
+    
+    #[test]
+    fn test_module_proximity() {
+        // Same module
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::module_a"),
+            Some("crate::module_a")
+        ), 0);
+        
+        // Parent/child
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::module_a"),
+            Some("crate::module_a::submodule")
+        ), 1);
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::module_a::submodule"),
+            Some("crate::module_a")
+        ), 1);
+        
+        // Siblings
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::module_a"),
+            Some("crate::module_b")
+        ), 2);
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::storage::memory"),
+            Some("crate::storage::tantivy")
+        ), 2);
+        
+        // Distant
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::module_a::sub"),
+            Some("crate::module_b::other")
+        ), 3);
+        
+        // Missing module info
+        assert_eq!(SimpleIndexer::module_proximity(
+            None,
+            Some("crate::module_a")
+        ), 4);
+        assert_eq!(SimpleIndexer::module_proximity(
+            Some("crate::module_a"),
+            None
+        ), 4);
+        assert_eq!(SimpleIndexer::module_proximity(None, None), 4);
+    }
+    
+    #[test]
+    fn test_is_compatible_relationship_calls() {
+        // Valid call relationships - executable code calling executable code
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Function, 
+            RelationKind::Calls
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Method, 
+            SymbolKind::Function, 
+            RelationKind::Calls
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Method, 
+            RelationKind::Calls
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Macro, 
+            SymbolKind::Function, 
+            RelationKind::Calls
+        ));
+        
+        // Invalid call relationships - non-executable code
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Struct, 
+            SymbolKind::Function, 
+            RelationKind::Calls
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Trait, 
+            SymbolKind::Method, 
+            RelationKind::Calls
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Struct, 
+            RelationKind::Calls
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Constant, 
+            SymbolKind::Function, 
+            RelationKind::Calls
+        ));
+    }
+    
+    #[test]
+    fn test_is_compatible_relationship_implements() {
+        // Valid implements relationships - types implementing interfaces
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Struct, 
+            SymbolKind::Trait, 
+            RelationKind::Implements
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Enum, 
+            SymbolKind::Trait, 
+            RelationKind::Implements
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Class, 
+            SymbolKind::Interface, 
+            RelationKind::Implements
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Class, 
+            SymbolKind::Trait, 
+            RelationKind::Implements
+        ));
+        
+        // Invalid implements relationships
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Trait, 
+            RelationKind::Implements
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Struct, 
+            SymbolKind::Function, 
+            RelationKind::Implements
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Trait, 
+            SymbolKind::Struct, 
+            RelationKind::Implements
+        ));
+    }
+    
+    #[test]
+    fn test_is_compatible_relationship_uses() {
+        // Valid uses relationships - language agnostic
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Struct, 
+            RelationKind::Uses
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Method, 
+            SymbolKind::Enum, 
+            RelationKind::Uses
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Class, 
+            SymbolKind::Interface, 
+            RelationKind::Uses
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Module, 
+            SymbolKind::TypeAlias, 
+            RelationKind::Uses
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Constant, 
+            RelationKind::Uses
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Method, 
+            SymbolKind::Variable, 
+            RelationKind::Uses
+        ));
+        
+        // Invalid uses relationships - what can't use things
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Constant, 
+            SymbolKind::Struct, 
+            RelationKind::Uses
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Variable, 
+            SymbolKind::Class, 
+            RelationKind::Uses
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Field, 
+            SymbolKind::Function, 
+            RelationKind::Uses
+        ));
+    }
+    
+    #[test]
+    fn test_is_compatible_relationship_defines() {
+        // Valid defines relationships - containers defining members
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Trait, 
+            SymbolKind::Method, 
+            RelationKind::Defines
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Module, 
+            SymbolKind::Function, 
+            RelationKind::Defines
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Struct, 
+            SymbolKind::Field, 
+            RelationKind::Defines
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Class, 
+            SymbolKind::Method, 
+            RelationKind::Defines
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Interface, 
+            SymbolKind::Method, 
+            RelationKind::Defines
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Enum, 
+            SymbolKind::Constant, 
+            RelationKind::Defines
+        ));
+        
+        // Invalid defines relationships - non-containers
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Function, 
+            SymbolKind::Method, 
+            RelationKind::Defines
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Method, 
+            SymbolKind::Function, 
+            RelationKind::Defines
+        ));
+        assert!(!SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Variable, 
+            SymbolKind::Field, 
+            RelationKind::Defines
+        ));
     }
 }
