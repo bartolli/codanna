@@ -298,6 +298,8 @@ For Claude in future sessions, these components are ready to use:
    - Tracks which types implement which traits
    - Maps trait names to their methods
    - Can resolve method to trait: `resolve_method_trait(type_name, method_name)`
+   - Tracks inherent methods separately and prefers them over trait methods
+   - Handles ambiguous trait methods with warnings
 
 2. **ResolutionContext** (`src/indexing/resolution_context.rs`)
    - Handles scope-based symbol resolution
@@ -309,14 +311,23 @@ For Claude in future sessions, these components are ready to use:
 
 4. **Method Extraction**
    - Trait methods are extracted as symbols
-   - Parser identifies method calls with receivers (e.g., "self.fmt")
+   - Parser identifies method calls with receivers (e.g., "obj@fmt" for `obj.fmt()`)
    - Qualified paths work (e.g., "String::new")
+   - Variable types are tracked for method resolution
+   - Inherent methods are tracked separately from trait methods
 
-## Current Limitations
+## Previously Fixed Limitations
 
-1. **No Type Inference**: When we see `obj.fmt()`, we don't know obj's type
-2. **No Receiver Tracking**: Method calls store "fmt" not "obj.fmt" with type info
-3. **TraitResolver Not Used**: It's populated but not consulted during method resolution
+These limitations were addressed in Phase 3:
+
+1. ~~**No Type Inference**: When we see `obj.fmt()`, we don't know obj's type~~
+   - ✅ FIXED: Task 3.5 added variable type tracking via `find_variable_types()`
+   
+2. ~~**No Receiver Tracking**: Method calls store "fmt" not "obj.fmt" with type info~~
+   - ✅ FIXED: Parser now extracts method calls as `receiver@method` format
+   
+3. ~~**TraitResolver Not Used**: It's populated but not consulted during method resolution~~
+   - ✅ FIXED: Task 3.6 added `resolve_method_call()` that uses TraitResolver for resolution
 
 ## Phase 3 Completion Summary
 
