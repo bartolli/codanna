@@ -133,15 +133,20 @@ fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32
 
 ## Phase 3: Advanced Resolution
 
-### Task 3.5: Type Tracking for Method Receivers
-**Duration**: 2 hours  
-**Files**: `src/parsing/rust.rs`, `src/indexing/simple.rs`
+### Task 3.5: Type Tracking for Method Receivers ✅
+**Status**: COMPLETED  
+**Duration**: 1 hour  
+**Files**: `src/parsing/rust.rs`, `src/indexing/simple.rs`, `src/parsing/parser.rs`
 **Description**: Track variable types to resolve method receivers
 - Extract variable declarations with their types
 - Track field access chains (e.g., `self.field.method()`)
 - Store type information during parsing
-**Context for Claude**: Currently, when we see `obj.fmt()`, we don't know that `obj` is of type `MyStruct`. We need to track `let obj = MyStruct { ... }` to make this connection.
-**Validation**: Parser can report receiver type for method calls
+**Implementation**:
+- Added `find_variable_types()` to LanguageParser trait
+- RustParser extracts let bindings with types (struct construction, references, assignments)
+- Method calls now include receiver: `obj.method()` becomes `obj@method`
+- Added `variable_types: HashMap<(FileId, String), String>` to SimpleIndexer
+**Validation**: Tested with focused examples - correctly tracks `obj: MyType`, `x: @obj`, `y: &@obj`
 
 ### Task 3.6: Enhanced Method Call Resolution
 **Duration**: 2 hours  
