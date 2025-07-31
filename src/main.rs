@@ -310,7 +310,7 @@ async fn main() {
                 eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
             }
             eprintln!("DEBUG: Creating new index");
-            let new_indexer = SimpleIndexer::with_settings(settings.clone());
+            let mut new_indexer = SimpleIndexer::with_settings(settings.clone());
             // Clear Tantivy index if force re-indexing directory
             if force_recreate_index {
                 if let Err(e) = new_indexer.clear_tantivy_index() {

@@ -31,7 +31,7 @@ pub struct ImportResolver {
     /// Maps module paths to file paths
     module_to_file: HashMap<String, PathBuf>,
     /// Import statements by file
-    imports_by_file: HashMap<FileId, Vec<Import>>,
+    pub imports_by_file: HashMap<FileId, Vec<Import>>,
     /// Maps file paths to FileIds
     path_to_file_id: HashMap<PathBuf, FileId>,
 }

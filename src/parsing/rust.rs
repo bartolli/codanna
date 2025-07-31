@@ -258,29 +258,69 @@ impl RustParser {
             }
             "struct_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    if let Some(symbol) = self.create_symbol(
+                    let mut symbol = self.create_symbol(
                         counter,
                         name_node,
                         SymbolKind::Struct,
                         file_id,
                         code,
-                    ) {
-                        symbols.push(symbol);
+                    );
+                    
+                    if let Some(mut sym) = symbol {
+                        // Update the range to include the entire struct body
+                        sym.range = Range::new(
+                            node.start_position().row as u32,
+                            node.start_position().column as u16,
+                            node.end_position().row as u32,
+                            node.end_position().column as u16,
+                        );
+                        symbols.push(sym);
                     }
                 }
             }
             "trait_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    if let Some(symbol) = self.create_symbol(
+                    // For traits, we need the full node range, not just the name
+                    let mut symbol = self.create_symbol(
                         counter,
                         name_node,
                         SymbolKind::Trait,
                         file_id,
                         code,
-                    ) {
-                        symbols.push(symbol);
+                    );
+                    
+                    if let Some(mut sym) = symbol {
+                        // Update the range to include the entire trait body
+                        sym.range = Range::new(
+                            node.start_position().row as u32,
+                            node.start_position().column as u16,
+                            node.end_position().row as u32,
+                            node.end_position().column as u16,
+                        );
+                        symbols.push(sym);
+                    }
+                    
+                    // Also extract method signatures from the trait
+                    if let Some(body) = node.child_by_field_name("body") {
+                        for child in body.children(&mut body.walk()) {
+                            if child.kind() == "function_signature_item" || child.kind() == "function_item" {
+                                if let Some(method_name_node) = child.child_by_field_name("name") {
+                                    if let Some(method_symbol) = self.create_symbol(
+                                        counter,
+                                        method_name_node,
+                                        SymbolKind::Method,
+                                        file_id,
+                                        code,
+                                    ) {
+                                        symbols.push(method_symbol);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+                // Don't recurse further - we've handled the trait methods
+                return;
             }
             "impl_item" => {
                 // Just recurse into impl blocks, functions will be handled with Method kind
@@ -364,14 +404,38 @@ impl RustParser {
                 // Handle method calls (e.g., `variable.method()`)
                 else if function_node.kind() == "field_expression" {
                     if let Some(field_node) = function_node.child_by_field_name("field") {
-                        target_name = Some(code[field_node.byte_range()].to_string());
+                        let method_name = code[field_node.byte_range()].to_string();
+                        
+                        // Try to extract receiver type for better context
+                        if let Some(value_node) = function_node.child_by_field_name("value") {
+                            match value_node.kind() {
+                                "self" => {
+                                    // self.method() - prefix with "self."
+                                    target_name = Some(format!("self.{}", method_name));
+                                }
+                                "identifier" => {
+                                    // variable.method() - just use method name for now
+                                    // In the future, we could track variable types
+                                    target_name = Some(method_name);
+                                }
+                                "field_expression" => {
+                                    // Chained calls like self.field.method()
+                                    // For now, just use the method name
+                                    target_name = Some(method_name);
+                                }
+                                _ => {
+                                    target_name = Some(method_name);
+                                }
+                            }
+                        } else {
+                            target_name = Some(method_name);
+                        }
                     }
                 }
                 // Handle associated functions (e.g., `String::new()`)
                 else if function_node.kind() == "scoped_identifier" {
-                    if let Some(name_node) = function_node.child_by_field_name("name") {
-                        target_name = Some(code[name_node.byte_range()].to_string());
-                    }
+                    // Extract the full qualified path
+                    target_name = Some(code[function_node.byte_range()].to_string());
                 }
 
                 if let (Some(target), Some(caller)) = (target_name, containing_function) {
@@ -559,11 +623,11 @@ impl RustParser {
             "trait_item" => {
                 if let Some(trait_name_node) = node.child_by_field_name("name") {
                     let trait_name = &code[trait_name_node.byte_range()];
-                    
                     // Find all methods defined in this trait
                     if let Some(body) = node.child_by_field_name("body") {
                         for child in body.children(&mut body.walk()) {
-                            if child.kind() == "function_signature_item" {
+                            // Handle both function_signature_item and function_item
+                            if child.kind() == "function_signature_item" || child.kind() == "function_item" {
                                 if let Some(method_name_node) = child.child_by_field_name("name") {
                                     let method_name = &code[method_name_node.byte_range()];
                                     let range = Range::new(
