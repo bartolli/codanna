@@ -258,7 +258,7 @@ impl RustParser {
             }
             "struct_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
-                    let mut symbol = self.create_symbol(
+                    let symbol = self.create_symbol(
                         counter,
                         name_node,
                         SymbolKind::Struct,
@@ -281,7 +281,7 @@ impl RustParser {
             "trait_item" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     // For traits, we need the full node range, not just the name
-                    let mut symbol = self.create_symbol(
+                    let symbol = self.create_symbol(
                         counter,
                         name_node,
                         SymbolKind::Trait,

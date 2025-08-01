@@ -126,7 +126,6 @@ impl SimpleIndexer {
     }
     
     /// Set the project root for module path calculation
-    
     /// Enable vector search with the given engine and generator
     #[must_use = "Vector search configuration should be used"]
     pub fn with_vector_search(
@@ -333,37 +332,6 @@ impl SimpleIndexer {
         Ok(file_id)
     }
     
-    /// Remove all symbols from a file
-    fn remove_file_symbols(&mut self, file_id: FileId) -> IndexResult<()> {
-        eprintln!("DEBUG remove_file_symbols: Removing symbols for file_id {:?}", file_id);
-        
-        // Get all symbols for this file from Tantivy
-        let symbols = self.document_index.find_symbols_by_file(file_id)
-            .map_err(|e| IndexError::TantivyError {
-                operation: "find_symbols_by_file".to_string(),
-                cause: e.to_string(),
-            })?;
-        
-        eprintln!("DEBUG: Found {} symbols to remove", symbols.len());
-        
-        // Remove each symbol and its relationships from Tantivy
-        for symbol in symbols {
-            self.document_index.delete_symbol(symbol.id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "delete_symbol".to_string(),
-                    cause: e.to_string(),
-                })?;
-            
-            // Also remove relationships
-            self.document_index.delete_relationships_for_symbol(symbol.id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "delete_relationships".to_string(),
-                    cause: e.to_string(),
-                })?;
-        }
-        
-        Ok(())
-    }
     
     /// Index or re-index file content
     fn reindex_file_content(&mut self, path: &Path, path_str: &str, file_id: FileId, content: &str) -> IndexResult<FileId> {
@@ -635,8 +603,24 @@ impl SimpleIndexer {
         target.visibility == Visibility::Public
     }
     
-    /// Compare module paths to determine proximity
-    /// Returns a score: 0 = same module, 1 = parent/child, 2 = sibling, 3+ = distant
+    /// TODO: Implement module proximity scoring for relationship resolution
+    /// 
+    /// Purpose: Improve relationship resolution accuracy by preferring symbols
+    /// in closer modules when multiple candidates exist.
+    /// 
+    /// Description: This method calculates the proximity between two module paths
+    /// to help disambiguate symbol references. When resolving relationships like
+    /// function calls, symbols in the same or nearby modules should be preferred
+    /// over distant ones.
+    /// 
+    /// Returns:
+    /// - 0: Same module (highest priority)
+    /// - 1: Parent/child relationship
+    /// - 2: Sibling modules (same parent)
+    /// - 3+: More distant relationships
+    /// 
+    /// Reference: See FIX_PLAN_RELATIONSHIPS.md for full implementation details
+    #[allow(dead_code)]
     fn module_proximity(path1: Option<&str>, path2: Option<&str>) -> u32 {
         match (path1, path2) {
             (Some(p1), Some(p2)) => {
@@ -1410,7 +1394,7 @@ impl SimpleIndexer {
                     let parts: Vec<&str> = rel.to_name.split("::").collect();
                     if parts.len() == 2 {
                         // Try to resolve the type first, then find the method
-                        if let Some(type_id) = context.resolve(parts[0]) {
+                        if let Some(_type_id) = context.resolve(parts[0]) {
                             // Find the method on this type
                             // For now, just resolve the method name
                             context.resolve(parts[1])
@@ -1477,6 +1461,13 @@ impl SimpleIndexer {
         
         // Commit the batch with all the relationships
         self.commit_tantivy_batch()?;
+        
+        eprintln!(
+            "DEBUG: Relationship resolution complete - resolved: {}, skipped: {}, total: {}", 
+            resolved_count, 
+            skipped_count, 
+            _total_unresolved
+        );
         
         Ok(())
     }
