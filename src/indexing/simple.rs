@@ -10,6 +10,7 @@ use crate::storage::{DocumentIndex, SearchResult};
 use crate::parsing::{Language, ParserFactory};
 use crate::indexing::{FileWalker, IndexStats, ImportResolver, IndexTransaction, ResolutionContext, TraitResolver, calculate_hash, get_utc_timestamp};
 use crate::vector::{VectorSearchEngine, EmbeddingGenerator, create_symbol_text};
+use crate::semantic::SimpleSemanticSearch;
 use std::path::Path;
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -56,6 +57,8 @@ pub struct SimpleIndexer {
     embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
     /// Symbols pending vector processing (SymbolId, symbol_text)
     pending_embeddings: Vec<(SymbolId, String)>,
+    /// Optional semantic search for documentation
+    semantic_search: Option<Arc<Mutex<SimpleSemanticSearch>>>,
 }
 
 impl SimpleIndexer {
@@ -92,6 +95,7 @@ impl SimpleIndexer {
             vector_engine: None,
             embedding_generator: None,
             pending_embeddings: Vec::new(),
+            semantic_search: None,
         };
         
         // Reconstruct TraitResolver state from stored relationships
@@ -139,6 +143,25 @@ impl SimpleIndexer {
     #[must_use]
     pub fn has_vector_search(&self) -> bool {
         self.vector_engine.is_some() && self.embedding_generator.is_some()
+    }
+    
+    /// Enable semantic search for documentation
+    pub fn enable_semantic_search(&mut self) -> IndexResult<()> {
+        match SimpleSemanticSearch::new() {
+            Ok(search) => {
+                self.semantic_search = Some(Arc::new(Mutex::new(search)));
+                Ok(())
+            }
+            Err(e) => Err(IndexError::General(
+                format!("Failed to initialize semantic search: {}", e)
+            )),
+        }
+    }
+    
+    /// Check if semantic search is enabled
+    #[must_use]
+    pub fn has_semantic_search(&self) -> bool {
+        self.semantic_search.is_some()
     }
     
     /// Start a batch operation for Tantivy indexing
@@ -473,6 +496,13 @@ impl SimpleIndexer {
     
     /// Store a single symbol in Tantivy
     fn store_symbol(&mut self, symbol: crate::Symbol, path_str: &str) -> IndexResult<()> {
+        // Index doc comment for semantic search if enabled
+        if let (Some(semantic), Some(doc)) = (&self.semantic_search, &symbol.doc_comment) {
+            if let Err(e) = semantic.lock().unwrap().index_doc_comment(symbol.id, doc) {
+                eprintln!("WARNING: Failed to index doc comment for symbol {}: {}", symbol.name, e);
+            }
+        }
+        
         // Store the symbol in Tantivy
         self.document_index.index_symbol(&symbol, path_str)
             .map_err(|e| IndexError::TantivyError {
@@ -907,12 +937,72 @@ impl SimpleIndexer {
             .flatten()
     }
     
+    /// Search documentation using natural language query
+    /// Returns symbols with their similarity scores, sorted by relevance
+    pub fn semantic_search_docs(&self, query: &str, limit: usize) -> IndexResult<Vec<(Symbol, f32)>> {
+        let semantic = self.semantic_search.as_ref()
+            .ok_or_else(|| IndexError::General(
+                "Semantic search is not enabled. Call enable_semantic_search() first.".to_string()
+            ))?;
+        
+        let results = semantic.lock().unwrap()
+            .search(query, limit)
+            .map_err(|e| IndexError::General(
+                format!("Semantic search failed: {}", e)
+            ))?;
+        
+        // Convert SymbolIds to Symbols
+        let mut symbol_results = Vec::with_capacity(results.len());
+        for (symbol_id, score) in results {
+            if let Some(symbol) = self.get_symbol(symbol_id) {
+                symbol_results.push((symbol, score));
+            }
+        }
+        
+        Ok(symbol_results)
+    }
+    
+    /// Search documentation with similarity threshold
+    pub fn semantic_search_docs_with_threshold(
+        &self, 
+        query: &str, 
+        limit: usize, 
+        threshold: f32
+    ) -> IndexResult<Vec<(Symbol, f32)>> {
+        let semantic = self.semantic_search.as_ref()
+            .ok_or_else(|| IndexError::General(
+                "Semantic search is not enabled. Call enable_semantic_search() first.".to_string()
+            ))?;
+        
+        let results = semantic.lock().unwrap()
+            .search_with_threshold(query, limit, threshold)
+            .map_err(|e| IndexError::General(
+                format!("Semantic search failed: {}", e)
+            ))?;
+        
+        // Convert SymbolIds to Symbols
+        let mut symbol_results = Vec::with_capacity(results.len());
+        for (symbol_id, score) in results {
+            if let Some(symbol) = self.get_symbol(symbol_id) {
+                symbol_results.push((symbol, score));
+            }
+        }
+        
+        Ok(symbol_results)
+    }
+    
     /// Clear the Tantivy index
     pub fn clear_tantivy_index(&mut self) -> IndexResult<()> {
         // Clear trait resolver data as well
         self.trait_resolver.clear();
         self.trait_symbols_by_file.clear();
         self.variable_types.clear();
+        
+        // Clear semantic search if enabled
+        if let Some(ref semantic) = self.semantic_search {
+            semantic.lock().unwrap().clear();
+        }
+        
         self.document_index.clear()
             .map_err(|e| IndexError::TantivyError {
                 operation: "clear_index".to_string(),

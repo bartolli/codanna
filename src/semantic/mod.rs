@@ -13,13 +13,13 @@ pub use fastembed::{EmbeddingModel, TextEmbedding};
 /// Similarity threshold recommendations based on testing
 pub mod thresholds {
     /// Threshold for very similar documents (e.g., same concept, different wording)
-    pub const VERY_SIMILAR: f32 = 0.85;
+    pub const VERY_SIMILAR: f32 = 0.75;
     
     /// Threshold for similar documents (e.g., related concepts)
-    pub const SIMILAR: f32 = 0.70;
+    pub const SIMILAR: f32 = 0.60;
     
     /// Threshold for somewhat related documents
-    pub const RELATED: f32 = 0.50;
+    pub const RELATED: f32 = 0.40;
     
     /// Default threshold for semantic search
     pub const DEFAULT: f32 = SIMILAR;

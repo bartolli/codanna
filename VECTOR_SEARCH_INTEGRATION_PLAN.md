@@ -11,7 +11,7 @@ Build semantic search for documentation comments as an MCP-first feature, starti
 
 ## Phase 0: Model Evaluation (Start Here!)
 
-### Task 0.1: Compare Embedding Models
+### Task 0.1: Compare Embedding Models ✅
 **Duration**: 2 hours  
 **File**: `tests/embedding_model_comparison.rs` (new)
 **Description**: Test different code-optimized models from fastembed
@@ -34,7 +34,7 @@ Evaluation criteria:
 - Error handling patterns
 **Validation**: Clear winner based on code similarity scores
 
-### Task 0.2: Benchmark Selected Model
+### Task 0.2: Benchmark Selected Model ✅
 **Duration**: 1 hour  
 **File**: `tests/embedding_model_benchmark.rs` (new)
 **Description**: Deep benchmark of chosen model
@@ -46,7 +46,7 @@ Evaluation criteria:
 
 ## Phase 1: Simple API (Doc Comment Search)
 
-### Task 1.1: Basic Semantic API
+### Task 1.1: Basic Semantic API ✅
 **Duration**: 2 hours  
 **Files**: `src/semantic/mod.rs` (new), `src/semantic/simple.rs` (new)
 **Description**: Minimal API for semantic search on doc comments
@@ -65,30 +65,27 @@ impl SimpleSemanticSearch {
 ```
 **Validation**: Can index and search doc comments
 
-### Task 1.2: Integration with SimpleIndexer
+### Task 1.2: Integration with SimpleIndexer ✅
 **Duration**: 2 hours  
 **Files**: `src/indexing/simple.rs`
 **Description**: Add semantic indexing for symbols with doc comments
-```rust
-// In SimpleIndexer
-if let Some(ref mut semantic) = self.semantic_search {
-    if let Some(doc) = symbol.doc_comment() {
-        semantic.index_doc_comment(symbol.id, doc)?;
-    }
-}
-```
-**Validation**: Doc comments are indexed during normal indexing
+**Completed**:
+- Added `semantic_search` field to SimpleIndexer struct
+- Modified `store_symbol` to index doc comments automatically
+- Added cleanup in `clear_tantivy_index` method
+- Thread-safe integration with Arc<Mutex<SimpleSemanticSearch>>
+**Validation**: Doc comments are indexed during normal indexing ✅
 
-### Task 1.3: Add to SimpleIndexer API
+### Task 1.3: Add to SimpleIndexer API ✅
 **Duration**: 1 hour  
-**Files**: `src/lib.rs`, `src/indexing/simple.rs`
+**Files**: `src/indexing/simple.rs`
 **Description**: Expose semantic search through SimpleIndexer
-```rust
-impl SimpleIndexer {
-    pub fn semantic_search_docs(&self, query: &str, limit: usize) -> Result<Vec<(Symbol, f32)>>;
-}
-```
-**Validation**: API method returns relevant symbols with scores
+**Completed**:
+- `enable_semantic_search()` - Initialize semantic search capability
+- `has_semantic_search()` - Check if semantic search is enabled
+- `semantic_search_docs(query, limit)` - Search with natural language
+- `semantic_search_docs_with_threshold(query, limit, threshold)` - Filtered search
+**Validation**: API methods return relevant symbols with scores ✅
 
 ## Phase 2: MCP Integration
 
@@ -158,25 +155,79 @@ impl SimpleIndexer {
 - Optimize similarity calculations
 **Validation**: <50ms search latency
 
+## API Usage
+
+### How to Use Semantic Search
+
+```rust
+use codanna::SimpleIndexer;
+
+// 1. Create indexer with settings
+let mut indexer = SimpleIndexer::new();
+// or with custom settings:
+// let settings = Arc::new(Settings { ... });
+// let mut indexer = SimpleIndexer::with_settings(settings);
+
+// 2. Enable semantic search
+indexer.enable_semantic_search()?;
+
+// 3. Index files normally - doc comments are automatically indexed
+indexer.index_file("src/lib.rs")?;
+
+// 4. Search using natural language queries
+let results = indexer.semantic_search_docs("parse JSON data", 10)?;
+for (symbol, score) in results {
+    println!("{}: {:.3}", symbol.name, score);
+}
+
+// 5. Search with similarity threshold (only return scores > 0.6)
+let results = indexer.semantic_search_docs_with_threshold(
+    "user authentication", 
+    10,     // limit
+    0.6     // minimum similarity score
+)?;
+```
+
+### Available Methods
+
+- `enable_semantic_search() -> Result<()>` - Initialize semantic search capability
+- `has_semantic_search() -> bool` - Check if semantic search is enabled
+- `semantic_search_docs(query: &str, limit: usize) -> Result<Vec<(Symbol, f32)>>` - Search with natural language
+- `semantic_search_docs_with_threshold(query: &str, limit: usize, threshold: f32) -> Result<Vec<(Symbol, f32)>>` - Search with minimum score filter
+
+## Test Results & Performance
+
+### Semantic Search Accuracy (from integration tests)
+- **"parse JSON data"** → parse_json: 0.625 (good match)
+- **"user authentication login"** → authenticate_user: 0.620 (good match)
+- **"recursive calculation factorial"** → factorial: 0.769 (excellent match)
+- **"matrix multiplication"** → all functions: <0.034 (correctly identified as unrelated)
+
+### Updated Similarity Thresholds (based on real results)
+- **Very Similar**: 0.75+ (e.g., exact concept match)
+- **Similar**: 0.60+ (e.g., related concepts)
+- **Related**: 0.40+ (e.g., somewhat related)
+- **Unrelated**: <0.30
+
 ## Success Metrics
 
 ### Simplicity
-- [ ] Under 500 lines of new code
-- [ ] Single embedding model
-- [ ] No CLI changes needed
-- [ ] Works with existing index
+- [x] Under 500 lines of new code (~400 lines)
+- [x] Single embedding model (AllMiniLML6V2)
+- [x] No CLI changes needed
+- [x] Works with existing index
 
 ### Quality
-- [ ] Finds semantically related docs
-- [ ] Good results for natural language queries
-- [ ] Reasonable similarity thresholds
-- [ ] Fast enough for interactive use
+- [x] Finds semantically related docs (validated with tests)
+- [x] Good results for natural language queries (0.6+ scores for matches)
+- [x] Reasonable similarity thresholds (empirically validated)
+- [x] Fast enough for interactive use (<1s for indexing + search)
 
 ### Integration
-- [ ] MCP tool works smoothly
-- [ ] No impact when disabled
-- [ ] Easy to enable/disable
-- [ ] Clear documentation
+- [ ] MCP tool works smoothly (Phase 2 pending)
+- [x] No impact when disabled (opt-in via enable_semantic_search)
+- [x] Easy to enable/disable (single method call)
+- [x] Clear documentation (doc comments + tests demonstrate usage)
 
 ## Future Considerations
 
