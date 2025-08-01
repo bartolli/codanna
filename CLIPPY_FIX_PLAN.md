@@ -68,6 +68,63 @@ Fix one at a time, test after each:
   - Line 187: Use `path_without_ext.strip_suffix("/mod")` ✓
   - Test: `cargo test -- indexing::resolver`
 
+## Detailed Analysis of Remaining Warnings
+
+### Investigation Workflow
+
+For each medium/high risk warning, follow this process:
+1. **Identify** - Exact issue and location
+2. **Search** - Check all usages with grep/search
+3. **Analyze** - Impact of potential changes
+4. **Determine** - Safest resolution approach
+5. **Document** - Decision rationale
+6. **Test** - Thoroughly after each fix
+
+### Warning Analysis
+
+#### 1. FromStr trait confusion (MEDIUM RISK)
+- **Location**: `src/types/mod.rs:123`
+- **Current**: `pub fn from_str(s: &str) -> Self`
+- **Issue**: Method name conflicts with `std::str::FromStr` trait
+- **Usage Found**: 
+  - `src/storage/tantivy.rs`: Used for deserializing SymbolKind from documents
+- **Resolution Options**:
+  a) Implement `std::str::FromStr` trait with `type Err = &'static str`
+  b) Rename method to `parse_from_str` or `from_string`
+- **Recommendation**: Option A - Implement trait properly for idiomatic Rust
+
+#### 2. Non-canonical PartialOrd (MEDIUM RISK)
+- **Location**: `src/vector/types.rs:213`
+- **Current**: Manual `partial_cmp` despite implementing `Ord`
+- **Issue**: Should use `Some(self.cmp(other))` when Ord exists
+- **Context**: Score type wraps f32 for vector similarity scores
+- **Risk**: Used for ordering search results by relevance
+- **Recommendation**: Fix to canonical form - low risk since Ord already handles NaN
+
+#### 3. Identical if blocks (MEDIUM RISK)
+- **Location**: `src/indexing/resolver.rs:198-201`
+- **Current**: Three conditions (`"main"`, `"lib"`, `is_empty()`) return `"crate"`
+- **Issue**: Code duplication reduces clarity
+- **Resolution**: Extract predicate or combine conditions
+- **Recommendation**: Create helper or use pattern matching
+
+#### 4. Large error variants (HIGH RISK)
+- **Location**: `src/config.rs:182, 275`
+- **Current**: `Result<Self, figment::Error>` (208+ bytes)
+- **Usage Found**:
+  - `src/main.rs`: Error handling with `.unwrap_or_else()`
+  - Tests: Multiple test cases use `.unwrap()`
+- **API Impact**: Changes function signatures
+- **Recommendation**: Box the error but requires updating all call sites
+
+#### 5. Recursive parameters (HIGH RISK - FALSE POSITIVES)
+- **Locations**: 
+  - `src/storage/graph.rs:170` - DFS path finding
+  - `src/parsing/rust.rs:579` - AST type extraction
+- **Issue**: Clippy warns about `&self` only used in recursion
+- **Analysis**: Both are legitimate recursive algorithms
+- **Recommendation**: Add `#[allow(clippy::only_used_in_recursion)]` with explanatory comments
+
 ### Phase 2: Medium Risk - Careful Review Required
 
 - [ ] **FromStr trait** - `src/types/mod.rs:123`
@@ -94,15 +151,15 @@ Fix one at a time, test after each:
   - Check: `cargo test -- config`
 
 - [ ] **Recursive parameter** - `src/storage/graph.rs:170`
-  - Analyze if false positive
-  - If needed, add: `#[allow(clippy::only_used_in_recursion)]`
-  - Add justification comment
+  - FALSE POSITIVE: DFS algorithm legitimately uses &self in recursion
+  - Add: `#[allow(clippy::only_used_in_recursion)]`
+  - Add comment: "DFS traversal requires &self for recursive calls"
   - Test: `cargo test -- storage::graph`
 
 - [ ] **Recursive parameter** - `src/parsing/rust.rs:579`
-  - Analyze if false positive
-  - If needed, add: `#[allow(clippy::only_used_in_recursion)]`
-  - Add justification comment
+  - FALSE POSITIVE: Recursive AST traversal legitimately uses &self
+  - Add: `#[allow(clippy::only_used_in_recursion)]`
+  - Add comment: "Recursive type extraction from AST nodes"
   - Test: `cargo test -- parsing::rust`
 
 ## Module-Specific Test Commands
@@ -129,9 +186,29 @@ Per `docs/development/guidelines.md`:
 - All warnings must be addressed before merging
 - Use `#[allow(...)]` only with clear justification
 
+## Current Status Summary
+
+### Progress
+- **Phase 1 (Low Risk)**: ✅ Complete (15/24 fixed)
+  - Automated fixes: 9 warnings
+  - Manual fixes: 6 warnings
+  - Committed as: "fix(clippy): complete Phase 1 low-risk warning fixes (15/24)"
+
+### Remaining Warnings (9)
+- **Medium Risk (3)**: FromStr trait, PartialOrd, identical blocks
+- **High Risk (3)**: Large errors (API change), false positive recursions (2)
+
+### Key Decisions Made
+1. **FromStr**: Should implement trait properly for idiomatic Rust
+2. **PartialOrd**: Safe to fix - Ord already handles edge cases
+3. **Identical blocks**: Refactor for clarity
+4. **Large errors**: Need boxing but impacts API
+5. **Recursive params**: Confirmed as false positives
+
 ## Notes
 
-- Total warnings: 24 (excluding the one already fixed)
-- Estimated time: 2-3 hours with thorough testing
-- Commit after each logical group of fixes
-- Keep this document updated as fixes are completed
+- Total warnings: 24
+- Fixed: 15 (Phase 1 complete)
+- Remaining: 9 (5 medium, 4 high risk)
+- Estimated time remaining: 1-2 hours with testing
+- Test failures: 2 pre-existing (unrelated to clippy fixes)
