@@ -166,6 +166,8 @@ impl DependencyGraph {
         paths
     }
 
+    /// DFS traversal requires &self for recursive calls to maintain graph context
+    #[allow(clippy::only_used_in_recursion)]
     fn dfs_paths(
         &self,
         graph: &DiGraph<SymbolId, Relationship>,

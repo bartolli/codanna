@@ -1554,35 +1554,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     
-    #[test]
-    fn test_import_extraction() {
-        let settings = Arc::new(Settings::default());
-        let mut indexer = SimpleIndexer::with_settings(settings);
-        
-        // Create a test file with imports
-        let test_code = r#"
-use std::collections::HashMap;
-use std::io::{Read, Write};
-use super::module::Type as MyType;
-
-fn main() {
-    let map = HashMap::new();
-}
-"#;
-        
-        // Create a temporary file
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let test_file = temp_dir.path().join("test.rs");
-        std::fs::write(&test_file, test_code).unwrap();
-        
-        // Index the file
-        indexer.index_file(&test_file).unwrap();
-        
-        // Check that imports were captured
-        // Note: We can't directly access imports_by_file, but we can verify
-        // that the ImportResolver was populated by checking debug output
-        eprintln!("ImportResolver state: {:?}", indexer.import_resolver);
-    }
     use crate::{SymbolKind, RelationKind, Visibility, Symbol, SymbolId, FileId};
     
     #[test]

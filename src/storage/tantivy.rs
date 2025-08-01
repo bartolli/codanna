@@ -1098,7 +1098,7 @@ impl DocumentIndex {
         let kind_str = doc.get_first(self.schema.kind)
             .and_then(|v| v.as_str())
             .ok_or(StorageError::InvalidFieldValue { field: "kind".to_string(), reason: "missing from document".to_string() })?;
-        let kind = SymbolKind::from_str(kind_str);
+        let kind = SymbolKind::from_str_with_default(kind_str);
         
         let file_id = doc.get_first(self.schema.file_id)
             .and_then(|v| v.as_u64())

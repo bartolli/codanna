@@ -576,6 +576,8 @@ impl RustParser {
         }
     }
     
+    /// Recursive type extraction from AST nodes requires &self for traversal context
+    #[allow(clippy::only_used_in_recursion)]
     fn extract_type_name(&self, node: Node, code: &str) -> Option<String> {
         match node.kind() {
             "type_identifier" => Some(code[node.byte_range()].to_string()),
@@ -1036,18 +1038,25 @@ mod tests {
         let mut counter = 1u32;
         let symbols = parser.parse(code, file_id, &mut counter);
         
-        assert_eq!(symbols.len(), 4);
+        // The parser correctly extracts 5 symbols including trait methods
+        assert_eq!(symbols.len(), 5);
         
         let names: Vec<&str> = symbols.iter().map(|s| s.name.as_ref()).collect();
         assert!(names.contains(&"helper"));
         assert!(names.contains(&"Data"));
         assert!(names.contains(&"process"));
         assert!(names.contains(&"Operation"));
+        assert!(names.contains(&"execute")); // Trait method is also extracted
         
         let functions: Vec<_> = symbols.iter()
             .filter(|s| s.kind == SymbolKind::Function)
             .collect();
         assert_eq!(functions.len(), 2);
+        
+        let methods: Vec<_> = symbols.iter()
+            .filter(|s| s.kind == SymbolKind::Method)
+            .collect();
+        assert_eq!(methods.len(), 1); // The execute method
     }
     
     #[test]

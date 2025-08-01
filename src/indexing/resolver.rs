@@ -194,12 +194,8 @@ impl ImportResolver {
         // Convert path separators to module separators
         let module_path = module_path.replace('/', "::");
         
-        // Handle special cases
-        let module_path = if module_path == "main" {
-            "crate".to_string()
-        } else if module_path == "lib" {
-            "crate".to_string()
-        } else if module_path.is_empty() {
+        // Handle special cases - main, lib, and empty paths all map to crate root
+        let module_path = if module_path == "main" || module_path == "lib" || module_path.is_empty() {
             "crate".to_string()
         } else {
             format!("crate::{}", module_path)

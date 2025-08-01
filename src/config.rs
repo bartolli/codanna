@@ -179,7 +179,7 @@ fn default_languages() -> HashMap<String, LanguageConfig> {
 
 impl Settings {
     /// Load configuration from all sources
-    pub fn load() -> Result<Self, figment::Error> {
+    pub fn load() -> Result<Self, Box<figment::Error>> {
         // Try to find the workspace root by looking for .codanna directory
         let config_path = Self::find_workspace_config()
             .unwrap_or_else(|| PathBuf::from(".codanna/settings.toml"));
@@ -203,6 +203,7 @@ impl Settings {
             )
             // Extract into Settings struct
             .extract()
+            .map_err(Box::new)
             .map(|mut settings: Settings| {
                 // If workspace_root is not set in config, detect it
                 if settings.workspace_root.is_none() {
@@ -272,12 +273,13 @@ impl Settings {
     }
     
     /// Load configuration from a specific file
-    pub fn load_from(path: impl AsRef<std::path::Path>) -> Result<Self, figment::Error> {
+    pub fn load_from(path: impl AsRef<std::path::Path>) -> Result<Self, Box<figment::Error>> {
         Figment::new()
             .merge(Serialized::defaults(Settings::default()))
             .merge(Toml::file(path))
             .merge(Env::prefixed("CI_").split("_"))
             .extract()
+            .map_err(Box::new)
     }
     
     /// Save current configuration to file

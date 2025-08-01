@@ -212,13 +212,13 @@ impl Eq for Score {}
 
 impl PartialOrd for Score {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.partial_cmp(&other.0)
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Score {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other)
+        self.0.partial_cmp(&other.0)
             .expect("Score values should never be NaN")
     }
 }

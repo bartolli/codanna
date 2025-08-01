@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolId(pub u32);
@@ -119,25 +120,34 @@ impl Range {
     }
 }
 
-impl SymbolKind {
-    pub fn from_str(s: &str) -> Self {
+impl FromStr for SymbolKind {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Function" => SymbolKind::Function,
-            "Method" => SymbolKind::Method,
-            "Struct" => SymbolKind::Struct,
-            "Enum" => SymbolKind::Enum,
-            "Trait" => SymbolKind::Trait,
-            "Interface" => SymbolKind::Interface,
-            "Class" => SymbolKind::Class,
-            "Module" => SymbolKind::Module,
-            "Variable" => SymbolKind::Variable,
-            "Constant" => SymbolKind::Constant,
-            "Field" => SymbolKind::Field,
-            "Parameter" => SymbolKind::Parameter,
-            "TypeAlias" => SymbolKind::TypeAlias,
-            "Macro" => SymbolKind::Macro,
-            _ => SymbolKind::Function, // Default fallback
+            "Function" => Ok(SymbolKind::Function),
+            "Method" => Ok(SymbolKind::Method),
+            "Struct" => Ok(SymbolKind::Struct),
+            "Enum" => Ok(SymbolKind::Enum),
+            "Trait" => Ok(SymbolKind::Trait),
+            "Interface" => Ok(SymbolKind::Interface),
+            "Class" => Ok(SymbolKind::Class),
+            "Module" => Ok(SymbolKind::Module),
+            "Variable" => Ok(SymbolKind::Variable),
+            "Constant" => Ok(SymbolKind::Constant),
+            "Field" => Ok(SymbolKind::Field),
+            "Parameter" => Ok(SymbolKind::Parameter),
+            "TypeAlias" => Ok(SymbolKind::TypeAlias),
+            "Macro" => Ok(SymbolKind::Macro),
+            _ => Err("Unknown symbol kind"),
         }
+    }
+}
+
+impl SymbolKind {
+    /// Parse from string with a default fallback for unknown values
+    pub fn from_str_with_default(s: &str) -> Self {
+        s.parse().unwrap_or(SymbolKind::Function)
     }
 }
 
