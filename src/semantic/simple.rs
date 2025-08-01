@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::path::Path;
 use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
 use crate::SymbolId;
 
@@ -16,6 +17,25 @@ pub enum SemanticSearchError {
     
     #[error("No embeddings available for search")]
     NoEmbeddings,
+    
+    #[error("Storage error: {message}\nSuggestion: {suggestion}")]
+    StorageError {
+        message: String,
+        suggestion: String,
+    },
+    
+    #[error("Dimension mismatch: expected {expected}, got {actual}\nSuggestion: {suggestion}")]
+    DimensionMismatch {
+        expected: usize,
+        actual: usize,
+        suggestion: String,
+    },
+    
+    #[error("Invalid ID: {id}\nSuggestion: {suggestion}")]
+    InvalidId {
+        id: u32,
+        suggestion: String,
+    },
 }
 
 /// Simple semantic search for documentation comments
@@ -31,6 +51,16 @@ pub struct SimpleSemanticSearch {
     
     /// Model dimensions for validation
     dimensions: usize,
+}
+
+impl std::fmt::Debug for SimpleSemanticSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SimpleSemanticSearch")
+            .field("embeddings_count", &self.embeddings.len())
+            .field("dimensions", &self.dimensions)
+            .field("model", &"<TextEmbedding>")
+            .finish()
+    }
 }
 
 impl SimpleSemanticSearch {
@@ -134,6 +164,107 @@ impl SimpleSemanticSearch {
     pub fn clear(&mut self) {
         self.embeddings.clear();
     }
+    
+    /// Save embeddings to disk using the efficient vector storage
+    /// 
+    /// # Arguments
+    /// * `path` - Path where semantic data should be stored
+    pub fn save(&self, path: &Path) -> Result<(), SemanticSearchError> {
+        use crate::semantic::{SemanticVectorStorage, SemanticMetadata};
+        use crate::vector::VectorDimension;
+        
+        // Ensure the directory exists
+        std::fs::create_dir_all(path)
+            .map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Failed to create semantic directory: {}", e),
+                suggestion: "Check directory permissions".to_string(),
+            })?;
+        
+        // Save metadata
+        let metadata = SemanticMetadata::new(
+            "AllMiniLML6V2".to_string(), // TODO: Make this configurable
+            self.dimensions,
+            self.embeddings.len()
+        );
+        metadata.save(path)?;
+        
+        // Create storage with our dimension
+        let dimension = VectorDimension::new(self.dimensions)
+            .map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Invalid dimension: {}", e),
+                suggestion: "Dimension must be between 1 and 4096".to_string(),
+            })?;
+        
+        let mut storage = SemanticVectorStorage::new(path, dimension)?;
+        
+        // Convert HashMap to Vec for batch save
+        let embeddings: Vec<(SymbolId, Vec<f32>)> = self.embeddings
+            .iter()
+            .map(|(id, embedding)| (*id, embedding.clone()))
+            .collect();
+        
+        // Save all embeddings
+        storage.save_batch(&embeddings)?;
+        
+        Ok(())
+    }
+    
+    /// Load embeddings from disk
+    /// 
+    /// # Arguments
+    /// * `path` - Path where semantic data is stored
+    pub fn load(path: &Path) -> Result<Self, SemanticSearchError> {
+        use crate::semantic::{SemanticVectorStorage, SemanticMetadata};
+        
+        // Load metadata first
+        let metadata = SemanticMetadata::load(path)?;
+        
+        // Verify model compatibility (for now we only support AllMiniLML6V2)
+        if metadata.model_name != "AllMiniLML6V2" {
+            return Err(SemanticSearchError::StorageError {
+                message: format!("Unsupported model: {}", metadata.model_name),
+                suggestion: "Only AllMiniLML6V2 is currently supported".to_string(),
+            });
+        }
+        
+        // Open existing storage
+        let mut storage = SemanticVectorStorage::open(path)?;
+        
+        // Verify dimension matches
+        if storage.dimension().get() != metadata.dimension {
+            return Err(SemanticSearchError::DimensionMismatch {
+                expected: metadata.dimension,
+                actual: storage.dimension().get(),
+                suggestion: "Metadata and storage dimension mismatch. The index may be corrupted.".to_string(),
+            });
+        }
+        
+        // Load all embeddings
+        let embeddings_vec = storage.load_all()?;
+        
+        // Verify count matches metadata
+        if embeddings_vec.len() != metadata.embedding_count {
+            eprintln!("WARNING: Expected {} embeddings but found {}", 
+                     metadata.embedding_count, embeddings_vec.len());
+        }
+        
+        // Convert to HashMap
+        let mut embeddings = HashMap::with_capacity(embeddings_vec.len());
+        for (id, embedding) in embeddings_vec {
+            embeddings.insert(id, embedding);
+        }
+        
+        // Create new instance with same model
+        let model = TextEmbedding::try_new(
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(false)
+        ).map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+        
+        Ok(Self {
+            embeddings,
+            model: Mutex::new(model),
+            dimensions: metadata.dimension,
+        })
+    }
 }
 
 /// Calculate cosine similarity between two vectors
@@ -152,6 +283,61 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    #[test]
+    fn test_save_and_load() {
+        use tempfile::TempDir;
+        
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Create and populate search instance
+        let mut search = SimpleSemanticSearch::new().unwrap();
+        
+        // Index some test data
+        search.index_doc_comment(
+            SymbolId::new(1).unwrap(),
+            "This function parses JSON data"
+        ).unwrap();
+        
+        search.index_doc_comment(
+            SymbolId::new(2).unwrap(),
+            "Authenticates a user with credentials"
+        ).unwrap();
+        
+        let original_count = search.embedding_count();
+        
+        // Save to disk
+        search.save(temp_dir.path()).unwrap();
+        
+        // Load from disk
+        let loaded = SimpleSemanticSearch::load(temp_dir.path()).unwrap();
+        
+        // Verify same number of embeddings
+        assert_eq!(loaded.embedding_count(), original_count);
+        
+        // Verify search still works
+        let results = loaded.search("parse JSON", 10).unwrap();
+        assert!(!results.is_empty());
+        
+        // The first result should be our JSON parsing function
+        assert_eq!(results[0].0, SymbolId::new(1).unwrap());
+    }
+    
+    #[test]
+    fn test_load_missing_file() {
+        use tempfile::TempDir;
+        
+        let temp_dir = TempDir::new().unwrap();
+        
+        // Try to load from non-existent path
+        let result = SimpleSemanticSearch::load(temp_dir.path());
+        
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SemanticSearchError::StorageError { .. } => {},
+            _ => panic!("Expected StorageError"),
+        }
+    }
     
     #[test]
     fn test_semantic_search_basic() {

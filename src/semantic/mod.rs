@@ -4,8 +4,12 @@
 //! designed to integrate with the existing indexing system.
 
 mod simple;
+mod storage;
+mod metadata;
 
 pub use simple::{SimpleSemanticSearch, SemanticSearchError};
+pub use storage::SemanticVectorStorage;
+pub use metadata::SemanticMetadata;
 
 // Re-export key types
 pub use fastembed::{EmbeddingModel, TextEmbedding};

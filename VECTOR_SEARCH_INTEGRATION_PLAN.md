@@ -91,23 +91,32 @@ impl SimpleSemanticSearch {
 
 ### Task 2.1: Create MCP Tool
 **Duration**: 2 hours  
-**Files**: `src/mcp/tools.rs`
-**Description**: Add semantic_search_docs tool
-```json
-{
-  "name": "semantic_search_docs",
-  "description": "Search documentation using natural language",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "query": {"type": "string", "description": "Natural language search query"},
-      "limit": {"type": "integer", "default": 10},
-      "threshold": {"type": "number", "description": "Minimum similarity score (0-1)"}
-    }
-  }
+**Files**: `src/mcp/mod.rs`
+**Description**: Add semantic_search_docs tool to CodeIntelligenceServer
+```rust
+// Add request struct
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct SemanticSearchRequest {
+    /// Natural language search query
+    pub query: String,
+    /// Maximum number of results (default: 10)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Minimum similarity score (0-1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f32>,
+}
+
+// Add tool method in impl CodeIntelligenceServer
+#[tool(description = "Search documentation using natural language semantic search")]
+pub async fn semantic_search_docs(
+    &self,
+    Parameters(SemanticSearchRequest { query, limit, threshold }): Parameters<SemanticSearchRequest>,
+) -> Result<CallToolResult, McpError> {
+    // Implementation
 }
 ```
-**Validation**: Tool appears in MCP tool list
+**Validation**: Tool appears in MCP tool list when calling `list_tools`
 
 ### Task 2.2: Implement Tool Handler
 **Duration**: 1 hour  

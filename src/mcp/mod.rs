@@ -75,6 +75,18 @@ pub struct SearchSymbolsRequest {
     pub module: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct SemanticSearchRequest {
+    /// Natural language search query
+    pub query: String,
+    /// Maximum number of results (default: 10)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Minimum similarity score (0-1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f32>,
+}
+
 fn default_depth() -> usize {
     3
 }
@@ -357,6 +369,79 @@ impl CodeIntelligenceServer {
         );
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Search documentation using natural language semantic search")]
+    pub async fn semantic_search_docs(
+        &self,
+        Parameters(SemanticSearchRequest { query, limit, threshold }): Parameters<SemanticSearchRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let indexer = self.indexer.read().await;
+        
+        if !indexer.has_semantic_search() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled."
+            )]));
+        }
+        
+        let results = match threshold {
+            Some(t) => indexer.semantic_search_docs_with_threshold(&query, limit, t),
+            None => indexer.semantic_search_docs(&query, limit),
+        };
+        
+        match results {
+            Ok(results) => {
+                if results.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        format!("No semantically similar documentation found for: {}", query)
+                    )]));
+                }
+                
+                let mut result = format!(
+                    "Found {} semantically similar result(s) for '{}':\n\n", 
+                    results.len(), 
+                    query
+                );
+                
+                for (i, (symbol, score)) in results.iter().enumerate() {
+                    let file_path = indexer.get_file_path(symbol.file_id)
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    
+                    result.push_str(&format!(
+                        "{}. {} ({:?}) - Similarity: {:.3}\n",
+                        i + 1,
+                        symbol.name,
+                        symbol.kind,
+                        score
+                    ));
+                    result.push_str(&format!("   File: {}:{}\n", file_path, symbol.range.start_line + 1));
+                    
+                    if let Some(ref doc) = symbol.doc_comment {
+                        // Show first 3 lines of doc
+                        let preview: Vec<&str> = doc.lines().take(3).collect();
+                        let doc_preview = if doc.lines().count() > 3 {
+                            format!("{}...", preview.join(" "))
+                        } else {
+                            preview.join(" ")
+                        };
+                        result.push_str(&format!("   Doc: {}\n", doc_preview));
+                    }
+                    
+                    if let Some(ref sig) = symbol.signature {
+                        result.push_str(&format!("   Signature: {}\n", sig));
+                    }
+                    
+                    result.push('\n');
+                }
+                
+                Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+            Err(e) => {
+                Ok(CallToolResult::error(vec![Content::text(
+                    format!("Semantic search failed: {}", e)
+                )]))
+            }
+        }
     }
 
     #[tool(description = "Search for symbols using full-text search with fuzzy matching")]

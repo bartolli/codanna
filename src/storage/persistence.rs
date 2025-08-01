@@ -20,6 +20,17 @@ impl IndexPersistence {
         Self { base_path }
     }
     
+    /// Get path for semantic search data
+    fn semantic_path(&self) -> PathBuf {
+        self.base_path.join("semantic")
+    }
+    
+    /// Check if semantic data exists
+    fn has_semantic_data(&self) -> bool {
+        // Check if metadata exists - that's the definitive indicator
+        self.semantic_path().join("metadata.json").exists()
+    }
+    
     /// Save metadata for the index
     #[must_use = "Save errors should be handled to ensure data is persisted"]
     pub fn save(&self, indexer: &SimpleIndexer) -> IndexResult<()> {
@@ -41,6 +52,21 @@ impl IndexPersistence {
         };
         
         metadata.save(&self.base_path)?;
+        
+        // NEW: Save semantic search if enabled
+        if indexer.has_semantic_search() {
+            let semantic_path = self.semantic_path();
+            std::fs::create_dir_all(&semantic_path)
+                .map_err(|e| IndexError::General(
+                    format!("Failed to create semantic directory: {}", e)
+                ))?;
+            
+            indexer.save_semantic_search(&semantic_path)
+                .map_err(|e| IndexError::General(
+                    format!("Failed to save semantic search: {}", e)
+                ))?;
+        }
+        
         Ok(())
     }
     
@@ -60,7 +86,7 @@ impl IndexPersistence {
         let tantivy_path = self.base_path.join("tantivy");
         if tantivy_path.join("meta.json").exists() {
             // Create indexer that will load from Tantivy
-            let indexer = SimpleIndexer::with_settings(settings);
+            let mut indexer = SimpleIndexer::with_settings(settings);
             
             // Display source info with fresh counts
             if let Some(meta) = metadata {
@@ -78,6 +104,23 @@ impl IndexPersistence {
                     }
                 }
                 eprintln!("Index contains {} symbols from {} files", fresh_symbol_count, fresh_file_count);
+            }
+            
+            // NEW: Load semantic search if it exists
+            if self.has_semantic_data() {
+                let semantic_path = self.semantic_path();
+                match indexer.load_semantic_search(&semantic_path) {
+                    Ok(true) => {
+                        // Successfully loaded (message already printed by load_semantic_search)
+                    }
+                    Ok(false) => {
+                        // No semantic data found (shouldn't happen if has_semantic_data() was true)
+                    }
+                    Err(e) => {
+                        // Log error but continue - semantic search is optional
+                        eprintln!("Warning: Failed to load semantic search: {}", e);
+                    }
+                }
             }
             
             Ok(indexer)
@@ -145,5 +188,25 @@ mod tests {
         
         // Now it exists
         assert!(persistence.exists());
+    }
+    
+    #[test]
+    fn test_semantic_paths() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = IndexPersistence::new(temp_dir.path().to_path_buf());
+        
+        // Test semantic_path
+        let semantic_path = persistence.semantic_path();
+        assert_eq!(semantic_path, temp_dir.path().join("semantic"));
+        
+        // Initially has no semantic data
+        assert!(!persistence.has_semantic_data());
+        
+        // Create semantic directory and metadata file
+        std::fs::create_dir_all(&semantic_path).unwrap();
+        std::fs::write(semantic_path.join("metadata.json"), "{}").unwrap();
+        
+        // Now has semantic data
+        assert!(persistence.has_semantic_data());
     }
 }

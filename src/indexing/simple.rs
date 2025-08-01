@@ -169,6 +169,43 @@ impl SimpleIndexer {
         self.semantic_search.is_some()
     }
     
+    /// Save semantic search data to the given path
+    pub fn save_semantic_search(&self, path: &Path) -> Result<(), crate::semantic::SemanticSearchError> {
+        if let Some(semantic) = &self.semantic_search {
+            semantic.lock().unwrap().save(path)
+        } else {
+            Ok(())
+        }
+    }
+    
+    /// Load and attach semantic search from the given path
+    /// 
+    /// This is used during index loading to restore semantic search state.
+    /// Returns Ok(true) if loaded successfully, Ok(false) if no data exists.
+    pub fn load_semantic_search(&mut self, path: &Path) -> IndexResult<bool> {
+        use crate::semantic::{SimpleSemanticSearch, SemanticMetadata};
+        
+        // Check if semantic data exists
+        if !SemanticMetadata::exists(path) {
+            return Ok(false);
+        }
+        
+        // Try to load semantic search
+        match SimpleSemanticSearch::load(path) {
+            Ok(semantic) => {
+                let count = semantic.embedding_count();
+                self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+                eprintln!("Loaded semantic search with {} embeddings", count);
+                Ok(true)
+            }
+            Err(e) => {
+                // Don't fail the entire load, just warn
+                eprintln!("Warning: Could not load semantic search: {}", e);
+                Ok(false)
+            }
+        }
+    }
+    
     /// Start a batch operation for Tantivy indexing
     pub fn start_tantivy_batch(&self) -> IndexResult<()> {
         self.document_index.start_batch()
