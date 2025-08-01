@@ -1124,6 +1124,24 @@ impl SimpleIndexer {
         };
         
         let total_files = files.len();
+        
+        // Handle dry-run mode
+        if dry_run {
+            println!("Would index {} files:", total_files);
+            for (i, file_path) in files.iter().enumerate() {
+                if i < 5 {
+                    println!("  {}", file_path.display());
+                } else if i == 5 && total_files > 5 {
+                    println!("  ... and {} more files", total_files - 5);
+                    break;
+                }
+            }
+            
+            let mut stats = IndexStats::new();
+            stats.files_indexed = total_files;
+            return Ok(stats);
+        }
+        
         let mut stats = IndexStats::new();
         
         // Process files one at a time with individual batches
@@ -1132,10 +1150,7 @@ impl SimpleIndexer {
         for file_path in files {
             // Track files as they are processed
             
-            if dry_run {
-                // In dry-run mode, just count the files that would be indexed
-                stats.files_indexed += 1;
-            } else {
+            {
                 // Start a new batch for this file
                 self.start_tantivy_batch()?;
                 
