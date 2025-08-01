@@ -52,6 +52,22 @@ Commands:
   help      Print this message or the help of the given subcommand(s)
 ```
 
+## Semantic Search Configuration
+
+To enable semantic search features (natural language search), add this to your `.codanna/settings.toml`:
+
+```toml
+[semantic_search]
+enabled = true
+model = "AllMiniLML6V2"  # Currently the only supported model
+threshold = 0.6          # Default similarity threshold (0.0-1.0)
+```
+
+**Note:** After enabling semantic search, you must re-index your codebase:
+```bash
+codanna index . --force --progress
+```
+
 ## Detailed Command Reference
 
 ### `init` - Initialize Configuration
@@ -366,7 +382,8 @@ codanna mcp <TOOL> [OPTIONS]
 - `analyze_impact` - Analyze impact of changing a symbol
 - `get_index_info` - Get information about the index
 - `search_symbols` - Search for symbols using full-text search with fuzzy matching (same as `retrieve search`)
-- `semantic_search_docs` - Search documentation using natural language semantic search
+- `semantic_search_docs` - Search documentation using natural language semantic search (requires semantic search enabled)
+- `semantic_search_with_context` - Enhanced semantic search with full context (dependencies, callers, impact) - the "powerhorse" tool (requires semantic search enabled)
 
 **Examples:**
 ```bash
@@ -390,6 +407,7 @@ codanna mcp semantic_search_docs --args '{"query": "parse configuration", "limit
 ./target/release/codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 ./target/release/codanna mcp search_symbols --args '{"query": "tantivy", "limit": 10}'
 ./target/release/codanna mcp semantic_search_docs --args '{"query": "parse JSON", "limit": 5, "threshold": 0.6}'
+./target/release/codanna mcp semantic_search_with_context --args '{"query": "error handling", "limit": 3}'
 ```
 
 ## Configuration File
@@ -422,11 +440,11 @@ type = "sqlite"
 path = ".codanna/index"
 
 [semantic_search]
-# Enable semantic search for documentation
+# Enable semantic search for natural language queries
 enabled = false
-# Model to use for embeddings
+# Model to use for embeddings (currently only AllMiniLML6V2 supported)
 model = "AllMiniLML6V2"
-# Similarity threshold (0.0-1.0)
+# Default similarity threshold (0.0-1.0, higher = more strict)
 threshold = 0.6
 ```
 
@@ -506,6 +524,10 @@ For testing during development, use the target binary:
    ./target/release/codanna mcp find_symbol --args '{"name": "main"}'
    ./target/release/codanna mcp get_calls --args '{"function_name": "main"}'
    ./target/release/codanna mcp search_symbols --args '{"query": "index", "limit": 5}'
+   
+   # Test semantic search (if enabled)
+   ./target/release/codanna mcp semantic_search_docs --args '{"query": "parse files", "limit": 5}'
+   ./target/release/codanna mcp semantic_search_with_context --args '{"query": "indexing logic"}'
    ```
 
 ## Common Usage Patterns
@@ -538,8 +560,9 @@ codanna index src --force --progress
 
 ### MCP Integration Examples
 
+#### Basic Symbol Operations
 ```bash
-# Basic symbol lookup
+# Find specific symbols
 codanna mcp find_symbol --args '{"name": "SimpleIndexer"}'
 
 # Trace function calls
@@ -551,10 +574,17 @@ codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 
 # Get index statistics
 codanna mcp get_index_info
+```
 
-# Search with filters
+#### Text Search with Filters
+```bash
+# Basic search
 codanna mcp search_symbols --args '{"query": "parse", "limit": 20}'
+
+# Filter by symbol type
 codanna mcp search_symbols --args '{"query": "test", "kind": "function", "limit": 10}'
+
+# Filter by module
 codanna mcp search_symbols --args '{"query": "new", "module": "crate::types", "limit": 5}'
 
 # Multi-line JSON for complex queries
@@ -564,6 +594,81 @@ codanna mcp search_symbols --args '{
   "module": "crate::mcp",
   "limit": 15
 }'
+```
+
+#### Semantic Search Operations
+```bash
+# Natural language search
+codanna mcp semantic_search_docs --args '{
+  "query": "how to parse JSON data",
+  "limit": 5
+}'
+
+# Search with similarity threshold
+codanna mcp semantic_search_docs --args '{
+  "query": "handle authentication",
+  "limit": 10,
+  "threshold": 0.7
+}'
+
+# Comprehensive context search
+codanna mcp semantic_search_with_context --args '{
+  "query": "error handling and recovery",
+  "limit": 3
+}'
+
+# Find specific functionality with full context
+codanna mcp semantic_search_with_context --args '{
+  "query": "database connection pooling",
+  "limit": 2,
+  "threshold": 0.6
+}'
+```
+
+### Semantic Search Examples
+
+#### Natural Language Documentation Search
+```bash
+# Find code related to parsing configuration
+codanna mcp semantic_search_docs --args '{"query": "parse configuration files", "limit": 5}'
+
+# Search with higher precision
+codanna mcp semantic_search_docs --args '{"query": "database connection handling", "threshold": 0.7}'
+```
+
+#### Comprehensive Context Search (The "Powerhorse" Tool)
+```bash
+# Get full context in a single query
+codanna mcp semantic_search_with_context --args '{"query": "authentication logic", "limit": 2}'
+
+# This single command provides:
+# - Symbol location and documentation
+# - All functions it calls (dependencies)
+# - All functions that call it (callers)
+# - Impact analysis of changes
+```
+
+#### Comparing Traditional vs Context-Aware Search
+
+**Traditional approach (multiple calls):**
+```bash
+# Step 1: Find the symbol
+codanna mcp find_symbol --args '{"name": "parse_config"}'
+
+# Step 2: Get dependencies
+codanna mcp get_calls --args '{"function_name": "parse_config"}'
+
+# Step 3: Get callers
+codanna mcp find_callers --args '{"function_name": "parse_config"}'
+
+# Step 4: Analyze impact
+codanna mcp analyze_impact --args '{"symbol_name": "parse_config"}'
+```
+
+**New approach (single context-aware call):**
+```bash
+# Get everything at once!
+codanna mcp semantic_search_with_context --args '{"query": "configuration parsing", "limit": 1}'
 ```
 
 ## Testing Scenarios
@@ -641,6 +746,14 @@ codanna index src/main.rs --progress
 - Incremental indexing automatically skips unchanged files (100x faster)
 - Only modified files are re-parsed based on SHA256 content hashes
 - Use the global `-c` flag to test different configurations without modifying defaults
+
+### Semantic Search Performance
+
+- Initial indexing with semantic search is slower (~2-3x) due to embedding generation
+- Embeddings add ~1.5KB per symbol to storage requirements
+- Semantic search queries have <10ms latency after initial indexing
+- Re-indexing only regenerates embeddings for changed files
+- The `semantic_search_with_context` tool is optimized to batch operations
 
 ## Troubleshooting
 

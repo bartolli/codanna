@@ -3,6 +3,10 @@
     "Context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "codanna": {
+      "command": "/Users/bartolli/Projects/codebase-intelligence/target/release/codanna",
+      "args": ["serve"]
     }
   }
 }

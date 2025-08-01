@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a high-performance code intelligence system written in Rust, designed to provide AI assistants with deep understanding of codebases. Currently in the architecture/planning phase with a comprehensive technical specification in the README file.
+This is a high-performance code intelligence system written in Rust, designed to provide AI assistants with deep understanding of codebases. The system features production-ready semantic search capabilities, comprehensive relationship tracking, and an MCP server for seamless AI integration.
 
 ## Development Commands
 
@@ -30,16 +30,22 @@ For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 
 ```bash
 # Index entire directory with progress
-./target/debug/codanna index src --progress
+./target/release/codanna index src --progress
 
 # Find a symbol by name
-./target/debug/codanna retrieve symbol SimpleIndexer
+./target/release/codanna retrieve symbol SimpleIndexer
 
 # Show function dependencies
-./target/debug/codanna retrieve dependencies parse_function
+./target/release/codanna retrieve dependencies parse_function
+
+# Natural language search
+./target/release/codanna mcp semantic_search_docs --args '{"query": "parse JSON data", "limit": 5}'
+
+# Comprehensive context search (dependencies + callers + impact)
+./target/release/codanna mcp semantic_search_with_context --args '{"query": "authentication", "limit": 3}'
 
 # Start MCP server
-./target/debug/codanna serve
+./target/release/codanna serve
 ```
 
 ## Architecture Overview
@@ -97,35 +103,63 @@ For comprehensive CLI documentation, see [CLI.md](./CLI.md).
 
 ## Current Capabilities
 
-The system can:
+The system provides:
 
 **Core Indexing & Search:**
 - Index both single files and entire directory trees at 10,000+ files/second
 - Extract symbols (functions, methods, structs, traits) from Rust code
 - Detect and track relationships between symbols (calls, implements, uses, defines)
+- Full-text search with fuzzy matching support
 - Persist and load indexes from disk
 - Provide comprehensive querying capabilities via CLI
 - Serve as an MCP server for AI assistant integration
 - Report progress and performance metrics during indexing
 
-**Vector Search (POC Complete, Ready for Production):**
-- Generate 384-dimensional embeddings using fastembed (AllMiniLML6V2 model)
-- Cluster vectors using K-means with linfa for IVFFlat indexing
-- Store vectors in memory-mapped files achieving 0.71 μs/vector access
-- Perform hybrid text + vector search with <10ms latency
-- Combine scores using Reciprocal Rank Fusion (RRF) with k=60
-- Filter searches to specific clusters, reducing comparisons by 99.8%
-- Detect symbol-level changes for incremental vector updates
-- Handle concurrent file updates with atomic transactions and rollback
+**Semantic Search (Production Ready):**
+- **Natural Language Search**: Query code using descriptive language instead of exact names
+- **Semantic Embeddings**: 384-dimensional vectors using AllMiniLML6V2 model
+- **Smart Storage**: Memory-mapped files with <1μs access time
+- **Embedding Lifecycle**: Automatic cleanup during re-indexing prevents accumulation
+- **MCP Integration**: Three semantic search tools available:
+  - `semantic_search_docs`: Basic natural language search
+  - `semantic_search_with_context`: Comprehensive single-query analysis (the "powerhorse" tool)
+  - `search_symbols`: Full-text fuzzy search
+- **Configuration**: Simple enable/disable via settings.toml
+- **Performance**: <10ms search latency, 1.5KB per symbol overhead
+
+**MCP Tools Available:**
+1. **find_symbol** - Find symbols by exact name
+2. **get_calls** - Show what a function calls
+3. **find_callers** - Show what calls a function
+4. **analyze_impact** - Analyze change impact radius
+5. **get_index_info** - Get index statistics
+6. **search_symbols** - Full-text fuzzy search
+7. **semantic_search_docs** - Natural language documentation search
+8. **semantic_search_with_context** - Enhanced search with full context (dependencies, callers, impact)
 
 **Performance Achievements:**
-- Vector indexing: 1.4M vectors/second (single-threaded)
-- Clustering: 100ms for 10,000 384-dim vectors
-- Memory usage: 1536 bytes per embedding (384 dims × 4 bytes)
-- Incremental updates: <100ms per file with symbol-level granularity
-- Zero serialization overhead for cluster centroids with bincode v2
+- Core indexing: 10,000+ files/second maintained
+- Semantic indexing: ~50-100ms per documented symbol
+- Search latency: <10ms for both text and semantic search
+- Memory usage: ~100MB for 1M symbols + 1.5KB per embedding
+- Embedding cleanup: Zero accumulation during re-indexing
+- Storage efficiency: Memory-mapped files with instant loading
 
-The vector search POC has been validated with 10 comprehensive tests (16 sub-tests) and is architecturally ready for production migration with minor refinements.
+## Configuration
+
+To enable semantic search, add to `.codanna/settings.toml`:
+
+```toml
+[semantic_search]
+enabled = true
+model = "AllMiniLML6V2"
+threshold = 0.6  # Optional: default similarity threshold
+```
+
+After enabling, re-index your codebase:
+```bash
+cargo run -- index . --force
+```
 
 ## Development Guidelines
 
