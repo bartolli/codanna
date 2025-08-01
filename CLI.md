@@ -366,6 +366,7 @@ codanna mcp <TOOL> [OPTIONS]
 - `analyze_impact` - Analyze impact of changing a symbol
 - `get_index_info` - Get information about the index
 - `search_symbols` - Search for symbols using full-text search with fuzzy matching (same as `retrieve search`)
+- `semantic_search_docs` - Search documentation using natural language semantic search
 
 **Examples:**
 ```bash
@@ -377,6 +378,7 @@ codanna mcp get_index_info
 # With parameters
 codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 codanna mcp search_symbols --args '{"query": "parse", "limit": 5}'
+codanna mcp semantic_search_docs --args '{"query": "parse configuration", "limit": 10}'
 ```
 
 **Local Development:**
@@ -387,6 +389,7 @@ codanna mcp search_symbols --args '{"query": "parse", "limit": 5}'
 ./target/release/codanna mcp find_callers --args '{"function_name": "parse_file"}'
 ./target/release/codanna mcp analyze_impact --args '{"symbol_name": "Symbol", "max_depth": 3}'
 ./target/release/codanna mcp search_symbols --args '{"query": "tantivy", "limit": 10}'
+./target/release/codanna mcp semantic_search_docs --args '{"query": "parse JSON", "limit": 5, "threshold": 0.6}'
 ```
 
 ## Configuration File
@@ -417,6 +420,14 @@ port = 7777
 [index]
 type = "sqlite"
 path = ".codanna/index"
+
+[semantic_search]
+# Enable semantic search for documentation
+enabled = false
+# Model to use for embeddings
+model = "AllMiniLML6V2"
+# Similarity threshold (0.0-1.0)
+threshold = 0.6
 ```
 
 ## Typical Workflow

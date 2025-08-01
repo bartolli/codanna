@@ -321,6 +321,17 @@ async fn main() {
         }
     };
     
+    // Enable semantic search if configured
+    if config.semantic_search.enabled && !indexer.has_semantic_search() {
+        if let Err(e) = indexer.enable_semantic_search() {
+            eprintln!("Warning: Failed to enable semantic search: {}", e);
+        } else {
+            eprintln!("Semantic search enabled (model: {}, threshold: {})", 
+                     config.semantic_search.model, 
+                     config.semantic_search.threshold);
+        }
+    }
+    
     match cli.command {
         Commands::Init { .. } | Commands::Config => {
             // Already handled above
@@ -896,9 +907,31 @@ async fn main() {
                         module,
                     })).await
                 }
+                "semantic_search_docs" => {
+                    let query = arguments.as_ref()
+                        .and_then(|m| m.get("query"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: semantic_search_docs requires 'query' parameter");
+                            std::process::exit(1);
+                        });
+                    let limit = arguments.as_ref()
+                        .and_then(|m| m.get("limit"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(10) as usize;
+                    let threshold = arguments.as_ref()
+                        .and_then(|m| m.get("threshold"))
+                        .and_then(|v| v.as_f64())
+                        .map(|v| v as f32);
+                    server.semantic_search_docs(Parameters(SemanticSearchRequest {
+                        query: query.to_string(),
+                        limit,
+                        threshold,
+                    })).await
+                }
                 _ => {
                     eprintln!("Unknown tool: {}", tool);
-                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols");
+                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs");
                     std::process::exit(1);
                 }
             };

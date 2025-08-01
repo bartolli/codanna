@@ -169,6 +169,17 @@ impl SimpleIndexer {
         self.semantic_search.is_some()
     }
     
+    /// Get the number of embeddings in semantic search
+    pub fn semantic_search_embedding_count(&self) -> IndexResult<usize> {
+        if let Some(semantic) = &self.semantic_search {
+            Ok(semantic.lock().unwrap().embedding_count())
+        } else {
+            Err(IndexError::General(
+                "Semantic search is not enabled".to_string()
+            ))
+        }
+    }
+    
     /// Save semantic search data to the given path
     pub fn save_semantic_search(&self, path: &Path) -> Result<(), crate::semantic::SemanticSearchError> {
         if let Some(semantic) = &self.semantic_search {
@@ -313,12 +324,28 @@ impl SimpleIndexer {
             }
             
             // File has changed or force re-indexing
+            // First, collect symbols that will be removed (for semantic search cleanup)
+            let symbols_to_remove = if self.has_semantic_search() {
+                self.document_index.find_symbols_by_file(file_id)
+                    .ok()
+                    .map(|symbols| symbols.into_iter().map(|s| s.id).collect::<Vec<_>>())
+            } else {
+                None
+            };
+            
             // Use remove_file_documents to remove ALL documents for this file path
             self.document_index.remove_file_documents(path_str)
                 .map_err(|e| IndexError::TantivyError {
                     operation: "remove_file_documents".to_string(),
                     cause: e.to_string(),
                 })?;
+            
+            // Remove embeddings for the old symbols if semantic search is enabled
+            if let Some(symbol_ids) = symbols_to_remove {
+                if let Some(semantic) = &self.semantic_search {
+                    semantic.lock().unwrap().remove_embeddings(&symbol_ids);
+                }
+            }
         }
         
         // Register or update file

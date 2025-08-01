@@ -44,6 +44,10 @@ pub struct Settings {
     /// MCP server settings
     #[serde(default)]
     pub mcp: McpConfig,
+    
+    /// Semantic search settings
+    #[serde(default)]
+    pub semantic_search: SemanticSearchConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -101,6 +105,21 @@ pub struct McpConfig {
     pub debug: bool,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SemanticSearchConfig {
+    /// Enable semantic search
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    
+    /// Model to use for embeddings
+    #[serde(default = "default_embedding_model")]
+    pub model: String,
+    
+    /// Similarity threshold for search results
+    #[serde(default = "default_similarity_threshold")]
+    pub threshold: f32,
+}
+
 // Default value functions
 fn default_version() -> u32 { 1 }
 fn default_index_path() -> PathBuf { PathBuf::from(".codanna/index") }
@@ -109,6 +128,8 @@ fn default_true() -> bool { true }
 fn default_false() -> bool { false }
 fn default_mcp_port() -> u16 { 7777 }
 fn default_max_context_size() -> usize { 100_000 }
+fn default_embedding_model() -> String { "AllMiniLML6V2".to_string() }
+fn default_similarity_threshold() -> f32 { 0.6 }
 
 impl Default for Settings {
     fn default() -> Self {
@@ -119,6 +140,7 @@ impl Default for Settings {
             indexing: IndexingConfig::default(),
             languages: default_languages(),
             mcp: McpConfig::default(),
+            semantic_search: SemanticSearchConfig::default(),
         }
     }
 }
@@ -146,6 +168,16 @@ impl Default for McpConfig {
             port: default_mcp_port(),
             max_context_size: default_max_context_size(),
             debug: false,
+        }
+    }
+}
+
+impl Default for SemanticSearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            model: default_embedding_model(),
+            threshold: default_similarity_threshold(),
         }
     }
 }

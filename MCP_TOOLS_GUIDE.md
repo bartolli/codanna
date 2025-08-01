@@ -1,4 +1,4 @@
-# Gemini Code Intelligence MCP Tools Guide
+# MCP Tools Guide
 
 This guide outlines how to effectively use the Code Intelligence MCP (Model Context Protocol) tools with Gemini to understand, navigate, and analyze a codebase. These tools provide a powerful way to query the code index and build a comprehensive understanding of the software's structure and relationships.
 

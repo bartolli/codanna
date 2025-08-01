@@ -43,3 +43,6 @@ extensions = [
 port = 7777
 max_context_size = 100000
 debug = false
+
+[semantic_search]
+enabled = true

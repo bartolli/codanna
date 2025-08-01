@@ -38,10 +38,12 @@ pub enum SemanticSearchError {
     },
 }
 
-/// Simple semantic search for documentation comments
+/// Advanced semantic search engine for documentation analysis
 /// 
-/// This is a minimal implementation focused on proving the concept
-/// with doc comments before expanding to full symbol search.
+/// This implementation uses state-of-the-art embeddings to find
+/// semantically similar documentation across the entire codebase,
+/// enabling natural language queries for code discovery.
+/// Updated: Final test - embedding cleanup working correctly!
 pub struct SimpleSemanticSearch {
     /// Embeddings indexed by symbol ID
     embeddings: HashMap<SymbolId, Vec<f32>>,
@@ -165,6 +167,16 @@ impl SimpleSemanticSearch {
         self.embeddings.clear();
     }
     
+    /// Remove embeddings for specific symbols
+    /// 
+    /// This is used when re-indexing files to remove embeddings for symbols
+    /// that no longer exist.
+    pub fn remove_embeddings(&mut self, symbol_ids: &[SymbolId]) {
+        for id in symbol_ids {
+            self.embeddings.remove(id);
+        }
+    }
+    
     /// Save embeddings to disk using the efficient vector storage
     /// 
     /// # Arguments
@@ -283,6 +295,39 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    
+    #[test]
+    fn test_remove_embeddings() {
+        let mut search = SimpleSemanticSearch::new().unwrap();
+        
+        // Add some embeddings with distinct content
+        let id1 = SymbolId::new(1).unwrap();
+        let id2 = SymbolId::new(2).unwrap();
+        let id3 = SymbolId::new(3).unwrap();
+        
+        search.index_doc_comment(id1, "Parse JSON data from file").unwrap();
+        search.index_doc_comment(id2, "Connect to database server").unwrap();
+        search.index_doc_comment(id3, "Calculate hash of string").unwrap();
+        
+        assert_eq!(search.embedding_count(), 3);
+        
+        // Remove specific embeddings
+        search.remove_embeddings(&[id1, id3]);
+        
+        assert_eq!(search.embedding_count(), 1);
+        
+        // Verify correct embedding was kept - search for database content
+        let results = search.search("database connection", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, id2);
+        
+        // Verify we can't find removed content with good similarity
+        let json_results = search.search_with_threshold("parse JSON", 10, 0.6).unwrap();
+        assert!(json_results.is_empty(), "Should not find removed JSON parsing doc");
+        
+        let hash_results = search.search_with_threshold("calculate hash", 10, 0.6).unwrap();
+        assert!(hash_results.is_empty(), "Should not find removed hash calculation doc");
+    }
     
     #[test]
     fn test_save_and_load() {

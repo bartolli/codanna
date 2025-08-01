@@ -24,6 +24,16 @@ impl SemanticVectorStorage {
     /// * `path` - Base path for storage files
     /// * `dimension` - Dimension of embeddings (must match model output)
     pub fn new(path: &Path, dimension: VectorDimension) -> Result<Self, SemanticSearchError> {
+        // First, remove any existing storage file to ensure clean state
+        let storage_path = path.join("segment_0.vec");
+        if storage_path.exists() {
+            std::fs::remove_file(&storage_path)
+                .map_err(|e| SemanticSearchError::StorageError {
+                    message: format!("Failed to remove old storage: {}", e),
+                    suggestion: "Check file permissions".to_string(),
+                })?;
+        }
+        
         // Use segment 0 for semantic embeddings
         let storage = MmapVectorStorage::new(path, SegmentOrdinal::new(0), dimension)
             .map_err(|e| SemanticSearchError::StorageError {
