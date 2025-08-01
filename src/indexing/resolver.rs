@@ -36,6 +36,12 @@ pub struct ImportResolver {
     path_to_file_id: HashMap<PathBuf, FileId>,
 }
 
+impl Default for ImportResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ImportResolver {
     pub fn new() -> Self {
         Self {
@@ -57,7 +63,7 @@ impl ImportResolver {
     pub fn add_import(&mut self, import: Import) {
         self.imports_by_file
             .entry(import.file_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(import);
     }
     
@@ -175,16 +181,12 @@ impl ImportResolver {
         
         // Remove the file extension
         let path_str = path_without_src.to_str()?;
-        let path_without_ext = if path_str.ends_with(".rs") {
-            &path_str[..path_str.len() - 3]
-        } else {
-            path_str
-        };
+        let path_without_ext = path_str.strip_suffix(".rs").unwrap_or(path_str);
         
         // Handle special cases for mod.rs files BEFORE converting separators
-        let module_path = if path_without_ext.ends_with("/mod") {
+        let module_path = if let Some(stripped) = path_without_ext.strip_suffix("/mod") {
             // foo/mod.rs -> foo
-            path_without_ext[..path_without_ext.len() - 4].to_string()
+            stripped.to_string()
         } else {
             path_without_ext.to_string()
         };

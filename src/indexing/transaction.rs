@@ -57,6 +57,12 @@ pub struct FileTransaction {
     completed: bool,
 }
 
+impl Default for FileTransaction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileTransaction {
     /// Create a new file transaction
     pub fn new() -> Self {

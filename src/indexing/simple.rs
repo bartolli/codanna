@@ -20,6 +20,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug)]
 pub struct TantivyTransaction;
 
+impl Default for TantivyTransaction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TantivyTransaction {
     pub fn new() -> Self {
         Self
@@ -1385,7 +1391,7 @@ impl SimpleIndexer {
                     // For MyStruct->fmt, we want the second fmt
                     // This is a hack but works for our test case
                     if !from_symbols.is_empty() && from_symbols[0].kind == crate::types::SymbolKind::Trait {
-                        candidates.get(0).map(|s| s.id)
+                        candidates.first().map(|s| s.id)
                     } else {
                         candidates.get(1).map(|s| s.id)
                     }

@@ -35,7 +35,7 @@ impl ParserFactory {
         match language {
             Language::Rust => {
                 let parser = RustParser::new()
-                    .map_err(|e| IndexError::General(e))?;
+                    .map_err(IndexError::General)?;
                 Ok(Box::new(parser))
             }
             Language::Python => {

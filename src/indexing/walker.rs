@@ -65,7 +65,7 @@ impl FileWalker {
         // Build and filter the walker
         builder.build()
             .filter_map(Result::ok) // Skip files we can't access
-            .filter(|entry| entry.file_type().map_or(false, |ft| ft.is_file()))
+            .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
             .filter_map(move |entry| {
                 let path = entry.path();
                 

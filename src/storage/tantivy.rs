@@ -680,7 +680,7 @@ impl DocumentIndex {
                     // Copy all fields except cluster_id and has_vector
                     for (field, value) in old_doc.field_values() {
                         if field != self.schema.cluster_id && field != self.schema.has_vector {
-                            new_doc.add_field_value(field, value.clone());
+                            new_doc.add_field_value(field, value);
                         }
                     }
                     
@@ -751,7 +751,7 @@ impl DocumentIndex {
         
         // Add string fields for filtering
         doc.add_text(self.schema.module_path, module_path);
-        doc.add_text(self.schema.kind, &format!("{:?}", kind));
+        doc.add_text(self.schema.kind, format!("{:?}", kind));
         
         // Add default vector fields - these will be updated later if vectors are generated
         if self.has_vector_support() {
@@ -1444,7 +1444,7 @@ impl DocumentIndex {
         doc.add_text(self.schema.doc_type, "relationship");
         doc.add_u64(self.schema.from_symbol_id, from.value() as u64);
         doc.add_u64(self.schema.to_symbol_id, to.value() as u64);
-        doc.add_text(self.schema.relation_kind, &format!("{:?}", rel.kind));
+        doc.add_text(self.schema.relation_kind, format!("{:?}", rel.kind));
         doc.add_f64(self.schema.relation_weight, rel.weight as f64);
         
         if let Some(ref metadata) = rel.metadata {

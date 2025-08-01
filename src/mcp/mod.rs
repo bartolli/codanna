@@ -391,7 +391,7 @@ impl CodeIntelligenceServer {
                 let mut result = format!("Found {} result(s) for query '{}':\n\n", results.len(), query);
                 
                 for (i, search_result) in results.iter().enumerate() {
-                    result.push_str(&format!("{}. {} ({})\n", i + 1, search_result.name, format!("{:?}", search_result.kind)));
+                    result.push_str(&format!("{}. {} ({:?})\n", i + 1, search_result.name, search_result.kind));
                     result.push_str(&format!("   File: {}:{}\n", search_result.file_path, search_result.line));
                     
                     if !search_result.module_path.is_empty() {

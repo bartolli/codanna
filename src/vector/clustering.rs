@@ -199,7 +199,7 @@ fn update_centroids(
     }
     
     // Compute means and normalize
-    for (_cluster_idx, (centroid, &size)) in new_centroids.iter_mut().zip(cluster_sizes.iter()).enumerate() {
+    for (centroid, &size) in new_centroids.iter_mut().zip(cluster_sizes.iter()) {
         if size == 0 {
             // Empty cluster: reinitialize to a random vector
             let random_idx = rand::rng().random_range(0..vectors.len());

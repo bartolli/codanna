@@ -25,6 +25,7 @@ pub struct Relationship {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RelationshipMetadata {
     pub line: Option<u32>,
     pub column: Option<u16>,
@@ -104,15 +105,6 @@ impl RelationKind {
     }
 }
 
-impl Default for RelationshipMetadata {
-    fn default() -> Self {
-        Self {
-            line: None,
-            column: None,
-            context: None,
-        }
-    }
-}
 
 impl RelationshipMetadata {
     pub fn new() -> Self {

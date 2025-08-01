@@ -30,7 +30,7 @@ impl IndexPersistence {
         
         metadata.update_counts(
             indexer.symbol_count() as u32,
-            indexer.file_count() as u32,
+            indexer.file_count(),
         );
         
         // Update metadata to reflect Tantivy
