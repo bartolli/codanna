@@ -8,6 +8,7 @@ pub mod config;
 pub mod mcp;
 pub mod error;
 pub mod vector;
+pub mod semantic;
 
 // Explicit exports for better API clarity
 pub use types::{SymbolId, FileId, Range, SymbolKind, IndexingResult, CompactString, compact_string};
