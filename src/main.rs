@@ -929,9 +929,31 @@ async fn main() {
                         threshold,
                     })).await
                 }
+                "semantic_search_with_context" => {
+                    let query = arguments.as_ref()
+                        .and_then(|m| m.get("query"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: semantic_search_with_context requires 'query' parameter");
+                            std::process::exit(1);
+                        });
+                    let limit = arguments.as_ref()
+                        .and_then(|m| m.get("limit"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(5) as usize;
+                    let threshold = arguments.as_ref()
+                        .and_then(|m| m.get("threshold"))
+                        .and_then(|v| v.as_f64())
+                        .map(|v| v as f32);
+                    server.semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+                        query: query.to_string(),
+                        limit,
+                        threshold,
+                    })).await
+                }
                 _ => {
                     eprintln!("Unknown tool: {}", tool);
-                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs");
+                    eprintln!("Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context");
                     std::process::exit(1);
                 }
             };

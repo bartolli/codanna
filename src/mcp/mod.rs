@@ -87,12 +87,28 @@ pub struct SemanticSearchRequest {
     pub threshold: Option<f32>,
 }
 
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct SemanticSearchWithContextRequest {
+    /// Natural language search query
+    pub query: String,
+    /// Maximum number of results (default: 5, as each includes full context)
+    #[serde(default = "default_context_limit")]
+    pub limit: usize,
+    /// Minimum similarity score (0-1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<f32>,
+}
+
 fn default_depth() -> usize {
     3
 }
 
 fn default_limit() -> usize {
     10
+}
+
+fn default_context_limit() -> usize {
+    5
 }
 
 #[derive(Clone)]
@@ -435,6 +451,172 @@ impl CodeIntelligenceServer {
                 }
                 
                 Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+            Err(e) => {
+                Ok(CallToolResult::error(vec![Content::text(
+                    format!("Semantic search failed: {}", e)
+                )]))
+            }
+        }
+    }
+
+    #[tool(description = "Search documentation with full context including dependencies, callers, and impact")]
+    pub async fn semantic_search_with_context(
+        &self,
+        Parameters(SemanticSearchWithContextRequest { query, limit, threshold }): Parameters<SemanticSearchWithContextRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let indexer = self.indexer.read().await;
+        
+        if !indexer.has_semantic_search() {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled."
+            )]));
+        }
+        
+        // First, perform semantic search
+        let search_results = match threshold {
+            Some(t) => indexer.semantic_search_docs_with_threshold(&query, limit, t),
+            None => indexer.semantic_search_docs(&query, limit),
+        };
+        
+        match search_results {
+            Ok(results) => {
+                if results.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        format!("No documentation found matching query: {}", query)
+                    )]));
+                }
+                
+                let mut output = String::new();
+                output.push_str(&format!(
+                    "Found {} results for query: '{}'\n\n",
+                    results.len(),
+                    query
+                ));
+                
+                // For each result, gather comprehensive context
+                for (idx, (symbol, score)) in results.iter().enumerate() {
+                    let file_path = indexer.get_file_path(symbol.file_id)
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    
+                    // Basic symbol information - matching find_symbol format
+                    output.push_str(&format!("{}. {} - {:?} at {}:{}\n", 
+                        idx + 1, 
+                        symbol.name, 
+                        symbol.kind,
+                        file_path, 
+                        symbol.range.start_line + 1
+                    ));
+                    output.push_str(&format!("   Similarity Score: {:.3}\n", score));
+                    
+                    // Documentation
+                    if let Some(ref doc) = symbol.doc_comment {
+                        output.push_str("   Documentation:\n");
+                        for line in doc.lines().take(5) {
+                            output.push_str(&format!("     {}\n", line));
+                        }
+                        if doc.lines().count() > 5 {
+                            output.push_str("     ...\n");
+                        }
+                    }
+                    
+                    // Only gather additional context for functions/methods
+                    if matches!(symbol.kind, crate::SymbolKind::Function | crate::SymbolKind::Method) {
+                        // Dependencies (what this function calls) - using logic from get_calls
+                        let called_functions = indexer.get_called_functions(symbol.id);
+                        if !called_functions.is_empty() {
+                            output.push_str(&format!("\n   {} calls {} function(s):\n", symbol.name, called_functions.len()));
+                            for (i, called) in called_functions.iter().take(10).enumerate() {
+                                let called_file = indexer.get_file_path(called.file_id)
+                                    .unwrap_or_else(|| "<unknown>".to_string());
+                                output.push_str(&format!("     -> {:?} {} at {}:{}\n", 
+                                    called.kind,
+                                    called.name,
+                                    called_file,
+                                    called.range.start_line + 1
+                                ));
+                                if i == 9 && called_functions.len() > 10 {
+                                    output.push_str(&format!("     ... and {} more\n", called_functions.len() - 10));
+                                }
+                            }
+                        }
+                        
+                        // Callers (who uses this function) - using logic from find_callers
+                        let calling_functions = indexer.get_calling_functions(symbol.id);
+                        if !calling_functions.is_empty() {
+                            output.push_str(&format!("\n   {} function(s) call {}:\n", calling_functions.len(), symbol.name));
+                            for (i, caller) in calling_functions.iter().take(10).enumerate() {
+                                let caller_file = indexer.get_file_path(caller.file_id)
+                                    .unwrap_or_else(|| "<unknown>".to_string());
+                                output.push_str(&format!("     <- {:?} {} at {}:{}\n", 
+                                    caller.kind,
+                                    caller.name,
+                                    caller_file,
+                                    caller.range.start_line + 1
+                                ));
+                                if i == 9 && calling_functions.len() > 10 {
+                                    output.push_str(&format!("     ... and {} more\n", calling_functions.len() - 10));
+                                }
+                            }
+                        }
+                        
+                        // Impact analysis - using logic from analyze_impact
+                        let impacted = indexer.get_impact_radius(symbol.id, Some(2));
+                        if !impacted.is_empty() {
+                            output.push_str(&format!("\n   Changing {} would impact {} symbol(s) (max depth: 2):\n", 
+                                symbol.name, impacted.len()));
+                            
+                            // Get details and group by kind
+                            let impacted_details: Vec<_> = impacted.iter()
+                                .filter_map(|id| indexer.get_symbol(*id))
+                                .collect();
+                            
+                            // Group by kind
+                            let mut methods = Vec::new();
+                            let mut functions = Vec::new();
+                            let mut other = Vec::new();
+                            
+                            for sym in impacted_details {
+                                match sym.kind {
+                                    crate::SymbolKind::Method => methods.push(sym),
+                                    crate::SymbolKind::Function => functions.push(sym),
+                                    _ => other.push(sym),
+                                }
+                            }
+                            
+                            if !methods.is_empty() {
+                                output.push_str(&format!("\n     methods ({}):\n", methods.len()));
+                                for method in methods.iter().take(5) {
+                                    output.push_str(&format!("       - {}\n", method.name));
+                                }
+                                if methods.len() > 5 {
+                                    output.push_str(&format!("       ... and {} more\n", methods.len() - 5));
+                                }
+                            }
+                            
+                            if !functions.is_empty() {
+                                output.push_str(&format!("\n     functions ({}):\n", functions.len()));
+                                for func in functions.iter().take(5) {
+                                    output.push_str(&format!("       - {}\n", func.name));
+                                }
+                                if functions.len() > 5 {
+                                    output.push_str(&format!("       ... and {} more\n", functions.len() - 5));
+                                }
+                            }
+                            
+                            if !other.is_empty() {
+                                output.push_str(&format!("\n     other ({}):\n", other.len()));
+                                for sym in other.iter().take(3) {
+                                    output.push_str(&format!("       - {} ({:?})\n", sym.name, sym.kind));
+                                }
+                            }
+                        }
+                    }
+                    
+                    output.push_str("\n");
+                }
+                
+                Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             Err(e) => {
                 Ok(CallToolResult::error(vec![Content::text(

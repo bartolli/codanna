@@ -16,6 +16,7 @@ Here is a summary of the primary tools available:
 *   `get_calls`: Shows all functions and methods that a specific function calls. Helps understand a function's dependencies.
 *   `find_callers`: Shows all functions that call a specific function. Essential for understanding who uses a particular piece of code.
 *   `analyze_impact`: Analyzes the "blast radius" of changing a symbol by showing all other symbols that would be directly or indirectly affected.
+*   `semantic_search_docs`: Performs natural language search across documentation comments using semantic embeddings. Perfect for finding code by describing what it does rather than knowing exact names.
 
 ## Common Workflows
 
@@ -75,7 +76,29 @@ Let's say you're new to the project and want to understand how "parsing" works.
         ```
     *You can repeat this process, using the output of `get_calls` or `find_callers` as the input for your next query to traverse the codebase's dependency graph.*
 
-### Workflow 3: Getting a Project Overview
+### Workflow 3: Natural Language Code Discovery
+
+When you know what functionality you're looking for but don't know the exact names, use semantic search to find code by describing what it does.
+
+1.  **Search by description:** Use natural language to find relevant code.
+    ```bash
+    codanna mcp semantic_search_docs --args '{"query": "parse JSON data", "limit": 5}'
+    ```
+    *This will return functions with documentation mentioning JSON parsing, ranked by semantic similarity.*
+
+2.  **Explore related functionality:** Use broader descriptions to discover related code.
+    ```bash
+    codanna mcp semantic_search_docs --args '{"query": "handle authentication and user login", "limit": 10}'
+    ```
+    *Returns all auth-related functions, even if they use different terminology.*
+
+3.  **Combine with traditional tools:** Once you find relevant symbols through semantic search, use other tools to explore them further.
+    ```bash
+    # Found parse_json_file through semantic search, now explore it
+    codanna mcp find_callers --args '{"function_name": "parse_json_file"}'
+    ```
+
+### Workflow 4: Getting a Project Overview
 
 When you first approach a project, it's helpful to get a sense of its scale and composition.
 
@@ -99,3 +122,6 @@ When you first approach a project, it's helpful to get a sense of its scale and 
     *   `args`: `{"function_name": "exact_function_name"}`
 *   **`analyze_impact`**
     *   `args`: `{"symbol_name": "exact_symbol_name", "max_depth": 3}` (max_depth is optional, defaults to 3)
+*   **`semantic_search_docs`**
+    *   `args`: `{"query": "natural language description", "limit": 10}` (limit is optional, defaults to 10)
+    *   Note: Requires semantic search to be enabled in settings.toml
