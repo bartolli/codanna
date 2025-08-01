@@ -2639,11 +2639,11 @@ fn find_nearest_centroid(centroids: &[Vec<f32>], vector: &[f32]) -> ClusterId {
 
 fn generate_outlier_vectors(n: usize, dim: usize, _centroids: &[Vec<f32>]) -> Vec<Vec<f32>> {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     
     (0..n).map(|_| {
         // Generate vectors far from all centroids
-        let mut vector: Vec<f32> = (0..dim).map(|_| rng.gen_range(-2.0..2.0)).collect();
+        let mut vector: Vec<f32> = (0..dim).map(|_| rng.random_range(-2.0..2.0)).collect();
         
         // Normalize
         let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -2684,7 +2684,7 @@ fn setup_unbalanced_clusters() -> Result<IncrementalUpdateManager, VectorTestErr
 
 fn generate_cluster_vectors(n: usize, dim: usize, cluster_id: usize) -> Vec<Vec<f32>> {
     use rand::Rng;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     
     // Generate vectors around a specific point in space
     let center_offset = cluster_id as f32 * 0.5;
@@ -2692,9 +2692,9 @@ fn generate_cluster_vectors(n: usize, dim: usize, cluster_id: usize) -> Vec<Vec<
     (0..n).map(|_| {
         let mut vector: Vec<f32> = (0..dim).map(|i| {
             if i == cluster_id % dim {
-                center_offset + rng.gen_range(-0.1..0.1)
+                center_offset + rng.random_range(-0.1..0.1)
             } else {
-                rng.gen_range(-0.2..0.2)
+                rng.random_range(-0.2..0.2)
             }
         }).collect();
         
