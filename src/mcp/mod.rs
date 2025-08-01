@@ -613,7 +613,7 @@ impl CodeIntelligenceServer {
                         }
                     }
                     
-                    output.push_str("\n");
+                    output.push('\n');
                 }
                 
                 Ok(CallToolResult::success(vec![Content::text(output)]))
