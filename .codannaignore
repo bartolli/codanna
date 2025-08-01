@@ -1,0 +1,11 @@
+# Codanna ignore patterns (gitignore syntax)
+# https://git-scm.com/docs/gitignore
+
+# Ignore test directories
+tests/
+
+# Ignore test files
+*_test.rs
+
+# Ignore the codanna directory itself
+.codanna/

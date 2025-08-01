@@ -1132,7 +1132,10 @@ impl SimpleIndexer {
         for file_path in files {
             // Track files as they are processed
             
-            if !dry_run {
+            if dry_run {
+                // In dry-run mode, just count the files that would be indexed
+                stats.files_indexed += 1;
+            } else {
                 // Start a new batch for this file
                 self.start_tantivy_batch()?;
                 

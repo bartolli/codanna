@@ -38,26 +38,16 @@ impl FileWalker {
             .max_depth(None) // No depth limit
             .require_git(false); // Allow gitignore to work in non-git directories
             
-        // If we have a project root configured, use it as the base for gitignore
-        if let Some(_project_root) = &self.settings.indexing.project_root {
-            // This helps the ignore crate understand the project structure
-            // even if it's not a git repository
-            builder.add_custom_ignore_filename(".codanna-ignore");
-        }
+        // Always support .codannaignore files for custom ignore patterns (follows .gitignore pattern)
+        builder.add_custom_ignore_filename(".codannaignore");
         
-        // Add custom ignore patterns using overrides
-        // This is the correct way to add glob patterns programmatically
-        let mut override_builder = ignore::overrides::OverrideBuilder::new(root);
-        for pattern in &self.settings.indexing.ignore_patterns {
-            // Add as exclusion pattern (prefix with !)
-            if let Err(e) = override_builder.add(&format!("!{}", pattern)) {
-                eprintln!("Warning: Invalid ignore pattern '{}': {}", pattern, e);
-            }
-        }
+        // The ignore crate's override feature is for INCLUDING files, not excluding them.
+        // To add custom ignore patterns, we need to use a different approach.
+        // For now, we'll rely on .gitignore and .codannaignore files.
         
-        if let Ok(overrides) = override_builder.build() {
-            builder.overrides(overrides);
-        }
+        // TODO: Add support for custom ignore patterns from settings
+        // One approach would be to create a temporary .codanna-ignore file
+        // or use the glob filtering in the iterator below
         
         // Get enabled languages for filtering
         let enabled_languages = self.get_enabled_languages();
