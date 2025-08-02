@@ -33,6 +33,10 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
     
+    /// Global debug mode
+    #[serde(default = "default_false")]
+    pub debug: bool,
+    
     /// Indexing configuration
     #[serde(default)]
     pub indexing: IndexingConfig,
@@ -137,6 +141,7 @@ impl Default for Settings {
             version: default_version(),
             index_path: default_index_path(),
             workspace_root: None,
+            debug: false,
             indexing: IndexingConfig::default(),
             languages: default_languages(),
             mcp: McpConfig::default(),

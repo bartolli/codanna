@@ -16,6 +16,15 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// Debug print macro that respects the debug setting
+macro_rules! debug_print {
+    ($self:expr, $($arg:tt)*) => {
+        if $self.settings.debug {
+            eprintln!("DEBUG: {}", format!($($arg)*));
+        }
+    };
+}
+
 /// Compatibility struct for transaction support
 #[derive(Debug)]
 pub struct TantivyTransaction;
@@ -105,7 +114,7 @@ impl SimpleIndexer {
         };
         
         // Reconstruct TraitResolver state from stored relationships
-        eprintln!("DEBUG: Reconstructing trait resolver from stored relationships");
+        debug_print!(indexer, "Reconstructing trait resolver from stored relationships");
         if let Err(e) = indexer.reconstruct_trait_resolver() {
             eprintln!("WARNING: Failed to reconstruct trait resolver: {}", e);
         }
@@ -420,10 +429,10 @@ impl SimpleIndexer {
         
         // Register the file with ImportResolver
         if let Some(ref mod_path) = module_path {
-            eprintln!("DEBUG: Registering file {:?} with module path: {}", path, mod_path);
+            debug_print!(self, "Registering file {:?} with module path: {}", path, mod_path);
             self.import_resolver.register_file(path.to_path_buf(), file_id, mod_path.clone());
         } else {
-            eprintln!("DEBUG: No module path for file {:?}", path);
+            debug_print!(self, "No module path for file {:?}", path);
         }
         
         let symbol_counter = self.get_next_symbol_counter()?;
@@ -497,7 +506,7 @@ impl SimpleIndexer {
         // Extract and register imports
         let imports = parser.find_imports(content, file_id);
         if !imports.is_empty() {
-            eprintln!("DEBUG: Found {} imports in file {:?}", imports.len(), file_id);
+            debug_print!(self, "Found {} imports in file {:?}", imports.len(), file_id);
             for import in &imports {
                 eprintln!("  - Import: {} (alias: {:?}, glob: {})", import.path, import.alias, import.is_glob);
             }
@@ -586,7 +595,7 @@ impl SimpleIndexer {
         // 2. Trait implementations
         let implementations = parser.find_implementations(content);
         for (type_name, trait_name, _range) in implementations {
-            eprintln!("DEBUG: Registering implementation: {} implements {}", type_name, trait_name);
+            debug_print!(self, "Registering implementation: {} implements {}", type_name, trait_name);
             // Register with trait resolver
             self.trait_resolver.add_trait_impl(type_name.clone(), trait_name.clone(), file_id);
             self.add_relationships_by_name(&type_name, &trait_name, file_id, RelationKind::Implements)?;
@@ -601,7 +610,7 @@ impl SimpleIndexer {
                 // Group methods by type
                 let mut methods_by_type: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
                 for (type_name, method_name, _range) in inherent_methods {
-                    eprintln!("DEBUG: Found inherent method: {}::{}", type_name, method_name);
+                    debug_print!(self, "Found inherent method: {}::{}", type_name, method_name);
                     methods_by_type.entry(type_name)
                         .or_default()
                         .push(method_name);
@@ -627,7 +636,7 @@ impl SimpleIndexer {
             if let Some(symbol_kinds) = self.trait_symbols_by_file.get(&file_id) {
                 if let Some(kind) = symbol_kinds.get(&definer_name) {
                     if *kind == crate::types::SymbolKind::Trait {
-                        eprintln!("DEBUG: Adding method '{}' to trait '{}'", method_name, definer_name);
+                        debug_print!(self, "Adding method '{}' to trait '{}'", method_name, definer_name);
                         // Update trait resolver with method info
                         let existing_methods = self.trait_resolver.get_trait_methods(&definer_name)
                             .unwrap_or_default();
@@ -1227,7 +1236,7 @@ impl SimpleIndexer {
                 cause: e.to_string(),
             })?;
             
-        eprintln!("DEBUG: Found {} implements relationships", implements_relationships.len());
+        debug_print!(self, "Found {} implements relationships", implements_relationships.len());
             
         for (type_id, trait_id, _) in implements_relationships {
             // Get symbol names
@@ -1243,7 +1252,7 @@ impl SimpleIndexer {
                 })?;
                 
             if let (Some(type_sym), Some(trait_sym)) = (type_symbol, trait_symbol) {
-                eprintln!("DEBUG: {} implements {}", type_sym.name, trait_sym.name);
+                debug_print!(self, "{} implements {}", type_sym.name, trait_sym.name);
                 self.trait_resolver.add_trait_impl(
                     type_sym.name.to_string(),
                     trait_sym.name.to_string(),
@@ -1281,7 +1290,7 @@ impl SimpleIndexer {
                 
             if let (Some(definer), Some(method)) = (definer_symbol, method_symbol) {
                 if definer.kind == crate::types::SymbolKind::Trait {
-                    eprintln!("DEBUG: Trait {} defines method {}", definer.name, method.name);
+                    debug_print!(self, "Trait {} defines method {}", definer.name, method.name);
                     trait_methods.entry(definer.name.to_string())
                         .or_default()
                         .push(method.name.to_string());
@@ -1310,40 +1319,40 @@ impl SimpleIndexer {
             None => return context.resolve(call_target), // Regular function call
         };
         
-        eprintln!("DEBUG: Resolving method call: receiver={}, method={}", receiver, method_name);
+        debug_print!(self, "Resolving method call: receiver={}, method={}", receiver, method_name);
         
         // Look up receiver's type
         let type_name = self.variable_types
             .get(&(file_id, receiver.to_string()))?;
         
-        eprintln!("DEBUG: Found type for {}: {}", receiver, type_name);
+        debug_print!(self, "Found type for {}: {}", receiver, type_name);
         
         // Check if method comes from a trait
         match self.trait_resolver.resolve_method_trait(type_name, method_name) {
             Some(trait_name) => {
-                eprintln!("DEBUG: Method {} comes from trait {}", method_name, trait_name);
+                debug_print!(self, "Method {} comes from trait {}", method_name, trait_name);
                 // Try trait::method resolution first
                 let trait_method = format!("{}::{}", trait_name, method_name);
                 let result = context.resolve(&trait_method)
                     .or_else(|| context.resolve(method_name));
-                eprintln!("DEBUG: Resolution result for {}: {:?}", method_name, result);
+                debug_print!(self, "Resolution result for {}: {:?}", method_name, result);
                 result
             }
             None => {
                 // Could be an inherent method or not exist
                 if self.trait_resolver.is_inherent_method(type_name, method_name) {
-                    eprintln!("DEBUG: Method {} is inherent on type {}", method_name, type_name);
+                    debug_print!(self, "Method {} is inherent on type {}", method_name, type_name);
                     // Try Type::method format for inherent methods
                     let type_method = format!("{}::{}", type_name, method_name);
                     let result = context.resolve(&type_method)
                         .or_else(|| context.resolve(method_name));
-                    eprintln!("DEBUG: Inherent method resolution result for {}: {:?}", method_name, result);
+                    debug_print!(self, "Inherent method resolution result for {}: {:?}", method_name, result);
                     result
                 } else {
-                    eprintln!("DEBUG: Method {} not found on type {}", method_name, type_name);
+                    debug_print!(self, "Method {} not found on type {}", method_name, type_name);
                     // Last resort - try to resolve just the method name
                     let result = context.resolve(method_name);
-                    eprintln!("DEBUG: Direct resolution result for {}: {:?}", method_name, result);
+                    debug_print!(self, "Direct resolution result for {}: {:?}", method_name, result);
                     result
                 }
             }
@@ -1559,8 +1568,9 @@ impl SimpleIndexer {
         // Commit the batch with all the relationships
         self.commit_tantivy_batch()?;
         
-        eprintln!(
-            "DEBUG: Relationship resolution complete - resolved: {}, skipped: {}, total: {}", 
+        debug_print!(
+            self,
+            "Relationship resolution complete - resolved: {}, skipped: {}, total: {}", 
             resolved_count, 
             skipped_count, 
             _total_unresolved

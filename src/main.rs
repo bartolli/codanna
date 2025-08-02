@@ -331,10 +331,14 @@ async fn main() {
     } else {
         let force_recreate_index = matches!(cli.command, Commands::Index { force: true, ref path, .. } if path.is_dir());
         if persistence.exists() && !force_recreate_index {
-            eprintln!("DEBUG: Found existing index at {}", config.index_path.display());
+            if config.debug {
+                eprintln!("DEBUG: Found existing index at {}", config.index_path.display());
+            }
             match persistence.load_with_settings(settings.clone()) {
                 Ok(loaded) => {
-                    eprintln!("DEBUG: Successfully loaded index from disk");
+                    if config.debug {
+                        eprintln!("DEBUG: Successfully loaded index from disk");
+                    }
                     eprintln!("Loaded existing index (total: {} symbols)", loaded.symbol_count());
                     loaded
                 }
@@ -347,9 +351,13 @@ async fn main() {
             if force_recreate_index && persistence.exists() {
                 eprintln!("Force re-indexing requested, creating new index");
             } else if !persistence.exists() {
-                eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
+                if config.debug {
+                    eprintln!("DEBUG: No existing index found at {}", config.index_path.display());
+                }
             }
-            eprintln!("DEBUG: Creating new index");
+            if config.debug {
+                eprintln!("DEBUG: Creating new index");
+            }
             let mut new_indexer = SimpleIndexer::with_settings(settings.clone());
             // Clear Tantivy index if force re-indexing directory
             if force_recreate_index {
@@ -450,11 +458,15 @@ async fn main() {
                         println!("  Traits: {}", traits);
                         
                         // Save the index
-                        eprintln!("DEBUG: Saving index with {} symbols", indexer.symbol_count());
+                        if config.debug {
+                            eprintln!("DEBUG: Saving index with {} symbols", indexer.symbol_count());
+                        }
                         match persistence.save(&indexer) {
                             Ok(_) => {
                                 println!("\nIndex saved to: {}", config.index_path.display());
-                                eprintln!("DEBUG: Index saved successfully");
+                                if config.debug {
+                                    eprintln!("DEBUG: Index saved successfully");
+                                }
                             }
                             Err(e) => eprintln!("\nWarning: Could not save index: {}", e),
                         }
