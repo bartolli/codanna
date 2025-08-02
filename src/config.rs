@@ -69,13 +69,6 @@ pub struct IndexingConfig {
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
     
-    /// Include test files in the index
-    #[serde(default = "default_true")]
-    pub include_tests: bool,
-    
-    /// Include doc comments in the index
-    #[serde(default = "default_false")]
-    pub include_docs: bool,
     
 }
 
@@ -161,8 +154,6 @@ impl Default for IndexingConfig {
                 ".git/**".to_string(),
                 "*.generated.*".to_string(),
             ],
-            include_tests: true,
-            include_docs: false,
         }
     }
 }
@@ -494,7 +485,8 @@ enabled = false
         assert_eq!(settings.version, 2);
         assert_eq!(settings.indexing.parallel_threads, 4);
         assert_eq!(settings.indexing.ignore_patterns, vec!["custom/**"]);
-        assert!(!settings.indexing.include_tests);
+        // Default ignore patterns should be replaced by custom ones
+        assert_eq!(settings.indexing.ignore_patterns.len(), 1);
         assert_eq!(settings.mcp.port, 8888);
         assert!(settings.mcp.debug);
         assert!(!settings.languages["rust"].enabled);
@@ -541,7 +533,8 @@ enabled = true
         // Default values should still be present
         assert_eq!(settings.version, 1);
         assert_eq!(settings.mcp.port, 7777);
-        assert!(settings.indexing.include_tests);
+        // Default ignore patterns should be present
+        assert!(!settings.indexing.ignore_patterns.is_empty());
     }
     
     #[test]
@@ -580,7 +573,8 @@ port = 7777
         // Env var adds new value not in config
         assert!(settings.mcp.debug);
         // Config file value remains
-        assert!(settings.indexing.include_tests);
+        // Default ignore patterns should be present
+        assert!(!settings.indexing.ignore_patterns.is_empty());
         
         // Clean up
         unsafe {
