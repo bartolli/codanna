@@ -1,5 +1,6 @@
 use crate::{Symbol, SymbolId, SymbolKind, FileId, Range};
 use crate::parsing::{Language, LanguageParser};
+use crate::parsing::method_call::MethodCall;
 use crate::indexing::Import;
 use tree_sitter::{Parser, Node};
 
@@ -487,6 +488,106 @@ impl RustParser {
         }
     }
     
+    fn find_method_calls_in_node(&self, node: Node, code: &str, method_calls: &mut Vec<MethodCall>) {
+        let containing_function = self.find_containing_function(node, code);
+        
+        if node.kind() == "call_expression" {
+            if let Some(function_node) = node.child_by_field_name("function") {
+                // Handle direct function calls (e.g., `my_function()`)
+                if function_node.kind() == "identifier" {
+                    let method_name = code[function_node.byte_range()].to_string();
+                    if let Some(caller) = containing_function {
+                        let range = Range::new(
+                            node.start_position().row as u32,
+                            node.start_position().column as u16,
+                            node.end_position().row as u32,
+                            node.end_position().column as u16,
+                        );
+                        let method_call = MethodCall::new(&caller, &method_name, range);
+                        eprintln!("DEBUG: Found function call: {} -> {}", caller, method_name);
+                        method_calls.push(method_call);
+                    }
+                }
+                // Handle method calls (e.g., `variable.method()`)
+                else if function_node.kind() == "field_expression" {
+                    if let Some(field_node) = function_node.child_by_field_name("field") {
+                        let method_name = code[field_node.byte_range()].to_string();
+                        
+                        // Extract receiver from field_expression
+                        if let Some(value_node) = function_node.child_by_field_name("value") {
+                            let receiver_text = code[value_node.byte_range()].to_string();
+                            
+                            if let Some(caller) = containing_function {
+                                let range = Range::new(
+                                    node.start_position().row as u32,
+                                    node.start_position().column as u16,
+                                    node.end_position().row as u32,
+                                    node.end_position().column as u16,
+                                );
+                                
+                                let method_call = match value_node.kind() {
+                                    "self" => {
+                                        eprintln!("DEBUG: Found self method call: {} -> self.{}", caller, method_name);
+                                        MethodCall::new(&caller, &method_name, range)
+                                            .with_receiver("self")
+                                    }
+                                    "identifier" => {
+                                        eprintln!("DEBUG: Found instance method call: {} -> {}.{}", caller, receiver_text, method_name);
+                                        MethodCall::new(&caller, &method_name, range)
+                                            .with_receiver(&receiver_text)
+                                    }
+                                    "field_expression" => {
+                                        // Chained calls like self.field.method()
+                                        eprintln!("DEBUG: Found chained method call: {} -> {}.{}", caller, receiver_text, method_name);
+                                        MethodCall::new(&caller, &method_name, range)
+                                            .with_receiver(&receiver_text)
+                                    }
+                                    _ => {
+                                        eprintln!("DEBUG: Found method call with unknown receiver type: {} -> {}.{}", caller, receiver_text, method_name);
+                                        MethodCall::new(&caller, &method_name, range)
+                                            .with_receiver(&receiver_text)
+                                    }
+                                };
+                                method_calls.push(method_call);
+                            }
+                        }
+                    }
+                }
+                // Handle static method calls (e.g., `String::new()`)
+                else if function_node.kind() == "scoped_identifier" {
+                    let full_path = code[function_node.byte_range()].to_string();
+                    
+                    // Parse Type::method pattern
+                    if let Some(scope_pos) = full_path.rfind("::") {
+                        let type_name = &full_path[..scope_pos];
+                        let method_name = &full_path[scope_pos + 2..];
+                        
+                        if let Some(caller) = containing_function {
+                            let range = Range::new(
+                                node.start_position().row as u32,
+                                node.start_position().column as u16,
+                                node.end_position().row as u32,
+                                node.end_position().column as u16,
+                            );
+                            
+                            let method_call = MethodCall::new(&caller, method_name, range)
+                                .with_receiver(type_name)
+                                .static_method();
+                            
+                            eprintln!("DEBUG: Found static method call: {} -> {}::{}", caller, type_name, method_name);
+                            method_calls.push(method_call);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_method_calls_in_node(child, code, method_calls);
+        }
+    }
+    
     fn find_implementations_in_node(&self, node: Node, code: &str, implementations: &mut Vec<(String, String, Range)>) {
         if node.kind() == "impl_item" {
             // Check if this is a trait implementation (has trait field)
@@ -911,6 +1012,23 @@ impl LanguageParser for RustParser {
     
     fn find_calls(&mut self, code: &str) -> Vec<(String, String, Range)> {
         self.find_calls(code)
+    }
+    
+    fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
+        eprintln!("DEBUG: RustParser::find_method_calls override called with enhanced AST detection");
+        
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        
+        let root_node = tree.root_node();
+        let mut method_calls = Vec::new();
+        
+        self.find_method_calls_in_node(root_node, code, &mut method_calls);
+        
+        eprintln!("DEBUG: Enhanced method call detection found {} calls", method_calls.len());
+        method_calls
     }
     
     fn find_implementations(&mut self, code: &str) -> Vec<(String, String, Range)> {
@@ -1465,5 +1583,41 @@ fn trim_test() {}
             .unwrap();
         let doc = trim.doc_comment.as_ref().unwrap();
         assert_eq!(doc.as_ref(), "Trim test");
+    }
+    
+    #[test]
+    fn test_find_method_calls_override() {
+        use crate::parsing::LanguageParser;
+        
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+            struct Data;
+            impl Data {
+                fn process(&self) {}
+                fn new() -> Self { Data }
+            }
+            
+            fn main() {
+                let data = Data::new();  // Static call
+                data.process();          // Instance call  
+                self.validate();         // Self call
+            }
+        "#;
+        
+        // Test the override method
+        let method_calls = parser.find_method_calls(code);
+        
+        // Should find at least the same calls as legacy method
+        let legacy_calls = parser.find_calls(code);
+        assert_eq!(method_calls.len(), legacy_calls.len());
+        
+        // Verify we get MethodCall structs, not tuples
+        for call in &method_calls {
+            assert!(!call.caller.is_empty());
+            assert!(!call.method_name.is_empty());
+        }
+        
+        // Should have some method calls from the test code
+        assert!(method_calls.len() >= 2); // At least Data::new and data.process
     }
 }
