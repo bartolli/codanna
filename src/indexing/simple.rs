@@ -66,6 +66,8 @@ pub struct SimpleIndexer {
     variable_types: std::collections::HashMap<(FileId, String), String>,
     /// Trait symbols by file for relationship extraction
     trait_symbols_by_file: std::collections::HashMap<FileId, std::collections::HashMap<String, crate::SymbolKind>>,
+    /// Method calls with rich receiver information for enhanced resolution
+    method_calls_by_file: std::collections::HashMap<FileId, Vec<crate::parsing::MethodCall>>,
     /// Optional vector search engine
     vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
     /// Optional embedding generator
@@ -107,6 +109,7 @@ impl SimpleIndexer {
             unresolved_relationships: Vec::new(),
             variable_types: std::collections::HashMap::new(),
             trait_symbols_by_file: std::collections::HashMap::new(),
+            method_calls_by_file: std::collections::HashMap::new(),
             vector_engine: None,
             embedding_generator: None,
             pending_embeddings: Vec::new(),
@@ -642,14 +645,15 @@ impl SimpleIndexer {
             }
         }
         
-        // Convert back to tuples for compatibility (gradual migration)
-        let calls: Vec<(String, String, crate::Range)> = method_calls.iter()
-            .map(|call| call.to_simple_call())
-            .collect();
-        
-        for (caller_name, callee_name, _range) in &calls {
-            debug_print!(self, "Processing legacy format: {} -> {}", caller_name, callee_name);
-            self.add_relationships_by_name(caller_name, callee_name, file_id, RelationKind::Calls)?;
+        // Process method calls using MethodCall objects for enhanced resolution
+        for method_call in &method_calls {
+            debug_print!(self, "Processing method call with enhanced data: {} -> {}", method_call.caller, method_call.method_name);
+            
+            // Store MethodCall for enhanced resolution during symbol resolution phase
+            self.store_method_call_for_resolution(method_call, file_id);
+            
+            // Also add traditional relationship for backward compatibility
+            self.add_relationships_by_name(&method_call.caller, &method_call.method_name, file_id, RelationKind::Calls)?;
         }
         
         // 2. Trait implementations
@@ -1365,9 +1369,47 @@ impl SimpleIndexer {
         
         Ok(())
     }
+
+    /// Store MethodCall for enhanced resolution during symbol resolution phase
+    fn store_method_call_for_resolution(
+        &mut self,
+        method_call: &crate::parsing::MethodCall,
+        file_id: FileId,
+    ) {
+        debug_print!(self, "Storing method call for enhanced resolution: {} calls {} (static: {}, receiver: {:?})", 
+                    method_call.caller, method_call.method_name, method_call.is_static, method_call.receiver);
+        
+        self.method_calls_by_file
+            .entry(file_id)
+            .or_default()
+            .push(method_call.clone());
+    }
+
+    /// Enhanced method call resolution using MethodCall data when available
+    fn resolve_method_call_enhanced(
+        &self,
+        call_target: &str,
+        caller_name: &str,
+        file_id: FileId,
+        context: &ResolutionContext,
+    ) -> Option<SymbolId> {
+        // Try to find corresponding MethodCall object for enhanced resolution
+        if let Some(method_calls) = self.method_calls_by_file.get(&file_id) {
+            for method_call in method_calls {
+                if method_call.caller == caller_name && method_call.method_name == call_target {
+                    debug_print!(self, "Found MethodCall object for {}->{}! Using enhanced resolution", caller_name, call_target);
+                    return self.resolve_method_call(method_call, file_id, context);
+                }
+            }
+        }
+        
+        // Fallback to legacy string-based resolution
+        debug_print!(self, "No MethodCall object found for {}->{}. Using legacy resolution", caller_name, call_target);
+        self.resolve_method_call_legacy(call_target, file_id, context)
+    }
     
-    /// Resolve a method call using receiver type information
-    fn resolve_method_call(
+    /// Legacy method call resolution using string patterns (for backward compatibility)
+    fn resolve_method_call_legacy(
         &self,
         call_target: &str,
         file_id: FileId,
@@ -1384,7 +1426,7 @@ impl SimpleIndexer {
             }
         };
         
-        debug_print!(self, "Resolving method call: receiver={}, method={}", receiver, method_name);
+        debug_print!(self, "Legacy resolution: receiver={}, method={}", receiver, method_name);
         
         // Look up receiver's type
         let type_name = self.variable_types
@@ -1396,7 +1438,6 @@ impl SimpleIndexer {
         match self.trait_resolver.resolve_method_trait(type_name, method_name) {
             Some(trait_name) => {
                 debug_print!(self, "Method {} comes from trait {}", method_name, trait_name);
-                // Try trait::method resolution first
                 let trait_method = format!("{}::{}", trait_name, method_name);
                 let result = context.resolve(&trait_method)
                     .or_else(|| context.resolve(method_name));
@@ -1404,10 +1445,8 @@ impl SimpleIndexer {
                 result
             }
             None => {
-                // Could be an inherent method or not exist
                 if self.trait_resolver.is_inherent_method(type_name, method_name) {
                     debug_print!(self, "Method {} is inherent on type {}", method_name, type_name);
-                    // Try Type::method format for inherent methods
                     let type_method = format!("{}::{}", type_name, method_name);
                     let result = context.resolve(&type_method)
                         .or_else(|| context.resolve(method_name));
@@ -1415,9 +1454,77 @@ impl SimpleIndexer {
                     result
                 } else {
                     debug_print!(self, "Method {} not found on type {}", method_name, type_name);
-                    // Last resort - try to resolve just the method name
                     let result = context.resolve(method_name);
                     debug_print!(self, "Direct resolution result for {}: {:?}", method_name, result);
+                    result
+                }
+            }
+        }
+    }
+    
+    /// Resolve a method call using MethodCall struct with rich receiver information
+    fn resolve_method_call(
+        &self,
+        method_call: &crate::parsing::MethodCall,
+        file_id: FileId,
+        context: &ResolutionContext,
+    ) -> Option<SymbolId> {
+        // If no receiver, treat as regular function call
+        let receiver = match &method_call.receiver {
+            Some(recv) => recv,
+            None => {
+                debug_print!(self, "No receiver found, resolving '{}' as regular function", method_call.method_name);
+                let result = context.resolve(&method_call.method_name);
+                debug_print!(self, "Regular function resolution result: {:?}", result);
+                return result;
+            }
+        };
+        
+        debug_print!(self, "Resolving method call: receiver={}, method={}, is_static={}", receiver, method_call.method_name, method_call.is_static);
+        
+        // Handle static methods differently - they don't need receiver type lookup
+        if method_call.is_static {
+            debug_print!(self, "Static method call: {}::{}", receiver, method_call.method_name);
+            // For static calls, receiver is the type name, try Type::method format
+            let static_method = format!("{}::{}", receiver, method_call.method_name);
+            let result = context.resolve(&static_method)
+                .or_else(|| context.resolve(&method_call.method_name));
+            debug_print!(self, "Static method resolution result for {}: {:?}", method_call.method_name, result);
+            return result;
+        }
+        
+        // For instance methods, look up receiver's type
+        let type_name = self.variable_types
+            .get(&(file_id, receiver.to_string()))?;
+        
+        debug_print!(self, "Found type for {}: {}", receiver, type_name);
+        
+        // Check if method comes from a trait
+        match self.trait_resolver.resolve_method_trait(type_name, &method_call.method_name) {
+            Some(trait_name) => {
+                debug_print!(self, "Method {} comes from trait {}", method_call.method_name, trait_name);
+                // Try trait::method resolution first
+                let trait_method = format!("{}::{}", trait_name, method_call.method_name);
+                let result = context.resolve(&trait_method)
+                    .or_else(|| context.resolve(&method_call.method_name));
+                debug_print!(self, "Resolution result for {}: {:?}", method_call.method_name, result);
+                result
+            }
+            None => {
+                // Could be an inherent method or not exist
+                if self.trait_resolver.is_inherent_method(type_name, &method_call.method_name) {
+                    debug_print!(self, "Method {} is inherent on type {}", method_call.method_name, type_name);
+                    // Try Type::method format for inherent methods
+                    let type_method = format!("{}::{}", type_name, method_call.method_name);
+                    let result = context.resolve(&type_method)
+                        .or_else(|| context.resolve(&method_call.method_name));
+                    debug_print!(self, "Inherent method resolution result for {}: {:?}", method_call.method_name, result);
+                    result
+                } else {
+                    debug_print!(self, "Method {} not found on type {}", method_call.method_name, type_name);
+                    // Last resort - try to resolve just the method name
+                    let result = context.resolve(&method_call.method_name);
+                    debug_print!(self, "Direct resolution result for {}: {:?}", method_call.method_name, result);
                     result
                 }
             }
@@ -1588,7 +1695,7 @@ impl SimpleIndexer {
                     context.resolve(method_name)
                 } else if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
                     debug_print!(self, "Resolving as method call: '{}'", rel.to_name);
-                    self.resolve_method_call(&rel.to_name, file_id, &context)
+                    self.resolve_method_call_enhanced(&rel.to_name, &rel.from_name, file_id, &context)
                 } else {
                     debug_print!(self, "Resolving '{}' using context", rel.to_name);
                     let result = context.resolve(&rel.to_name);
