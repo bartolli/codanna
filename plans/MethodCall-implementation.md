@@ -4,13 +4,15 @@
 - ✅ **Priority 1**: Parser Interface Enhancement - COMPLETE
   - ✅ 1.1: Added find_method_calls() to trait
   - ✅ 1.2: Implemented from_legacy_format()
-- ⏳ **Priority 2**: RustParser Enhancement - IN PROGRESS
-  - ⏳ 2.1: Override find_method_calls in RustParser
-  - ⏳ 2.2: Enhanced receiver detection
-- 🔲 **Priority 3**: SimpleIndexer Integration - TODO
+- ✅ **Priority 2**: RustParser Enhancement - COMPLETE
+  - ✅ 2.1: Override find_method_calls in RustParser
+  - ✅ 2.2: Enhanced receiver detection with AST parsing
+- ⏳ **Priority 3**: SimpleIndexer Integration - IN PROGRESS
+  - ✅ 3.1: Update relationship processing to use find_method_calls()
+  - ⏳ 3.2: Enhance method resolution logic
 - 🔲 **Priority 4**: Storage Layer - TODO
 
-**Last Updated**: 2025-08-02 - Priority 1 complete, all tests passing, zero warnings
+**Last Updated**: 2025-08-02 - Priority 3.1 complete, enhanced detection integrated and working!
 
 ## Workflow
 1. **Implementation Point** → Precise code change
@@ -115,8 +117,9 @@ cargo test method_call::from_legacy_format
 
 ## Priority 3: Integration with SimpleIndexer (1 hour)
 
-### 3.1 Update Relationship Processing
+### 3.1 Update Relationship Processing ✅
 **Implementation Point**: `src/indexing/simple.rs:~800` - `extract_relationships_from_file`
+**Status**: COMPLETE - Successfully integrated with debug logging
 
 **Unit Test Reference**:
 ```rust

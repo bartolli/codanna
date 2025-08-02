@@ -7,7 +7,7 @@ use crate::{
     IndexError, IndexResult,
 };
 use crate::storage::{DocumentIndex, SearchResult};
-use crate::parsing::{Language, ParserFactory};
+use crate::parsing::{Language, ParserFactory, MethodCall};
 use crate::indexing::{FileWalker, IndexStats, ImportResolver, IndexTransaction, ResolutionContext, TraitResolver, calculate_hash, get_utc_timestamp};
 use crate::vector::{VectorSearchEngine, EmbeddingGenerator, create_symbol_text};
 use crate::semantic::SimpleSemanticSearch;
@@ -624,10 +624,31 @@ impl SimpleIndexer {
         file_id: FileId,
     ) -> IndexResult<()> {
         // 1. Function/method calls
-        let calls = parser.find_calls(content);
-        debug_print!(self, "Found {} calls in file {:?}", calls.len(), file_id);
+        let method_calls: Vec<MethodCall> = parser.find_method_calls(content);
+        debug_print!(self, "Found {} method calls in file {:?}", method_calls.len(), file_id);
+        
+        // Debug: Show enhanced method call information before conversion
+        for method_call in &method_calls {
+            if let Some(receiver) = &method_call.receiver {
+                if method_call.is_static {
+                    debug_print!(self, "Static call: {}::{} in {}", receiver, method_call.method_name, method_call.caller);
+                } else if receiver == "self" {
+                    debug_print!(self, "Self call: self.{} in {}", method_call.method_name, method_call.caller);
+                } else {
+                    debug_print!(self, "Instance call: {}.{} in {} (receiver will be lost in current format)", receiver, method_call.method_name, method_call.caller);
+                }
+            } else {
+                debug_print!(self, "Plain call: {} in {}", method_call.method_name, method_call.caller);
+            }
+        }
+        
+        // Convert back to tuples for compatibility (gradual migration)
+        let calls: Vec<(String, String, crate::Range)> = method_calls.iter()
+            .map(|call| call.to_simple_call())
+            .collect();
+        
         for (caller_name, callee_name, _range) in &calls {
-            debug_print!(self, "Call: {} -> {}", caller_name, callee_name);
+            debug_print!(self, "Processing legacy format: {} -> {}", caller_name, callee_name);
             self.add_relationships_by_name(caller_name, callee_name, file_id, RelationKind::Calls)?;
         }
         
