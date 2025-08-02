@@ -33,6 +33,34 @@ use tokio::sync::RwLock;
 
 use crate::{SimpleIndexer, IndexPersistence, Settings, Symbol};
 
+/// Format a Unix timestamp as relative time (e.g., "2 hours ago")
+fn format_relative_time(timestamp: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    let diff = now.saturating_sub(timestamp);
+    
+    if diff < 60 {
+        "just now".to_string()
+    } else if diff < 3600 {
+        let mins = diff / 60;
+        format!("{} minute{} ago", mins, if mins == 1 { "" } else { "s" })
+    } else if diff < 86400 {
+        let hours = diff / 3600;
+        format!("{} hour{} ago", hours, if hours == 1 { "" } else { "s" })
+    } else if diff < 604800 {
+        let days = diff / 86400;
+        format!("{} day{} ago", days, if days == 1 { "" } else { "s" })
+    } else {
+        // For older dates, show the actual date
+        // This is a simple approximation
+        let date = std::time::UNIX_EPOCH + std::time::Duration::from_secs(timestamp);
+        format!("{:?}", date).replace("SystemTime { tv_sec: ", "").replace(", tv_nsec: 0 }", "")
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct FindSymbolRequest {
     /// Name of the symbol to find
@@ -378,10 +406,24 @@ impl CodeIntelligenceServer {
         let methods = kind_counts.get(&crate::SymbolKind::Method).unwrap_or(&0);
         let structs = kind_counts.get(&crate::SymbolKind::Struct).unwrap_or(&0);
         let traits = kind_counts.get(&crate::SymbolKind::Trait).unwrap_or(&0);
+        
+        // Get semantic search info
+        let semantic_info = if let Some(metadata) = indexer.get_semantic_metadata() {
+            format!(
+                "\n\nSemantic Search:\n  - Status: Enabled\n  - Model: {}\n  - Embeddings: {}\n  - Dimensions: {}\n  - Created: {}\n  - Updated: {}",
+                metadata.model_name,
+                metadata.embedding_count,
+                metadata.dimension,
+                format_relative_time(metadata.created_at),
+                format_relative_time(metadata.updated_at)
+            )
+        } else {
+            "\n\nSemantic Search:\n  - Status: Disabled".to_string()
+        };
 
         let result = format!(
-            "Index contains {} symbols across {} files.\n\nBreakdown:\n  - Symbols: {}\n  - Relationships: {}\n\nSymbol Kinds:\n  - Functions: {}\n  - Methods: {}\n  - Structs: {}\n  - Traits: {}",
-            symbol_count, file_count, symbol_count, relationship_count, functions, methods, structs, traits
+            "Index contains {} symbols across {} files.\n\nBreakdown:\n  - Symbols: {}\n  - Relationships: {}\n\nSymbol Kinds:\n  - Functions: {}\n  - Methods: {}\n  - Structs: {}\n  - Traits: {}{}",
+            symbol_count, file_count, symbol_count, relationship_count, functions, methods, structs, traits, semantic_info
         );
 
         Ok(CallToolResult::success(vec![Content::text(result)]))

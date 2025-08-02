@@ -1,0 +1,413 @@
+# Rust Code Intelligence System - Technical Architecture
+
+## Overview
+
+A high-performance, type-safe code indexing and intelligence system built in pure Rust. Designed to provide Claude (or any AI) with deep understanding of codebases through semantic search, dependency analysis, and real-time updates.
+
+## Core Principles
+
+1. **Type Safety First**: No SQL string manipulation, no dynamic types
+2. **Performance**: Target 10,000+ files/second indexing
+3. **Memory Efficient**: ~100MB for 1M symbols
+4. **Multi-Target**: Works standalone, in VS Code, or as MCP server
+
+## Architecture
+
+### Technology Stack
+
+```toml
+[package]
+name = "codanna"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core parsing
+tree-sitter = "*"
+tree-sitter-rust = "*"
+tree-sitter-typescript = "*"
+tree-sitter-python = "*"
+
+# Data structures
+petgraph = "*"        # Graph algorithms
+dashmap = "*"         # Concurrent hashmaps
+smallvec = "*"        # Small vector optimization
+
+# Search & indexing
+tantivy = "*"         # Full-text search
+hnsw = "*"            # Vector similarity search
+
+# Persistence
+sqlx = { version = "*", features = ["sqlite", "runtime-tokio"] }
+bincode = "*"         # Binary serialization
+
+# Async & parallel
+tokio = { version = "*", features = ["full"] }
+rayon = "*"           # Data parallelism
+
+# Embeddings
+candle = "*"          # Pure Rust ML inference
+tokenizers = "*"      # Fast tokenization
+
+# MCP integration
+rmcp = { version = "0.2.0", features = ["server"] }
+```
+
+### Core Data Structures
+
+```rust
+pub struct CodeIntelligence {
+    // In-memory graph for relationships
+    graph: Arc<RwLock<DiGraph<Symbol, Relationship>>>,
+    
+    // Symbol lookup - concurrent access
+    symbols: Arc<DashMap<SymbolId, Symbol>>,
+    
+    // Vector embeddings for semantic search
+    embeddings: Arc<RwLock<EmbeddingIndex>>,
+    
+    // Full-text search
+    text_index: Arc<tantivy::Index>,
+    
+    // Persistent storage (metadata only)
+    db: SqlitePool,
+}
+
+pub struct Symbol {
+    id: SymbolId,
+    name: CompactString,      // Small string optimization
+    kind: SymbolKind,         // Enum: Function, Class, etc.
+    file_id: FileId,          
+    range: Range,             // Start/end positions
+    signature: Option<Box<str>>, // Lazy-loaded
+}
+
+pub struct Relationship {
+    kind: RelationKind,       // Calls, Extends, Implements
+    weight: f32,              // For ranking
+}
+```
+
+### Why These Choices
+
+**petgraph over Apache AGE**:
+- Type-safe graph operations
+- Zero serialization overhead
+- Rich algorithm library built-in
+- No SQL string building
+
+**tantivy over PostgreSQL FTS**:
+- Purpose-built for code search
+- Supports custom tokenizers
+- Memory-mapped indexes
+- No database round trips
+
+**Simple Vec<f32> over pgvector**:
+- Direct SIMD operations possible
+- No type conversion overhead
+- Easy to persist/load
+- Full control over similarity algorithms
+
+**DashMap over standard HashMap**:
+- Lock-free concurrent reads
+- Sharded for parallel writes
+- No global locks
+
+## Indexing Pipeline
+
+### Parallel Processing Strategy
+
+```rust
+pub struct ParallelIndexer {
+    // Thread-local parser pools
+    parsers: ThreadLocal<RefCell<ParserPool>>,
+    
+    // Work-stealing queue
+    queue: crossbeam::deque::Injector<PathBuf>,
+}
+
+// Process files in parallel chunks
+// Why: Maximize CPU utilization
+let chunk_size = num_cpus::get() * 4;
+files.par_chunks(chunk_size)
+    .map(|chunk| process_chunk(chunk))
+    .reduce(merge_results);
+```
+
+### Memory-Efficient Parsing
+
+```rust
+// Why: Avoid loading entire files into memory
+pub struct StreamingParser {
+    // Memory-mapped file access
+    mmap: Mmap,
+    
+    // Reuse parser allocations
+    parser: tree_sitter::Parser,
+    
+    // Incremental parsing state
+    tree: Option<tree_sitter::Tree>,
+}
+
+// Parse only what changed
+// Why: Sub-100ms incremental updates
+fn parse_incremental(&mut self, edit: InputEdit) {
+    if let Some(tree) = &self.tree {
+        self.tree = self.parser.parse_with(&mut |offset, _| {
+            &self.mmap[offset..]
+        }, Some(tree));
+    }
+}
+```
+
+### Embedding Generation
+
+```rust
+// Why use Candle: Pure Rust, no Python dependencies
+pub struct EmbeddingGenerator {
+    model: candle::Model,
+    tokenizer: Tokenizer,
+}
+
+impl EmbeddingGenerator {
+    // Batch processing for GPU efficiency
+    pub fn generate_batch(&self, symbols: &[Symbol]) -> Vec<[f32; 384]> {
+        // Group by similar length for padding efficiency
+        let batches = group_by_length(symbols, 32);
+        
+        // Process on GPU if available
+        #[cfg(feature = "cuda")]
+        let device = Device::cuda_if_available(0)?;
+        
+        // ... model inference
+    }
+}
+```
+
+## Search Architecture
+
+### Semantic Search
+
+```rust
+pub struct SemanticSearch {
+    // HNSW for approximate nearest neighbor
+    index: hnsw::HNSW<f32, DistCosine>,
+    
+    // Metadata storage
+    metadata: Vec<SymbolMetadata>,
+}
+
+// Why HNSW: O(log N) search with high recall
+impl SemanticSearch {
+    pub fn search(&self, query_embedding: &[f32], k: usize) -> Vec<SearchResult> {
+        let neighbors = self.index.search(query_embedding, k);
+        
+        // Post-process with additional filters
+        neighbors.into_iter()
+            .map(|idx| self.metadata[idx])
+            .filter(|m| m.is_public)  // Example filter
+            .collect()
+    }
+}
+```
+
+### Hybrid Search Strategy
+
+```rust
+// Combine multiple signals for best results
+pub async fn hybrid_search(
+    query: &str,
+    limit: usize
+) -> Vec<SearchResult> {
+    // Parallel search across indices
+    let (text_results, semantic_results, graph_results) = tokio::join!(
+        search_text_index(query),
+        search_semantic_index(query),
+        search_graph_patterns(query)
+    );
+    
+    // Rank fusion with learned weights
+    merge_and_rank(text_results, semantic_results, graph_results)
+}
+```
+
+## MCP Server Implementation
+
+```rust
+use rmcp::{tool_box, tool};
+
+#[tool_box]
+pub struct CodeIntelligenceTools {
+    engine: Arc<CodeIntelligence>,
+}
+
+#[tool_box]
+impl CodeIntelligenceTools {
+    #[tool(description = "Find semantically similar code")]
+    pub async fn find_similar(
+        &self,
+        code: String,
+        limit: Option<usize>
+    ) -> Result<Vec<SimilarCode>> {
+        let embedding = self.engine.generate_embedding(&code).await?;
+        self.engine.search_similar(&embedding, limit.unwrap_or(10)).await
+    }
+    
+    #[tool(description = "Analyze impact of changes")]
+    pub async fn analyze_impact(
+        &self,
+        file: String,
+        function: String
+    ) -> Result<ImpactAnalysis> {
+        // Graph traversal to find dependencies
+        let node = self.engine.find_symbol(&file, &function)?;
+        let impacted = self.engine.traverse_dependents(node, 3);
+        
+        Ok(ImpactAnalysis {
+            direct_callers: impacted[0].len(),
+            total_affected: impacted.iter().map(|l| l.len()).sum(),
+            critical_paths: self.find_critical_paths(node, &impacted),
+        })
+    }
+    
+    #[tool(description = "Get implementation context")]
+    pub async fn get_context(
+        &self,
+        file: String,
+        position: Position
+    ) -> Result<CodeContext> {
+        // Multi-level context gathering
+        let symbol = self.engine.symbol_at_position(&file, position)?;
+        
+        Ok(CodeContext {
+            definition: self.engine.get_definition(symbol)?,
+            references: self.engine.get_references(symbol)?,
+            call_hierarchy: self.engine.get_call_hierarchy(symbol, 2)?,
+            related_tests: self.engine.find_related_tests(symbol)?,
+        })
+    }
+}
+```
+
+## Performance Optimizations
+
+### Memory Layout
+
+```rust
+// Cache-line aligned for SIMD operations
+#[repr(C, align(64))]
+pub struct CompactSymbol {
+    name_offset: u32,     // Offset into string table
+    kind: u8,             // Enum discriminant
+    flags: u8,            // Bitflags for properties
+    file_id: u16,         // Limited to 65k files
+    start_line: u32,      
+    start_col: u16,
+    end_line: u32,
+    end_col: u16,
+}
+
+// Why: Fits in 32 bytes, 2 per cache line
+```
+
+### Zero-Copy Serialization
+
+```rust
+use rkyv::{Archive, Deserialize, Serialize};
+
+#[derive(Archive, Deserialize, Serialize)]
+pub struct GraphSnapshot {
+    nodes: Vec<CompactSymbol>,
+    edges: Vec<CompactEdge>,
+}
+
+// Memory-map the archive for instant loading
+let mmap = unsafe { MmapOptions::new().map(&file)? };
+let archived = unsafe { archived_root::<GraphSnapshot>(&mmap) };
+// No deserialization needed!
+```
+
+### Incremental Updates
+
+```rust
+pub struct IncrementalIndexer {
+    // Track file modifications
+    file_hashes: DashMap<PathBuf, u64>,
+    
+    // Dependency graph for invalidation
+    file_deps: DiGraph<FileId, ()>,
+}
+
+impl IncrementalIndexer {
+    pub async fn update_file(&self, path: &Path) -> Result<()> {
+        // Calculate what needs reindexing
+        let affected = self.calculate_affected_files(path);
+        
+        // Update only affected symbols
+        for file in affected {
+            self.reindex_file(file).await?;
+        }
+        
+        Ok(())
+    }
+}
+```
+
+## Deployment Options
+
+### 1. Standalone Binary
+```bash
+# Single binary with everything
+cargo build --release
+./target/release/codanna index /path/to/code
+```
+
+### 2. Node.js Bindings
+```rust
+#[napi]
+pub async fn find_similar_code(code: String) -> Result<String> {
+    let engine = ENGINE.get_or_init(|| /* ... */);
+    let results = engine.find_similar(&code).await?;
+    Ok(serde_json::to_string(&results)?)
+}
+```
+
+### 3. MCP Server
+```bash
+# Run as MCP server
+codanna serve --mcp --port 7777
+```
+
+### 4. Library
+```toml
+[dependencies]
+codanna = "0.1"
+```
+
+## Why This Architecture
+
+1. **Type Safety**: No runtime type errors from SQL
+2. **Performance**: Everything optimized for code analysis workloads
+3. **Memory Efficiency**: Compact representations, zero-copy where possible
+4. **Flexibility**: Use as library, binary, or service
+5. **Real-time**: Incremental updates keep index fresh
+6. **Scalable**: Handles millions of symbols efficiently
+
+## Performance Targets
+
+- **Indexing**: 10,000+ files/second
+- **Search Latency**: <10ms for semantic search
+- **Memory**: ~100 bytes per symbol
+- **Incremental Update**: <100ms per file
+- **Startup Time**: <1s with memory-mapped cache
+
+## Next Steps
+
+1. Implement core data structures with tests
+2. Build parallel indexing pipeline
+3. Create MCP tool interface
+4. Optimize memory layout with benchmarks
+5. Add language-specific parsers
+6. Deploy as VS Code integration
+
+This pure Rust approach ensures maximum performance, type safety, and ease of deployment across all target environments.

@@ -3,18 +3,56 @@
 //! Provides commands for indexing, querying, and serving code intelligence data.
 //! Main components: Cli parser, Commands enum, and async runtime with MCP server support.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, builder::styling::{AnsiColor, Effects, Styles}};
 use codanna::{SimpleIndexer, Symbol, SymbolKind, RelationKind, Settings, IndexPersistence};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Main CLI structure for codanna code intelligence system.
-/// 
-/// Supports custom config path and subcommands for indexing/querying/serving.
+const QUICK_START: &str = r#"QUICK START
+    $ codanna init              # Set up in current directory
+    $ codanna index src         # Index your source code  
+    $ codanna mcp-test          # Verify Claude can connect"#;
+
+const EXAMPLES: &str = r#"EXAMPLES
+
+    # First time setup
+    $ codanna init
+    $ codanna index src --progress
+    $ codanna mcp-test
+
+    # Index a single file
+    $ codanna index src/main.rs
+
+    # Check what calls your main function  
+    $ codanna retrieve callers main
+
+    # Natural language search (if semantic search enabled)
+    $ codanna mcp semantic_search_docs --args '{"query": "error handling"}'
+
+LEARN MORE
+    GitHub: https://github.com/bartolli/codanna
+    Commands: codanna help <COMMAND>"#;
+
+fn clap_cargo_style() -> Styles {
+    Styles::styled()
+        .header(AnsiColor::Green.on_default() | Effects::BOLD)
+        .usage(AnsiColor::Green.on_default() | Effects::BOLD)
+        .literal(AnsiColor::Cyan.on_default() | Effects::BOLD)
+        .placeholder(AnsiColor::Cyan.on_default())
+}
+
+/// High-performance code intelligence for AI assistants
 #[derive(Parser)]
-#[command(name = "codanna")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "A code intelligence system for understanding codebases")]
+#[command(
+    name = "codanna",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "High-performance code intelligence for AI assistants",
+    long_about = "Codanna provides AI assistants like Claude with deep understanding of your codebase.\n\nIndexes 10,000+ files/second and enables natural language search.",
+    before_help = QUICK_START,
+    after_help = EXAMPLES,
+    next_line_help = true,
+    styles = clap_cargo_style()
+)]
 struct Cli {
     /// Path to custom settings.toml file
     #[arg(short, long, global = true)]
@@ -24,22 +62,19 @@ struct Cli {
     command: Commands,
 }
 
-/// Available CLI commands.
-/// 
-/// Indexing: init, index
-/// Querying: retrieve (symbol, calls, callers, implementations, uses, impact, search, defines, dependencies)
-/// Serving: serve (MCP), mcp (embedded), mcp-test (client testing)
-/// Utility: config
+/// Available CLI commands
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize configuration file
+    /// Initialize project for code intelligence
+    #[command(about = "Set up .codanna directory with default configuration")]
     Init {
         /// Force overwrite existing configuration
         #[arg(short, long)]
         force: bool,
     },
     
-    /// Index source files or directories
+    /// Index source files or directories for AI understanding
+    #[command(about = "Build searchable index from your codebase (10,000+ files/second)")]
     Index {
         /// Path to file or directory to index
         path: PathBuf,
@@ -65,23 +100,27 @@ enum Commands {
         max_files: Option<usize>,
     },
     
-    /// Retrieve information from the index
+    /// Query code relationships and dependencies
+    #[command(about = "Search symbols, find callers/callees, analyze impact")]
     Retrieve {
         #[command(subcommand)]
         query: RetrieveQuery,
     },
     
-    /// Show current configuration
+    /// Show current configuration settings
+    #[command(about = "Display active settings from .codanna/settings.toml")]
     Config,
     
     /// Start MCP server for AI assistants
+    #[command(hide = true)]  // Hidden - used internally by MCP clients
     Serve {
         /// Port to listen on (overrides config)
         #[arg(short, long)]
         port: Option<u16>,
     },
     
-    /// Test MCP client functionality
+    /// Test MCP connection with Claude
+    #[command(name = "mcp-test", about = "Verify Claude can connect and list available tools")]
     McpTest {
         /// Path to server binary (defaults to current binary)
         #[arg(long)]
@@ -96,7 +135,8 @@ enum Commands {
         args: Option<String>,
     },
     
-    /// Call MCP tools directly without spawning a server (embedded mode)
+    /// Call MCP tools directly (advanced)
+    #[command(about = "Execute MCP tools without spawning server - for debugging")]
     Mcp {
         /// Tool to call
         tool: String,

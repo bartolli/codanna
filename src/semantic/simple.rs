@@ -53,6 +53,9 @@ pub struct SimpleSemanticSearch {
     
     /// Model dimensions for validation
     dimensions: usize,
+    
+    /// Metadata for tracking model info and timestamps
+    metadata: Option<crate::semantic::SemanticMetadata>,
 }
 
 impl std::fmt::Debug for SimpleSemanticSearch {
@@ -61,6 +64,7 @@ impl std::fmt::Debug for SimpleSemanticSearch {
             .field("embeddings_count", &self.embeddings.len())
             .field("dimensions", &self.dimensions)
             .field("model", &"<TextEmbedding>")
+            .field("metadata", &self.metadata)
             .finish()
     }
 }
@@ -88,6 +92,7 @@ impl SimpleSemanticSearch {
             embeddings: HashMap::new(),
             model: Mutex::new(text_model),
             dimensions,
+            metadata: None,
         })
     }
     
@@ -175,6 +180,11 @@ impl SimpleSemanticSearch {
         for id in symbol_ids {
             self.embeddings.remove(id);
         }
+    }
+    
+    /// Get the metadata if available
+    pub fn metadata(&self) -> Option<&crate::semantic::SemanticMetadata> {
+        self.metadata.as_ref()
     }
     
     /// Save embeddings to disk using the efficient vector storage
@@ -275,6 +285,7 @@ impl SimpleSemanticSearch {
             embeddings,
             model: Mutex::new(model),
             dimensions: metadata.dimension,
+            metadata: Some(metadata),
         })
     }
 }

@@ -180,6 +180,15 @@ impl SimpleIndexer {
         }
     }
     
+    /// Get semantic search metadata if available
+    pub fn get_semantic_metadata(&self) -> Option<crate::semantic::SemanticMetadata> {
+        if let Some(semantic) = &self.semantic_search {
+            semantic.lock().unwrap().metadata().cloned()
+        } else {
+            None
+        }
+    }
+    
     /// Save semantic search data to the given path
     pub fn save_semantic_search(&self, path: &Path) -> Result<(), crate::semantic::SemanticSearchError> {
         if let Some(semantic) = &self.semantic_search {

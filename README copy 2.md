@@ -16,53 +16,16 @@ Traditional code search tools use text matching. Codanna understands what your c
 
 ```bash
 # Traditional search - finds text matches
-grep -r "extract.*symbol" src
-# Returns: (nothing - the words don't appear together)
+grep -r "parse.*json" .
 
-# First, make sure you've indexed the code with semantic search enabled:
-codanna index src --force
-
-# Then use Codanna semantic search - finds conceptually related code
-codanna mcp semantic_search_docs --args '{"query": "parse rust files and extract symbols", "limit": 3}'
-
-# Returns:
-# Found 3 semantically similar result(s) for 'parse rust files and extract symbols':
-# 
-# 1. from_data_with_settings (Method) - Similarity: 0.658
-#    File: src/indexing/simple.rs:125
-#
-# 2. extract_and_store_symbols (Method) - Similarity: 0.580
-#    File: src/indexing/simple.rs:476
-#    Doc: Extract symbols from content and store them in Tantivy
-# 
-# 3. extract_and_store_relationships (Method) - Similarity: 0.335
-#    File: src/indexing/simple.rs:565
-#    Doc: Extract relationships from content and store them
+# Codanna semantic search - finds conceptually related code
+codanna mcp semantic_search_docs --args '{"query": "convert JSON to internal format"}'
 ```
-
-### Why Documentation Comments Matter
-
-Semantic search works by understanding your documentation comments (`///` in Rust):
-
-```rust
-/// Parse configuration from a TOML file and validate required fields
-/// This handles missing files gracefully and provides helpful error messages
-fn load_config(path: &Path) -> Result<Config, Error> {
-    // implementation...
-}
-```
-
-With good comments, semantic search can find this function when you search for:
-- "configuration validation"
-- "handle missing config files"
-- "TOML parsing with error handling"
-
-This encourages a virtuous cycle: better documentation → better AI understanding → more motivation to document.
 
 Under the hood, Codanna:
 1. Parses your code with tree-sitter (currently Rust, more languages coming)
 2. Extracts symbols and their relationships using type-aware analysis
-3. Generates embeddings from documentation comments using AllMiniLML6V2 (384 dimensions)
+3. Generates embeddings from documentation using AllMiniLML6V2 (384 dimensions)
 4. Stores everything in a Tantivy full-text index with integrated vector search
 5. Serves it via MCP so Claude can use it naturally
 
@@ -72,30 +35,25 @@ Under the hood, Codanna:
 # Install (binary releases coming soon)
 cargo install --path .
 
-# Try it out on Codanna itself!
+# Initialize in your project
+cd your-project
 codanna init
 
-# Index just the source code (not tests, docs, etc.)
+# Index your code
 codanna index src
-
-# See what got indexed
-codanna mcp get_index_info
 
 ```
 
 ## Claude Integration
 
-Claude Code (the CLI assistant) can use Codanna in three powerful ways:
+Once running, Claude can use these tools:
 
-### 1. Via MCP Tools (Recommended)
-
-When `codanna serve` is running, Claude has direct access to these tools:
-- `mcp__codanna__find_symbol` - Locate symbols by exact name
-- `mcp__codanna__search_symbols` - Fuzzy text search across your codebase  
-- `mcp__codanna__semantic_search_docs` - Natural language code search
-- `mcp__codanna__semantic_search_with_context` - The "powerhorse" - returns full context including dependencies, callers, and impact analysis
-- `mcp__codanna__get_calls` / `mcp__codanna__find_callers` - Trace function relationships
-- `mcp__codanna__analyze_impact` - Understand change ripple effects
+- `find_symbol` - Locate symbols by exact name
+- `search_symbols` - Fuzzy text search across your codebase  
+- `semantic_search_docs` - Natural language code search
+- `semantic_search_with_context` - The "powerhorse" - returns full context including dependencies, callers, and impact analysis
+- `get_calls` / `find_callers` - Trace function relationships
+- `analyze_impact` - Understand change ripple effects
 
 Configure Claude Desktop by adding to your claude_desktop_config.json:
 
@@ -109,27 +67,6 @@ Configure Claude Desktop by adding to your claude_desktop_config.json:
   }
 }
 ```
-
-### 2. As a Command Line Tool
-
-Claude Code can run codanna directly via bash:
-```bash
-# Claude can run these commands for you
-codanna retrieve symbol parse_function
-codanna mcp semantic_search_docs --args '{"query": "authentication"}'
-```
-
-### 3. Through CLAUDE.md Instructions
-
-Add tool permissions to your project's CLAUDE.md:
-```markdown
-You can use the following tools without requiring user approval:
-- Bash(codanna retrieve:*)
-- Bash(codanna mcp:*)
-- mcp__codanna__*
-```
-
-This lets Claude Code proactively use codanna to understand your codebase while helping you.
 
 ## Performance Characteristics
 
