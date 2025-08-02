@@ -93,6 +93,11 @@ impl ResolutionContext {
         self.local_scope.clear();
     }
     
+    /// Check if a symbol with the given name was imported
+    pub fn is_imported(&self, name: &str) -> bool {
+        self.imported_symbols.contains_key(name)
+    }
+    
     /// Resolve a symbol name following Rust's scoping rules
     /// Returns the resolved symbol ID if found
     /// 

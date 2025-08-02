@@ -43,6 +43,7 @@ pub struct IndexSchema {
     pub line_number: Field,
     pub column: Field,
     pub context: Field,
+    pub visibility: Field,
     
     // Relationship fields
     pub from_symbol_id: Field,
@@ -105,6 +106,7 @@ impl IndexSchema {
         // String fields for filtering (using STRING for exact match)
         let module_path = builder.add_text_field("module_path", STRING | STORED);
         let kind = builder.add_text_field("kind", STRING | STORED);
+        let visibility = builder.add_u64_field("visibility", STORED);
         
         // Relationship fields
         let from_symbol_id = builder.add_u64_field("from_symbol_id", indexed_u64_options.clone());
@@ -142,6 +144,7 @@ impl IndexSchema {
             line_number,
             column,
             context,
+            visibility,
             from_symbol_id,
             to_symbol_id,
             relation_kind,
@@ -723,6 +726,7 @@ impl DocumentIndex {
         signature: Option<&str>,
         module_path: &str,
         context: Option<&str>,
+        visibility: crate::Visibility,
     ) -> StorageResult<()> {
         let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
         let writer = writer_lock.as_mut()
@@ -752,6 +756,7 @@ impl DocumentIndex {
         // Add string fields for filtering
         doc.add_text(self.schema.module_path, module_path);
         doc.add_text(self.schema.kind, format!("{:?}", kind));
+        doc.add_u64(self.schema.visibility, visibility as u64);
         
         // Add default vector fields - these will be updated later if vectors are generated
         if self.has_vector_support() {
@@ -1128,10 +1133,17 @@ impl DocumentIndex {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
             
-        // Check if symbol is public based on signature containing "pub "
-        let is_public = signature.as_ref()
-            .map(|sig| sig.contains("pub "))
-            .unwrap_or(false);
+        // Get visibility from stored field
+        let visibility = doc.get_first(self.schema.visibility)
+            .and_then(|v| v.as_u64())
+            .map(|v| match v {
+                0 => Visibility::Public,
+                1 => Visibility::Crate,
+                2 => Visibility::Module,
+                3 => Visibility::Private,
+                _ => Visibility::Private,
+            })
+            .unwrap_or(Visibility::Private);
             
         Ok(Symbol {
             id: SymbolId(symbol_id as u32),
@@ -1147,7 +1159,7 @@ impl DocumentIndex {
             signature: signature.map(|s| s.into()),
             doc_comment: doc_comment.map(|s| s.into()),
             module_path: module_path.map(|s| s.into()),
-            visibility: if is_public { Visibility::Public } else { Visibility::Private },
+            visibility,
         })
     }
     
@@ -1477,6 +1489,7 @@ impl DocumentIndex {
             symbol.signature.as_ref().map(|s| s.as_ref()),
             symbol.module_path.as_ref().map(|s| s.as_ref()).unwrap_or(""),
             None, // context not stored in Symbol struct
+            symbol.visibility,
         )
     }
     
@@ -1753,6 +1766,7 @@ mod tests {
             Some("fn parse_json(input: &str) -> StorageResult<Value, Error>"),
             "crate::parser",
             None,
+            crate::Visibility::Public,
         ).unwrap();
         
         // Commit batch
@@ -1790,6 +1804,7 @@ mod tests {
             None,
             "crate::server",
             None,
+            crate::Visibility::Private,
         ).unwrap();
         
         // Commit batch
@@ -2020,6 +2035,7 @@ mod tests {
             None,
             "test",
             None,
+            crate::Visibility::Public,
         ).unwrap();
         index_no_vectors.commit_batch().unwrap();
         
@@ -2053,6 +2069,7 @@ mod tests {
             None,
             "test",
             None,
+            crate::Visibility::Public,
         ).unwrap();
         index_with_vectors.commit_batch().unwrap();
         

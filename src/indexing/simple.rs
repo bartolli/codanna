@@ -322,6 +322,23 @@ impl SimpleIndexer {
         }
     }
     
+    /// Index a file without resolving relationships (for batch operations)
+    pub fn index_file_no_resolve(&mut self, path: impl AsRef<Path>) -> IndexResult<crate::IndexingResult> {
+        self.start_tantivy_batch()?;
+        
+        match self.index_file_internal(path, false) {
+            Ok(result) => {
+                self.commit_tantivy_batch()?;
+                // Don't resolve relationships - caller will do it after all files
+                Ok(result)
+            }
+            Err(e) => {
+                // Rollback is automatic - uncommitted changes are discarded
+                Err(e)
+            }
+        }
+    }
+    
     fn index_file_internal(&mut self, path: impl AsRef<Path>, force: bool) -> IndexResult<crate::IndexingResult> {
         let path = path.as_ref();
         let path_str = path.to_str().ok_or_else(|| {
@@ -423,6 +440,7 @@ impl SimpleIndexer {
     
     /// Index or re-index file content
     fn reindex_file_content(&mut self, path: &Path, path_str: &str, file_id: FileId, content: &str) -> IndexResult<FileId> {
+        debug_print!(self, "reindex_file_content called with path: {:?} (absolute: {})", path, path.is_absolute());
         let language = self.detect_language(path)?;
         let mut parser = self.create_parser(language)?;
         let module_path = self.calculate_module_path(path);
@@ -469,16 +487,29 @@ impl SimpleIndexer {
         let root = self.settings.workspace_root.as_ref()
             .or(self.settings.indexing.project_root.as_ref())?;
             
+        debug_print!(self, "Calculating module path for {:?} with root {:?}", path, root);
+        
         // Use ImportResolver's module_path_from_file for Rust files
-        if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-            ImportResolver::module_path_from_file(path, root)
+        let module_path = if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            // Make path absolute if it's relative
+            let abs_path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                root.join(path)
+            };
+            let result = ImportResolver::module_path_from_file(&abs_path, root);
+            debug_print!(self, "ImportResolver returned: {:?}", result);
+            result
         } else {
             // For other languages, just return the relative path
             path.canonicalize().ok()?
                 .strip_prefix(root.canonicalize().ok()?)
                 .ok()
                 .and_then(|relative_path| relative_path.to_str().map(|s| s.to_string()))
-        }
+        };
+        
+        debug_print!(self, "Module path for {:?}: {:?}", path, module_path);
+        module_path
     }
     
     /// Get the next symbol counter from Tantivy
@@ -508,7 +539,7 @@ impl SimpleIndexer {
         if !imports.is_empty() {
             debug_print!(self, "Found {} imports in file {:?}", imports.len(), file_id);
             for import in &imports {
-                eprintln!("  - Import: {} (alias: {:?}, glob: {})", import.path, import.alias, import.is_glob);
+                debug_print!(self, "  - Import: {} (alias: {:?}, glob: {})", import.path, import.alias, import.is_glob);
             }
         }
         for import in imports {
@@ -536,7 +567,13 @@ impl SimpleIndexer {
     fn configure_symbol(&self, symbol: &mut crate::Symbol, module_path: &Option<String>, language: Language) {
         // Set module path if available
         if symbol.module_path.is_none() {
-            symbol.module_path = module_path.clone().map(Into::into);
+            if let Some(mod_path) = module_path {
+                // Create full qualified path including symbol name
+                symbol.module_path = Some(format!("{}::{}", mod_path, symbol.name).into());
+                debug_print!(self, "Set module path for symbol '{}': {:?}", symbol.name, symbol.module_path);
+            }
+        } else {
+            debug_print!(self, "Symbol '{}' already has module path: {:?}", symbol.name, symbol.module_path);
         }
         
         // Determine visibility based on language rules
@@ -588,8 +625,10 @@ impl SimpleIndexer {
     ) -> IndexResult<()> {
         // 1. Function/method calls
         let calls = parser.find_calls(content);
-        for (caller_name, callee_name, _range) in calls {
-            self.add_relationships_by_name(&caller_name, &callee_name, file_id, RelationKind::Calls)?;
+        debug_print!(self, "Found {} calls in file {:?}", calls.len(), file_id);
+        for (caller_name, callee_name, _range) in &calls {
+            debug_print!(self, "Call: {} -> {}", caller_name, callee_name);
+            self.add_relationships_by_name(caller_name, callee_name, file_id, RelationKind::Calls)?;
         }
         
         // 2. Trait implementations
@@ -1316,7 +1355,12 @@ impl SimpleIndexer {
         // Check for receiver@method pattern
         let (receiver, method_name) = match call_target.find('@') {
             Some(pos) => (&call_target[..pos], &call_target[pos + 1..]),
-            None => return context.resolve(call_target), // Regular function call
+            None => {
+                debug_print!(self, "No receiver found, resolving '{}' as regular function", call_target);
+                let result = context.resolve(call_target);
+                debug_print!(self, "Regular function resolution result: {:?}", result);
+                return result;
+            }
         };
         
         debug_print!(self, "Resolving method call: receiver={}, method={}", receiver, method_name);
@@ -1368,7 +1412,7 @@ impl SimpleIndexer {
             for import in imports {
                 // Resolve the import to actual symbols
                 if let Some(symbol_id) = self.import_resolver.resolve_symbol(
-                    import.path.split("::").last().unwrap_or(&import.path),
+                    &import.path,  // Pass full path, not just last segment
                     file_id,
                     &self.document_index
                 ) {
@@ -1377,6 +1421,7 @@ impl SimpleIndexer {
                     } else {
                         import.path.split("::").last().unwrap_or(&import.path).to_string()
                     };
+                    debug_print!(self, "Adding import to context: name='{}', symbol_id={:?}", name, symbol_id);
                     context.add_import(name, symbol_id, import.alias.is_some());
                 }
             }
@@ -1451,6 +1496,9 @@ impl SimpleIndexer {
             let context = self.build_resolution_context(file_id)?;
             
             for rel in file_relationships {
+                debug_print!(self, "Processing relationship: {} -> {} (kind: {:?}, file: {:?})", 
+                    rel.from_name, rel.to_name, rel.kind, rel.file_id);
+                
                 // Find 'from' symbols - these should be in the current file
                 let all_from_symbols = self.document_index.find_symbols_by_name(&rel.from_name)
                     .map_err(|e| IndexError::TantivyError {
@@ -1462,6 +1510,8 @@ impl SimpleIndexer {
                 let from_symbols: Vec<_> = all_from_symbols.into_iter()
                     .filter(|s| s.file_id == file_id)
                     .collect();
+                
+                debug_print!(self, "Found {} from_symbols in current file", from_symbols.len());
                 
                 
                 // Use ResolutionContext to resolve the target symbol (except for Defines)
@@ -1516,14 +1566,22 @@ impl SimpleIndexer {
                     // Look for the method in the current module
                     context.resolve(method_name)
                 } else if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
+                    debug_print!(self, "Resolving as method call: '{}'", rel.to_name);
                     self.resolve_method_call(&rel.to_name, file_id, &context)
                 } else {
-                    context.resolve(&rel.to_name)
+                    debug_print!(self, "Resolving '{}' using context", rel.to_name);
+                    let result = context.resolve(&rel.to_name);
+                    debug_print!(self, "Resolution result: {:?}", result);
+                    result
                 };
                 
                 let to_symbol_id = match to_symbol_id {
-                    Some(id) => id,
+                    Some(id) => {
+                        debug_print!(self, "Resolved target symbol to: {:?}", id);
+                        id
+                    },
                     None => {
+                        debug_print!(self, "Failed to resolve target symbol - skipping");
                         // Symbol not in scope - skip this relationship
                         skipped_count += 1;
                         continue;
@@ -1531,33 +1589,49 @@ impl SimpleIndexer {
                 };
                 
                 // Get the full symbol data
+                debug_print!(self, "Looking up symbol by ID: {:?}", to_symbol_id);
                 let to_symbol = match self.document_index.find_symbol_by_id(to_symbol_id)
                     .map_err(|e| IndexError::TantivyError {
                         operation: "find_symbol_by_id".to_string(),
                         cause: e.to_string(),
                     })? {
-                    Some(symbol) => symbol,
+                    Some(symbol) => {
+                        debug_print!(self, "Found target symbol: {}", symbol.name);
+                        symbol
+                    },
                     None => {
+                        debug_print!(self, "Target symbol not found in index - skipping");
                         skipped_count += 1;
                         continue;
                     }
                 };
             
                 // Process with our filtering logic
+                debug_print!(self, "Processing {} from symbols", from_symbols.len());
                 for from_symbol in &from_symbols {
+                    debug_print!(self, "Checking relationship from {} to {}", from_symbol.name, to_symbol.name);
+                    
                     // Check symbol kind compatibility
                     if !Self::is_compatible_relationship(from_symbol.kind, to_symbol.kind, rel.kind) {
+                        debug_print!(self, "Incompatible relationship: {} ({:?}) -> {} ({:?}) for {:?}", 
+                            from_symbol.name, from_symbol.kind, to_symbol.name, to_symbol.kind, rel.kind);
                         skipped_count += 1;
                         continue;
                     }
                     
                     // Check visibility
+                    debug_print!(self, "Checking visibility: {} (vis: {:?}, module: {:?}) from {} (module: {:?})", 
+                        to_symbol.name, to_symbol.visibility, to_symbol.module_path,
+                        from_symbol.name, from_symbol.module_path);
                     if !Self::is_symbol_visible_from(&to_symbol, from_symbol) {
+                        debug_print!(self, "Symbol not visible: {} not visible from {}", to_symbol.name, from_symbol.name);
                         skipped_count += 1;
                         continue;
                     }
                     
                     // Add the relationship
+                    debug_print!(self, "Adding relationship: {} ({:?}) -> {} ({:?})", 
+                        from_symbol.name, from_symbol.id, to_symbol.name, to_symbol.id);
                     self.add_relationship_internal(from_symbol.id, to_symbol.id, Relationship::new(rel.kind))?;
                     resolved_count += 1;
                 }
@@ -1656,6 +1730,129 @@ mod tests {
     use std::path::PathBuf;
     
     use crate::{SymbolKind, RelationKind, Visibility, Symbol, SymbolId, FileId};
+    
+    #[test]
+    fn test_symbol_module_paths() {
+        use tempfile::TempDir;
+        use std::fs;
+        
+        // Create temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
+        
+        // Create src directory
+        let src_dir = project_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        
+        // Create a simple Rust file
+        let test_file = src_dir.join("test.rs");
+        fs::write(&test_file, r#"
+pub fn hello() {}
+pub struct World;
+"#).unwrap();
+        
+        // Create indexer with proper settings
+        let settings = Arc::new(Settings {
+            workspace_root: Some(project_root.to_path_buf()),
+            index_path: project_root.join(".test_index"),
+            ..Settings::default()
+        });
+        
+        let mut indexer = SimpleIndexer::with_settings(settings);
+        
+        // Index the file
+        indexer.index_file(&test_file).unwrap();
+        
+        // Find symbols and check their module paths
+        let hello_symbols = indexer.document_index.find_symbols_by_name("hello").unwrap();
+        assert_eq!(hello_symbols.len(), 1);
+        assert_eq!(hello_symbols[0].module_path.as_ref().map(|s| s.as_ref()), Some("crate::test::hello"));
+        
+        let world_symbols = indexer.document_index.find_symbols_by_name("World").unwrap();
+        assert_eq!(world_symbols.len(), 1);
+        assert_eq!(world_symbols[0].module_path.as_ref().map(|s| s.as_ref()), Some("crate::test::World"));
+    }
+    
+    #[test]
+    fn test_simple_import_resolution() {
+        use tempfile::TempDir;
+        use std::fs;
+        
+        // Create temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
+        
+        // Create src directory
+        let src_dir = project_root.join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        
+        // Create config.rs with a function
+        let config_file = src_dir.join("config.rs");
+        fs::write(&config_file, r#"
+pub fn create_config() -> String {
+    "config".to_string()
+}
+"#).unwrap();
+        
+        // Create another.rs with a different function of same name
+        let another_file = src_dir.join("another.rs");
+        fs::write(&another_file, r#"
+pub fn create_config() -> i32 {
+    42
+}
+"#).unwrap();
+        
+        // Create main.rs that imports only from config
+        let main_file = src_dir.join("main.rs");
+        fs::write(&main_file, r#"
+use crate::config::create_config;
+
+fn main() {
+    let cfg = create_config();
+}
+"#).unwrap();
+        
+        // Create indexer with proper settings
+        let settings = Arc::new(Settings {
+            workspace_root: Some(project_root.to_path_buf()),
+            index_path: project_root.join(".test_index"),
+            ..Settings::default()
+        });
+        
+        let mut indexer = SimpleIndexer::with_settings(settings);
+        
+        // Index all files
+        indexer.index_file(&config_file).unwrap();
+        indexer.index_file(&another_file).unwrap();
+        indexer.index_file(&main_file).unwrap();
+        
+        // Check that symbols have correct module paths
+        let config_funcs = indexer.document_index.find_symbols_by_name("create_config").unwrap();
+        assert_eq!(config_funcs.len(), 2);
+        
+        // Verify module paths
+        let config_create = config_funcs.iter()
+            .find(|s| s.module_path.as_ref().map(|m| m.as_ref()) == Some("crate::config::create_config"))
+            .expect("Should find crate::config::create_config");
+        let _another_create = config_funcs.iter()
+            .find(|s| s.module_path.as_ref().map(|m| m.as_ref()) == Some("crate::another::create_config"))
+            .expect("Should find crate::another::create_config");
+        
+        // Verify import was registered
+        let main_symbols = indexer.document_index.find_symbols_by_name("main").unwrap();
+        assert_eq!(main_symbols.len(), 1);
+        let main_file_id = main_symbols[0].file_id;
+        
+        // Test that resolve_symbol works correctly
+        let resolved = indexer.import_resolver.resolve_symbol(
+            "create_config",
+            main_file_id,
+            &indexer.document_index
+        );
+        
+        // Should resolve to config::create_config, not another::create_config
+        assert_eq!(resolved, Some(config_create.id));
+    }
     
     #[test]
     fn test_symbols_in_same_module() {
@@ -1800,9 +1997,7 @@ fn main() {
         assert_eq!(resolved.unwrap(), helper_symbols[0].id);
     }
     
-    // TODO: This test needs more work to handle the complexity of import-based resolution
-    // with current parser limitations on extracting full qualified paths
-    #[ignore]
+    // Test import-based resolution - should now work with our fixes
     #[test]
     fn test_import_based_relationship_resolution() {
         use tempfile::TempDir;
@@ -1876,21 +2071,26 @@ pub struct Another {
 }
 "#).unwrap();
         
-        // Create indexer
+        // Create indexer with debug enabled
         let settings = Arc::new(Settings {
             workspace_root: Some(project_root.to_path_buf()),
             index_path: PathBuf::from(".test_import_resolution"),
+            debug: true,
             ..Settings::default()
         });
         
         let mut indexer = SimpleIndexer::with_settings(settings);
         
         // Index files
-        indexer.index_file(&config_path).unwrap();
-        indexer.index_file(&another_path).unwrap();
-        indexer.index_file(&main_path).unwrap();
+        // Use index_file_no_resolve to batch indexing without resolving relationships
+        indexer.index_file_no_resolve(&config_path).unwrap();
+        indexer.index_file_no_resolve(&another_path).unwrap();
+        indexer.index_file_no_resolve(&main_path).unwrap();
         
-        // Resolve relationships
+        // Debug: Check unresolved relationships before resolution
+        eprintln!("Unresolved relationships before resolution: {:?}", indexer.unresolved_relationships);
+        
+        // Now resolve all relationships after all files are indexed
         indexer.resolve_cross_file_relationships().unwrap();
         
         // Verify correct resolution
@@ -1904,15 +2104,17 @@ pub struct Another {
             RelationKind::Calls
         ).unwrap();
         
+        eprintln!("Relationships from main: {:?}", relationships);
+        
         // Should have exactly one relationship (to create_config)
         assert_eq!(relationships.len(), 1, "main should call exactly one create_config function");
         
         // Verify it's config::create_config, not another::create_config
-        let (target_id, _, _) = &relationships[0];
+        let (_, target_id, _) = &relationships[0];  // Second element is to_id
         let target_symbol = indexer.document_index.find_symbol_by_id(*target_id).unwrap().unwrap();
         
         assert_eq!(target_symbol.name.as_ref(), "create_config");
-        assert_eq!(target_symbol.module_path.as_ref().map(|s| s.as_ref()), Some("crate::config"));
+        assert_eq!(target_symbol.module_path.as_ref().map(|s| s.as_ref()), Some("crate::config::create_config"));
     }
     
     #[test]

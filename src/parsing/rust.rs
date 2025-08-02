@@ -824,6 +824,26 @@ impl RustParser {
             range,
         );
         
+        // Check for visibility modifiers
+        if let Some(parent) = name_node.parent() {
+            // Check if there's a visibility_modifier child
+            let mut found_visibility = false;
+            for child in parent.children(&mut parent.walk()) {
+                if child.kind() == "visibility_modifier" {
+                    symbol = symbol.with_visibility(crate::Visibility::Public);
+                    found_visibility = true;
+                    break;
+                }
+            }
+            
+            // Debug: print if we're looking at a function
+            if parent.kind() == "function_item" && name == "create_config" {
+                eprintln!("DEBUG visibility check for create_config: found_visibility={}", found_visibility);
+                eprintln!("  Parent kind: {}", parent.kind());
+                eprintln!("  Children: {:?}", parent.children(&mut parent.walk()).map(|c| c.kind()).collect::<Vec<_>>());
+            }
+        }
+        
         if let Some(doc) = doc_comment {
             symbol = symbol.with_doc(doc);
         }
@@ -1362,6 +1382,33 @@ fn simple_doc() {}
             .expect("Should find simple_doc");
         assert!(simple.doc_comment.is_some());
         assert_eq!(simple.doc_comment.as_ref().unwrap().as_ref(), "Single line doc");
+    }
+    
+    #[test]
+    fn test_visibility_detection() {
+        let mut parser = RustParser::new().unwrap();
+        let code = r#"
+pub fn public_function() {}
+fn private_function() {}
+pub struct PublicStruct {}
+struct PrivateStruct {}
+        "#;
+        
+        let file_id = FileId::new(1).unwrap();
+        let mut counter = 1u32;
+        let symbols = parser.parse(code, file_id, &mut counter);
+        
+        // Find public_function
+        let pub_fn = symbols.iter()
+            .find(|s| s.name.as_ref() == "public_function")
+            .expect("Should find public_function");
+        assert_eq!(pub_fn.visibility, crate::Visibility::Public);
+        
+        // Find private_function
+        let priv_fn = symbols.iter()
+            .find(|s| s.name.as_ref() == "private_function")
+            .expect("Should find private_function");
+        assert_eq!(priv_fn.visibility, crate::Visibility::Private);
     }
     
     #[test]

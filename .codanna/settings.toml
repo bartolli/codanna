@@ -1,7 +1,7 @@
 version = 1
 index_path = ".codanna/index"
 workspace_root = "/Users/bartolli/Projects/codebase-intelligence"
-debug = false
+debug = true
 
 [indexing]
 parallel_threads = 16

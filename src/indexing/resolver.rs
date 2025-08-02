@@ -82,6 +82,12 @@ impl ImportResolver {
     ) -> Option<SymbolId> {
         eprintln!("DEBUG ImportResolver: Trying to resolve '{}' from file {:?}", name, from_file);
         
+        // If the name already contains "::", it's a full path, resolve it directly
+        if name.contains("::") {
+            eprintln!("DEBUG ImportResolver: Name contains '::', treating as full path");
+            return self.resolve_import_path(name, document_index);
+        }
+        
         // Check if there's a direct import for this name
         if let Some(imports) = self.imports_by_file.get(&from_file) {
             eprintln!("DEBUG ImportResolver: Found {} imports in file", imports.len());
@@ -124,22 +130,32 @@ impl ImportResolver {
     fn resolve_import_path(&self, path: &str, document_index: &DocumentIndex) -> Option<SymbolId> {
         eprintln!("DEBUG resolve_import_path: Resolving path '{}'", path);
         
-        // Split the path into segments
+        // Split the path to get the symbol name (last segment)
         let segments: Vec<&str> = path.split("::").collect();
         if segments.is_empty() {
             return None;
         }
         
-        // The last segment is the symbol name
         let symbol_name = segments.last()?;
+        eprintln!("DEBUG resolve_import_path: Looking for symbol '{}' with full path '{}'", symbol_name, path);
         
-        // Build the module path (all segments except the last)
-        let module_path = segments[..segments.len() - 1].join("::");
+        // Find symbols with this name
+        let candidates = document_index.find_symbols_by_name(symbol_name).ok()?;
+        eprintln!("DEBUG resolve_import_path: Found {} candidates for '{}'", candidates.len(), symbol_name);
         
-        eprintln!("DEBUG resolve_import_path: Looking for symbol '{}' in module '{}'", symbol_name, module_path);
+        // Find the one with matching full module path
+        for candidate in &candidates {
+            eprintln!("DEBUG resolve_import_path: Checking candidate with module_path: {:?}", candidate.module_path);
+            if let Some(module_path) = &candidate.module_path {
+                if module_path.as_ref() == path {
+                    eprintln!("DEBUG resolve_import_path: Found exact match!");
+                    return Some(candidate.id);
+                }
+            }
+        }
         
-        // Find the symbol in the module
-        self.find_symbol_in_module(symbol_name, &module_path, document_index)
+        eprintln!("DEBUG resolve_import_path: No exact match found for '{}'", path);
+        None
     }
     
     /// Find a symbol by name within a specific module
@@ -268,5 +284,51 @@ mod tests {
         // Verify import was stored
         assert!(resolver.imports_by_file.contains_key(&file_id_2));
         assert_eq!(resolver.imports_by_file[&file_id_2].len(), 1);
+    }
+    
+    #[test]
+    fn test_resolve_import_path() {
+        use crate::storage::DocumentIndex;
+        use crate::{Symbol, SymbolKind, SymbolId, Range};
+        
+        // Create a mock document index
+        let doc_index = DocumentIndex::new(":memory:").unwrap();
+        
+        // Create test symbols with full qualified paths
+        let config_symbol = Symbol::new(
+            SymbolId::new(1).unwrap(),
+            "ConfigA",
+            SymbolKind::Struct,
+            FileId::new(1).unwrap(),
+            Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_a::ConfigA");
+        
+        let another_config = Symbol::new(
+            SymbolId::new(2).unwrap(),
+            "ConfigA",
+            SymbolKind::Struct,
+            FileId::new(2).unwrap(),
+            Range::new(0, 0, 0, 0),
+        ).with_module_path("crate::module_b::ConfigA");
+        
+        // Index the symbols
+        doc_index.start_batch().unwrap();
+        doc_index.index_symbol(&config_symbol, "src/module_a.rs").unwrap();
+        doc_index.index_symbol(&another_config, "src/module_b.rs").unwrap();
+        doc_index.commit_batch().unwrap();
+        
+        let resolver = ImportResolver::new();
+        
+        // Test resolving the correct ConfigA
+        let result = resolver.resolve_import_path("crate::module_a::ConfigA", &doc_index);
+        assert_eq!(result, Some(SymbolId::new(1).unwrap()));
+        
+        // Test resolving the other ConfigA
+        let result = resolver.resolve_import_path("crate::module_b::ConfigA", &doc_index);
+        assert_eq!(result, Some(SymbolId::new(2).unwrap()));
+        
+        // Test non-existent path
+        let result = resolver.resolve_import_path("crate::module_c::ConfigA", &doc_index);
+        assert_eq!(result, None);
     }
 }
