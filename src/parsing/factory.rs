@@ -1,28 +1,36 @@
-//! Parser factory for creating language-specific parsers
+//! Language parser factory with configuration-based instantiation.
 //! 
-//! This module provides a factory for creating parsers based on
-//! language detection and configuration settings.
+//! Creates LanguageParser instances based on Language enum and Settings.
+//! Validates language enablement and provides discovery of supported languages.
 
 use std::sync::Arc;
 use crate::{Settings, IndexError, IndexResult};
 use super::{Language, LanguageParser, RustParser};
 
-/// Factory for creating language parsers based on configuration
+/// Parser factory that creates LanguageParser instances based on configuration.
+/// 
+/// Validates language support and configuration before instantiation.
+/// Currently supports: Rust (full), Python/JS/TS (placeholder).
 #[derive(Debug)]
 pub struct ParserFactory {
     settings: Arc<Settings>,
 }
 
 impl ParserFactory {
-    /// Create a new parser factory with the given settings
+    /// Creates factory instance with shared configuration.
+    /// 
+    /// Args: settings - Arc-wrapped Settings for thread-safe access across parsing tasks.
     pub fn new(settings: Arc<Settings>) -> Self {
         Self { settings }
     }
     
-    /// Create a parser for the specified language
+    /// Creates parser instance for the specified language.
+    /// 
+    /// Validates language is enabled in configuration before creation.
+    /// Returns ConfigError if language disabled, General error if unimplemented.
     #[must_use = "Parser creation may fail and should be handled"]
     pub fn create_parser(&self, language: Language) -> IndexResult<Box<dyn LanguageParser>> {
-        // Check if language is enabled in settings
+        // Validate language enablement before expensive parser creation
         let lang_key = language.config_key();
         if let Some(config) = self.settings.languages.get(lang_key) {
             if !config.enabled {
@@ -62,7 +70,9 @@ impl ParserFactory {
         }
     }
     
-    /// Check if a language is enabled
+    /// Checks if language is enabled in configuration.
+    /// 
+    /// Returns false if language not found in settings (fail-safe default).
     pub fn is_language_enabled(&self, language: Language) -> bool {
         let lang_key = language.config_key();
         self.settings.languages
@@ -71,7 +81,9 @@ impl ParserFactory {
             .unwrap_or(false)
     }
     
-    /// Get all enabled languages
+    /// Returns list of all enabled languages from configuration.
+    /// 
+    /// Filters all supported languages against settings.languages map.
     pub fn enabled_languages(&self) -> Vec<Language> {
         vec![Language::Rust, Language::Python, Language::JavaScript, Language::TypeScript]
             .into_iter()

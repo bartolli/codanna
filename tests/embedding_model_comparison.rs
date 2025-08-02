@@ -17,6 +17,7 @@ struct CodeExample {
 
 /// Model evaluation results
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ModelEvaluation {
     model_name: String,
     dimensions: usize,
