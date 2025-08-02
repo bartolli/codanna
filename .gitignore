@@ -7,3 +7,7 @@
 /rust-sdk-reference/
 
 .fastembed_cache/
+
+# Build artifacts
+*.rcgu.o
+*.rmeta
