@@ -203,6 +203,60 @@ impl MethodCall {
             (None, _) => self.method_name.clone(),
         }
     }
+    
+    /// Parse legacy string patterns into MethodCall
+    /// 
+    /// Handles the legacy tuple format used by the current parser system.
+    /// Converts patterns like:
+    /// - `"self.method"` → self method call
+    /// - `"Type::method"` → static method call  
+    /// - `"receiver@method"` → instance call with receiver hint
+    /// - `"method"` → plain function call
+    /// 
+    /// # Arguments
+    /// 
+    /// * `caller` - The function containing this method call
+    /// * `target` - The legacy target string with embedded patterns
+    /// * `range` - The source location of the call
+    /// 
+    /// # Examples
+    /// 
+    /// ```rust
+    /// let call = MethodCall::from_legacy_format("main", "self.validate", range);
+    /// assert!(call.is_self_call());
+    /// 
+    /// let call = MethodCall::from_legacy_format("init", "HashMap::new", range);
+    /// assert!(call.is_static);
+    /// ```
+    pub fn from_legacy_format(caller: &str, target: &str, range: Range) -> Self {
+        if let Some(method) = target.strip_prefix("self.") {
+            // Self method call: "self.validate" -> receiver="self", method="validate"
+            Self::new(caller, method, range)
+                .with_receiver("self")
+        } else if target.contains("::") {
+            // Static method call: "HashMap::new" -> receiver="HashMap", method="new", static=true
+            let parts: Vec<&str> = target.split("::").collect();
+            if parts.len() == 2 {
+                Self::new(caller, parts[1], range)
+                    .with_receiver(parts[0])
+                    .static_method()
+            } else {
+                Self::new(caller, target, range)
+            }
+        } else if target.contains('@') {
+            // Instance method with receiver hint: "file@write" -> receiver="file", method="write"
+            let parts: Vec<&str> = target.split('@').collect();
+            if parts.len() == 2 {
+                Self::new(caller, parts[1], range)
+                    .with_receiver(parts[0])
+            } else {
+                Self::new(caller, target, range)
+            }
+        } else {
+            // Plain function call or instance method (receiver information lost in legacy format)
+            Self::new(caller, target, range)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -235,9 +289,8 @@ mod tests {
         
         // Converting current output to MethodCall structures
         let method_calls: Vec<MethodCall> = parser_output.iter().map(|(caller, target, range)| {
-            let result = if target.starts_with("self.") {
+            let result = if let Some(method) = target.strip_prefix("self.") {
                 // Self method call
-                let method = &target[5..];
                 if debug {
                     eprintln!("DEBUG: Parsing self call '{}' -> method: '{}'", target, method);
                 }
@@ -474,20 +527,20 @@ mod tests {
         if debug {
             eprintln!("\nDEBUG: Priority 2 - Method chains:");
             eprintln!("  Chain: foo().bar().baz()");
-            for i in 0..3 {
+            for (i, call) in chain_calls[0..3].iter().enumerate() {
                 eprintln!("    Step {}: {} (receiver: {:?})",
                     i + 1,
-                    chain_calls[i].method_name,
-                    chain_calls[i].receiver
+                    call.method_name,
+                    call.receiver
                 );
             }
             
             eprintln!("\n  Chain: self.field.method()");
-            for i in 3..5 {
+            for (i, call) in chain_calls[3..5].iter().enumerate() {
                 eprintln!("    Step {}: {} (receiver: {:?})",
-                    i - 2,
-                    chain_calls[i].method_name,
-                    chain_calls[i].receiver
+                    i + 1,
+                    call.method_name,
+                    call.receiver
                 );
             }
         }
@@ -672,5 +725,56 @@ mod tests {
         
         assert_eq!(call1, call2);
         assert_ne!(call1, call3);
+    }
+    
+    #[test]
+    fn test_from_legacy_format() {
+        let range = test_range();
+        
+        // Test self method calls
+        let self_call = MethodCall::from_legacy_format("save", "self.validate", range);
+        assert_eq!(self_call.caller, "save");
+        assert_eq!(self_call.method_name, "validate");
+        assert_eq!(self_call.receiver, Some("self".to_string()));
+        assert!(!self_call.is_static);
+        assert!(self_call.is_self_call());
+        
+        // Test static method calls
+        let static_call = MethodCall::from_legacy_format("main", "HashMap::new", range);
+        assert_eq!(static_call.caller, "main");
+        assert_eq!(static_call.method_name, "new");
+        assert_eq!(static_call.receiver, Some("HashMap".to_string()));
+        assert!(static_call.is_static);
+        assert!(!static_call.is_self_call());
+        
+        // Test receiver hint pattern
+        let receiver_call = MethodCall::from_legacy_format("handler", "file@write", range);
+        assert_eq!(receiver_call.caller, "handler");
+        assert_eq!(receiver_call.method_name, "write");
+        assert_eq!(receiver_call.receiver, Some("file".to_string()));
+        assert!(!receiver_call.is_static);
+        assert!(!receiver_call.is_self_call());
+        
+        // Test plain function call
+        let plain_call = MethodCall::from_legacy_format("process", "clone", range);
+        assert_eq!(plain_call.caller, "process");
+        assert_eq!(plain_call.method_name, "clone");
+        assert_eq!(plain_call.receiver, None);
+        assert!(!plain_call.is_static);
+        assert!(plain_call.is_function_call());
+        
+        // Test malformed static call (more than 2 parts)
+        let malformed_static = MethodCall::from_legacy_format("test", "std::collections::HashMap::new", range);
+        assert_eq!(malformed_static.caller, "test");
+        assert_eq!(malformed_static.method_name, "std::collections::HashMap::new");
+        assert_eq!(malformed_static.receiver, None);
+        assert!(!malformed_static.is_static);
+        
+        // Test malformed receiver hint (more than 2 parts)
+        let malformed_receiver = MethodCall::from_legacy_format("test", "a@b@c", range);
+        assert_eq!(malformed_receiver.caller, "test");
+        assert_eq!(malformed_receiver.method_name, "a@b@c");
+        assert_eq!(malformed_receiver.receiver, None);
+        assert!(!malformed_receiver.is_static);
     }
 }

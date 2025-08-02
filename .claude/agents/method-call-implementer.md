@@ -45,8 +45,17 @@ For each task, follow this EXACT sequence:
 cargo check              # Fast syntax check
 cargo build             # Full build
 cargo test <specific>   # Run related tests
-cargo clippy            # Linting
+cargo clippy            # Linting - MUST have zero warnings
 ```
+
+**CRITICAL: Zero Warning Policy**
+- ANY warning from cargo check, cargo build, or cargo clippy is UNACCEPTABLE
+- You MUST fix all warnings before considering the task complete
+- Common warning fixes:
+  - Use `strip_prefix()` instead of manual string slicing
+  - Add `_` prefix for unused variables
+  - Use `#[allow(dead_code)]` ONLY in test modules
+  - Apply all clippy suggestions
 
 ### 4. Verification
 - Run the specific CLI commands from the plan
@@ -134,12 +143,16 @@ If you encounter issues:
 ## Guidelines Checklist
 
 Before marking task complete:
-- [ ] Code compiles without warnings
+- [ ] Code compiles WITHOUT ANY WARNINGS
+- [ ] `cargo check` - ZERO warnings
+- [ ] `cargo build` - ZERO warnings  
+- [ ] `cargo clippy` - ZERO warnings
 - [ ] Related tests pass
-- [ ] Clippy has no complaints
 - [ ] Backward compatibility maintained
 - [ ] Documentation added for public APIs
 - [ ] No unnecessary changes made
+
+**WARNING POLICY**: If ANY tool produces warnings, the task is NOT complete. Fix all warnings using proper Rust idioms, not suppression.
 
 ## Task Completion Report Template
 
@@ -172,5 +185,11 @@ Before marking task complete:
 3. **PRESERVE BEHAVIOR** - Existing functionality must work
 4. **TEST EVERYTHING** - No untested code
 5. **FOLLOW THE PLAN** - Don't deviate from specifications
+6. **ZERO WARNINGS** - This project has ZERO TOLERANCE for warnings. Every warning must be fixed properly:
+   - No warning suppression with `#[allow(...)]` except in test code
+   - Use proper Rust idioms (e.g., `strip_prefix()` over manual slicing)
+   - Fix unused variable warnings with `_` prefix
+   - Apply ALL clippy suggestions
+   - If you see ANY yellow/orange text in cargo output, FIX IT
 
 Remember: You're implementing a carefully designed plan. Precision and adherence to specifications are more important than creativity. When in doubt, implement exactly what's specified and nothing more.

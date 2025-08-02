@@ -4,6 +4,7 @@
 //! must implement to work with the indexing system.
 
 use crate::{Symbol, FileId, Range};
+use crate::parsing::method_call::MethodCall;
 use tree_sitter::Node;
 use std::any::Any;
 
@@ -27,6 +28,22 @@ pub trait LanguageParser: Send + Sync {
     /// 
     /// Returns tuples of (caller_name, callee_name, range)
     fn find_calls(&mut self, code: &str) -> Vec<(String, String, Range)>;
+    
+    /// Find method calls with rich receiver information
+    /// 
+    /// Default implementation converts from find_calls() for backward compatibility.
+    /// Parsers can override this method to provide enhanced receiver tracking.
+    /// 
+    /// # Returns
+    /// 
+    /// A vector of MethodCall structs with structured receiver information
+    fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
+        self.find_calls(code).into_iter()
+            .map(|(caller, target, range)| {
+                MethodCall::from_legacy_format(&caller, &target, range)
+            })
+            .collect()
+    }
     
     /// Find trait/interface implementations
     /// 
