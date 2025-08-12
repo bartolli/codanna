@@ -294,6 +294,25 @@ fn default_languages() -> HashMap<String, LanguageConfig> {
         },
     );
 
+    // PHP configuration
+    langs.insert(
+        "php".to_string(),
+        LanguageConfig {
+            enabled: false,
+            extensions: vec![
+                "php".to_string(),
+                "php3".to_string(),
+                "php4".to_string(),
+                "php5".to_string(),
+                "php7".to_string(),
+                "php8".to_string(),
+                "phps".to_string(),
+                "phtml".to_string(),
+            ],
+            parser_options: HashMap::new(),
+        },
+    );
+
     langs
 }
 

@@ -8,7 +8,7 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
 };
 use codanna::FileId;
-use codanna::parsing::{LanguageParser, PythonParser, RustParser};
+use codanna::parsing::{LanguageParser, PhpParser, PythonParser, RustParser};
 use codanna::{IndexPersistence, RelationKind, Settings, SimpleIndexer, Symbol, SymbolKind};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -3000,14 +3000,17 @@ fn run_benchmark_command(language: &str, custom_file: Option<PathBuf>) {
     match language.to_lowercase().as_str() {
         "rust" => benchmark_rust_parser(custom_file),
         "python" => benchmark_python_parser(custom_file),
+        "php" => benchmark_php_parser(custom_file),
         "all" => {
             benchmark_rust_parser(None);
             println!();
             benchmark_python_parser(None);
+            println!();
+            benchmark_php_parser(None);
         }
         _ => {
             eprintln!("Unknown language: {language}");
-            eprintln!("Available languages: rust, python, all");
+            eprintln!("Available languages: rust, python, php, all");
             std::process::exit(1);
         }
     }
@@ -3063,6 +3066,22 @@ fn benchmark_python_parser(custom_file: Option<PathBuf>) {
 
     let mut parser = PythonParser::new().expect("Failed to create Python parser");
     benchmark_parser("Python", &mut parser, &code, file_path);
+}
+
+fn benchmark_php_parser(custom_file: Option<PathBuf>) {
+    let (code, file_path) = if let Some(path) = custom_file {
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("Failed to read {}: {e}", path.display());
+            std::process::exit(1);
+        });
+        (content, Some(path))
+    } else {
+        // Generate benchmark code
+        (generate_php_benchmark_code(), None)
+    };
+
+    let mut parser = PhpParser::new().expect("Failed to create PHP parser");
+    benchmark_parser("PHP", &mut parser, &code, file_path);
 }
 
 fn benchmark_parser(
@@ -3194,6 +3213,78 @@ fn generate_python_benchmark_code() -> String {
         ));
     }
 
+    code
+}
+
+fn generate_php_benchmark_code() -> String {
+    let mut code = String::from("<?php\n/**\n * PHP benchmark file\n */\n\n");
+
+    // Generate 500 functions
+    for i in 0..500 {
+        code.push_str(&format!(
+            r#"/**
+ * Function {i} documentation
+ */
+function function_{i}(int $param1, string $param2 = 'default'): bool {{
+    $result = $param1 * 2;
+    return $result > 0;
+}}
+
+"#
+        ));
+    }
+
+    // Generate 50 classes with methods
+    for i in 0..50 {
+        code.push_str(&format!(
+            r#"/**
+ * Class {i} documentation
+ */
+class Class_{i} {{
+    private int $value;
+    
+    public function __construct(int $value) {{
+        $this->value = $value;
+    }}
+    
+    public function methodA(): int {{
+        return $this->value * 2;
+    }}
+    
+    public function methodB(string $param): string {{
+        return strtoupper($param);
+    }}
+}}
+
+"#
+        ));
+    }
+
+    // Generate 25 interfaces
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"interface Interface_{i} {{
+    public function method_{i}(): void;
+}}
+
+"#
+        ));
+    }
+
+    // Generate 25 traits
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"trait Trait_{i} {{
+    public function traitMethod_{i}(): string {{
+        return 'trait_{i}';
+    }}
+}}
+
+"#
+        ));
+    }
+
+    code.push_str("?>");
     code
 }
 

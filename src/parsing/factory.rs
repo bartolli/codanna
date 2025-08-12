@@ -3,7 +3,7 @@
 //! Creates LanguageParser instances based on Language enum and Settings.
 //! Validates language enablement and provides discovery of supported languages.
 
-use super::{Language, LanguageParser, PythonParser, RustParser};
+use super::{Language, LanguageParser, PhpParser, PythonParser, RustParser};
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
 
@@ -67,6 +67,10 @@ impl ParserFactory {
                     language.name()
                 )))
             }
+            Language::Php => {
+                let parser = PhpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
         }
     }
 
@@ -91,6 +95,7 @@ impl ParserFactory {
             Language::Python,
             Language::JavaScript,
             Language::TypeScript,
+            Language::Php,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))

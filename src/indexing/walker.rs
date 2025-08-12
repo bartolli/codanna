@@ -87,6 +87,7 @@ impl FileWalker {
             Language::Python,
             Language::JavaScript,
             Language::TypeScript,
+            Language::Php,
         ]
         .into_iter()
         .filter(|&lang| {

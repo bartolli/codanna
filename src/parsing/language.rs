@@ -12,6 +12,7 @@ pub enum Language {
     Python,
     JavaScript,
     TypeScript,
+    Php,
 }
 
 impl Language {
@@ -22,6 +23,9 @@ impl Language {
             "py" | "pyi" => Some(Language::Python),
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
             "ts" | "tsx" | "mts" | "cts" => Some(Language::TypeScript),
+            "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => {
+                Some(Language::Php)
+            }
             _ => None,
         }
     }
@@ -40,6 +44,9 @@ impl Language {
             Language::Python => &["py", "pyi"],
             Language::JavaScript => &["js", "jsx", "mjs", "cjs"],
             Language::TypeScript => &["ts", "tsx", "mts", "cts"],
+            Language::Php => &[
+                "php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml",
+            ],
         }
     }
 
@@ -50,6 +57,7 @@ impl Language {
             Language::Python => "python",
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
+            Language::Php => "php",
         }
     }
 
@@ -60,6 +68,7 @@ impl Language {
             Language::Python => "Python",
             Language::JavaScript => "JavaScript",
             Language::TypeScript => "TypeScript",
+            Language::Php => "PHP",
         }
     }
 }
@@ -85,6 +94,10 @@ mod tests {
         assert_eq!(Language::from_extension("jsx"), Some(Language::JavaScript));
         assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
         assert_eq!(Language::from_extension("tsx"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("php"), Some(Language::Php));
+        assert_eq!(Language::from_extension("PHP"), Some(Language::Php));
+        assert_eq!(Language::from_extension("php5"), Some(Language::Php));
+        assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -110,6 +123,14 @@ mod tests {
             Language::from_path(Path::new("types.d.ts")),
             Some(Language::TypeScript)
         );
+        assert_eq!(
+            Language::from_path(Path::new("index.php")),
+            Some(Language::Php)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("src/class.php5")),
+            Some(Language::Php)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -119,5 +140,8 @@ mod tests {
         assert!(Language::Python.extensions().contains(&"py"));
         assert!(Language::JavaScript.extensions().contains(&"js"));
         assert!(Language::TypeScript.extensions().contains(&"ts"));
+        assert!(Language::Php.extensions().contains(&"php"));
+        assert!(Language::Php.extensions().contains(&"php5"));
+        assert!(Language::Php.extensions().contains(&"phtml"));
     }
 }
