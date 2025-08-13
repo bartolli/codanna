@@ -31,11 +31,22 @@ impl LanguageBehavior for CSharpBehavior {
     }
 
     fn parse_visibility(&self, signature: &str) -> Visibility {
-        if signature.contains("public ") {
+        // Check for combined modifiers first, in order of decreasing permissiveness
+        if signature.contains("protected internal ") || signature.contains("internal protected ") {
+            // C# 'protected internal' means accessible from the same assembly or any derived type
+            // This is most similar to 'crate' in Rust, but more permissive than 'protected' alone
+            Visibility::Crate
+        } else if signature.contains("private protected ") {
+            // C# 'private protected' means accessible from the same assembly and only by derived types
+            // This is more restrictive than 'protected internal'
+            Visibility::Module
+        } else if signature.contains("public ") {
             Visibility::Public
         } else if signature.contains("internal ") {
+            // Only 'internal', not part of a combined modifier
             Visibility::Crate
         } else if signature.contains("protected ") {
+            // Only 'protected', not part of a combined modifier
             Visibility::Module
         } else if signature.contains("private ") {
             Visibility::Private
@@ -50,7 +61,7 @@ impl LanguageBehavior for CSharpBehavior {
     }
 
     fn supports_traits(&self) -> bool {
-        false // C# uses interfaces, not traits
+        true // C# supports interface-like behavior via interfaces (analogous to traits)
     }
 
     fn get_language(&self) -> Language {
