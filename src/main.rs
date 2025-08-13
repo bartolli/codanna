@@ -8,7 +8,7 @@ use clap::{
     builder::styling::{AnsiColor, Effects, Styles},
 };
 use codanna::FileId;
-use codanna::parsing::{LanguageParser, PhpParser, PythonParser, RustParser};
+use codanna::parsing::{CSharpParser, LanguageParser, PhpParser, PythonParser, RustParser};
 use codanna::types::SymbolCounter;
 use codanna::{IndexPersistence, RelationKind, Settings, SimpleIndexer, Symbol, SymbolKind};
 use serde::Serialize;
@@ -3227,16 +3227,19 @@ fn run_benchmark_command(language: &str, custom_file: Option<PathBuf>) {
         "rust" => benchmark_rust_parser(custom_file),
         "python" => benchmark_python_parser(custom_file),
         "php" => benchmark_php_parser(custom_file),
+        "csharp" => benchmark_csharp_parser(custom_file),
         "all" => {
             benchmark_rust_parser(None);
             println!();
             benchmark_python_parser(None);
             println!();
             benchmark_php_parser(None);
+            println!();
+            benchmark_csharp_parser(None);
         }
         _ => {
             eprintln!("Unknown language: {language}");
-            eprintln!("Available languages: rust, python, php, all");
+            eprintln!("Available languages: rust, python, php, csharp, all");
             std::process::exit(1);
         }
     }
@@ -3308,6 +3311,22 @@ fn benchmark_php_parser(custom_file: Option<PathBuf>) {
 
     let mut parser = PhpParser::new().expect("Failed to create PHP parser");
     benchmark_parser("PHP", &mut parser, &code, file_path);
+}
+
+fn benchmark_csharp_parser(custom_file: Option<PathBuf>) {
+    let (code, file_path) = if let Some(path) = custom_file {
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("Failed to read {}: {e}", path.display());
+            std::process::exit(1);
+        });
+        (content, Some(path))
+    } else {
+        // Generate benchmark code
+        (generate_csharp_benchmark_code(), None)
+    };
+
+    let mut parser = CSharpParser::new().expect("Failed to create C# parser");
+    benchmark_parser("C#", &mut parser, &code, file_path);
 }
 
 fn benchmark_parser(
@@ -3511,6 +3530,113 @@ class Class_{i} {{
     }
 
     code.push_str("?>");
+    code
+}
+
+fn generate_csharp_benchmark_code() -> String {
+    let mut code = String::new();
+
+    // Generate namespaces and using statements
+    code.push_str(
+        r#"using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace BenchmarkApp
+{
+    // Generate 100 classes with various members
+"#,
+    );
+
+    // Generate 100 classes
+    for i in 0..100 {
+        code.push_str(&format!(
+            r#"    /// <summary>
+    /// Class {i} documentation.
+    /// </summary>
+    public class Class_{i} : IInterface_{j}
+    {{
+        private int field_{i};
+        
+        public int Property_{i} {{ get; set; }}
+        
+        public event EventHandler Event_{i};
+        
+        public Class_{i}(int value)
+        {{
+            field_{i} = value;
+        }}
+        
+        public int MethodA()
+        {{
+            return field_{i} * 2;
+        }}
+        
+        public async Task<string> MethodB()
+        {{
+            await Task.Delay(1);
+            return $"Result_{{field_{i}}}";
+        }}
+        
+        public void ImplementedMethod()
+        {{
+            Console.WriteLine("Implementation {i}");
+        }}
+    }}
+
+"#,
+            j = i % 25
+        ));
+    }
+
+    // Generate 25 interfaces
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"    public interface IInterface_{i}
+    {{
+        void ImplementedMethod();
+        int Property_{i} {{ get; set; }}
+    }}
+
+"#
+        ));
+    }
+
+    // Generate 25 enums
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"    public enum Enum_{i}
+    {{
+        Value1,
+        Value2,
+        Value3
+    }}
+
+"#
+        ));
+    }
+
+    // Generate 25 structs
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"    public struct Struct_{i}
+    {{
+        public int X {{ get; set; }}
+        public int Y {{ get; set; }}
+        
+        public Struct_{i}(int x, int y)
+        {{
+            X = x;
+            Y = y;
+        }}
+    }}
+
+"#
+        ));
+    }
+
+    code.push_str("}\n");
     code
 }
 

@@ -4,8 +4,11 @@
 //! Validates language enablement and provides discovery of supported languages.
 
 use super::{
-    Language, LanguageBehavior, LanguageId, LanguageParser, PhpBehavior, PhpParser, PythonBehavior,
-    PythonParser, RustBehavior, RustParser, get_registry,
+    CSharpBehavior, CSharpParser, Language, LanguageBehavior, LanguageId, LanguageParser, PhpParser, PythonParser, RustParser,
+    get_registry,
+};
+use crate::parsing::{
+    php::PhpBehavior, python::PythonBehavior, rust::RustBehavior,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -146,6 +149,10 @@ impl ParserFactory {
                 let parser = PhpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::CSharp => {
+                let parser = CSharpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
         }
     }
 
@@ -206,6 +213,13 @@ impl ParserFactory {
                     behavior: Box::new(PhpBehavior::new()),
                 }
             }
+            Language::CSharp => {
+                let parser = CSharpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(CSharpBehavior::new()),
+                }
+            }
             Language::JavaScript | Language::TypeScript => {
                 return Err(IndexError::General(format!(
                     "{} parser not yet implemented.",
@@ -244,6 +258,7 @@ impl ParserFactory {
             Language::JavaScript,
             Language::TypeScript,
             Language::Php,
+            Language::CSharp,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))
