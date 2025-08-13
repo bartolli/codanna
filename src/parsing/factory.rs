@@ -4,11 +4,11 @@
 //! Validates language enablement and provides discovery of supported languages.
 
 use super::{
-    Language, LanguageBehavior, LanguageId, LanguageParser, PhpParser, PythonParser, RustParser,
+    Language, LanguageBehavior, LanguageId, LanguageParser, PhpParser, PythonParser, RustParser, SwiftParser,
     get_registry,
 };
 use crate::parsing::{
-    php_behavior::PhpBehavior, python_behavior::PythonBehavior, rust_behavior::RustBehavior,
+    php_behavior::PhpBehavior, python_behavior::PythonBehavior, rust_behavior::RustBehavior, swift_behavior::SwiftBehavior,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -149,6 +149,11 @@ impl ParserFactory {
                 let parser = PhpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Swift => {
+                let parser = SwiftParser::with_debug(self.settings.debug)
+                    .map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
         }
     }
 
@@ -209,6 +214,13 @@ impl ParserFactory {
                     behavior: Box::new(PhpBehavior::new()),
                 }
             }
+            Language::Swift => {
+                let parser = SwiftParser::with_debug(self.settings.debug).map_err(IndexError::General)?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(SwiftBehavior::new()),
+                }
+            }
             Language::JavaScript | Language::TypeScript => {
                 return Err(IndexError::General(format!(
                     "{} parser not yet implemented.",
@@ -230,6 +242,7 @@ impl ParserFactory {
             Language::JavaScript,
             Language::TypeScript,
             Language::Php,
+            Language::Swift,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))

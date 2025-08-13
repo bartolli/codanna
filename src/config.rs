@@ -302,6 +302,59 @@ fn fallback_minimal_languages() -> HashMap<String, LanguageConfig> {
         },
     );
 
+    // Python configuration
+    langs.insert(
+        "python".to_string(),
+        LanguageConfig {
+            enabled: false,
+            extensions: vec!["py".to_string(), "pyi".to_string()],
+            parser_options: HashMap::new(),
+        },
+    );
+
+    // TypeScript/JavaScript configuration
+    langs.insert(
+        "typescript".to_string(),
+        LanguageConfig {
+            enabled: false,
+            extensions: vec![
+                "ts".to_string(),
+                "tsx".to_string(),
+                "js".to_string(),
+                "jsx".to_string(),
+            ],
+            parser_options: HashMap::new(),
+        },
+    );
+
+    // PHP configuration
+    langs.insert(
+        "php".to_string(),
+        LanguageConfig {
+            enabled: false,
+            extensions: vec![
+                "php".to_string(),
+                "php3".to_string(),
+                "php4".to_string(),
+                "php5".to_string(),
+                "php7".to_string(),
+                "php8".to_string(),
+                "phps".to_string(),
+                "phtml".to_string(),
+            ],
+            parser_options: HashMap::new(),
+        },
+    );
+
+    // Swift configuration
+    langs.insert(
+        "swift".to_string(),
+        LanguageConfig {
+            enabled: true,
+            extensions: vec!["swift".to_string()],
+            parser_options: HashMap::new(),
+        },
+    );
     langs
 }
 
@@ -566,7 +619,7 @@ impl Settings {
             } else if line.starts_with("[languages.") {
                 if !in_languages_section {
                     result.push_str("\n# Language-specific settings\n");
-                    result.push_str("# Currently supported: Rust, Python, PHP\n");
+                    result.push_str("# Currently supported: Rust, Python, PHP, Swift\n");
                     in_languages_section = true;
                 }
                 result.push('\n');

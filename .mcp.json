@@ -2,11 +2,19 @@
   "mcpServers": {
     "Context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     },
     "codanna": {
       "command": "codanna",
-      "args": ["serve", "--watch", "--watch-interval", "5"]
+      "args": [
+        "serve",
+        "--watch",
+        "--watch-interval",
+        "5"
+      ]
     },
     "codanna-sse": {
       "type": "sse",

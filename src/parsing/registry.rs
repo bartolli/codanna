@@ -354,6 +354,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::rust_definition::register(registry);
     super::python_definition::register(registry);
     super::php_definition::register(registry);
+    super::swift_definition::register(registry);
 
     // Future languages will be added here:
     // super::javascript_definition::register(registry);

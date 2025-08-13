@@ -13,6 +13,9 @@ pub mod registry;
 pub mod rust;
 pub mod rust_behavior;
 pub mod rust_definition;
+pub mod swift;
+pub mod swift_behavior;
+pub mod swift_definition;
 
 pub use factory::{ParserFactory, ParserWithBehavior};
 pub use language::Language;
@@ -26,3 +29,5 @@ pub use python_behavior::PythonBehavior;
 pub use registry::{LanguageDefinition, LanguageId, LanguageRegistry, RegistryError, get_registry};
 pub use rust::RustParser;
 pub use rust_behavior::RustBehavior;
+pub use swift::SwiftParser;
+pub use swift_behavior::SwiftBehavior;
