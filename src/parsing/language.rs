@@ -29,6 +29,7 @@ impl Language {
             Language::JavaScript => super::LanguageId::new("javascript"),
             Language::TypeScript => super::LanguageId::new("typescript"),
             Language::Php => super::LanguageId::new("php"),
+            Language::CSharp => super::LanguageId::new("csharp"),
         }
     }
 

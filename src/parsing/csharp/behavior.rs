@@ -1,47 +1,59 @@
-//! C# language-specific behavior implementation
+//! C#-specific language behavior implementation
 
-use super::LanguageBehavior;
+use crate::Visibility;
+use crate::parsing::language_behavior::LanguageBehavior;
+use tree_sitter::Language;
 
-/// C# language-specific behavior implementation
-pub struct CSharpBehavior;
+/// C# language behavior implementation
+#[derive(Clone)]
+pub struct CSharpBehavior {
+    language: Language,
+}
 
 impl CSharpBehavior {
+    /// Create a new C# behavior instance
     pub fn new() -> Self {
-        Self
+        Self {
+            language: tree_sitter_c_sharp::LANGUAGE.into(),
+        }
+    }
+}
+
+impl Default for CSharpBehavior {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl LanguageBehavior for CSharpBehavior {
-    fn module_separator(&self) -> &str {
+    fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
+        format!("{}.{}", base_path, symbol_name)
+    }
+
+    fn parse_visibility(&self, signature: &str) -> Visibility {
+        if signature.contains("public ") {
+            Visibility::Public
+        } else if signature.contains("internal ") {
+            Visibility::Crate
+        } else if signature.contains("protected ") {
+            Visibility::Module
+        } else if signature.contains("private ") {
+            Visibility::Private
+        } else {
+            // Default to private if no modifier specified
+            Visibility::Private
+        }
+    }
+
+    fn module_separator(&self) -> &'static str {
         "."
     }
 
-    fn is_extension_method(&self, _name: &str) -> bool {
-        // C# extension methods are identified by having `this` as first parameter
-        // This would need proper parsing context to determine accurately
-        false
-    }
-
-    fn is_inherent_method(&self, _name: &str) -> bool {
-        // In C#, all methods defined directly in a class are inherent
-        // Would need more context to determine accurately
-        true
-    }
-
-    fn supports_extension_methods(&self) -> bool {
-        true
-    }
-
     fn supports_traits(&self) -> bool {
-        // C# has interfaces, not traits
-        false
+        false // C# uses interfaces, not traits
     }
 
-    fn supports_interfaces(&self) -> bool {
-        true
-    }
-
-    fn supports_namespaces(&self) -> bool {
-        true
+    fn get_language(&self) -> Language {
+        self.language.clone()
     }
 }

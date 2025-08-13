@@ -3586,6 +3586,7 @@ namespace BenchmarkApp
     }}
 
 "#,
+            i = i,
             j = i % 25
         ));
     }

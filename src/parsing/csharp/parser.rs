@@ -3,7 +3,8 @@
 use crate::indexing::Import;
 use crate::parsing::method_call::MethodCall;
 use crate::parsing::{Language, LanguageParser};
-use crate::{FileId, Range, Symbol, SymbolId, SymbolKind};
+use crate::types::SymbolCounter;
+use crate::{FileId, Range, Symbol, SymbolKind};
 use std::any::Any;
 use tree_sitter::{Node, Parser};
 
@@ -51,7 +52,7 @@ impl CSharpParser {
         code: &str,
         file_id: FileId,
         symbols: &mut Vec<Symbol>,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) {
         match node.kind() {
             "namespace_declaration" | "file_scoped_namespace_declaration" => {
@@ -144,12 +145,11 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = self.extract_namespace_name(node, code)?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Module, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -161,14 +161,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Class, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -183,14 +182,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Interface, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -205,14 +203,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Struct, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -224,14 +221,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Enum, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -243,14 +239,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         // Records are like classes in C#
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Class, file_id, range);
@@ -266,14 +261,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         // Delegates are like type aliases for functions
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::TypeAlias, file_id, range);
@@ -289,14 +283,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let kind = if self.is_inside_interface(node) {
             SymbolKind::Function
@@ -317,13 +310,12 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         // Get parent class name for constructor
         let name = self.get_parent_type_name(node, code)?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Method, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -338,14 +330,13 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         let name = node
             .child_by_field_name("name")
             .map(|n| &code[n.byte_range()])?;
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         // Properties are like fields but with accessors
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
@@ -361,7 +352,7 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Vec<Symbol> {
         let mut symbols = Vec::new();
 
@@ -374,14 +365,12 @@ impl CSharpParser {
                         if let Some(name_node) = declarator.child_by_field_name("name") {
                             let name = &code[name_node.byte_range()];
                             let range = self.node_to_range(declarator);
-                            if let Some(symbol_id) = SymbolId::new(*counter) {
-                                *counter += 1;
-                                let mut symbol =
-                                    Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
-                                symbol.doc_comment =
-                                    self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
-                                symbols.push(symbol);
-                            }
+                            let symbol_id = counter.next_id();
+                            let mut symbol =
+                                Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
+                            symbol.doc_comment =
+                                self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
+                            symbols.push(symbol);
                         }
                     }
                 }
@@ -396,10 +385,10 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Vec<Symbol> {
         let mut symbols = Vec::new();
-        
+
         // For event_field_declaration, we need to look at the variable_declaration child
         if node.kind() == "event_field_declaration" {
             // Similar structure to field_declaration
@@ -410,12 +399,12 @@ impl CSharpParser {
                             if let Some(name_node) = declarator.child_by_field_name("name") {
                                 let name = &code[name_node.byte_range()];
                                 let range = self.node_to_range(declarator);
-                                if let Some(symbol_id) = SymbolId::new(*counter) {
-                                    *counter += 1;
-                                    let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
-                                    symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
-                                    symbols.push(symbol);
-                                }
+                                let symbol_id = counter.next_id();
+                                let mut symbol =
+                                    Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
+                                symbol.doc_comment =
+                                    self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
+                                symbols.push(symbol);
                             }
                         }
                     }
@@ -426,15 +415,13 @@ impl CSharpParser {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = &code[name_node.byte_range()];
                 let range = self.node_to_range(node);
-                if let Some(symbol_id) = SymbolId::new(*counter) {
-                    *counter += 1;
-                    let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
-                    symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
-                    symbols.push(symbol);
-                }
+                let symbol_id = counter.next_id();
+                let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Field, file_id, range);
+                symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
+                symbols.push(symbol);
             }
         }
-        
+
         symbols
     }
 
@@ -443,13 +430,12 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         // Indexers don't have names, use "this[]"
         let name = "this[]";
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Method, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -464,17 +450,16 @@ impl CSharpParser {
         node: Node,
         code: &str,
         file_id: FileId,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) -> Option<Symbol> {
         // Extract operator token
         let operator = node
             .child_by_field_name("operator")
             .map(|n| &code[n.byte_range()])
             .unwrap_or("operator");
-        let name = format!("operator{operator}");
+        let name = format!("operator {}", operator);
         let range = self.node_to_range(node);
-        let symbol_id = SymbolId::new(*counter)?;
-        *counter += 1;
+        let symbol_id = counter.next_id();
 
         let mut symbol = Symbol::new(symbol_id, name.as_str(), SymbolKind::Method, file_id, range);
         symbol.doc_comment = self.extract_xml_doc(node, code).map(|s| s.into_boxed_str());
@@ -490,7 +475,7 @@ impl CSharpParser {
         code: &str,
         file_id: FileId,
         symbols: &mut Vec<Symbol>,
-        counter: &mut u32,
+        counter: &mut SymbolCounter,
     ) {
         for child in node.children(&mut node.walk()) {
             self.extract_symbols_from_node(child, code, file_id, symbols, counter);
@@ -507,7 +492,7 @@ impl CSharpParser {
         // Check multiple previous siblings as there might be multiple comment lines
         let mut doc_lines = Vec::new();
         let mut current = node.prev_sibling();
-        
+
         // Collect all consecutive XML doc comments
         while let Some(prev) = current {
             if prev.kind() == "xml_doc_comment" || prev.kind() == "comment" {
@@ -525,7 +510,7 @@ impl CSharpParser {
                 break;
             }
         }
-        
+
         if !doc_lines.is_empty() {
             // Clean up XML doc comment markers
             let cleaned = doc_lines
@@ -536,7 +521,7 @@ impl CSharpParser {
                 .join("\n");
             return Some(cleaned);
         }
-        
+
         None
     }
 
@@ -654,7 +639,7 @@ impl CSharpParser {
             parts.push(param_str);
         }
 
-        Some(parts.join(""))
+        Some(parts.join(" "))
     }
 
     fn build_property_signature(&self, node: Node, code: &str) -> Option<String> {
@@ -860,7 +845,9 @@ impl CSharpParser {
                         if child.kind() == "base_list" {
                             for base_child in child.children(&mut child.walk()) {
                                 // In the base_list, identifiers and qualified_names directly represent base types
-                                if base_child.kind() == "identifier" || base_child.kind() == "qualified_name" {
+                                if base_child.kind() == "identifier"
+                                    || base_child.kind() == "qualified_name"
+                                {
                                     let base_name = &code[base_child.byte_range()];
                                     let range = self.node_to_range(base_child);
                                     implementations.push((class_name, base_name, range));
@@ -885,7 +872,9 @@ impl CSharpParser {
                     for child in node.children(&mut node.walk()) {
                         if child.kind() == "base_list" {
                             for base_child in child.children(&mut child.walk()) {
-                                if base_child.kind() == "identifier" || base_child.kind() == "qualified_name" {
+                                if base_child.kind() == "identifier"
+                                    || base_child.kind() == "qualified_name"
+                                {
                                     let base_name = &code[base_child.byte_range()];
                                     let range = self.node_to_range(base_child);
                                     implementations.push((interface_name, base_name, range));
@@ -955,7 +944,8 @@ impl CSharpParser {
                         if child.kind() == "declaration_pattern" {
                             if let Some(type_node) = child.child_by_field_name("type") {
                                 let type_name = &code[type_node.byte_range()];
-                                let context = self.get_enclosing_method_name(node, code).unwrap_or("");
+                                let context =
+                                    self.get_enclosing_method_name(node, code).unwrap_or("");
                                 let range = self.node_to_range(type_node);
                                 uses.push((context, type_name, range));
                             }
@@ -1021,7 +1011,7 @@ impl CSharpParser {
                 let mut found_equals = false;
                 let mut is_global = false;
                 let mut is_static = false;
-                
+
                 for child in node.children(&mut node.walk()) {
                     match child.kind() {
                         "global" => {
@@ -1053,7 +1043,7 @@ impl CSharpParser {
                         _ => {}
                     }
                 }
-                
+
                 // Add the import with appropriate prefix
                 if let Some(import_path) = path {
                     let final_path = if is_global {
@@ -1063,7 +1053,7 @@ impl CSharpParser {
                     } else {
                         import_path
                     };
-                    
+
                     imports.push(Import {
                         path: final_path,
                         alias,
@@ -1135,7 +1125,12 @@ impl CSharpParser {
 }
 
 impl LanguageParser for CSharpParser {
-    fn parse(&mut self, code: &str, file_id: FileId, symbol_counter: &mut u32) -> Vec<Symbol> {
+    fn parse(
+        &mut self,
+        code: &str,
+        file_id: FileId,
+        symbol_counter: &mut SymbolCounter,
+    ) -> Vec<Symbol> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
             None => return Vec::new(),
@@ -1150,10 +1145,6 @@ impl LanguageParser for CSharpParser {
     }
 
     fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
@@ -1242,7 +1233,7 @@ impl LanguageParser for CSharpParser {
         Vec::new()
     }
 
-    fn find_inherent_methods<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+    fn find_inherent_methods(&mut self, _code: &str) -> Vec<(String, String, Range)> {
         // TODO: Implement C# method extraction (methods defined directly on classes)
         Vec::new()
     }
@@ -1279,7 +1270,7 @@ namespace MyApp.Services
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1303,7 +1294,7 @@ public class UserService : BaseService, IUserService
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1342,7 +1333,7 @@ public interface IUserService : IService
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1378,7 +1369,7 @@ public struct Point
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1414,7 +1405,7 @@ public enum Status
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1435,7 +1426,7 @@ public record class Employee : Person
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1462,7 +1453,7 @@ public delegate void EventHandler(object sender, EventArgs e);
 public delegate Task<T> AsyncFunc<T>(string input);
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1493,7 +1484,7 @@ public class Calculator
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1525,7 +1516,7 @@ public class User
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1560,7 +1551,7 @@ public class Button
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1588,7 +1579,7 @@ public class MyList
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1610,7 +1601,7 @@ public class Complex
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1637,7 +1628,7 @@ public class UserService
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         let class_symbol = symbols
@@ -1739,7 +1730,7 @@ public class UserService
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1773,7 +1764,7 @@ public class Outer
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1810,7 +1801,7 @@ public class Repository<T> where T : class
 public interface IService<TRequest, TResponse> { }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1849,7 +1840,7 @@ public partial class MyClass
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         // Should extract both occurrences of the partial class
@@ -1887,7 +1878,7 @@ public class AsyncService
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1943,7 +1934,7 @@ public class Person(string firstName, string lastName)
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
@@ -1970,7 +1961,7 @@ public static class StringExtensions
 }
 "#;
         let mut parser = CSharpParser::new().unwrap();
-        let mut counter = 1;
+        let mut counter = SymbolCounter::new();
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut counter);
 
         assert!(
