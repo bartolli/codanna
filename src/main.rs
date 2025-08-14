@@ -950,6 +950,14 @@ async fn main() {
                             .iter()
                             .filter(|s| s.kind == SymbolKind::Struct)
                             .count();
+                        let classes = file_symbols
+                            .iter()
+                            .filter(|s| s.kind == SymbolKind::Class)
+                            .count();
+                        let enums = file_symbols
+                            .iter()
+                            .filter(|s| s.kind == SymbolKind::Enum)
+                            .count();
                         let traits = file_symbols
                             .iter()
                             .filter(|s| s.kind == SymbolKind::Trait)
@@ -958,6 +966,8 @@ async fn main() {
                         println!("  Functions: {functions}");
                         println!("  Methods: {methods}");
                         println!("  Structs: {structs}");
+                        println!("  Classes: {classes}");
+                        println!("  Enums: {enums}");
                         println!("  Traits: {traits}");
 
                         // Save the index

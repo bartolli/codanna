@@ -32,7 +32,7 @@ pub enum IndexError {
     },
 
     #[error(
-        "Unsupported file type '{extension}' for file '{path}'. Supported types: .rs, .go, .py, .js, .ts, .java"
+        "Unsupported file type '{extension}' for file '{path}'. Supported types: .rs, .go, .py, .js, .ts, .java, .swift"
     )]
     UnsupportedFileType { path: PathBuf, extension: String },
 

@@ -13,6 +13,7 @@ pub enum Language {
     JavaScript,
     TypeScript,
     Php,
+    Swift,
 }
 
 impl Language {
@@ -28,6 +29,7 @@ impl Language {
             Language::JavaScript => super::LanguageId::new("javascript"),
             Language::TypeScript => super::LanguageId::new("typescript"),
             Language::Php => super::LanguageId::new("php"),
+            Language::Swift => super::LanguageId::new("swift"),
         }
     }
 
@@ -42,6 +44,7 @@ impl Language {
             "javascript" => Some(Language::JavaScript),
             "typescript" => Some(Language::TypeScript),
             "php" => Some(Language::Php),
+            "swift" => Some(Language::Swift),
             _ => None,
         }
     }
@@ -71,6 +74,7 @@ impl Language {
             "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => {
                 Some(Language::Php)
             }
+            "swift" => Some(Language::Swift),
             _ => None,
         }
     }
@@ -92,6 +96,7 @@ impl Language {
             Language::Php => &[
                 "php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml",
             ],
+            Language::Swift => &["swift"],
         }
     }
 
@@ -103,6 +108,7 @@ impl Language {
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
             Language::Php => "php",
+            Language::Swift => "swift",
         }
     }
 
@@ -114,6 +120,7 @@ impl Language {
             Language::JavaScript => "JavaScript",
             Language::TypeScript => "TypeScript",
             Language::Php => "PHP",
+            Language::Swift => "Swift",
         }
     }
 }
@@ -143,6 +150,8 @@ mod tests {
         assert_eq!(Language::from_extension("PHP"), Some(Language::Php));
         assert_eq!(Language::from_extension("php5"), Some(Language::Php));
         assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
+        assert_eq!(Language::from_extension("swift"), Some(Language::Swift));
+        assert_eq!(Language::from_extension("SWIFT"), Some(Language::Swift));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -176,6 +185,14 @@ mod tests {
             Language::from_path(Path::new("src/class.php5")),
             Some(Language::Php)
         );
+        assert_eq!(
+            Language::from_path(Path::new("AppDelegate.swift")),
+            Some(Language::Swift)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("Sources/Model.swift")),
+            Some(Language::Swift)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -188,5 +205,6 @@ mod tests {
         assert!(Language::Php.extensions().contains(&"php"));
         assert!(Language::Php.extensions().contains(&"php5"));
         assert!(Language::Php.extensions().contains(&"phtml"));
+        assert!(Language::Swift.extensions().contains(&"swift"));
     }
 }

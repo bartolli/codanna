@@ -2384,6 +2384,7 @@ impl SimpleIndexer {
 
         let mut resolved_count = 0;
         let mut skipped_count = 0;
+        let mut external_symbols_created = 0u32;
         let _total_unresolved = unresolved.len();
 
         // Group relationships by file for efficient context building
@@ -2436,8 +2437,15 @@ impl SimpleIndexer {
 
                 // Use ResolutionContext to resolve the target symbol (except for Defines)
                 let to_symbol_id = if rel.kind == RelationKind::Defines {
-                    // For defines relationships, look up the method symbol directly
-                    // Methods aren't "in scope" - they're defined by their container
+                    // For defines relationships, we're looking for extension methods/properties
+                    // that are defined on a type (from_name defines to_name)
+                    debug_print!(
+                        self,
+                        "Processing Defines relationship: {} defines {}",
+                        rel.from_name, rel.to_name
+                    );
+                    
+                    // Find all symbols with the target name (method/property being defined)
                     let method_symbols = self
                         .document_index
                         .find_symbols_by_name(&rel.to_name)
@@ -2446,31 +2454,61 @@ impl SimpleIndexer {
                             cause: e.to_string(),
                         })?;
 
-                    // For defines relationships, we need to match the correct method.
-                    // Since range checking is broken due to Tantivy serialization issues,
-                    // we use a heuristic: for each definer, we track which methods have been
-                    // matched to avoid double-matching.
-
-                    // First, collect all method candidates
+                    // For extension methods/properties, we need to find the symbol that:
+                    // 1. Has the right name (rel.to_name)
+                    // 2. Is in the current file
+                    // 3. Is a method or property
+                    // 4. Is defined in an extension context (if we can determine that)
+                    
                     let mut candidates: Vec<_> = method_symbols
                         .into_iter()
                         .filter(|s| {
-                            s.file_id == file_id && s.kind == crate::types::SymbolKind::Method
+                            s.file_id == file_id && 
+                            (s.kind == crate::types::SymbolKind::Method || 
+                             s.kind == crate::types::SymbolKind::Field ||
+                             s.kind == crate::types::SymbolKind::Function)
                         })
                         .collect();
 
-                    // Sort by line number to ensure consistent ordering
+                    debug_print!(
+                        self,
+                        "Found {} candidates for '{}' in file",
+                        candidates.len(), rel.to_name
+                    );
+
+                    // Sort by line number for consistent ordering
                     candidates.sort_by_key(|s| s.range.start_line);
 
-                    // For Display->fmt, we want the first fmt
-                    // For MyStruct->fmt, we want the second fmt
-                    // This is a hack but works for our test case
-                    if !from_symbols.is_empty()
-                        && from_symbols[0].kind == crate::types::SymbolKind::Trait
-                    {
+                    // For Swift extensions, we want to find the method/property that
+                    // corresponds to this specific defines relationship.
+                    // Since we may have multiple methods with the same name,
+                    // we need to match based on the defining type (from_name).
+                    
+                    // First check if there's a from_symbol that matches our from_name
+                    let from_type = from_symbols.iter()
+                        .find(|s| s.name.as_ref() == rel.from_name.as_ref() && 
+                                  (s.kind == crate::types::SymbolKind::Struct || 
+                                   s.kind == crate::types::SymbolKind::Class ||
+                                   s.kind == crate::types::SymbolKind::Enum ||
+                                   s.kind == crate::types::SymbolKind::Trait ||
+                                   s.kind == crate::types::SymbolKind::Interface));
+                    
+                    if let Some(_type_symbol) = from_type {
+                        // We found the type being extended, return the first matching method
+                        debug_print!(
+                            self,
+                            "Found type '{}' being extended with '{}'",
+                            rel.from_name, rel.to_name
+                        );
                         candidates.first().map(|s| s.id)
                     } else {
-                        candidates.get(1).map(|s| s.id)
+                        // Type might be defined in another file, still try to link the method
+                        debug_print!(
+                            self,
+                            "Type '{}' not found in current file, but linking extension method '{}'",
+                            rel.from_name, rel.to_name
+                        );
+                        candidates.first().map(|s| s.id)
                     }
                 } else if rel.to_name.contains("::") {
                     // Handle qualified paths like String::new
@@ -2513,34 +2551,134 @@ impl SimpleIndexer {
                         id
                     }
                     None => {
-                        debug_print!(
-                            self,
-                            "Failed to resolve target symbol '{}' - skipping",
-                            rel.to_name
-                        );
-                        // Symbol not in scope - skip this relationship
-                        skipped_count += 1;
-                        continue;
+                        // Check if this looks like an external/stdlib symbol
+                        // Common Swift stdlib/framework symbols
+                        let is_external = matches!(
+                            rel.to_name.as_ref(),
+                            "print" | "sqrt" | "abs" | "min" | "max" | "pow" | 
+                            "Date" | "UUID" | "String" | "Int" | "Double" | "Bool" |
+                            "Array" | "Dictionary" | "Set" | "Optional" |
+                            "Task" | "MainActor" | "async" | "await"
+                        ) || rel.to_name.starts_with("NS") // Foundation types
+                          || rel.to_name.starts_with("UI") // UIKit types
+                          || rel.to_name.starts_with("CG"); // Core Graphics types
+                        
+                        if is_external {
+                            debug_print!(
+                                self,
+                                "Symbol '{}' appears to be external/stdlib - creating placeholder",
+                                rel.to_name
+                            );
+                            
+                            // Create or find an external placeholder symbol
+                            // Use FileId(0) as a special marker for external symbols
+                            let external_file_id = FileId(0);
+                            
+                            // Check if we already have this external symbol
+                            let existing_external = self
+                                .document_index
+                                .find_symbols_by_name(&rel.to_name)
+                                .ok()
+                                .and_then(|symbols| {
+                                    symbols.into_iter()
+                                        .find(|s| s.file_id == external_file_id)
+                                        .map(|s| s.id)
+                                });
+                            
+                            if let Some(existing_id) = existing_external {
+                                debug_print!(
+                                    self, 
+                                    "Found existing external symbol: {:?}", 
+                                    existing_id
+                                );
+                                existing_id
+                            } else {
+                                // Create a new external symbol placeholder
+                                // We use a special ID generation scheme for external symbols
+                                // to avoid conflicts with real symbols
+                                let external_id = SymbolId(1_000_000 + external_symbols_created);
+                                external_symbols_created += 1;
+                                
+                                let external_symbol = crate::symbol::Symbol::new(
+                                    external_id,
+                                    rel.to_name.as_ref(),
+                                    crate::types::SymbolKind::Function, // Default to function
+                                    external_file_id,
+                                    crate::types::Range::new(0, 0, 0, 0), // Dummy range
+                                )
+                                .with_module_path("external")
+                                .with_visibility(crate::symbol::Visibility::Public);
+                                
+                                // Store the external symbol with a special path
+                                if let Err(e) = self.document_index.index_symbol(
+                                    &external_symbol, 
+                                    "<external>"
+                                ) {
+                                    debug_print!(
+                                        self,
+                                        "Failed to add external symbol: {}",
+                                        e
+                                    );
+                                    skipped_count += 1;
+                                    continue;
+                                }
+                                
+                                debug_print!(
+                                    self,
+                                    "Created external symbol '{}' with ID: {:?}",
+                                    rel.to_name, external_symbol.id
+                                );
+                                
+                                external_symbol.id
+                            }
+                        } else {
+                            debug_print!(
+                                self,
+                                "Failed to resolve target symbol '{}' - skipping",
+                                rel.to_name
+                            );
+                            // Symbol not in scope and not external - skip this relationship
+                            skipped_count += 1;
+                            continue;
+                        }
                     }
                 };
 
                 // Get the full symbol data
-                debug_print!(self, "Looking up symbol by ID: {:?}", to_symbol_id);
-                let to_symbol = match self
-                    .document_index
-                    .find_symbol_by_id(to_symbol_id)
-                    .map_err(|e| IndexError::TantivyError {
-                        operation: "find_symbol_by_id".to_string(),
-                        cause: e.to_string(),
-                    })? {
-                    Some(symbol) => {
-                        debug_print!(self, "Found target symbol: {}", symbol.name);
-                        symbol
-                    }
-                    None => {
-                        debug_print!(self, "Target symbol not found in index - skipping");
-                        skipped_count += 1;
-                        continue;
+                // For external symbols, we might have just created them and they won't be findable yet
+                // Check if this is an external symbol ID (>= 1,000,000)
+                let to_symbol = if to_symbol_id.value() >= 1_000_000 {
+                    // This is an external symbol we just created
+                    // Create a placeholder symbol object for it
+                    debug_print!(self, "Using external symbol placeholder for ID: {:?}", to_symbol_id);
+                    crate::symbol::Symbol::new(
+                        to_symbol_id,
+                        rel.to_name.as_ref(),
+                        crate::types::SymbolKind::Function,
+                        FileId(0),
+                        crate::types::Range::new(0, 0, 0, 0),
+                    )
+                    .with_module_path("external")
+                    .with_visibility(crate::symbol::Visibility::Public)
+                } else {
+                    // Normal symbol - look it up
+                    debug_print!(self, "Looking up symbol by ID: {:?}", to_symbol_id);
+                    match self
+                        .document_index
+                        .find_symbol_by_id(to_symbol_id)
+                        .map_err(|e| IndexError::TantivyError {
+                            operation: "find_symbol_by_id".to_string(),
+                            cause: e.to_string(),
+                        })? {
+                        Some(symbol) => {
+                            debug_print!(self, "Found target symbol: {}", symbol.name);
+                            symbol
+                        }
+                        None => {
+                            debug_print!(self, "Target symbol not found in index - skipping");
+                            skipped_count += 1;
+                            continue;
+                        }
                     }
                 };
 
