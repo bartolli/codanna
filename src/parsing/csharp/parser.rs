@@ -19,7 +19,7 @@ pub enum CSharpParseError {
 
 pub struct CSharpParser {
     parser: Parser,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Will be used for debug output in future implementations
     debug: bool,
 }
 
@@ -457,7 +457,7 @@ impl CSharpParser {
             .child_by_field_name("operator")
             .map(|n| &code[n.byte_range()])
             .unwrap_or("operator");
-        let name = format!("operator {}", operator);
+        let name = format!("operator {operator}");
         let range = self.node_to_range(node);
         let symbol_id = counter.next_id();
 
@@ -721,7 +721,10 @@ impl CSharpParser {
         let mut parent = node.parent();
         while let Some(p) = parent {
             match p.kind() {
-                "class_declaration" | "struct_declaration" | "record_declaration" => {
+                "class_declaration"
+                | "struct_declaration"
+                | "record_declaration"
+                | "interface_declaration" => {
                     return p.child_by_field_name("name").map(|n| &code[n.byte_range()]);
                 }
                 _ => parent = p.parent(),
@@ -1047,9 +1050,9 @@ impl CSharpParser {
                 // Add the import with appropriate prefix
                 if let Some(import_path) = path {
                     let final_path = if is_global {
-                        format!("global::{}", import_path)
+                        format!("global::{import_path}")
                     } else if is_static {
-                        format!("static::{}", import_path)
+                        format!("static::{import_path}")
                     } else {
                         import_path
                     };
@@ -1121,6 +1124,99 @@ impl CSharpParser {
         // First try to get method name, then class name
         self.get_enclosing_method_name(node, code)
             .or_else(|| self.get_parent_type_name(node, code))
+    }
+
+    fn find_inherent_methods_in_node(
+        &self,
+        node: Node,
+        code: &str,
+        methods: &mut Vec<(String, String, Range)>,
+    ) {
+        if node.kind() == "method_declaration" {
+            // Check if it's an extension method first
+            if self.is_extension_method(node, code) {
+                // Extension methods are treated as inherent methods on the extended type
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let method_name = code[name_node.byte_range()].to_string();
+
+                    // Get the extended type from the first parameter
+                    if let Some(extended_type) = self.get_extension_method_type(node, code) {
+                        let range = self.node_to_range(name_node);
+                        methods.push((extended_type, method_name, range));
+                    }
+                }
+            } else {
+                // Regular method
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let method_name = code[name_node.byte_range()].to_string();
+
+                    // Get the parent type name (class, struct, record, or interface)
+                    if let Some(type_name) = self.get_parent_type_name(node, code) {
+                        let range = self.node_to_range(name_node);
+                        methods.push((type_name.to_string(), method_name, range));
+                    }
+                }
+            }
+        }
+
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.find_inherent_methods_in_node(child, code, methods);
+        }
+    }
+
+    fn is_extension_method(&self, node: Node, code: &str) -> bool {
+        // Check if this is a static method with 'this' as first parameter modifier
+        if node.kind() != "method_declaration" {
+            return false;
+        }
+
+        // Check for static modifier directly as child of method_declaration
+        let mut has_static = false;
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "modifier" {
+                let modifier_text = &code[child.byte_range()];
+                if modifier_text == "static" {
+                    has_static = true;
+                    break;
+                }
+            }
+        }
+
+        if !has_static {
+            return false;
+        }
+
+        // Check for 'this' in first parameter - look for parameter_list
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "parameter_list" {
+                // Check the parameter list text for 'this' keyword
+                let param_list_text = &code[child.byte_range()];
+                if param_list_text.contains("this ") {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn get_extension_method_type(&self, node: Node, code: &str) -> Option<String> {
+        // Get the type from the first parameter with 'this' modifier
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "parameter_list" {
+                for param in child.children(&mut child.walk()) {
+                    if param.kind() == "parameter" {
+                        // Get the type of the first parameter
+                        if let Some(type_node) = param.child_by_field_name("type") {
+                            return Some(code[type_node.byte_range()].to_string());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
@@ -1229,13 +1325,20 @@ impl LanguageParser for CSharpParser {
     }
 
     fn find_variable_types<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        // TODO: Implement C# variable type extraction
-        Vec::new()
+        // Not yet implemented: C# variable type extraction
+        unimplemented!("CSharpParser::find_variable_types is not yet implemented");
     }
 
-    fn find_inherent_methods(&mut self, _code: &str) -> Vec<(String, String, Range)> {
-        // TODO: Implement C# method extraction (methods defined directly on classes)
-        Vec::new()
+    fn find_inherent_methods(&mut self, code: &str) -> Vec<(String, String, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let root_node = tree.root_node();
+        let mut methods = Vec::new();
+        self.find_inherent_methods_in_node(root_node, code, &mut methods);
+        methods
     }
 }
 
@@ -1974,5 +2077,171 @@ public static class StringExtensions
                 .iter()
                 .any(|s| s.as_name() == "IsNullOrEmpty" && s.kind == SymbolKind::Method)
         );
+    }
+
+    #[test]
+    fn test_extension_method_detection() {
+        let code = r#"
+public static class StringExtensions
+{
+    public static bool IsNullOrEmpty(this string str)
+    {
+        return string.IsNullOrEmpty(str);
+    }
+}
+"#;
+        let mut parser = CSharpParser::new().unwrap();
+
+        // Parse the tree and inspect it
+        let tree = parser.parser.parse(code, None).unwrap();
+        let root = tree.root_node();
+
+        // Walk through the tree and find method_declaration nodes
+        fn walk_tree(node: tree_sitter::Node, code: &str, depth: usize) {
+            if node.kind() == "method_declaration" {
+                println!(
+                    "{}Found method_declaration at depth {}",
+                    "  ".repeat(depth),
+                    depth
+                );
+                for child in node.children(&mut node.walk()) {
+                    println!(
+                        "{}  Child: {} - '{}'",
+                        "  ".repeat(depth),
+                        child.kind(),
+                        if child.byte_range().len() < 50 {
+                            &code[child.byte_range()]
+                        } else {
+                            "<too long>"
+                        }
+                    );
+                }
+            }
+
+            for child in node.children(&mut node.walk()) {
+                walk_tree(child, code, depth + 1);
+            }
+        }
+
+        walk_tree(root, code, 0);
+
+        // Now test if we can detect it as an extension method
+        let methods = parser.find_inherent_methods(code);
+        println!(
+            "\nFound methods: {:?}",
+            methods
+                .iter()
+                .map(|(t, m, _)| format!("{t}.{m}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_find_inherent_methods() {
+        let code = r#"
+public class Calculator
+{
+    public int Add(int a, int b) => a + b;
+    
+    private async Task<string> ProcessAsync()
+    {
+        return await Task.FromResult("done");
+    }
+    
+    public static void Main(string[] args) { }
+}
+
+public struct Point
+{
+    public double Distance() => Math.Sqrt(X * X + Y * Y);
+}
+
+public interface IService
+{
+    void Execute();
+    Task<bool> ValidateAsync(string input);
+}
+
+public static class StringExtensions
+{
+    public static bool IsNullOrEmpty(this string str)
+    {
+        return string.IsNullOrEmpty(str);
+    }
+    
+    public static string Reverse(this string str)
+    {
+        return new string(str.ToCharArray().Reverse().ToArray());
+    }
+}
+"#;
+        let mut parser = CSharpParser::new().unwrap();
+        let methods = parser.find_inherent_methods(code);
+
+        // Should find methods from Calculator class
+        assert!(
+            methods.iter().any(
+                |(type_name, method_name, _)| type_name == "Calculator" && method_name == "Add"
+            )
+        );
+        assert!(
+            methods
+                .iter()
+                .any(|(type_name, method_name, _)| type_name == "Calculator"
+                    && method_name == "ProcessAsync")
+        );
+        assert!(
+            methods
+                .iter()
+                .any(|(type_name, method_name, _)| type_name == "Calculator"
+                    && method_name == "Main")
+        );
+
+        // Should find methods from Point struct
+        assert!(
+            methods.iter().any(
+                |(type_name, method_name, _)| type_name == "Point" && method_name == "Distance"
+            )
+        );
+
+        // Should find methods from IService interface
+        assert!(
+            methods
+                .iter()
+                .any(|(type_name, method_name, _)| type_name == "IService"
+                    && method_name == "Execute")
+        );
+        assert!(
+            methods
+                .iter()
+                .any(|(type_name, method_name, _)| type_name == "IService"
+                    && method_name == "ValidateAsync")
+        );
+
+        // Should find extension methods mapped to string type
+        assert!(
+            methods
+                .iter()
+                .any(|(type_name, method_name, _)| type_name == "string"
+                    && method_name == "IsNullOrEmpty")
+        );
+        assert!(
+            methods.iter().any(
+                |(type_name, method_name, _)| type_name == "string" && method_name == "Reverse"
+            )
+        );
+
+        // Verify we found all expected methods
+        let calculator_methods: Vec<_> = methods
+            .iter()
+            .filter(|(type_name, _, _)| type_name == "Calculator")
+            .collect();
+        assert_eq!(calculator_methods.len(), 3);
+
+        let string_extensions: Vec<_> = methods
+            .iter()
+            .filter(|(type_name, _, _)| type_name == "string")
+            .collect();
+        assert_eq!(string_extensions.len(), 2);
     }
 }

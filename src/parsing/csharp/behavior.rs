@@ -27,13 +27,14 @@ impl Default for CSharpBehavior {
 
 impl LanguageBehavior for CSharpBehavior {
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
-        format!("{}.{}", base_path, symbol_name)
+        format!("{base_path}.{symbol_name}")
     }
 
     fn parse_visibility(&self, signature: &str) -> Visibility {
         // Check for combined modifiers first, in order of decreasing permissiveness
         if signature.contains("protected internal ") || signature.contains("internal protected ") {
-            // C# 'protected internal' means accessible from the same assembly or any derived type
+            // C# allows both 'protected internal' and 'internal protected' as valid syntax (though 'protected internal' is the conventional ordering).
+            // Both mean accessible from the same assembly or any derived type.
             // This is most similar to 'crate' in Rust, but more permissive than 'protected' alone
             Visibility::Crate
         } else if signature.contains("private protected ") {
