@@ -1218,6 +1218,113 @@ impl CSharpParser {
         }
         None
     }
+
+    fn extract_variable_types_from_node<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        variables: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        match node.kind() {
+            "local_declaration_statement" => {
+                // Local variable declarations inside methods/blocks
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "variable_declaration" {
+                        self.process_variable_declaration(child, code, variables);
+                    }
+                }
+            }
+            "field_declaration" => {
+                // Field declarations in classes/structs
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "variable_declaration" {
+                        self.process_variable_declaration(child, code, variables);
+                    }
+                }
+            }
+            "variable_declaration" => {
+                // Direct variable declarations
+                self.process_variable_declaration(node, code, variables);
+            }
+            "for_statement" => {
+                // Variables declared in for loops
+                if let Some(init) = node.child_by_field_name("initializer") {
+                    if init.kind() == "variable_declaration" {
+                        self.process_variable_declaration(init, code, variables);
+                    }
+                }
+            }
+            "foreach_statement" => {
+                // Variables declared in foreach loops
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    if let Some(name_node) = node.child_by_field_name("left") {
+                        let var_name = &code[name_node.byte_range()];
+                        let type_name = &code[type_node.byte_range()];
+                        let range = self.node_to_range(name_node);
+                        variables.push((var_name, type_name, range));
+                    }
+                }
+            }
+            "catch_clause" => {
+                // Exception variables in catch blocks
+                // Look for catch_declaration child directly
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "catch_declaration" {
+                        if let Some(type_node) = child.child_by_field_name("type") {
+                            if let Some(name_node) = child.child_by_field_name("name") {
+                                let var_name = &code[name_node.byte_range()];
+                                let type_name = &code[type_node.byte_range()];
+                                let range = self.node_to_range(name_node);
+                                variables.push((var_name, type_name, range));
+                            }
+                        }
+                    }
+                }
+            }
+            "parameter" => {
+                // Method/constructor parameters
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let var_name = &code[name_node.byte_range()];
+                        let type_name = &code[type_node.byte_range()];
+                        let range = self.node_to_range(name_node);
+                        variables.push((var_name, type_name, range));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Recurse into children
+        for child in node.children(&mut node.walk()) {
+            self.extract_variable_types_from_node(child, code, variables);
+        }
+    }
+
+    fn process_variable_declaration<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        variables: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        // Get the type - it might be explicit or 'var'
+        let type_name = if let Some(type_node) = node.child_by_field_name("type") {
+            &code[type_node.byte_range()]
+        } else {
+            return; // No type information available
+        };
+
+        // Process all variable declarators
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "variable_declarator" {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    let var_name = &code[name_node.byte_range()];
+                    let range = self.node_to_range(name_node);
+                    variables.push((var_name, type_name, range));
+                }
+            }
+        }
+    }
 }
 
 impl LanguageParser for CSharpParser {
@@ -1324,9 +1431,16 @@ impl LanguageParser for CSharpParser {
         Language::CSharp
     }
 
-    fn find_variable_types<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        // Not yet implemented: C# variable type extraction
-        unimplemented!("CSharpParser::find_variable_types is not yet implemented");
+    fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let root_node = tree.root_node();
+        let mut variables = Vec::new();
+        self.extract_variable_types_from_node(root_node, code, &mut variables);
+        variables
     }
 
     fn find_inherent_methods(&mut self, code: &str) -> Vec<(String, String, Range)> {
@@ -2133,6 +2247,263 @@ public static class StringExtensions
                 .iter()
                 .map(|(t, m, _)| format!("{t}.{m}"))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_find_variable_types() {
+        let code = r#"
+public class Service
+{
+    private readonly ILogger logger;
+    public string Name;
+    
+    public void Process(string input, int count)
+    {
+        List<int> numbers = new List<int>();
+        var result = "test";
+        string message = "hello";
+        
+        for (int i = 0; i < 10; i++) {
+            Console.WriteLine(i);
+        }
+        
+        foreach (var item in numbers) {
+            Console.WriteLine(item);
+        }
+        
+        try {
+            // Some code
+        } catch (Exception ex) {
+            Console.WriteLine(ex.Message);
+        }
+    }
+    
+    public async Task<bool> ValidateAsync(User user)
+    {
+        return await Task.FromResult(true);
+    }
+}
+"#;
+        let mut parser = CSharpParser::new().unwrap();
+        let variables = parser.find_variable_types(code);
+
+        // Field variables
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "logger" && *type_name == "ILogger")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "Name" && *type_name == "string")
+        );
+
+        // Method parameters
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "input" && *type_name == "string")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "count" && *type_name == "int")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "user" && *type_name == "User")
+        );
+
+        // Local variables
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "numbers" && *type_name == "List<int>")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "result" && *type_name == "var")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "message" && *type_name == "string")
+        );
+
+        // For loop variable
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "i" && *type_name == "int")
+        );
+
+        // Foreach loop variable
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "item" && *type_name == "var")
+        );
+
+        // Catch block variable
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "ex" && *type_name == "Exception")
+        );
+    }
+
+    #[test]
+    fn test_find_variable_types_comprehensive() {
+        let code = r#"
+public class Example
+{
+    // Fields with various modifiers
+    private static readonly string StaticField = "static";
+    protected internal int ProtectedField;
+    public const double PI = 3.14159;
+    
+    // Properties are handled separately, not as variables
+    public string Property { get; set; }
+    
+    // Constructor parameters
+    public Example(string name, int value)
+    {
+        // Local variables with different types
+        int[] array = new int[10];
+        Dictionary<string, List<int>> complex = new();
+        var inferred = GetSomething();
+        dynamic dynamicVar = "dynamic";
+        
+        // Multiple declarations in one statement
+        int x = 1, y = 2, z = 3;
+        
+        // Using declaration (C# 8.0+)
+        using var stream = new FileStream("file.txt", FileMode.Open);
+        
+        // Pattern matching with variable declaration
+        if (GetObject() is string str)
+        {
+            Console.WriteLine(str);
+        }
+        
+        // Switch expression with pattern matching
+        var result = value switch
+        {
+            1 => "one",
+            2 => "two",
+            _ => "other"
+        };
+        
+        // Lambda with parameters
+        Action<int, string> lambda = (num, text) => Console.WriteLine($"{num}: {text}");
+    }
+    
+    // Generic method with constraints
+    public void GenericMethod<T>(T item) where T : class
+    {
+        T localGeneric = item;
+    }
+    
+    private object GetObject() => new object();
+    private object GetSomething() => new object();
+}
+"#;
+        let mut parser = CSharpParser::new().unwrap();
+        let variables = parser.find_variable_types(code);
+
+        // Check that we found various field types
+        assert!(variables.iter().any(|(name, _, _)| *name == "StaticField"));
+        assert!(
+            variables
+                .iter()
+                .any(|(name, _, _)| *name == "ProtectedField")
+        );
+        assert!(variables.iter().any(|(name, _, _)| *name == "PI"));
+
+        // Constructor parameters
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "name" && *type_name == "string")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "value" && *type_name == "int")
+        );
+
+        // Local variables
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "array" && *type_name == "int[]")
+        );
+        assert!(variables.iter().any(|(name, _, _)| *name == "complex"));
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "inferred" && *type_name == "var")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "dynamicVar" && *type_name == "dynamic")
+        );
+
+        // Multiple declarations
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "x" && *type_name == "int")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "y" && *type_name == "int")
+        );
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "z" && *type_name == "int")
+        );
+
+        // Using declaration
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "stream" && *type_name == "var")
+        );
+
+        // Pattern matching variable
+        // Note: This might not be captured depending on tree-sitter grammar
+        // but we should at least not crash
+
+        // Switch expression result
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "result" && *type_name == "var")
+        );
+
+        // Lambda variable
+        assert!(variables.iter().any(|(name, _, _)| *name == "lambda"));
+
+        // Generic method parameter
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "item" && *type_name == "T")
+        );
+
+        // Generic local variable
+        assert!(
+            variables
+                .iter()
+                .any(|(name, type_name, _)| *name == "localGeneric" && *type_name == "T")
         );
     }
 
