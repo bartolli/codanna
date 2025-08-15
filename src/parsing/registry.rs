@@ -80,6 +80,7 @@ impl<'de> Deserialize<'de> for LanguageId {
             "javascript" => "javascript",
             "typescript" => "typescript",
             "php" => "php",
+            "csharp" => "csharp",
             // For unknown languages, we leak the string to get 'static lifetime
             // This is safe because language identifiers are typically created once
             // at startup and live for the entire program
@@ -354,6 +355,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::rust::register(registry);
     super::python::register(registry);
     super::php::register(registry);
+    super::csharp::register(registry);
 
     // Future languages will be added here:
     // super::javascript_definition::register(registry);

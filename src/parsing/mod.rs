@@ -1,3 +1,4 @@
+pub mod csharp;
 pub mod factory;
 pub mod language;
 pub mod language_behavior;
@@ -8,6 +9,7 @@ pub mod python;
 pub mod registry;
 pub mod rust;
 
+pub use csharp::{CSharpBehavior, CSharpParser};
 pub use factory::{ParserFactory, ParserWithBehavior};
 pub use language::Language;
 pub use language_behavior::{LanguageBehavior, LanguageMetadata};

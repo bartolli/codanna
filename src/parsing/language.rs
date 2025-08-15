@@ -13,6 +13,7 @@ pub enum Language {
     JavaScript,
     TypeScript,
     Php,
+    CSharp,
 }
 
 impl Language {
@@ -28,6 +29,7 @@ impl Language {
             Language::JavaScript => super::LanguageId::new("javascript"),
             Language::TypeScript => super::LanguageId::new("typescript"),
             Language::Php => super::LanguageId::new("php"),
+            Language::CSharp => super::LanguageId::new("csharp"),
         }
     }
 
@@ -71,6 +73,7 @@ impl Language {
             "php" | "php3" | "php4" | "php5" | "php7" | "php8" | "phps" | "phtml" => {
                 Some(Language::Php)
             }
+            "cs" | "csx" => Some(Language::CSharp),
             _ => None,
         }
     }
@@ -92,6 +95,7 @@ impl Language {
             Language::Php => &[
                 "php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml",
             ],
+            Language::CSharp => &["cs", "csx"],
         }
     }
 
@@ -103,6 +107,7 @@ impl Language {
             Language::JavaScript => "javascript",
             Language::TypeScript => "typescript",
             Language::Php => "php",
+            Language::CSharp => "csharp",
         }
     }
 
@@ -114,6 +119,7 @@ impl Language {
             Language::JavaScript => "JavaScript",
             Language::TypeScript => "TypeScript",
             Language::Php => "PHP",
+            Language::CSharp => "C#",
         }
     }
 }
@@ -143,6 +149,9 @@ mod tests {
         assert_eq!(Language::from_extension("PHP"), Some(Language::Php));
         assert_eq!(Language::from_extension("php5"), Some(Language::Php));
         assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
+        assert_eq!(Language::from_extension("cs"), Some(Language::CSharp));
+        assert_eq!(Language::from_extension("CS"), Some(Language::CSharp));
+        assert_eq!(Language::from_extension("csx"), Some(Language::CSharp));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -176,6 +185,14 @@ mod tests {
             Language::from_path(Path::new("src/class.php5")),
             Some(Language::Php)
         );
+        assert_eq!(
+            Language::from_path(Path::new("Program.cs")),
+            Some(Language::CSharp)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("src/Main.cs")),
+            Some(Language::CSharp)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -188,5 +205,7 @@ mod tests {
         assert!(Language::Php.extensions().contains(&"php"));
         assert!(Language::Php.extensions().contains(&"php5"));
         assert!(Language::Php.extensions().contains(&"phtml"));
+        assert!(Language::CSharp.extensions().contains(&"cs"));
+        assert!(Language::CSharp.extensions().contains(&"csx"));
     }
 }
