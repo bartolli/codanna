@@ -590,7 +590,7 @@ impl SimpleIndexer {
                     operation: "get_next_file_id".to_string(),
                     cause: e.to_string(),
                 })?;
-        
+
         let file_id = FileId::new(file_counter).ok_or(IndexError::FileIdExhausted)?;
 
         // Update the file counter for next use
