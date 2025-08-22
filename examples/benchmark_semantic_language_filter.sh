@@ -12,6 +12,7 @@
 #   - examples/test_language_filter.py   (Python implementation)
 #   - examples/test_language_filter.ts   (TypeScript implementation)
 #   - examples/test_language_filter.php  (PHP implementation)
+#   - examples/test_language_filter.go   (Go implementation)
 #
 # Each file contains identical functions with identical documentation
 # to demonstrate language filtering effectiveness on semantic search
@@ -92,6 +93,7 @@ printf "  ${DOT} ${GREEN}examples/test_language_filter.rs${NC}   - Rust implemen
 printf "  ${DOT} ${GREEN}examples/test_language_filter.py${NC}   - Python implementation\n"
 printf "  ${DOT} ${GREEN}examples/test_language_filter.ts${NC}   - TypeScript implementation\n"
 printf "  ${DOT} ${GREEN}examples/test_language_filter.php${NC}  - PHP implementation\n"
+printf "  ${DOT} ${GREEN}examples/test_language_filter.go${NC}   - Go implementation\n"
 echo
 printf "${BOLD}Each file contains:${NC}\n"
 printf "  ${DOT} Function: ${YELLOW}authenticate_user${NC} with identical documentation\n"
@@ -145,12 +147,14 @@ lang_rust_count=0
 lang_python_count=0
 lang_typescript_count=0
 lang_php_count=0
+lang_go_count=0
 lang_rust_total=0
 lang_python_total=0
 lang_typescript_total=0
 lang_php_total=0
+lang_go_total=0
 
-for lang in rust python typescript php; do
+for lang in rust python typescript php go; do
     echo
     printf "${BOLD}${BLUE}Testing: lang:${lang}${NC}\n"
     print_separator
@@ -212,7 +216,7 @@ printf "   ${ARROW} ${GREEN}Eliminates $(( baseline_auth_count - 1 )) duplicate 
 echo
 
 printf "${BOLD}${GREEN}2. Noise Reduction by Language:${NC}\n"
-for lang in rust python typescript php; do
+for lang in rust python typescript php go; do
     eval "lang_total=\$lang_${lang}_total"
     if [ "$lang_total" -gt 0 ]; then
         reduction=$(echo "scale=1; 100 - ($lang_total * 100 / $baseline_total)" | bc 2>/dev/null || echo "0")
