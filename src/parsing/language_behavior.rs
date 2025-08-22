@@ -353,7 +353,7 @@ pub trait LanguageBehavior: Send + Sync {
                 };
 
                 // Add as imported symbol (higher priority than module symbols)
-                context.add_symbol(name, symbol_id, ScopeLevel::Module);
+                context.add_symbol(name, symbol_id, ScopeLevel::Package);
             }
         }
 

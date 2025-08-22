@@ -125,8 +125,8 @@ impl IndexSchema {
         let file_hash = builder.add_text_field("file_hash", STRING | STORED);
         let file_timestamp = builder.add_u64_field("file_timestamp", STORED | FAST);
 
-        // Metadata fields (for counters, etc.)
-        let meta_key = builder.add_text_field("meta_key", STRING | STORED | FAST);
+        // Metadata fields (for counters, etc.) - use STRING for exact matching
+        let meta_key = builder.add_text_field("meta_key", STRING | STORED);
         let meta_value = builder.add_u64_field("meta_value", STORED | FAST);
 
         // Vector search fields
