@@ -48,7 +48,7 @@ Codanna cuts the noise:
 
 ```bash
 # Install
-cargo install codanna
+cargo install codanna --locked
 
 # setup
 codanna init
