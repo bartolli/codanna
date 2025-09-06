@@ -373,6 +373,8 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::php::register(registry);
     super::typescript::register(registry);
     super::go::register(registry);
+    super::c::register(registry);
+    super::cpp::register(registry);
 
     // Future languages will be added here:
     // super::javascript_definition::register(registry);

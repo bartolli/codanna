@@ -14,6 +14,8 @@ Languages self-register via the modular registry system. Each language lives in 
 - **Python** - Classes, functions, type hints, inheritance
 - **PHP** - Classes, traits, interfaces, namespaces
 - **Go** - Structs, interfaces, methods, generics (1.18+), package visibility
+- **C** - Functions, structs, enums
+- **C++** - Classes, structs, functions, inheritance, templates
 
 **🎯 Ready for new languages** - The architecture is mature and well-tested.
 

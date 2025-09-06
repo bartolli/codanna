@@ -1,5 +1,7 @@
 pub mod behavior_state;
+pub mod c;
 pub mod context;
+pub mod cpp;
 pub mod factory;
 pub mod go;
 pub mod import;
@@ -14,7 +16,9 @@ pub mod resolution;
 pub mod rust;
 pub mod typescript;
 
+pub use c::{CBehavior, CParser};
 pub use context::{ParserContext, ScopeType};
+pub use cpp::{CppBehavior, CppParser};
 pub use factory::{ParserFactory, ParserWithBehavior};
 pub use go::{GoBehavior, GoParser};
 pub use import::Import;

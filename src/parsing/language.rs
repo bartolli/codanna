@@ -14,6 +14,8 @@ pub enum Language {
     TypeScript,
     Php,
     Go,
+    C,
+    Cpp,
 }
 
 impl Language {
@@ -30,6 +32,8 @@ impl Language {
             Language::TypeScript => super::LanguageId::new("typescript"),
             Language::Php => super::LanguageId::new("php"),
             Language::Go => super::LanguageId::new("go"),
+            Language::C => super::LanguageId::new("c"),
+            Language::Cpp => super::LanguageId::new("cpp"),
         }
     }
 
@@ -45,6 +49,8 @@ impl Language {
             "typescript" => Some(Language::TypeScript),
             "php" => Some(Language::Php),
             "go" => Some(Language::Go),
+            "c" => Some(Language::C),
+            "cpp" => Some(Language::Cpp),
             _ => None,
         }
     }
@@ -75,6 +81,8 @@ impl Language {
                 Some(Language::Php)
             }
             "go" | "go.mod" | "go.sum" => Some(Language::Go),
+            "c" | "h" => Some(Language::C),
+            "cpp" | "hpp" | "cc" | "cxx" | "hxx" => Some(Language::Cpp),
             _ => None,
         }
     }
@@ -97,6 +105,8 @@ impl Language {
                 "php", "php3", "php4", "php5", "php7", "php8", "phps", "phtml",
             ],
             Language::Go => &["go", "go.mod", "go.sum"],
+            Language::C => &["c", "h"],
+            Language::Cpp => &["cpp", "hpp", "cc", "cxx", "hxx"],
         }
     }
 
@@ -109,6 +119,8 @@ impl Language {
             Language::TypeScript => "typescript",
             Language::Php => "php",
             Language::Go => "go",
+            Language::C => "c",
+            Language::Cpp => "cpp",
         }
     }
 
@@ -121,6 +133,8 @@ impl Language {
             Language::TypeScript => "TypeScript",
             Language::Php => "PHP",
             Language::Go => "Go",
+            Language::C => "C",
+            Language::Cpp => "C++",
         }
     }
 }
@@ -153,6 +167,13 @@ mod tests {
         assert_eq!(Language::from_extension("go"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.mod"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.sum"), Some(Language::Go));
+        assert_eq!(Language::from_extension("c"), Some(Language::C));
+        assert_eq!(Language::from_extension("h"), Some(Language::C));
+        assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cc"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("cxx"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("hxx"), Some(Language::Cpp));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -190,6 +211,22 @@ mod tests {
             Language::from_path(Path::new("main.go")),
             Some(Language::Go)
         );
+        assert_eq!(
+            Language::from_path(Path::new("main.c")),
+            Some(Language::C)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("header.h")),
+            Some(Language::C)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("main.cpp")),
+            Some(Language::Cpp)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("header.hpp")),
+            Some(Language::Cpp)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -205,5 +242,12 @@ mod tests {
         assert!(Language::Go.extensions().contains(&"go"));
         assert!(Language::Go.extensions().contains(&"go.mod"));
         assert!(Language::Go.extensions().contains(&"go.sum"));
+        assert!(Language::C.extensions().contains(&"c"));
+        assert!(Language::C.extensions().contains(&"h"));
+        assert!(Language::Cpp.extensions().contains(&"cpp"));
+        assert!(Language::Cpp.extensions().contains(&"hpp"));
+        assert!(Language::Cpp.extensions().contains(&"cc"));
+        assert!(Language::Cpp.extensions().contains(&"cxx"));
+        assert!(Language::Cpp.extensions().contains(&"hxx"));
     }
 }

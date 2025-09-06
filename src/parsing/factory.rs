@@ -6,7 +6,7 @@
 use super::{
     GoBehavior, GoParser, Language, LanguageBehavior, LanguageId, LanguageParser, PhpBehavior,
     PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser, TypeScriptBehavior,
-    TypeScriptParser, get_registry,
+    TypeScriptParser, get_registry, CParser, CBehavior, CppParser, CppBehavior,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -151,6 +151,14 @@ impl ParserFactory {
                 let parser = GoParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::C => {
+                let parser = CParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
+            Language::Cpp => {
+                let parser = CppParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
         }
     }
 
@@ -230,6 +238,20 @@ impl ParserFactory {
                 ParserWithBehavior {
                     parser: Box::new(parser),
                     behavior: Box::new(GoBehavior::new()),
+                }
+            }
+            Language::C => {
+                let parser = CParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(CBehavior::new()),
+                }
+            }
+            Language::Cpp => {
+                let parser = CppParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(CppBehavior::new()),
                 }
             }
         };
