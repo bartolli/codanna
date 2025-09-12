@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2025-09-11
+
+### Added
+- React example app under `examples/typescript/react` demonstrating call tracking for React hooks and component methods.
+
+### Fixed
+- TypeScript parser/indexer: Function call relationships correctly tracked in React projects (fixes #23)
+  - React hooks (`useState`, `useEffect`) and component methods properly detected
+  - Call relationships preserved during full project indexing
+  - External module symbols correctly resolved with unique IDs
+
 ## [0.5.10] - 2025-09-11
 
 ### Added

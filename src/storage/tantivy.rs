@@ -364,6 +364,8 @@ pub struct DocumentIndex {
     embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
     /// Symbols pending vector processing (SymbolId, symbol_text)
     pub(crate) pending_embeddings: Mutex<Vec<(SymbolId, String)>>,
+    /// Pending symbol counter during batch operations
+    pending_symbol_counter: Mutex<Option<u32>>,
 }
 
 impl std::fmt::Debug for DocumentIndex {
@@ -426,6 +428,7 @@ impl DocumentIndex {
             cluster_cache: Arc::new(RwLock::new(None)),
             embedding_generator: None,
             pending_embeddings: Mutex::new(Vec::new()),
+            pending_symbol_counter: Mutex::new(None),
         })
     }
 
@@ -760,6 +763,14 @@ impl DocumentIndex {
         if writer_lock.is_none() {
             let writer = self.index.writer::<Document>(100_000_000)?; // 100MB buffer
             *writer_lock = Some(writer);
+
+            // Initialize the pending symbol counter for this batch
+            let current = self
+                .query_metadata(MetadataKey::SymbolCounter)?
+                .unwrap_or(0) as u32;
+            if let Ok(mut pending_guard) = self.pending_symbol_counter.lock() {
+                *pending_guard = Some(current + 1);
+            }
         }
         Ok(())
     }
@@ -863,6 +874,11 @@ impl DocumentIndex {
             writer.commit()?;
             // Reload the reader to see new documents
             self.reader.reload()?;
+
+            // Clear the pending symbol counter after commit
+            if let Ok(mut pending_guard) = self.pending_symbol_counter.lock() {
+                *pending_guard = None;
+            }
 
             // Process pending vector embeddings if enabled
             if self.has_vector_support() && self.embedding_generator.is_some() {
@@ -1508,6 +1524,16 @@ impl DocumentIndex {
 
     /// Get next symbol ID
     pub fn get_next_symbol_id(&self) -> StorageResult<u32> {
+        // During batch operations, use and increment the pending counter
+        if let Ok(mut pending_guard) = self.pending_symbol_counter.lock() {
+            if let Some(ref mut counter) = *pending_guard {
+                let next_id = *counter;
+                *counter += 1;
+                return Ok(next_id);
+            }
+        }
+
+        // Otherwise, query the committed metadata
         let current = self
             .query_metadata(MetadataKey::SymbolCounter)?
             .unwrap_or(0) as u32;

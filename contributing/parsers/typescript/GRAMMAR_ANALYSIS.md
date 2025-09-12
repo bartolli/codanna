@@ -1,16 +1,17 @@
 # TypeScript Grammar Analysis
 
-*Generated: 2025-09-11 20:24:24 UTC*
+*Generated: 2025-09-12 02:35:25 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 183
 - Nodes found in comprehensive.ts: 193
-- Nodes handled by parser: 182
-- Symbol kinds extracted: 9
+- Nodes handled by parser: 187
+- Symbol kinds extracted: 8
 
 ## ✅ Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - !
+- "
 - ${
 - &
 - &&
@@ -47,7 +48,6 @@ These nodes are in examples and handled by parser:
 - any
 - arguments
 - array
-- array_pattern
 - array_type
 - arrow_function
 - as
@@ -64,13 +64,11 @@ These nodes are in examples and handled by parser:
 - class_declaration
 - class_heritage
 - comment
-- computed_property_name
 - conditional_type
 - const
 - constraint
 - declare
 - decorator
-- default
 - enum
 - enum_assignment
 - enum_body
@@ -85,14 +83,12 @@ These nodes are in examples and handled by parser:
 - extends_type_clause
 - false
 - for
-- for_statement
 - formal_parameters
 - from
 - function
 - function_declaration
 - function_signature
 - function_type
-- generator_function_declaration
 - generic_type
 - get
 - global
@@ -115,7 +111,6 @@ These nodes are in examples and handled by parser:
 - intersection_type
 - is
 - keyof
-- let
 - lexical_declaration
 - literal_type
 - lookup_type
@@ -134,6 +129,7 @@ These nodes are in examples and handled by parser:
 - null
 - number
 - object
+- object_pattern
 - object_type
 - opting_type_annotation
 - optional_parameter
@@ -142,7 +138,6 @@ These nodes are in examples and handled by parser:
 - parenthesized_type
 - predefined_type
 - private
-- program
 - property_identifier
 - property_signature
 - protected
@@ -155,6 +150,8 @@ These nodes are in examples and handled by parser:
 - return_statement
 - set
 - shorthand_property_identifier
+- shorthand_property_identifier_pattern
+- spread_element
 - statement_block
 - static
 - string
@@ -165,7 +162,6 @@ These nodes are in examples and handled by parser:
 - template_substitution
 - template_type
 - this
-- this_type
 - true
 - tuple_type
 - type
@@ -186,7 +182,6 @@ These nodes are in examples and handled by parser:
 - variable_declarator
 - void
 - while
-- while_statement
 - yield
 - yield_expression
 - {
@@ -195,17 +190,22 @@ These nodes are in examples and handled by parser:
 
 ## ⚠️ Implementation Gaps
 These nodes appear in comprehensive.ts but aren't handled:
-- "
 - /
+- array_pattern
+- computed_property_name
+- default
+- for_statement
+- generator_function_declaration
+- let
 - nested_type_identifier
-- object_pattern
+- program
 - regex
 - regex_pattern
 - satisfies
 - satisfies_expression
-- shorthand_property_identifier_pattern
-- spread_element
+- this_type
 - type_assertion
+- while_statement
 
 ## 📝 Missing from Examples
 These grammar nodes aren't in comprehensive.ts:
@@ -283,5 +283,4 @@ These grammar nodes aren't in comprehensive.ts:
 - Interface
 - Method
 - TypeAlias
-- Variable
 

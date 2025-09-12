@@ -20,7 +20,7 @@ fn test_typescript_resolution_pipeline() {
         .languages
         .get("typescript")
         .expect("TypeScript should be configured");
-    assert_eq!(ts_config.config_files.len(), 2);
+    assert_eq!(ts_config.config_files.len(), 3);
     assert!(
         ts_config.config_files[0]
             .to_str()

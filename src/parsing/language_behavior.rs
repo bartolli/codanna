@@ -723,6 +723,40 @@ pub trait LanguageBehavior: Send + Sync {
         None
     }
 
+    /// Map an unresolved call target to an external module + symbol name.
+    ///
+    /// Used when a call cannot be resolved to any in-repo symbol. Languages can
+    /// leverage their import tracking to indicate the external module path and
+    /// symbol name so the indexer can materialize a lightweight stub.
+    ///
+    /// Returns (module_path, symbol_name) if a mapping is known, otherwise None.
+    /// Default implementation returns None (no external mapping).
+    fn resolve_external_call_target(
+        &self,
+        _to_name: &str,
+        _from_file: FileId,
+    ) -> Option<(String, String)> {
+        None
+    }
+
+    /// Create or retrieve an external symbol stub for unresolved calls.
+    ///
+    /// Behavior implementations may materialize a lightweight symbol in the index under a
+    /// virtual path (e.g., `.codanna/external/...`) so the index can store a relationship.
+    ///
+    /// Default implementation returns an error to avoid indexer-specific language logic.
+    fn create_external_symbol(
+        &self,
+        _document_index: &mut DocumentIndex,
+        _module_path: &str,
+        _symbol_name: &str,
+        _language_id: crate::parsing::LanguageId,
+    ) -> IndexResult<SymbolId> {
+        Err(IndexError::General(
+            "External symbol creation not implemented for this language".to_string(),
+        ))
+    }
+
     /// Enhanced import path resolution with module context
     ///
     /// This is separate from resolve_import_path for backward compatibility.

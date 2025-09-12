@@ -65,6 +65,12 @@ pub struct TypeScriptResolutionContext {
 
     /// Import tracking (path -> alias)
     imports: Vec<(String, Option<String>)>,
+
+    /// Precomputed qualified name resolution for namespace imports
+    /// e.g., alias "Utils" → { "Utils.helper" => SymbolId }
+    qualified_names: HashMap<String, SymbolId>,
+    /// Namespace alias to target module path (normalized, dots)
+    namespace_aliases: HashMap<String, String>,
 }
 
 impl TypeScriptResolutionContext {
@@ -79,12 +85,24 @@ impl TypeScriptResolutionContext {
             type_space: HashMap::new(),
             scope_stack: Vec::new(),
             imports: Vec::new(),
+            qualified_names: HashMap::new(),
+            namespace_aliases: HashMap::new(),
         }
     }
 
     /// Add an import (import statement)
     pub fn add_import(&mut self, path: String, alias: Option<String>) {
         self.imports.push((path, alias));
+    }
+
+    /// Record a namespace alias mapping (e.g., import * as React from 'react')
+    pub fn add_namespace_alias(&mut self, alias: String, target_module: String) {
+        self.namespace_aliases.insert(alias, target_module);
+    }
+
+    /// Add a qualified name binding for fast resolution (e.g., "Utils.helper" -> id)
+    pub fn add_qualified_name(&mut self, qualified: String, symbol_id: SymbolId) {
+        self.qualified_names.insert(qualified, symbol_id);
     }
 
     /// Add an imported symbol to the context
@@ -222,13 +240,29 @@ impl ResolutionScope for TypeScriptResolutionContext {
             if parts.len() == 2 {
                 let class_or_module = parts[0];
                 let method_or_prop = parts[1];
+                // Namespace import alias (e.g., React.useEffect)
+                if let Some(_module) = self.namespace_aliases.get(class_or_module) {
+                    // For namespace imports, attempt to resolve the member by name
+                    if let Some(&id) = self
+                        .local_scope
+                        .get(method_or_prop)
+                        .or_else(|| self.hoisted_scope.get(method_or_prop))
+                        .or_else(|| self.imported_symbols.get(method_or_prop))
+                        .or_else(|| self.module_symbols.get(method_or_prop))
+                        .or_else(|| self.global_symbols.get(method_or_prop))
+                    {
+                        return Some(id);
+                    }
+                    // If we haven't precomputed a mapping and no symbol exists
+                    // in current context, fall through to None
+                }
 
-                // Check if type exists in our codebase
+                // Check if type exists in our codebase (class or module symbol)
                 if self.resolve(class_or_module).is_some() {
-                    // Type exists, resolve the method/property
+                    // Type exists, resolve the method/property by name
                     return self.resolve(method_or_prop);
                 }
-                // External library - return None
+                // External library or unresolved alias - return None
                 return None;
             }
         }

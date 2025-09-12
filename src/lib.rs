@@ -1,4 +1,14 @@
 /// The main library module for codanna
+// Debug macro for consistent debug output
+#[macro_export]
+macro_rules! debug_print {
+    ($self:expr, $($arg:tt)*) => {
+        if $crate::config::is_global_debug_enabled() {
+            eprintln!("DEBUG: {}", format!($($arg)*));
+        }
+    };
+}
+
 pub mod config;
 pub mod display;
 pub mod error;

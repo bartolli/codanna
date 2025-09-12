@@ -1,11 +1,11 @@
 # TypeScript Parser Coverage Report
 
-*Generated: 2025-09-11 20:24:24 UTC*
+*Generated: 2025-09-12 02:35:25 UTC*
 
 ## Summary
 - Nodes in file: 193
-- Nodes handled by parser: 182
-- Symbol kinds extracted: 9
+- Nodes handled by parser: 187
+- Symbol kinds extracted: 8
 
 ## Coverage Table
 
@@ -23,7 +23,7 @@
 | lexical_declaration | 184 | ✅ implemented |
 | arrow_function | 227 | ✅ implemented |
 | function_expression | - | ❌ not found |
-| generator_function_declaration | 226 | ✅ implemented |
+| generator_function_declaration | 226 | ⚠️ gap |
 | import_statement | 174 | ✅ implemented |
 | export_statement | 167 | ✅ implemented |
 | namespace_import | 177 | ✅ implemented |
@@ -44,6 +44,11 @@
 - ❌ **not found**: Node type not present in the example file (may need better examples)
 
 ## Recommended Actions
+
+### Priority 1: Implementation Gaps
+These nodes exist in your code but aren't being captured:
+
+- `generator_function_declaration`: Add parsing logic in parser.rs
 
 ### Priority 2: Missing Examples
 These nodes aren't in the comprehensive example. Consider:

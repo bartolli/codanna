@@ -1,5 +1,6 @@
 //! TypeScript-specific language behavior implementation
 
+use crate::debug_print;
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
@@ -208,6 +209,252 @@ impl LanguageBehavior for TypeScriptBehavior {
         self.get_imports_from_state(file_id)
     }
 
+    fn resolve_external_call_target(
+        &self,
+        to_name: &str,
+        from_file: FileId,
+    ) -> Option<(String, String)> {
+        // Use tracked imports and module path to map unresolved calls to externals.
+        if crate::config::is_global_debug_enabled() {
+            eprintln!(
+                "DEBUG[TS]: resolve_external_call_target to='{to_name}' file_id={from_file:?}"
+            );
+        }
+        // Cases:
+        // - Namespace import: `import * as React from 'react'` -> React.useState
+        // - Default import:  `import React from 'react'` -> React.useState
+        // - Named import:    `import { useState } from 'react'` -> useState
+
+        let imports = self.get_imports_for_file(from_file);
+        if imports.is_empty() {
+            if crate::config::is_global_debug_enabled() {
+                eprintln!("DEBUG[TS]: no imports tracked for file {from_file:?}");
+            }
+            return None;
+        }
+
+        // Helper: normalize TS import path relative to importing module
+        fn parent_module(m: &str) -> String {
+            let mut parts: Vec<&str> = if m.is_empty() {
+                Vec::new()
+            } else {
+                m.split('.').collect()
+            };
+            if !parts.is_empty() {
+                parts.pop();
+            }
+            parts.join(".")
+        }
+        fn normalize_ts_import(import_path: &str, importing_mod: &str) -> String {
+            if import_path.starts_with("./") {
+                let base_owned = parent_module(importing_mod);
+                let base = base_owned.as_str();
+                let rel = import_path.trim_start_matches("./").replace('/', ".");
+                if base.is_empty() {
+                    rel
+                } else {
+                    format!("{base}.{rel}")
+                }
+            } else if import_path.starts_with("../") {
+                let base_owned = parent_module(importing_mod);
+                let mut parts: Vec<&str> = base_owned.split('.').collect();
+                let mut rest = import_path;
+                while rest.starts_with("../") {
+                    if !parts.is_empty() {
+                        parts.pop();
+                    }
+                    rest = &rest[3..];
+                }
+                let rest = rest.trim_start_matches("./").replace('/', ".");
+                let mut combined = parts.join(".");
+                if !rest.is_empty() {
+                    combined = if combined.is_empty() {
+                        rest
+                    } else {
+                        format!("{combined}.{rest}")
+                    };
+                }
+                combined
+            } else {
+                import_path.replace('/', ".")
+            }
+        }
+
+        let importing_module = self.get_module_path_for_file(from_file).unwrap_or_default();
+        if crate::config::is_global_debug_enabled() {
+            eprintln!(
+                "DEBUG[TS]: importing_module='{}', imports={}",
+                importing_module,
+                imports.len()
+            );
+            for imp in &imports {
+                eprintln!(
+                    "  import path='{}' alias={:?} glob={} type_only={}",
+                    imp.path, imp.alias, imp.is_glob, imp.is_type_only
+                );
+            }
+        }
+
+        // Namespace form only: Alias.member from `import * as Alias from 'module'`
+        if let Some((alias, member)) = to_name.split_once('.') {
+            for import in &imports {
+                // Guard: only namespace imports (is_glob == true)
+                if import.is_glob {
+                    if let Some(a) = &import.alias {
+                        if a == alias {
+                            let module_path = normalize_ts_import(&import.path, &importing_module);
+                            if crate::config::is_global_debug_enabled() {
+                                eprintln!(
+                                    "DEBUG[TS]: mapped namespace alias.member: {alias}.{member} -> module '{module_path}'"
+                                );
+                            }
+                            return Some((module_path, member.to_string()));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Named import form only (is_glob == false): e.g., import { useState } from 'react'
+            for import in &imports {
+                if !import.is_glob {
+                    if let Some(a) = &import.alias {
+                        if a == to_name {
+                            let module_path = normalize_ts_import(&import.path, &importing_module);
+                            if crate::config::is_global_debug_enabled() {
+                                eprintln!(
+                                    "DEBUG[TS]: mapped named import: {to_name} -> module '{module_path}'"
+                                );
+                            }
+                            return Some((module_path, to_name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn create_external_symbol(
+        &self,
+        document_index: &mut crate::storage::DocumentIndex,
+        module_path: &str,
+        symbol_name: &str,
+        language_id: crate::parsing::LanguageId,
+    ) -> crate::IndexResult<crate::SymbolId> {
+        use crate::storage::MetadataKey;
+        use crate::{IndexError, Symbol, SymbolId, SymbolKind, Visibility};
+
+        // If symbol already exists with same name and module_path, reuse it
+        if let Ok(cands) = document_index.find_symbols_by_name(symbol_name, None) {
+            debug_print!(
+                self,
+                "Found {} existing symbols with name '{}'",
+                cands.len(),
+                symbol_name
+            );
+            for s in cands {
+                if let Some(mp) = &s.module_path {
+                    debug_print!(
+                        self,
+                        "Checking symbol '{}' module '{}' vs '{}' (ID: {:?})",
+                        s.name,
+                        mp.as_ref(),
+                        module_path,
+                        s.id
+                    );
+                    if mp.as_ref() == module_path {
+                        debug_print!(
+                            self,
+                            "Reusing existing external symbol '{}' in module '{}' with ID {:?}",
+                            symbol_name,
+                            module_path,
+                            s.id
+                        );
+                        return Ok(s.id);
+                    }
+                }
+            }
+        }
+
+        // Compute virtual file path
+        let mut path_buf = String::from(".codanna/external/");
+        path_buf.push_str(&module_path.replace('.', "/"));
+        path_buf.push_str(".d.ts");
+        let path_str = path_buf;
+
+        // Ensure file_info exists
+        let file_id = if let Ok(Some((fid, _))) = document_index.get_file_info(&path_str) {
+            fid
+        } else {
+            let next_file_id =
+                document_index
+                    .get_next_file_id()
+                    .map_err(|e| IndexError::TantivyError {
+                        operation: "get_next_file_id".to_string(),
+                        cause: e.to_string(),
+                    })?;
+            let file_id = crate::FileId::new(next_file_id).ok_or(IndexError::FileIdExhausted)?;
+            let hash = format!("external:{module_path}");
+            let ts = crate::indexing::get_utc_timestamp();
+            document_index
+                .store_file_info(file_id, &path_str, &hash, ts)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "store_file_info".to_string(),
+                    cause: e.to_string(),
+                })?;
+            file_id
+        };
+
+        // Allocate a new symbol id
+        let next_id =
+            document_index
+                .get_next_symbol_id()
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "get_next_symbol_id".to_string(),
+                    cause: e.to_string(),
+                })?;
+        let symbol_id = SymbolId::new(next_id).ok_or(IndexError::SymbolIdExhausted)?;
+
+        // Build and index the stub symbol
+        let mut symbol = Symbol::new(
+            symbol_id,
+            symbol_name.to_string(),
+            SymbolKind::Function,
+            file_id,
+            crate::Range::new(0, 0, 0, 0),
+        )
+        .with_visibility(Visibility::Public);
+        symbol.module_path = Some(module_path.to_string().into());
+        symbol.scope_context = Some(crate::symbol::ScopeContext::Global);
+        symbol.language_id = Some(language_id);
+
+        document_index
+            .index_symbol(&symbol, &path_str)
+            .map_err(|e| IndexError::TantivyError {
+                operation: "index_symbol".to_string(),
+                cause: e.to_string(),
+            })?;
+
+        // Update the symbol counter metadata
+        document_index
+            .store_metadata(MetadataKey::SymbolCounter, symbol_id.value() as u64)
+            .map_err(|e| IndexError::TantivyError {
+                operation: "store_metadata(SymbolCounter)".to_string(),
+                cause: e.to_string(),
+            })?;
+
+        debug_print!(
+            self,
+            "Created new external symbol '{}' in module '{}' with ID {:?}",
+            symbol_name,
+            module_path,
+            symbol_id
+        );
+
+        Ok(symbol_id)
+    }
+
     fn build_resolution_context(
         &self,
         file_id: FileId,
@@ -220,6 +467,9 @@ impl LanguageBehavior for TypeScriptBehavior {
 
         // 1. Add imported symbols (using behavior's tracked imports)
         let imports = self.get_imports_for_file(file_id);
+        // Collect namespace imports for qualified-name precomputation
+        let mut namespace_imports: Vec<(String, String)> = Vec::new(); // (alias, normalized_module)
+
         for import in imports {
             if let Some(symbol_id) = self.resolve_import(&import, document_index) {
                 // Use alias if provided, otherwise use the last segment of the path
@@ -236,6 +486,61 @@ impl LanguageBehavior for TypeScriptBehavior {
 
                 // Use the is_type_only field to determine where to place the import
                 context.add_import_symbol(name, symbol_id, import.is_type_only);
+            } else if import.is_glob {
+                // Namespace import that didn't resolve to a concrete symbol set.
+                // Record alias -> target module mapping for qualified-name resolution.
+                if let Some(alias) = &import.alias {
+                    // Normalize target module relative to current file's module path
+                    let importing_module =
+                        self.get_module_path_for_file(file_id).unwrap_or_default();
+                    let normalized = {
+                        // Reuse normalize helper from resolve_import
+                        fn parent_module(m: &str) -> String {
+                            let mut parts: Vec<&str> = if m.is_empty() {
+                                Vec::new()
+                            } else {
+                                m.split('.').collect()
+                            };
+                            if !parts.is_empty() {
+                                parts.pop();
+                            }
+                            parts.join(".")
+                        }
+                        let p = &import.path;
+                        if p.starts_with("./") {
+                            let base = parent_module(&importing_module);
+                            let rel = p.trim_start_matches("./").replace('/', ".");
+                            if base.is_empty() {
+                                rel
+                            } else {
+                                format!("{base}.{rel}")
+                            }
+                        } else if p.starts_with("../") {
+                            let base_owned = parent_module(&importing_module);
+                            let mut parts: Vec<&str> = base_owned.split('.').collect();
+                            let mut rest = p.as_str();
+                            while rest.starts_with("../") {
+                                if !parts.is_empty() {
+                                    parts.pop();
+                                }
+                                rest = &rest[3..];
+                            }
+                            let rest = rest.trim_start_matches("./").replace('/', ".");
+                            let mut combined = parts.join(".");
+                            if !rest.is_empty() {
+                                combined = if combined.is_empty() {
+                                    rest
+                                } else {
+                                    format!("{combined}.{rest}")
+                                };
+                            }
+                            combined
+                        } else {
+                            p.replace('/', ".")
+                        }
+                    };
+                    namespace_imports.push((alias.clone(), normalized));
+                }
             }
         }
 
@@ -269,6 +574,7 @@ impl LanguageBehavior for TypeScriptBehavior {
                     cause: e.to_string(),
                 })?;
 
+        let mut public_symbols: Vec<crate::Symbol> = Vec::new();
         for symbol in all_symbols {
             // Only add if visible from this file
             if symbol.file_id != file_id && self.is_symbol_visible_from_file(&symbol, file_id) {
@@ -279,6 +585,27 @@ impl LanguageBehavior for TypeScriptBehavior {
                 };
 
                 context.add_symbol(symbol.name.to_string(), symbol.id, scope_level);
+                public_symbols.push(symbol);
+            }
+        }
+
+        // 3.1 Precompute qualified names for namespace imports against visible symbols
+        if !namespace_imports.is_empty() {
+            // Downcast to access TypeScript-specific API
+            if let Some(ts_ctx) = context
+                .as_any_mut()
+                .downcast_mut::<TypeScriptResolutionContext>()
+            {
+                for (alias, target_module) in namespace_imports {
+                    ts_ctx.add_namespace_alias(alias.clone(), target_module.clone());
+                    for sym in &public_symbols {
+                        if let Some(mod_path) = &sym.module_path {
+                            if mod_path.as_ref() == target_module {
+                                ts_ctx.add_qualified_name(format!("{alias}.{}", sym.name), sym.id);
+                            }
+                        }
+                    }
+                }
             }
         }
 

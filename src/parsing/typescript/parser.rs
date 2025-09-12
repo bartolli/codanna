@@ -88,7 +88,9 @@ impl TypeScriptParser {
     /// Create a new TypeScript parser
     pub fn new() -> Result<Self, String> {
         let mut parser = Parser::new();
-        let language: Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        // Use the TSX grammar so TSX/JSX syntax parses correctly. It also
+        // handles plain TypeScript files, avoiding ERROR roots in TSX files.
+        let language: Language = tree_sitter_typescript::LANGUAGE_TSX.into();
         parser
             .set_language(&language)
             .map_err(|e| format!("Failed to set TypeScript language: {e}"))?;
@@ -234,6 +236,77 @@ impl TypeScriptParser {
                     self.process_arrow_function(node, code, file_id, counter, module_path)
                 {
                     symbols.push(symbol);
+                }
+            }
+            "ERROR" => {
+                // ERROR nodes occur when tree-sitter can't parse something
+                // (e.g., "use client" directive in React Server Components)
+                // We still want to extract symbols from the children
+                self.register_handled_node(node.kind(), node.kind_id());
+
+                // Check if this looks like a fragmented function declaration
+                // Pattern: identifier followed by formal_parameters
+                let mut cursor = node.walk();
+                let children: Vec<Node> = node.children(&mut cursor).collect();
+
+                let mut i = 0;
+                while i < children.len() {
+                    let child = children[i];
+
+                    // Check if this is an identifier followed by formal_parameters
+                    if child.kind() == "identifier" && i + 1 < children.len() {
+                        let next = children[i + 1];
+                        if next.kind() == "formal_parameters" {
+                            // This looks like a function declaration that got fragmented
+                            // Extract it as a function
+                            let func_name = &code[child.byte_range()];
+
+                            // Create a synthetic function symbol
+                            let symbol_id = counter.next_id();
+                            let range = Range::new(
+                                child.start_position().row as u32,
+                                child.start_position().column as u16,
+                                next.end_position().row as u32,
+                                next.end_position().column as u16,
+                            );
+
+                            let mut symbol = Symbol::new(
+                                symbol_id,
+                                func_name.to_string(),
+                                SymbolKind::Function,
+                                file_id,
+                                range,
+                            );
+
+                            symbol = symbol
+                                .with_visibility(Visibility::Public)
+                                .with_signature(format!("function {func_name}()"));
+
+                            if !module_path.is_empty() {
+                                symbol = symbol.with_module_path(module_path.to_string());
+                            }
+
+                            // Set scope context
+                            symbol.scope_context = Some(self.context.current_scope_context());
+
+                            symbols.push(symbol);
+
+                            // Skip the formal_parameters node since we processed it
+                            i += 2;
+                            continue;
+                        }
+                    }
+
+                    // Process child normally
+                    self.extract_symbols_from_node(
+                        child,
+                        code,
+                        file_id,
+                        counter,
+                        symbols,
+                        module_path,
+                    );
+                    i += 1;
                 }
             }
             _ => {
@@ -1273,15 +1346,47 @@ impl TypeScriptParser {
         current_function: Option<&'a str>,
         calls: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
+        // Handle export wrappers that contain a function declaration. This helps
+        // when the tree is fragmented under an ERROR root and field labeling is unreliable.
+        if node.kind() == "export_statement" {
+            let mut w = node.walk();
+            for child in node.children(&mut w) {
+                if child.kind() == "function_declaration" {
+                    // Try to get function name
+                    let func_name = child
+                        .child_by_field_name("name")
+                        .or_else(|| {
+                            let mut cw = child.walk();
+                            child.children(&mut cw).find(|n| n.kind() == "identifier")
+                        })
+                        .map(|n| &code[n.byte_range()]);
+                    // Recurse into the function with proper context
+                    self.extract_calls_recursive(&child, code, func_name, calls);
+                    // Continue scanning other children as well
+                }
+            }
+        }
         // Handle function context - track which function we're inside
+        // CRITICAL: Only set NEW context when entering a function, otherwise INHERIT current context
         let function_context = if node.kind() == "function_declaration"
             || node.kind() == "method_definition"
             || node.kind() == "arrow_function"
             || node.kind() == "function_expression"
         {
-            // Extract function name
-            if let Some(name_node) = node.child_by_field_name("name") {
-                Some(&code[name_node.byte_range()])
+            // We're entering a NEW function scope - extract its name
+            if let Some(name_node) = node.child_by_field_name("name").or_else(|| {
+                // Fallback: some fragmented/ERROR-wrapped trees may not label fields
+                let mut w = node.walk();
+                node.children(&mut w).find(|n| n.kind() == "identifier")
+            }) {
+                let name = &code[name_node.byte_range()];
+                eprintln!(
+                    "DEBUG: Entering {} '{}' at line {}",
+                    node.kind(),
+                    name,
+                    node.start_position().row + 1
+                );
+                Some(name)
             } else {
                 // Arrow functions might not have a name, check parent for variable declaration
                 // Handle case: const ComponentName = () => { ... }
@@ -1304,7 +1409,29 @@ impl TypeScriptParser {
                     current_function
                 }
             }
-        } else if node.kind() == "variable_declarator" {
+        } else if node.kind() == "identifier" && current_function.is_none() {
+            // ONLY check for fragmented functions if we're NOT already in a function
+            // Fragmented function detection only at top level error/program contexts.
+            if let Some(parent) = node.parent() {
+                if parent.kind() == "ERROR" || parent.kind() == "program" {
+                    if let Some(next_sibling) = node.next_sibling() {
+                        if next_sibling.kind() == "formal_parameters" {
+                            // This is a fragmented function (e.g., due to "use client" causing ERROR root)
+                            Some(&code[node.byte_range()])
+                        } else {
+                            current_function
+                        }
+                    } else {
+                        current_function
+                    }
+                } else {
+                    current_function
+                }
+            } else {
+                current_function
+            }
+        } else if node.kind() == "variable_declarator" && current_function.is_none() {
+            // ONLY check variable declarators at top level, not inside functions
             // Check if this variable contains an arrow function or function expression
             if let Some(init) = node.child_by_field_name("value") {
                 if init.kind() == "arrow_function" || init.kind() == "function_expression" {
@@ -1321,15 +1448,65 @@ impl TypeScriptParser {
                 current_function
             }
         } else {
+            // Not a function declaration - INHERIT the current context
             current_function
         };
 
         // Check if this is a call expression
         if node.kind() == "call_expression" {
-            if let Some(function_node) = node.child_by_field_name("function") {
+            // Try to obtain the callee node robustly: prefer 'function' field,
+            // but fall back to the first child if fields are missing under ERROR nodes.
+            let function_node = node.child_by_field_name("function").or_else(|| {
+                let mut w = node.walk();
+                node.children(&mut w).next()
+            });
+
+            if let Some(function_node) = function_node {
                 // Extract function name for all types of calls (including member expressions like console.log)
                 if let Some(fn_name) = Self::extract_function_name(&function_node, code) {
-                    if let Some(context) = function_context {
+                    eprintln!(
+                        "DEBUG: Found call to {} at line {}, context = {:?}",
+                        fn_name,
+                        node.start_position().row + 1,
+                        function_context
+                    );
+                    // If we don't have a function context yet, try to infer it from ancestors
+                    let inferred_context = if function_context.is_none() {
+                        let mut anc = node.parent();
+                        let mut ctx: Option<&'a str> = None;
+                        while let Some(a) = anc {
+                            match a.kind() {
+                                "function_declaration" => {
+                                    if let Some(name_node) =
+                                        a.child_by_field_name("name").or_else(|| {
+                                            let mut w = a.walk();
+                                            a.children(&mut w).find(|n| n.kind() == "identifier")
+                                        })
+                                    {
+                                        ctx = Some(&code[name_node.byte_range()]);
+                                        break;
+                                    }
+                                }
+                                "arrow_function" | "function_expression" => {
+                                    if let Some(p) = a.parent() {
+                                        if p.kind() == "variable_declarator" {
+                                            if let Some(name_node) = p.child_by_field_name("name") {
+                                                ctx = Some(&code[name_node.byte_range()]);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                            anc = a.parent();
+                        }
+                        ctx
+                    } else {
+                        None
+                    };
+
+                    if let Some(context) = function_context.or(inferred_context) {
                         let range = Range {
                             start_line: (node.start_position().row + 1) as u32,
                             start_column: node.start_position().column as u16,
@@ -1337,6 +1514,45 @@ impl TypeScriptParser {
                             end_column: node.end_position().column as u16,
                         };
                         calls.push((context, fn_name, range));
+                        eprintln!("DEBUG: Added call {context} -> {fn_name}");
+                    } else {
+                        eprintln!("DEBUG: Skipping call to {fn_name} - no function context");
+                    }
+                }
+            }
+        }
+
+        // Special handling for fragmented functions
+        // If this is an identifier followed by formal_parameters, we need to process
+        // the following siblings with this function's context
+        if node.kind() == "identifier" {
+            if let Some(parent) = node.parent() {
+                if parent.kind() == "ERROR" || parent.kind() == "program" {
+                    if let Some(next_sibling) = node.next_sibling() {
+                        if next_sibling.kind() == "formal_parameters" {
+                            // Process subsequent siblings with this function's context
+                            let mut current = next_sibling.next_sibling();
+                            while let Some(sibling) = current {
+                                // Heuristic boundary: stop if we hit another top-level declaration
+                                let k = sibling.kind();
+                                if k == "function_declaration"
+                                    || k == "class_declaration"
+                                    || k == "abstract_class_declaration"
+                                    || k == "export_statement"
+                                {
+                                    break;
+                                }
+                                self.extract_calls_recursive(
+                                    &sibling,
+                                    code,
+                                    function_context,
+                                    calls,
+                                );
+                                current = sibling.next_sibling();
+                            }
+                            // Don't process children since we handled siblings
+                            return;
+                        }
                     }
                 }
             }
@@ -1806,19 +2022,55 @@ impl TypeScriptParser {
         current_function: Option<&str>,
         calls: &mut Vec<MethodCall>,
     ) {
-        // Track function context (same as find_calls)
+        // Track function context - SAME FIX as extract_calls_recursive
+        // Only set NEW context when entering a function, otherwise INHERIT
         let function_context = if node.kind() == "function_declaration"
             || node.kind() == "method_definition"
             || node.kind() == "arrow_function"
             || node.kind() == "function_expression"
         {
-            // Extract function name
+            // We're entering a NEW function - extract its name
             if let Some(name_node) = node.child_by_field_name("name") {
                 Some(&code[name_node.byte_range()])
+            } else if node.kind() == "arrow_function" {
+                // Check parent for variable declarator name
+                if let Some(parent) = node.parent() {
+                    if parent.kind() == "variable_declarator" {
+                        if let Some(name_node) = parent.child_by_field_name("name") {
+                            Some(&code[name_node.byte_range()])
+                        } else {
+                            current_function // Anonymous, inherit context
+                        }
+                    } else {
+                        current_function // Anonymous, inherit context
+                    }
+                } else {
+                    current_function // Anonymous, inherit context
+                }
+            } else {
+                current_function // Anonymous function, inherit context
+            }
+        } else if node.kind() == "identifier" && current_function.is_none() {
+            // Check for fragmented functions only at top level
+            if let Some(parent) = node.parent() {
+                if parent.kind() == "ERROR" || parent.kind() == "program" {
+                    if let Some(next_sibling) = node.next_sibling() {
+                        if next_sibling.kind() == "formal_parameters" {
+                            Some(&code[node.byte_range()])
+                        } else {
+                            current_function
+                        }
+                    } else {
+                        current_function
+                    }
+                } else {
+                    current_function
+                }
             } else {
                 current_function
             }
         } else {
+            // Not a function declaration - INHERIT the current context
             current_function
         };
 

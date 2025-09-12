@@ -2248,6 +2248,123 @@ impl SimpleIndexer {
         // Start a batch for relationship updates
         self.start_tantivy_batch()?;
 
+        // Pre-create external symbols before resolution
+        // This ensures they're available in Tantivy when we look them up
+        debug_print!(
+            self,
+            "Pre-creating external symbols for {} relationships",
+            unresolved.len()
+        );
+
+        // Track which external symbols we've already created to avoid duplicates
+        // Key: (module_path, symbol_name), Value: SymbolId
+        let mut created_external_symbols: std::collections::HashMap<(String, String), SymbolId> =
+            std::collections::HashMap::new();
+
+        // Track the symbol counter to ensure unique IDs
+        let mut symbol_counter = self.get_next_symbol_counter()?;
+
+        for rel in &unresolved {
+            if rel.kind == RelationKind::Calls {
+                // Check if this is an external call that needs symbol creation
+                if let Some(behavior) = self.file_behaviors.get(&rel.file_id) {
+                    // First try with method call enhanced resolution
+                    if let Some(method_calls) = self.method_calls_by_file.get(&rel.file_id) {
+                        // Look for matching method call to get receiver
+                        for mc in method_calls {
+                            if mc.method_name == rel.to_name.as_ref() {
+                                let target = if let Some(recv) = &mc.receiver {
+                                    format!("{}.{}", recv, mc.method_name)
+                                } else {
+                                    mc.method_name.clone()
+                                };
+
+                                if let Some((module_path, symbol_name)) =
+                                    behavior.resolve_external_call_target(&target, rel.file_id)
+                                {
+                                    let key = (module_path.clone(), symbol_name.clone());
+                                    if let std::collections::hash_map::Entry::Vacant(e) =
+                                        created_external_symbols.entry(key)
+                                    {
+                                        debug_print!(
+                                            self,
+                                            "Pre-creating external symbol: {}::{}",
+                                            module_path,
+                                            symbol_name
+                                        );
+                                        if let Some(lang_id) =
+                                            self.file_languages.get(&rel.file_id).copied()
+                                        {
+                                            // Create the external symbol now
+                                            if let Ok(symbol_id) = behavior.create_external_symbol(
+                                                &mut self.document_index,
+                                                &module_path,
+                                                &symbol_name,
+                                                lang_id,
+                                            ) {
+                                                e.insert(symbol_id);
+                                                // Advance the counter to track the next ID
+                                                let _ = symbol_counter.next_id();
+                                            }
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // Also try direct resolution
+                    if let Some((module_path, symbol_name)) =
+                        behavior.resolve_external_call_target(&rel.to_name, rel.file_id)
+                    {
+                        let key = (module_path.clone(), symbol_name.clone());
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            created_external_symbols.entry(key)
+                        {
+                            debug_print!(
+                                self,
+                                "Pre-creating external symbol: {}::{}",
+                                module_path,
+                                symbol_name
+                            );
+                            if let Some(lang_id) = self.file_languages.get(&rel.file_id).copied() {
+                                // Create the external symbol now
+                                if let Ok(symbol_id) = behavior.create_external_symbol(
+                                    &mut self.document_index,
+                                    &module_path,
+                                    &symbol_name,
+                                    lang_id,
+                                ) {
+                                    e.insert(symbol_id);
+                                    // Advance the counter to track the next ID
+                                    let _ = symbol_counter.next_id();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update the symbol counter metadata with the final value
+        if symbol_counter.current_count() > 0 {
+            self.update_symbol_counter(&symbol_counter)?;
+        }
+
+        // Commit the external symbols so they're searchable
+        debug_print!(self, "Committing pre-created external symbols");
+        self.commit_tantivy_batch()?;
+
+        // Rebuild symbol cache to include the new external symbols
+        debug_print!(self, "Rebuilding symbol cache with external symbols");
+        if let Err(e) = self.build_symbol_cache() {
+            debug_print!(self, "Warning: Failed to rebuild symbol cache: {}", e);
+        }
+
+        // Start a new batch for relationship updates
+        self.start_tantivy_batch()?;
+
         let mut resolved_count = 0;
         let mut skipped_count = 0;
         let _total_unresolved = unresolved.len();
@@ -2288,6 +2405,18 @@ impl SimpleIndexer {
                         cause: e.to_string(),
                     })?;
 
+                eprintln!(
+                    "DEBUG: Looking for '{}' symbols, found {} total",
+                    rel.from_name,
+                    all_from_symbols.len()
+                );
+                for s in &all_from_symbols {
+                    eprintln!(
+                        "  - Symbol '{}' in file_id {:?} (looking for {:?})",
+                        s.name, s.file_id, file_id
+                    );
+                }
+
                 // Filter to only symbols from the current file
                 let from_symbols: Vec<_> = all_from_symbols
                     .into_iter()
@@ -2300,16 +2429,71 @@ impl SimpleIndexer {
                     from_symbols.len()
                 );
 
+                if from_symbols.is_empty() && rel.kind == RelationKind::Calls {
+                    eprintln!(
+                        "WARNING: No '{}' symbol found in file {:?} for Calls relationship to '{}'",
+                        rel.from_name, file_id, rel.to_name
+                    );
+                }
+
                 // Use the clean resolution API that delegates to language-specific logic
                 let to_symbol_id = if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
                     // Special handling for method calls with enhanced resolution
                     debug_print!(self, "Resolving as method call: '{}'", rel.to_name);
-                    self.resolve_method_call_enhanced(
+                    let res = self.resolve_method_call_enhanced(
                         &rel.to_name,
                         &rel.from_name,
                         file_id,
                         context.as_ref(),
-                    )
+                    );
+                    if res.is_none() {
+                        // Try external mapping as a fallback
+                        if let Some(behavior) = self.file_behaviors.get(&file_id) {
+                            // Build a better external key using MethodCall receiver if available
+                            let to_key = if let Some(method_calls) =
+                                self.method_calls_by_file.get(&file_id)
+                            {
+                                // Try to find the matching MethodCall by caller and method name
+                                let caller_name =
+                                    from_symbols.first().map(|s| s.name.as_ref()).unwrap_or("");
+                                if let Some(mc) = method_calls.iter().find(|mc| {
+                                    mc.caller == caller_name
+                                        && mc.method_name == rel.to_name.as_ref()
+                                }) {
+                                    if let Some(recv) = &mc.receiver {
+                                        format!("{recv}.{}", mc.method_name)
+                                    } else {
+                                        rel.to_name.to_string()
+                                    }
+                                } else {
+                                    rel.to_name.to_string()
+                                }
+                            } else {
+                                rel.to_name.to_string()
+                            };
+
+                            if let Some((module_path, symbol_name)) =
+                                behavior.resolve_external_call_target(&to_key, file_id)
+                            {
+                                if let Some(lang_id) = self.file_languages.get(&file_id).copied() {
+                                    Some(behavior.create_external_symbol(
+                                        &mut self.document_index,
+                                        &module_path,
+                                        &symbol_name,
+                                        lang_id,
+                                    )?)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        res
+                    }
                 } else {
                     // Delegate all relationship resolution to the language-specific context
                     // This includes Defines, Implements, Extends, and other relationships
@@ -2327,18 +2511,57 @@ impl SimpleIndexer {
                         file_id,
                     );
                     debug_print!(self, "Resolution result: {:?}", result);
-                    result
+                    // If unresolved call, try language behavior external mapping
+                    if result.is_none() && rel.kind == RelationKind::Calls {
+                        if let Some(behavior) = self.file_behaviors.get(&file_id) {
+                            if let Some((module_path, symbol_name)) =
+                                behavior.resolve_external_call_target(&rel.to_name, file_id)
+                            {
+                                debug_print!(
+                                    self,
+                                    "External call target mapped: {} -> {}::{}",
+                                    rel.to_name,
+                                    module_path,
+                                    symbol_name
+                                );
+                                if let Some(lang_id) = self.file_languages.get(&file_id).copied() {
+                                    Some(behavior.create_external_symbol(
+                                        &mut self.document_index,
+                                        &module_path,
+                                        &symbol_name,
+                                        lang_id,
+                                    )?)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        result
+                    }
                 };
 
                 let to_symbol_id = match to_symbol_id {
                     Some(id) => {
                         debug_print!(self, "Resolved target symbol to: {:?}", id);
+                        eprintln!(
+                            "DEBUG: Resolved target symbol '{}' to ID: {:?}",
+                            rel.to_name, id
+                        );
                         id
                     }
                     None => {
                         debug_print!(
                             self,
                             "Failed to resolve target symbol '{}' - skipping",
+                            rel.to_name
+                        );
+                        eprintln!(
+                            "DEBUG: Failed to resolve target symbol '{}' - skipping",
                             rel.to_name
                         );
                         // Symbol not in scope - skip this relationship
@@ -2455,6 +2678,8 @@ impl SimpleIndexer {
 
         Ok(())
     }
+
+    // Note: external symbol creation moved to language behavior implementations
 
     /// Process pending embeddings after a successful Tantivy commit
     fn process_pending_embeddings(
