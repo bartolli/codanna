@@ -2917,7 +2917,6 @@ impl SimpleIndexer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     use crate::types::SymbolCounter;
     use crate::{FileId, RelationKind, Symbol, SymbolKind, Visibility};
@@ -3314,7 +3313,7 @@ pub struct Another {
         // Create indexer with debug enabled
         let settings = Arc::new(Settings {
             workspace_root: Some(project_root.to_path_buf()),
-            index_path: PathBuf::from(".test_import_resolution"),
+            index_path: project_root.join(".test_import_resolution"),
             debug: true,
             ..Settings::default()
         });
@@ -3869,6 +3868,7 @@ pub struct Another {
         // Create indexer with temp directory as root
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
+            index_path: temp_dir.path().join("test_index"),
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));
@@ -4000,6 +4000,7 @@ pub struct Another {
         // Create indexer
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
+            index_path: temp_dir.path().join("test_index"),
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));

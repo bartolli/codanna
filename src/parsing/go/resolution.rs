@@ -499,7 +499,9 @@ impl GoResolutionContext {
 
             if effective_name == package_name {
                 // 1. Check if it's a relative import
-                if import_path.starts_with("./") || import_path.starts_with("../") {
+                if (import_path.starts_with("./") || import_path.starts_with("../"))
+                    && current_package_path.is_some()
+                {
                     if let Some(current_path) = current_package_path {
                         if let Some(resolved_path) =
                             self.resolve_relative_import(import_path, current_path)
