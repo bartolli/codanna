@@ -110,6 +110,12 @@ pub struct SearchSymbolsRequest {
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    /// Skip first N results for pagination (default: 0)
+    #[serde(default)]
+    pub offset: u32,
+    /// Return compact summary only: name, kind, location (default: false)
+    #[serde(default)]
+    pub summary_only: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -1123,7 +1129,9 @@ impl CodeIntelligenceServer {
         }
     }
 
-    #[tool(description = "Search for symbols using full-text search with fuzzy matching")]
+    #[tool(
+        description = "Search for symbols using full-text search with fuzzy matching. Supports pagination via offset parameter."
+    )]
     pub async fn search_symbols(
         &self,
         Parameters(SearchSymbolsRequest {
@@ -1132,6 +1140,8 @@ impl CodeIntelligenceServer {
             kind,
             module,
             lang,
+            offset,
+            summary_only,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.indexer.read().await;
@@ -1148,25 +1158,83 @@ impl CodeIntelligenceServer {
             _ => None,
         });
 
+        // For pagination, we need to fetch more results than requested
+        // so we can skip the offset and still return the requested limit
+        let fetch_limit = (limit + offset) as usize;
+
         match indexer.search(
             &query,
-            limit as usize,
+            fetch_limit,
             kind_filter,
             module.as_deref(),
             lang.as_deref(),
         ) {
-            Ok(results) => {
-                if results.is_empty() {
+            Ok(mut results) => {
+                let total_count = results.len();
+
+                if total_count == 0 {
                     return Ok(CallToolResult::success(vec![Content::text(format!(
                         "No results found for query: {query}"
                     ))]));
                 }
 
-                let mut result = format!(
-                    "Found {} result(s) for query '{}':\n\n",
-                    results.len(),
-                    query
-                );
+                // Apply pagination offset
+                if offset as usize >= total_count {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Offset {offset} exceeds total results ({total_count}). Try a lower offset."
+                    ))]));
+                }
+
+                // Skip offset and take limit
+                results = results
+                    .into_iter()
+                    .skip(offset as usize)
+                    .take(limit as usize)
+                    .collect();
+                let page_count = results.len();
+
+                // If summary_only mode, return compact output
+                if summary_only {
+                    let mut summary = if offset > 0 {
+                        format!(
+                            "Found {total_count} result(s) for query '{query}' (showing {page_count} from offset {offset}):\n"
+                        )
+                    } else {
+                        format!("Found {total_count} result(s) for query '{query}':\n")
+                    };
+
+                    for search_result in &results {
+                        summary.push_str(&format!(
+                            "{} ({:?}) at {}:{}\n",
+                            search_result.name,
+                            search_result.kind,
+                            search_result.file_path,
+                            search_result.line
+                        ));
+                    }
+
+                    // Add pagination hints if there are more results
+                    let remaining =
+                        total_count.saturating_sub((offset + page_count as u32) as usize);
+                    if remaining > 0 {
+                        summary.push_str(&format!(
+                            "\n💡 {} more result(s) available. Use offset={} to see next page.",
+                            remaining,
+                            offset + page_count as u32
+                        ));
+                    }
+
+                    return Ok(CallToolResult::success(vec![Content::text(summary)]));
+                }
+
+                // Build the full result string first with pagination info
+                let mut result = if offset > 0 {
+                    format!(
+                        "Found {total_count} result(s) for query '{query}' (showing {page_count} result(s) from offset {offset}):\n\n"
+                    )
+                } else {
+                    format!("Found {total_count} result(s) for query '{query}':\n\n")
+                };
 
                 for (i, search_result) in results.iter().enumerate() {
                     result.push_str(&format!(
@@ -1196,6 +1264,49 @@ impl CodeIntelligenceServer {
 
                     result.push_str(&format!("   Score: {:.2}\n", search_result.score));
                     result.push('\n');
+                }
+
+                // Add pagination hints if there are more results
+                let remaining = total_count.saturating_sub((offset + page_count as u32) as usize);
+                if remaining > 0 {
+                    result.push_str(&format!(
+                        "\n💡 {} more result(s) available. Use offset={} to see next page.",
+                        remaining,
+                        offset + page_count as u32
+                    ));
+                }
+
+                // Token limit check - estimate ~4 chars per token
+                const MAX_TOKENS: usize = 20000; // Leave 5K buffer for 25K Claude limit
+                let estimated_tokens = result.len() / 4;
+
+                if estimated_tokens > MAX_TOKENS {
+                    // Auto-truncate to summary mode
+                    let summary_count = 20.min(results.len());
+                    let summary = results
+                        .iter()
+                        .take(summary_count)
+                        .map(|r| format!("{} ({:?}) at {}:{}", r.name, r.kind, r.file_path, r.line))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let mut truncated = format!(
+                        "Found {total_count} symbols (showing first {summary_count} from offset {offset} due to size):\n{summary}"
+                    );
+
+                    if remaining > 0 {
+                        truncated.push_str(&format!(
+                            "\n\n💡 {} more result(s) available. Use offset={} to see next page.",
+                            remaining,
+                            offset + summary_count as u32
+                        ));
+                    }
+
+                    truncated.push_str(
+                        "\n💡 Tip: Use smaller limit or kind/module filters for detailed results",
+                    );
+
+                    return Ok(CallToolResult::success(vec![Content::text(truncated)]));
                 }
 
                 Ok(CallToolResult::success(vec![Content::text(result)]))
