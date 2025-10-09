@@ -856,10 +856,17 @@ impl CSharpParser {
                                         node.end_position().row as u32,
                                         node.end_position().column as u16,
                                     );
-                                    method_calls.push(
-                                        MethodCall::new(caller, &method, range)
-                                            .with_receiver(&receiver),
-                                    );
+
+                                    // Detect static method calls: if receiver starts with uppercase,
+                                    // it's likely a class/type name (PascalCase convention in C#)
+                                    let mut call = MethodCall::new(caller, &method, range)
+                                        .with_receiver(&receiver);
+
+                                    if receiver.chars().next().is_some_and(|c| c.is_uppercase()) {
+                                        call = call.static_method();
+                                    }
+
+                                    method_calls.push(call);
                                 }
                             }
                         }

@@ -126,7 +126,7 @@ impl IndexSchema {
 
         // String fields for filtering (using STRING for exact match)
         let module_path = builder.add_text_field("module_path", STRING | STORED);
-        let kind = builder.add_text_field("kind", STRING | STORED);
+        let kind = builder.add_text_field("kind", STRING | STORED | FAST);
         let visibility = builder.add_u64_field("visibility", STORED);
         let scope_context = builder.add_text_field("scope_context", STRING | STORED);
         let language = builder.add_text_field("language", STRING | STORED | FAST);

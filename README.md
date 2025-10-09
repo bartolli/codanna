@@ -451,6 +451,7 @@ Available tools when using the MCP server. All tools support `--json` flag for s
 | `find_callers` | Show functions that call a given function | `codanna mcp find_callers init` |
 | `analyze_impact` | Analyze the impact radius of symbol changes | `codanna mcp analyze_impact Parser --json` |
 | `get_index_info` | Get index statistics and metadata | `codanna mcp get_index_info --json` |
+| `get_symbol_details` | Get detailed info for a specific symbol | `codanna mcp get_symbol_details symbol_name:Parser file_path:"src/main.rs"` |
 
 #### Complex Tools (Key:Value Arguments)
 | Tool | Description | Example |
@@ -471,17 +472,39 @@ codanna mcp semantic_search_with_context query:"parse config" lang:typescript li
 
 Language filtering eliminates duplicate results when similar documentation exists across multiple languages, reducing result sets by up to 75% while maintaining identical similarity scores.
 
+#### Summary Mode (Token Optimization)
+For overview queries, use `summary_only:true` to get compact output with 25x fewer tokens:
+```bash
+# Compact output: just name, kind, location (200 tokens vs 5000 tokens)
+codanna mcp search_symbols query:"Service" limit:20 summary_only:true
+
+# Output:
+# Found 20 result(s) for query 'Service':
+# Service (Function) at .\Service.cs:10
+# Service (Field) at .\Models\ServicesConfig.cs:58
+# Service (Method) at .\Processes\Service.cs:25
+# ...
+```
+
+Use summary mode for:
+- Quick overviews and symbol discovery
+- Large result sets (50+ results)
+- When you only need to know what exists, not full details
+
+Then use `find_symbol` or full search for specific symbols you want to explore.
+
 #### Parameters Reference
 | Tool | Parameters |
 |------|------------|
-| `find_symbol` | `name` (required) |
-| `search_symbols` | `query`, `limit`, `kind`, `module` |
+| `find_symbol` | `name` (required), `lang` |
+| `search_symbols` | `query`, `limit`, `kind`, `module`, `lang`, `offset`, `summary_only` |
 | `semantic_search_docs` | `query`, `limit`, `threshold`, `lang` |
 | `semantic_search_with_context` | `query`, `limit`, `threshold`, `lang` |
 | `get_calls` | `function_name` |
 | `find_callers` | `function_name` |
 | `analyze_impact` | `symbol_name`, `max_depth` |
 | `get_index_info` | None |
+| `get_symbol_details` | `symbol_name` (required), `file_path`, `module` |
 
 
 ### Performance

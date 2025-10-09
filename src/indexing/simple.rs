@@ -2324,7 +2324,31 @@ impl SimpleIndexer {
             let static_method = format!("{}::{}", receiver, method_call.method_name);
             let result = context
                 .resolve(&static_method)
-                .or_else(|| context.resolve(&method_call.method_name));
+                .or_else(|| context.resolve(&method_call.method_name))
+                // Fallback: search entire index for methods with this name in the receiver class
+                .or_else(|| {
+                    debug_print!(
+                        self,
+                        "Context resolution failed for {}::{}, searching entire index",
+                        receiver,
+                        method_call.method_name
+                    );
+                    // Find all symbols with this method name
+                    let candidates = self.find_symbols_by_name(&method_call.method_name, None);
+                    // Filter to only methods in the receiver class/module
+                    candidates
+                        .into_iter()
+                        .find(|sym| {
+                            // Check if this symbol's module path contains the receiver class name
+                            if let Some(module) = sym.as_module_path() {
+                                module.ends_with(receiver.as_str())
+                                    || module.ends_with(&format!(".{receiver}"))
+                            } else {
+                                false
+                            }
+                        })
+                        .map(|sym| sym.id)
+                });
             debug_print!(
                 self,
                 "Static method resolution result for {}: {:?}",
