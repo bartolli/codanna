@@ -2073,6 +2073,10 @@ async fn main() {
                             kind,
                             module,
                             lang,
+                            file_pattern: None,
+                            exclude_pattern: None,
+                            offset: 0,
+                            summary_only: false,
                         }))
                         .await
                 }

@@ -49,6 +49,7 @@ SIMPLE TOOLS (positional arguments):
 COMPLEX TOOLS (key:value arguments):
 - mcp__codanna__search_symbols query:"parse" limit:10  (kind is optional)
 - mcp__codanna__search_symbols query:"parse" kind:"function" limit:10
+- mcp__codanna__search_symbols query:"Service" limit:20 summary_only:true  (compact output, 25x fewer tokens)
 - mcp__codanna__semantic_search_docs query:"error handling" limit:5
 - mcp__codanna__semantic_search_with_context query:"authentication flow" limit:3
 </usage>

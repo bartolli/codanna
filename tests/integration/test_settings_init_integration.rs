@@ -41,7 +41,7 @@ fn test_settings_init_creates_global_resources() {
     #[cfg(windows)]
     {
         std::os::windows::fs::symlink_dir(&models_dir, &cache_path)
-            .or_else(|_| {
+            .or({
                 // If symlink fails (e.g., already exists or no permissions), that's ok
                 Ok::<(), std::io::Error>(())
             })

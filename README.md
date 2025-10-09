@@ -471,11 +471,32 @@ codanna mcp semantic_search_with_context query:"parse config" lang:typescript li
 
 Language filtering eliminates duplicate results when similar documentation exists across multiple languages, reducing result sets by up to 75% while maintaining identical similarity scores.
 
+#### Summary Mode (Token Optimization)
+For overview queries, use `summary_only:true` to get compact output with 25x fewer tokens:
+```bash
+# Compact output: just name, kind, location (200 tokens vs 5000 tokens)
+codanna mcp search_symbols query:"Service" limit:20 summary_only:true
+
+# Output:
+# Found 20 result(s) for query 'Service':
+# Service (Function) at .\Service.cs:10
+# Service (Field) at .\Models\ServicesConfig.cs:58
+# Service (Method) at .\Processes\Service.cs:25
+# ...
+```
+
+Use summary mode for:
+- Quick overviews and symbol discovery
+- Large result sets (50+ results)
+- When you only need to know what exists, not full details
+
+Then use `find_symbol` or full search for specific symbols you want to explore.
+
 #### Parameters Reference
 | Tool | Parameters |
 |------|------------|
-| `find_symbol` | `name` (required) |
-| `search_symbols` | `query`, `limit`, `kind`, `module` |
+| `find_symbol` | `name` (required), `lang` |
+| `search_symbols` | `query`, `limit`, `kind`, `module`, `lang`, `offset`, `summary_only` |
 | `semantic_search_docs` | `query`, `limit`, `threshold`, `lang` |
 | `semantic_search_with_context` | `query`, `limit`, `threshold`, `lang` |
 | `get_calls` | `function_name` |
