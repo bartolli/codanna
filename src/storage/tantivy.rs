@@ -2998,10 +2998,9 @@ mod tests {
         let debug_str = format!("{index_with_vectors:?}");
         assert!(debug_str.contains("DocumentIndex"));
         assert!(debug_str.contains("has_vector_engine: true"));
-        assert!(debug_str.contains(&format!(
-            "vector_storage_path: Some(\"{}\")",
-            vector_dir.display()
-        )));
+        // Check vector_storage_path is Some (platform-agnostic, handles Windows backslash escaping)
+        assert!(debug_str.contains("vector_storage_path: Some("));
+        assert!(debug_str.contains("vectors"));
     }
 
     #[test]
