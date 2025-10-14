@@ -774,6 +774,16 @@ impl Settings {
                 // enabled field in semantic_search - comment already added above
             } else if line.starts_with("model = ") {
                 result.push_str("\n# Model to use for embeddings\n");
+                result.push_str("# - AllMiniLML6V2: English-only, 384 dimensions (default)\n");
+                result.push_str("# - MultilingualE5Small: 94 languages including, 384 dimensions (recommended for multilingual)\n");
+                result.push_str(
+                    "# - MultilingualE5Base: 94 languages, 768 dimensions (better quality)\n",
+                );
+                result.push_str(
+                    "# - MultilingualE5Large: 94 languages, 1024 dimensions (best quality)\n",
+                );
+                result.push_str("# - BGESmallZHV15: Chinese-specialized, 512 dimensions\n");
+                result.push_str("# - See documentation for full list of available models\n");
             } else if line.starts_with("threshold = ") {
                 result.push_str("\n# Similarity threshold for search results (0.0 to 1.0)\n");
             } else if line == "[file_watch]" {

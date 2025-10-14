@@ -1620,6 +1620,33 @@ impl TypeScriptParser {
                                                 ctx = Some(&code[name_node.byte_range()]);
                                                 break;
                                             }
+                                        } else if p.kind() == "pair" {
+                                            // Handle object property: { propertyName: () => { ... } }
+                                            // Look for the parent object's variable name
+                                            let mut obj_anc = p.parent();
+                                            while let Some(oa) = obj_anc {
+                                                if oa.kind() == "object" {
+                                                    // Found the object, now find its variable declarator
+                                                    if let Some(obj_parent) = oa.parent() {
+                                                        if obj_parent.kind()
+                                                            == "variable_declarator"
+                                                        {
+                                                            if let Some(name_node) = obj_parent
+                                                                .child_by_field_name("name")
+                                                            {
+                                                                ctx = Some(
+                                                                    &code[name_node.byte_range()],
+                                                                );
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                obj_anc = oa.parent();
+                                            }
+                                            if ctx.is_some() {
+                                                break;
+                                            }
                                         }
                                     }
                                 }

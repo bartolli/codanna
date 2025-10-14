@@ -67,16 +67,39 @@ impl std::fmt::Debug for SimpleSemanticSearch {
 }
 
 impl SimpleSemanticSearch {
-    /// Create a new semantic search instance
+    /// Create a new semantic search instance using default model (AllMiniLML6V2).
     ///
-    /// Uses AllMiniLML6V2 model based on our testing results
+    /// For multilingual support, use `from_model_name` with "MultilingualE5Small".
     pub fn new() -> Result<Self, SemanticSearchError> {
         Self::with_model(EmbeddingModel::AllMiniLML6V2)
     }
 
-    /// Create with a specific model
+    /// Create a semantic search instance from a model name string.
+    ///
+    /// # Arguments
+    /// * `model_name` - Name of the model (e.g., "MultilingualE5Small", "AllMiniLML6V2")
+    ///
+    /// # Supported Models
+    /// - `AllMiniLML6V2` - English-only, 384 dimensions (default)
+    /// - `MultilingualE5Small` - 94 languages, 384 dimensions (recommended for multilingual)
+    /// - `MultilingualE5Base` - 94 languages, 768 dimensions
+    /// - `MultilingualE5Large` - 94 languages, 1024 dimensions
+    /// - And many more (see `parse_embedding_model` documentation)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let search = SimpleSemanticSearch::from_model_name("MultilingualE5Small")?;
+    /// ```
+    pub fn from_model_name(model_name: &str) -> Result<Self, SemanticSearchError> {
+        let model = crate::vector::parse_embedding_model(model_name)
+            .map_err(|e| SemanticSearchError::ModelInitError(format!("Invalid model name: {e}")))?;
+        Self::with_model(model)
+    }
+
+    /// Create with a specific model enum.
     pub fn with_model(model: EmbeddingModel) -> Result<Self, SemanticSearchError> {
         let cache_dir = crate::init::models_dir();
+        let model_name = crate::vector::model_to_string(&model);
 
         // Check if models directory has any content (indicating cached models)
         let has_cached_models = cache_dir.exists()
@@ -86,9 +109,9 @@ impl SimpleSemanticSearch {
 
         // Inform user what's happening
         if has_cached_models {
-            eprintln!("Loading embedding model from cache...");
+            eprintln!("Loading embedding model '{model_name}' from cache...");
         } else {
-            eprintln!("Downloading embedding model (first time only)...");
+            eprintln!("Downloading embedding model '{model_name}' (first time only)...");
         }
 
         let mut text_model = TextEmbedding::try_new(
@@ -96,7 +119,11 @@ impl SimpleSemanticSearch {
                 .with_cache_dir(cache_dir)
                 .with_show_download_progress(true), // Always show progress, but with context from message above
         )
-        .map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+        .map_err(|e| {
+            SemanticSearchError::ModelInitError(format!(
+                "Failed to initialize model '{model_name}': {e}"
+            ))
+        })?;
 
         // Get dimensions by generating a test embedding
         let test_embedding = text_model
@@ -104,12 +131,21 @@ impl SimpleSemanticSearch {
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
         let dimensions = test_embedding.into_iter().next().unwrap().len();
 
+        eprintln!("Semantic search enabled (model: {model_name}, threshold: 0.6)");
+
+        // Create initial metadata
+        let metadata = crate::semantic::SemanticMetadata::new(
+            model_name.clone(),
+            dimensions,
+            0, // No embeddings yet
+        );
+
         Ok(Self {
             embeddings: HashMap::new(),
             symbol_languages: HashMap::new(),
             model: Mutex::new(text_model),
             dimensions,
-            metadata: None,
+            metadata: Some(metadata),
         })
     }
 
@@ -318,12 +354,15 @@ impl SimpleSemanticSearch {
             suggestion: "Check directory permissions".to_string(),
         })?;
 
-        // Save metadata
-        let metadata = SemanticMetadata::new(
-            "AllMiniLML6V2".to_string(), // TODO: Make this configurable
-            self.dimensions,
-            self.embeddings.len(),
-        );
+        // Save metadata with actual model name
+        let model_name = if let Some(ref meta) = self.metadata {
+            meta.model_name.clone()
+        } else {
+            // Fallback to AllMiniLML6V2 if metadata not set (shouldn't happen)
+            "AllMiniLML6V2".to_string()
+        };
+
+        let metadata = SemanticMetadata::new(model_name, self.dimensions, self.embeddings.len());
         metadata.save(path)?;
 
         // Create storage with our dimension
@@ -369,7 +408,9 @@ impl SimpleSemanticSearch {
         Ok(())
     }
 
-    /// Load embeddings from disk
+    /// Load embeddings from disk.
+    ///
+    /// Automatically uses the model specified in the metadata.
     ///
     /// # Arguments
     /// * `path` - Path where semantic data is stored
@@ -379,13 +420,17 @@ impl SimpleSemanticSearch {
         // Load metadata first
         let metadata = SemanticMetadata::load(path)?;
 
-        // Verify model compatibility (for now we only support AllMiniLML6V2)
-        if metadata.model_name != "AllMiniLML6V2" {
-            return Err(SemanticSearchError::StorageError {
-                message: format!("Unsupported model: {}", metadata.model_name),
-                suggestion: "Only AllMiniLML6V2 is currently supported".to_string(),
-            });
-        }
+        eprintln!("Loading semantic index with model: {}", metadata.model_name);
+
+        // Parse model name from metadata
+        let model = crate::vector::parse_embedding_model(&metadata.model_name)
+            .map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Invalid model in metadata: {e}"),
+                suggestion: format!(
+                    "The index was created with model '{}' which is not supported. Consider re-indexing with a supported model.",
+                    metadata.model_name
+                ),
+            })?;
 
         // Open existing storage
         let mut storage = SemanticVectorStorage::open(path)?;
@@ -418,13 +463,18 @@ impl SimpleSemanticSearch {
             embeddings.insert(id, embedding);
         }
 
-        // Create new instance with same model, using global models directory
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+        // Create new instance with model from metadata
+        let text_model = TextEmbedding::try_new(
+            InitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())
                 .with_show_download_progress(false),
         )
-        .map_err(|e| SemanticSearchError::ModelInitError(e.to_string()))?;
+        .map_err(|e| {
+            SemanticSearchError::ModelInitError(format!(
+                "Failed to load model '{}': {}",
+                metadata.model_name, e
+            ))
+        })?;
 
         // Load language mappings if they exist
         let languages_path = path.join("languages.json");
@@ -452,7 +502,7 @@ impl SimpleSemanticSearch {
         Ok(Self {
             embeddings,
             symbol_languages,
-            model: Mutex::new(model),
+            model: Mutex::new(text_model),
             dimensions: metadata.dimension,
             metadata: Some(metadata),
         })

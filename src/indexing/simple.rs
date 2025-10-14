@@ -244,15 +244,19 @@ impl SimpleIndexer {
         self.vector_engine.is_some() && self.embedding_generator.is_some()
     }
 
-    /// Enable semantic search for documentation
+    /// Enable semantic search for documentation.
+    ///
+    /// Uses the model specified in settings (semantic_search.model).
     pub fn enable_semantic_search(&mut self) -> IndexResult<()> {
-        match SimpleSemanticSearch::new() {
+        let model_name = &self.settings.semantic_search.model;
+
+        match SimpleSemanticSearch::from_model_name(model_name) {
             Ok(search) => {
                 self.semantic_search = Some(Arc::new(Mutex::new(search)));
                 Ok(())
             }
             Err(e) => Err(IndexError::General(format!(
-                "Failed to initialize semantic search: {e}"
+                "Failed to initialize semantic search with model '{model_name}': {e}"
             ))),
         }
     }
@@ -1390,8 +1394,11 @@ impl SimpleIndexer {
                 // and class instantiation as a call target in dynamic languages.
                 // In JavaScript/TypeScript, constants and variables can hold function references
                 // (e.g., React components: const Button = () => {...})
-                let caller_can_call =
-                    |k: &crate::SymbolKind| matches!(k, Function | Method | Macro | Module);
+                // and object properties can contain functions that make calls
+                // (e.g., const actions = { submitForm: () => submitForm() })
+                let caller_can_call = |k: &crate::SymbolKind| {
+                    matches!(k, Function | Method | Macro | Module | Constant | Variable)
+                };
                 let callee_can_be_called = |k: &crate::SymbolKind| {
                     matches!(k, Function | Method | Macro | Class | Constant | Variable)
                 };
@@ -3482,6 +3489,19 @@ pub struct Another {
             RelationKind::Calls
         ));
 
+        // Constants and Variables can hold functions in dynamic languages
+        // This supports patterns like: const actions = { submit: () => {...} }
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Constant,
+            SymbolKind::Function,
+            RelationKind::Calls
+        ));
+        assert!(SimpleIndexer::is_compatible_relationship(
+            SymbolKind::Variable,
+            SymbolKind::Function,
+            RelationKind::Calls
+        ));
+
         // Invalid call relationships - non-executable code
         assert!(!SimpleIndexer::is_compatible_relationship(
             SymbolKind::Struct,
@@ -3496,11 +3516,6 @@ pub struct Another {
         assert!(!SimpleIndexer::is_compatible_relationship(
             SymbolKind::Function,
             SymbolKind::Struct,
-            RelationKind::Calls
-        ));
-        assert!(!SimpleIndexer::is_compatible_relationship(
-            SymbolKind::Constant,
-            SymbolKind::Function,
             RelationKind::Calls
         ));
     }

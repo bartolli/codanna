@@ -144,9 +144,127 @@
 //! 4. **Simple Mapping**: Direct SymbolId → VectorId mapping (no lookup table)
 //! 5. **Clean Separation**: Vector logic isolated in vector module
 
-use crate::vector::{VECTOR_DIMENSION_384, VectorDimension, VectorError};
+use crate::vector::{VectorDimension, VectorError};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::sync::Mutex;
+
+/// Parse a model name string into an EmbeddingModel enum.
+///
+/// # Arguments
+/// * `model_name` - String name of the model (e.g., "AllMiniLML6V2", "MultilingualE5Small")
+///
+/// # Returns
+/// The corresponding EmbeddingModel enum variant, or an error if the model name is not recognized
+///
+/// # Supported Models
+/// ## English Models
+/// - `AllMiniLML6V2` - Sentence Transformer, 384 dimensions (default)
+/// - `BGESmallENV15` - BAAI BGE English small, 384 dimensions
+/// - `BGEBaseENV15` - BAAI BGE English base, 768 dimensions
+/// - `BGELargeENV15` - BAAI BGE English large, 1024 dimensions
+///
+/// ## Multilingual Models (94 languages)
+/// - `MultilingualE5Small` - intfloat E5 small, 384 dimensions (recommended for multilingual)
+/// - `MultilingualE5Base` - intfloat E5 base, 768 dimensions
+/// - `MultilingualE5Large` - intfloat E5 large, 1024 dimensions
+///
+/// ## Chinese Models
+/// - `BGESmallZHV15` - BAAI BGE Chinese small, 512 dimensions
+/// - `BGELargeZHV15` - BAAI BGE Chinese large, 1024 dimensions
+///
+/// ## Code-Specialized Models
+/// - `JinaEmbeddingsV2BaseCode` - Jina code embeddings, 768 dimensions
+///
+/// # Example
+/// ```ignore
+/// let model = parse_embedding_model("MultilingualE5Small")?;
+/// ```
+pub fn parse_embedding_model(model_name: &str) -> Result<EmbeddingModel, VectorError> {
+    match model_name {
+        // English models
+        "AllMiniLML6V2" => Ok(EmbeddingModel::AllMiniLML6V2),
+        "AllMiniLML6V2Q" => Ok(EmbeddingModel::AllMiniLML6V2Q),
+        "AllMiniLML12V2" => Ok(EmbeddingModel::AllMiniLML12V2),
+        "AllMiniLML12V2Q" => Ok(EmbeddingModel::AllMiniLML12V2Q),
+        "BGEBaseENV15" => Ok(EmbeddingModel::BGEBaseENV15),
+        "BGEBaseENV15Q" => Ok(EmbeddingModel::BGEBaseENV15Q),
+        "BGELargeENV15" => Ok(EmbeddingModel::BGELargeENV15),
+        "BGELargeENV15Q" => Ok(EmbeddingModel::BGELargeENV15Q),
+        "BGESmallENV15" => Ok(EmbeddingModel::BGESmallENV15),
+        "BGESmallENV15Q" => Ok(EmbeddingModel::BGESmallENV15Q),
+        "NomicEmbedTextV1" => Ok(EmbeddingModel::NomicEmbedTextV1),
+        "NomicEmbedTextV15" => Ok(EmbeddingModel::NomicEmbedTextV15),
+        "NomicEmbedTextV15Q" => Ok(EmbeddingModel::NomicEmbedTextV15Q),
+        "ParaphraseMLMiniLML12V2" => Ok(EmbeddingModel::ParaphraseMLMiniLML12V2),
+        "ParaphraseMLMiniLML12V2Q" => Ok(EmbeddingModel::ParaphraseMLMiniLML12V2Q),
+        "ParaphraseMLMpnetBaseV2" => Ok(EmbeddingModel::ParaphraseMLMpnetBaseV2),
+
+        // Multilingual models (94 languages)
+        "MultilingualE5Small" => Ok(EmbeddingModel::MultilingualE5Small),
+        "MultilingualE5Base" => Ok(EmbeddingModel::MultilingualE5Base),
+        "MultilingualE5Large" => Ok(EmbeddingModel::MultilingualE5Large),
+
+        // Chinese models
+        "BGESmallZHV15" => Ok(EmbeddingModel::BGESmallZHV15),
+        "BGELargeZHV15" => Ok(EmbeddingModel::BGELargeZHV15),
+
+        // Other specialized models
+        "ModernBertEmbedLarge" => Ok(EmbeddingModel::ModernBertEmbedLarge),
+        "MxbaiEmbedLargeV1" => Ok(EmbeddingModel::MxbaiEmbedLargeV1),
+        "MxbaiEmbedLargeV1Q" => Ok(EmbeddingModel::MxbaiEmbedLargeV1Q),
+        "GTEBaseENV15" => Ok(EmbeddingModel::GTEBaseENV15),
+        "GTEBaseENV15Q" => Ok(EmbeddingModel::GTEBaseENV15Q),
+        "GTELargeENV15" => Ok(EmbeddingModel::GTELargeENV15),
+        "GTELargeENV15Q" => Ok(EmbeddingModel::GTELargeENV15Q),
+        "ClipVitB32" => Ok(EmbeddingModel::ClipVitB32),
+        "JinaEmbeddingsV2BaseCode" => Ok(EmbeddingModel::JinaEmbeddingsV2BaseCode),
+        "EmbeddingGemma300M" => Ok(EmbeddingModel::EmbeddingGemma300M),
+
+        _ => Err(VectorError::EmbeddingFailed(format!(
+            "Unknown embedding model: '{model_name}'. Supported models: AllMiniLML6V2, MultilingualE5Small, MultilingualE5Base, MultilingualE5Large, BGESmallZHV15, BGELargeZHV15, JinaEmbeddingsV2BaseCode, and more. See documentation for full list."
+        ))),
+    }
+}
+
+/// Get the model name as a string from an EmbeddingModel enum.
+///
+/// This is useful for saving model information to metadata.
+pub fn model_to_string(model: &EmbeddingModel) -> String {
+    match model {
+        EmbeddingModel::AllMiniLML6V2 => "AllMiniLML6V2",
+        EmbeddingModel::AllMiniLML6V2Q => "AllMiniLML6V2Q",
+        EmbeddingModel::AllMiniLML12V2 => "AllMiniLML12V2",
+        EmbeddingModel::AllMiniLML12V2Q => "AllMiniLML12V2Q",
+        EmbeddingModel::BGEBaseENV15 => "BGEBaseENV15",
+        EmbeddingModel::BGEBaseENV15Q => "BGEBaseENV15Q",
+        EmbeddingModel::BGELargeENV15 => "BGELargeENV15",
+        EmbeddingModel::BGELargeENV15Q => "BGELargeENV15Q",
+        EmbeddingModel::BGESmallENV15 => "BGESmallENV15",
+        EmbeddingModel::BGESmallENV15Q => "BGESmallENV15Q",
+        EmbeddingModel::NomicEmbedTextV1 => "NomicEmbedTextV1",
+        EmbeddingModel::NomicEmbedTextV15 => "NomicEmbedTextV15",
+        EmbeddingModel::NomicEmbedTextV15Q => "NomicEmbedTextV15Q",
+        EmbeddingModel::ParaphraseMLMiniLML12V2 => "ParaphraseMLMiniLML12V2",
+        EmbeddingModel::ParaphraseMLMiniLML12V2Q => "ParaphraseMLMiniLML12V2Q",
+        EmbeddingModel::ParaphraseMLMpnetBaseV2 => "ParaphraseMLMpnetBaseV2",
+        EmbeddingModel::MultilingualE5Small => "MultilingualE5Small",
+        EmbeddingModel::MultilingualE5Base => "MultilingualE5Base",
+        EmbeddingModel::MultilingualE5Large => "MultilingualE5Large",
+        EmbeddingModel::BGESmallZHV15 => "BGESmallZHV15",
+        EmbeddingModel::BGELargeZHV15 => "BGELargeZHV15",
+        EmbeddingModel::ModernBertEmbedLarge => "ModernBertEmbedLarge",
+        EmbeddingModel::MxbaiEmbedLargeV1 => "MxbaiEmbedLargeV1",
+        EmbeddingModel::MxbaiEmbedLargeV1Q => "MxbaiEmbedLargeV1Q",
+        EmbeddingModel::GTEBaseENV15 => "GTEBaseENV15",
+        EmbeddingModel::GTEBaseENV15Q => "GTEBaseENV15Q",
+        EmbeddingModel::GTELargeENV15 => "GTELargeENV15",
+        EmbeddingModel::GTELargeENV15Q => "GTELargeENV15Q",
+        EmbeddingModel::ClipVitB32 => "ClipVitB32",
+        EmbeddingModel::JinaEmbeddingsV2BaseCode => "JinaEmbeddingsV2BaseCode",
+        EmbeddingModel::EmbeddingGemma300M => "EmbeddingGemma300M",
+    }
+    .to_string()
+}
 
 /// Trait for generating embeddings from text.
 ///
@@ -167,38 +285,29 @@ pub trait EmbeddingGenerator: Send + Sync {
     fn dimension(&self) -> VectorDimension;
 }
 
-/// FastEmbed implementation using AllMiniLML6V2 model.
+/// FastEmbed implementation with configurable embedding models.
 ///
-/// This implementation produces 384-dimensional embeddings optimized
-/// for semantic similarity of code snippets.
+/// This implementation supports multiple embedding models for different use cases:
+/// - English-only models: AllMiniLML6V2 (default), BGE series
+/// - Multilingual models: MultilingualE5 series (94 languages)
+/// - Code-specialized models: JinaEmbeddingsV2BaseCode
 ///
 /// # Performance
 /// - Batch processing: ~1-10ms per embedding on average
-/// - Memory: 384 * 4 bytes = 1536 bytes per embedding
+/// - Memory: dimension * 4 bytes per embedding
 pub struct FastEmbedGenerator {
     model: Mutex<TextEmbedding>,
     dimension: VectorDimension,
+    model_name: String,
 }
 
 impl FastEmbedGenerator {
-    /// Create a new FastEmbed generator with AllMiniLML6V2 model.
+    /// Create a new FastEmbed generator with AllMiniLML6V2 model (default).
     ///
     /// # Errors
     /// Returns an error if the model fails to initialize or download.
     pub fn new() -> Result<Self, VectorError> {
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_cache_dir(crate::init::models_dir())
-                .with_show_download_progress(false),
-        )
-        .map_err(|e| VectorError::EmbeddingFailed(
-            format!("Failed to initialize embedding model: {e}. Ensure you have internet connection for first-time model download")
-        ))?;
-
-        Ok(Self {
-            model: Mutex::new(model),
-            dimension: VectorDimension::dimension_384(),
-        })
+        Self::with_model(EmbeddingModel::AllMiniLML6V2, false)
     }
 
     /// Create a new generator with progress display during model download.
@@ -206,19 +315,64 @@ impl FastEmbedGenerator {
     /// # Errors
     /// Returns an error if the model fails to initialize or download.
     pub fn new_with_progress() -> Result<Self, VectorError> {
-        let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+        Self::with_model(EmbeddingModel::AllMiniLML6V2, true)
+    }
+
+    /// Create a new generator with a specific model.
+    ///
+    /// # Arguments
+    /// * `model` - The embedding model to use
+    /// * `show_progress` - Whether to show download progress
+    ///
+    /// # Errors
+    /// Returns an error if the model fails to initialize or download.
+    pub fn with_model(model: EmbeddingModel, show_progress: bool) -> Result<Self, VectorError> {
+        let model_name = model_to_string(&model);
+
+        let mut text_model = TextEmbedding::try_new(
+            InitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())
-                .with_show_download_progress(true),
+                .with_show_download_progress(show_progress),
         )
         .map_err(|e| VectorError::EmbeddingFailed(
-            format!("Failed to initialize embedding model: {e}. Ensure you have internet connection for first-time model download")
+            format!("Failed to initialize embedding model '{model_name}': {e}. Ensure you have internet connection for first-time model download")
         ))?;
 
+        // Auto-detect dimension by generating a test embedding
+        let test_embedding = text_model.embed(vec!["test"], None).map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Failed to detect model dimensions: {e}"))
+        })?;
+
+        let dimension_size = test_embedding.into_iter().next().unwrap().len();
+        let dimension = VectorDimension::new(dimension_size).map_err(|e| {
+            VectorError::EmbeddingFailed(format!("Invalid dimension size {dimension_size}: {e}"))
+        })?;
+
         Ok(Self {
-            model: Mutex::new(model),
-            dimension: VectorDimension::dimension_384(),
+            model: Mutex::new(text_model),
+            dimension,
+            model_name,
         })
+    }
+
+    /// Create a generator from settings.
+    ///
+    /// Reads the model name from settings and initializes the appropriate model.
+    ///
+    /// # Arguments
+    /// * `model_name` - Model name from settings (e.g., "MultilingualE5Small")
+    /// * `show_progress` - Whether to show download progress
+    ///
+    /// # Errors
+    /// Returns an error if the model name is invalid or initialization fails.
+    pub fn from_settings(model_name: &str, show_progress: bool) -> Result<Self, VectorError> {
+        let model = parse_embedding_model(model_name)?;
+        Self::with_model(model, show_progress)
+    }
+
+    /// Get the name of the model being used.
+    pub fn model_name(&self) -> &str {
+        &self.model_name
     }
 }
 
@@ -248,10 +402,11 @@ impl EmbeddingGenerator for FastEmbedGenerator {
             })?;
 
         // Validate dimensions
+        let expected_dim = self.dimension.get();
         for embedding in embeddings.iter() {
-            if embedding.len() != VECTOR_DIMENSION_384 {
+            if embedding.len() != expected_dim {
                 return Err(VectorError::DimensionMismatch {
-                    expected: VECTOR_DIMENSION_384,
+                    expected: expected_dim,
                     actual: embedding.len(),
                 });
             }
@@ -398,7 +553,7 @@ mod tests {
         let embeddings = generator.generate_embeddings(&texts).unwrap();
 
         assert_eq!(embeddings.len(), 1);
-        assert_eq!(embeddings[0].len(), VECTOR_DIMENSION_384);
+        assert_eq!(embeddings[0].len(), generator.dimension().get());
 
         // Verify normalization
         let magnitude: f32 = embeddings[0].iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -419,7 +574,7 @@ mod tests {
 
         assert_eq!(embeddings.len(), 3);
         for embedding in &embeddings {
-            assert_eq!(embedding.len(), VECTOR_DIMENSION_384);
+            assert_eq!(embedding.len(), generator.dimension().get());
         }
     }
 

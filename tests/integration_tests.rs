@@ -39,3 +39,6 @@ mod test_provider_initialization;
 
 #[path = "integration/test_typescript_alias_relationships.rs"]
 mod test_typescript_alias_relationships;
+
+#[path = "integration/test_typescript_object_property_call.rs"]
+mod test_typescript_object_property_call;

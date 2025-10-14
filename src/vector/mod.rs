@@ -26,7 +26,10 @@ pub use clustering::{
 };
 #[cfg(test)]
 pub use embedding::MockEmbeddingGenerator;
-pub use embedding::{EmbeddingGenerator, FastEmbedGenerator, create_symbol_text};
+pub use embedding::{
+    EmbeddingGenerator, FastEmbedGenerator, create_symbol_text, model_to_string,
+    parse_embedding_model,
+};
 pub use engine::VectorSearchEngine;
 pub use storage::{ConcurrentVectorStorage, MmapVectorStorage, VectorStorageError};
 pub use types::{

@@ -393,8 +393,13 @@ impl ResolutionScope for TypeScriptResolutionContext {
 
         match rel_kind {
             Calls => {
-                // TypeScript-specific: Functions/Methods can call
-                let caller_can_call = matches!(from_kind, Function | Method | Macro | Module);
+                // TypeScript-specific: Functions/Methods/Constants/Variables can call
+                // Constants and Variables can contain functions (e.g., object methods, arrow functions)
+                // This enables patterns like: const actions = { submitForm: () => {...} }
+                let caller_can_call = matches!(
+                    from_kind,
+                    Function | Method | Macro | Module | Constant | Variable
+                );
                 // TypeScript-specific: Constants and Variables can be callable
                 // This enables React component patterns: const Button = () => {}
                 let callee_can_be_called = matches!(
@@ -405,7 +410,10 @@ impl ResolutionScope for TypeScriptResolutionContext {
             }
             CalledBy => {
                 // Reverse of Calls
-                let caller_can_call = matches!(to_kind, Function | Method | Macro | Module);
+                let caller_can_call = matches!(
+                    to_kind,
+                    Function | Method | Macro | Module | Constant | Variable
+                );
                 let callee_can_be_called = matches!(
                     from_kind,
                     Function | Method | Macro | Class | Constant | Variable

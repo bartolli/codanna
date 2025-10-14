@@ -310,6 +310,18 @@ When your TypeScript code imports `@app/utils`, Codanna uses your `tsconfig.json
 
 **Coming soon**: Python (`pyproject.toml`), Go (`go.mod`), and other languages with project-specific import resolution.
 
+### Semantic Search Configuration
+
+Codanna uses embedding models to power semantic code search. You can configure which model to use based on your needs.
+
+```toml
+# .codanna/settings.toml
+[semantic]
+model = "AllMiniLML6V2"  # Default: Fast, English-optimized
+# model = "MultilingualE5Small"  # Better for non-English codebases
+# model = "ParaphraseMultilingualMiniLML12V2"  # Best multilingual support
+```
+
 ## Nerds Section
 
 Codanna respects `.gitignore` and adds its own `.codannaignore`:
