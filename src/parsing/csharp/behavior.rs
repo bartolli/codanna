@@ -184,6 +184,7 @@ impl LanguageBehavior for CSharpBehavior {
         // - Qualified call: System.Console.WriteLine -> System.Console
         // - Using alias: using Alias = System.Collections.Generic.List; -> Alias.Add
         // - Using directive: using System; -> Console.WriteLine
+        // - Extension method: GetFromJsonAsync -> look in imported namespaces for extension classes
 
         let imports = self.get_imports_for_file(from_file);
         if imports.is_empty() {
@@ -207,11 +208,18 @@ impl LanguageBehavior for CSharpBehavior {
                 }
             }
         } else {
-            // Unqualified name - check using directives
+            // Unqualified name - could be an extension method or regular using directive
+            // For extension methods, we return the namespace where the method is defined
+            // The indexing code will then look for that method name in that namespace
+
+            // Try each imported namespace as a potential location for the method
             for import in &imports {
                 if !import.is_glob && import.alias.is_none() {
                     // This is a "using Namespace;" directive
-                    // The symbol could be Namespace.SymbolName
+                    // The method could be:
+                    // 1. A type: Namespace.MethodName (regular call)
+                    // 2. An extension method: Namespace.ExtensionClass.MethodName (static method)
+                    // Return the namespace and method name, let the indexer find the actual symbol
                     return Some((import.path.clone(), to_name.to_string()));
                 }
             }
