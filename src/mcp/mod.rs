@@ -38,6 +38,78 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::{IndexPersistence, Settings, SimpleIndexer, Symbol};
 
+/// Simple glob pattern matching for file paths
+/// Supports: *, **, ?, and exact matches
+fn glob_match(pattern: &str, path: &str) -> bool {
+    // Normalize path separators to forward slashes
+    let mut path = path.replace('\\', "/");
+    let pattern = pattern.replace('\\', "/");
+
+    // Strip leading ./ from path for matching
+    if path.starts_with("./") {
+        path = path[2..].to_string();
+    }
+
+    // Handle ** (match any number of directories)
+    if pattern.contains("**") {
+        // For patterns like **/Processes/**, we need substring matching
+        // Remove ** wildcards and check if remaining parts exist in path
+        let pattern_parts: Vec<&str> = pattern.split("**").filter(|p| !p.is_empty()).collect();
+
+        if pattern_parts.is_empty() {
+            // Pattern is just "**" - match everything
+            return true;
+        }
+
+        // Check each non-empty part exists in order in the path
+        let mut search_from = 0;
+        for part in pattern_parts {
+            let trimmed = part.trim_matches('/');
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Some(pos) = path[search_from..].find(trimmed) {
+                search_from += pos + trimmed.len();
+            } else {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Handle * (match within a directory)
+    if pattern.contains('*') {
+        let parts: Vec<&str> = pattern.split('*').collect();
+        let mut pos = 0;
+
+        for (i, part) in parts.iter().enumerate() {
+            if i == 0 {
+                // First part must match at start
+                if !path[pos..].starts_with(part) {
+                    return false;
+                }
+                pos += part.len();
+            } else if i == parts.len() - 1 {
+                // Last part must match at end
+                return path[pos..].ends_with(part);
+            } else {
+                // Middle parts must exist in order
+                if let Some(found_pos) = path[pos..].find(part) {
+                    pos += found_pos + part.len();
+                } else {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Exact match
+    path == pattern
+}
+
 /// Format a Unix timestamp as relative time (e.g., "2 hours ago")
 pub fn format_relative_time(timestamp: u64) -> String {
     use chrono::{DateTime, Utc};
@@ -110,6 +182,18 @@ pub struct SearchSymbolsRequest {
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    /// Filter by file path pattern (glob syntax, e.g., "**/Base/**", "*.cs")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_pattern: Option<String>,
+    /// Exclude file path pattern (glob syntax, e.g., "**/Test/**", "**/node_modules/**")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_pattern: Option<String>,
+    /// Skip first N results for pagination (default: 0)
+    #[serde(default)]
+    pub offset: u32,
+    /// Return compact summary only: name, kind, location (default: false)
+    #[serde(default)]
+    pub summary_only: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -140,6 +224,18 @@ pub struct SemanticSearchWithContextRequest {
     /// Filter by programming language (e.g., "rust", "python", "typescript", "php")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct GetSymbolDetailsRequest {
+    /// Name of the symbol to get details for
+    pub symbol_name: String,
+    /// Optional file path to disambiguate (e.g., "src/module.rs:42")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+    /// Optional module path to disambiguate
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -263,7 +359,12 @@ impl CodeIntelligenceServer {
 
         if symbols.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "No symbols found with name: {name}"
+                "No symbols found with name: {name}\n\n\
+                 💡 Try:\n\
+                   - Partial name search with search_symbols (e.g., query:{})\n\
+                   - Check spelling or try a similar name\n\
+                   - Use semantic_search_docs for natural language search",
+                &name[..name.len().min(5)]
             ))]));
         }
 
@@ -383,7 +484,12 @@ impl CodeIntelligenceServer {
 
         if symbols.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Function not found: {function_name}"
+                "Function not found: {function_name}\n\n\
+                 💡 Try:\n\
+                   - Use find_symbol to verify the exact function name\n\
+                   - Search with search_symbols (e.g., query:{} kind:function)\n\
+                   - Check if it's a method instead of a function",
+                &function_name[..function_name.len().min(5)]
             ))]));
         }
 
@@ -478,7 +584,12 @@ impl CodeIntelligenceServer {
 
         if symbols.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Function not found: {function_name}"
+                "Function not found: {function_name}\n\n\
+                 💡 Try:\n\
+                   - Use find_symbol to verify the exact function name\n\
+                   - Search with search_symbols (e.g., query:{} kind:method)\n\
+                   - Check if it's spelled differently or in a different namespace",
+                &function_name[..function_name.len().min(5)]
             ))]));
         }
 
@@ -661,6 +772,174 @@ impl CodeIntelligenceServer {
                     file_path,
                     sym.range.start_line + 1
                 ));
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(
+        description = "Get detailed information about a specific symbol. Use after search_symbols with summary_only=true to get full details."
+    )]
+    pub async fn get_symbol_details(
+        &self,
+        Parameters(GetSymbolDetailsRequest {
+            symbol_name,
+            file_path,
+            module,
+        }): Parameters<GetSymbolDetailsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        use crate::symbol::context::ContextIncludes;
+
+        let indexer = self.indexer.read().await;
+        let symbols = indexer.find_symbols_by_name(&symbol_name, None);
+
+        if symbols.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Symbol not found: {symbol_name}\n\n\
+                 💡 Try: Use search_symbols to find available symbols first"
+            ))]));
+        }
+
+        // Filter by file_path if provided
+        let filtered_symbols: Vec<_> = if let Some(ref path) = file_path {
+            // Normalize path separators for comparison
+            let normalized_filter = path.replace('\\', "/");
+            symbols
+                .into_iter()
+                .filter(|s| {
+                    let sym_path = indexer.get_file_path(s.file_id).unwrap_or_default();
+                    let normalized_sym_path = sym_path.replace('\\', "/");
+                    normalized_sym_path.contains(&normalized_filter)
+                        || normalized_filter.contains(&normalized_sym_path)
+                })
+                .collect()
+        } else if let Some(ref mod_path) = module {
+            symbols
+                .into_iter()
+                .filter(|s| {
+                    s.as_module_path()
+                        .map(|m| m.contains(mod_path))
+                        .unwrap_or(false)
+                })
+                .collect()
+        } else {
+            symbols
+        };
+
+        if filtered_symbols.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "No symbols found matching: {symbol_name} with filters\n\n\
+                 💡 Try: Remove file_path or module filter, or check the values"
+            ))]));
+        }
+
+        let mut result = format!(
+            "Found {} symbol(s) named '{}':\n\n",
+            filtered_symbols.len(),
+            symbol_name
+        );
+
+        for (idx, symbol) in filtered_symbols.iter().enumerate() {
+            if idx > 0 {
+                result.push_str("\n---\n\n");
+            }
+
+            // Get full context with all relationships
+            if let Some(ctx) = indexer.get_symbol_context(
+                symbol.id,
+                ContextIncludes::IMPLEMENTATIONS
+                    | ContextIncludes::DEFINITIONS
+                    | ContextIncludes::CALLERS,
+            ) {
+                result.push_str(&ctx.format_location_with_type());
+                result.push('\n');
+
+                // Module path
+                if let Some(module) = symbol.as_module_path() {
+                    result.push_str(&format!("Module: {module}\n"));
+                }
+
+                // Full signature
+                if let Some(sig) = symbol.as_signature() {
+                    result.push_str(&format!("Signature:\n{sig}\n"));
+                }
+
+                // Full documentation
+                if let Some(doc) = symbol.as_doc_comment() {
+                    result.push_str(&format!("\nDocumentation:\n{doc}\n"));
+                }
+
+                // Relationships
+                if let Some(impls) = &ctx.relationships.implemented_by {
+                    if !impls.is_empty() {
+                        result.push_str(&format!("\nImplemented by {} type(s):\n", impls.len()));
+                        for impl_sym in impls.iter().take(10) {
+                            result.push_str(&format!("  - {}\n", impl_sym.name));
+                        }
+                        if impls.len() > 10 {
+                            result.push_str(&format!("  ... and {} more\n", impls.len() - 10));
+                        }
+                    }
+                }
+
+                if let Some(defines) = &ctx.relationships.defines {
+                    if !defines.is_empty() {
+                        let methods: Vec<_> = defines
+                            .iter()
+                            .filter(|s| s.kind == crate::SymbolKind::Method)
+                            .collect();
+                        if !methods.is_empty() {
+                            result.push_str(&format!("\nDefines {} method(s):\n", methods.len()));
+                            for method in methods.iter().take(10) {
+                                result.push_str(&format!("  - {}\n", method.name));
+                            }
+                            if methods.len() > 10 {
+                                result
+                                    .push_str(&format!("  ... and {} more\n", methods.len() - 10));
+                            }
+                        }
+                    }
+                }
+
+                if let Some(callers) = &ctx.relationships.called_by {
+                    if !callers.is_empty() {
+                        result.push_str(&format!("\nCalled by {} function(s):\n", callers.len()));
+                        for (caller_sym, _) in callers.iter().take(10) {
+                            let caller_file = indexer
+                                .get_file_path(caller_sym.file_id)
+                                .unwrap_or_else(|| "<unknown>".to_string());
+                            result.push_str(&format!(
+                                "  - {} at {}:{}\n",
+                                caller_sym.name,
+                                caller_file,
+                                caller_sym.range.start_line + 1
+                            ));
+                        }
+                        if callers.len() > 10 {
+                            result.push_str(&format!("  ... and {} more\n", callers.len() - 10));
+                        }
+                    }
+                }
+            } else {
+                // Fallback to basic info
+                let file_path = indexer
+                    .get_file_path(symbol.file_id)
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                result.push_str(&format!(
+                    "{:?} at {}:{}\n",
+                    symbol.kind,
+                    file_path,
+                    symbol.range.start_line + 1
+                ));
+
+                if let Some(ref doc) = symbol.doc_comment {
+                    result.push_str(&format!("Documentation:\n{doc}\n"));
+                }
+
+                if let Some(ref sig) = symbol.signature {
+                    result.push_str(&format!("Signature:\n{sig}\n"));
+                }
             }
         }
 
@@ -1146,7 +1425,9 @@ impl CodeIntelligenceServer {
         }
     }
 
-    #[tool(description = "Search for symbols using full-text search with fuzzy matching")]
+    #[tool(
+        description = "Search for symbols using full-text search with fuzzy matching. Supports pagination via offset parameter."
+    )]
     pub async fn search_symbols(
         &self,
         Parameters(SearchSymbolsRequest {
@@ -1155,6 +1436,10 @@ impl CodeIntelligenceServer {
             kind,
             module,
             lang,
+            file_pattern,
+            exclude_pattern,
+            offset,
+            summary_only,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.indexer.read().await;
@@ -1162,34 +1447,136 @@ impl CodeIntelligenceServer {
         // Parse the kind filter if provided
         let kind_filter = kind.as_ref().and_then(|k| match k.to_lowercase().as_str() {
             "function" => Some(crate::SymbolKind::Function),
-            "struct" => Some(crate::SymbolKind::Struct),
-            "trait" => Some(crate::SymbolKind::Trait),
             "method" => Some(crate::SymbolKind::Method),
-            "field" => Some(crate::SymbolKind::Field),
+            "struct" => Some(crate::SymbolKind::Struct),
+            "class" => Some(crate::SymbolKind::Class),
+            "enum" => Some(crate::SymbolKind::Enum),
+            "trait" => Some(crate::SymbolKind::Trait),
+            "interface" => Some(crate::SymbolKind::Interface),
             "module" => Some(crate::SymbolKind::Module),
+            "field" => Some(crate::SymbolKind::Field),
+            "variable" => Some(crate::SymbolKind::Variable),
             "constant" => Some(crate::SymbolKind::Constant),
+            "parameter" => Some(crate::SymbolKind::Parameter),
+            "typealias" | "type_alias" => Some(crate::SymbolKind::TypeAlias),
+            "macro" => Some(crate::SymbolKind::Macro),
             _ => None,
         });
 
+        // For pagination, we need to fetch more results than requested
+        // so we can skip the offset and still return the requested limit
+        let fetch_limit = (limit + offset) as usize;
+
         match indexer.search(
             &query,
-            limit as usize,
+            fetch_limit,
             kind_filter,
             module.as_deref(),
             lang.as_deref(),
         ) {
-            Ok(results) => {
-                if results.is_empty() {
+            Ok(mut results) => {
+                // Apply file pattern filtering if specified
+                if file_pattern.is_some() || exclude_pattern.is_some() {
+                    results.retain(|r| {
+                        let file_path = &r.file_path;
+
+                        // Check inclusion pattern
+                        if let Some(ref pattern) = file_pattern {
+                            if !glob_match(pattern, file_path) {
+                                return false;
+                            }
+                        }
+
+                        // Check exclusion pattern
+                        if let Some(ref pattern) = exclude_pattern {
+                            if glob_match(pattern, file_path) {
+                                return false;
+                            }
+                        }
+
+                        true
+                    });
+                }
+
+                let total_count = results.len();
+
+                if total_count == 0 {
+                    let suggestion = if query.len() > 5 {
+                        format!(
+                            "Try a shorter/partial query (e.g., query:{})",
+                            &query[..query.len().min(5)]
+                        )
+                    } else {
+                        "Try a different query or use semantic_search_docs for natural language"
+                            .to_string()
+                    };
+
                     return Ok(CallToolResult::success(vec![Content::text(format!(
-                        "No results found for query: {query}"
+                        "No results found for query: {query}\n\n\
+                         💡 Try:\n\
+                           - {suggestion}\n\
+                           - Remove kind/module filters if using them\n\
+                           - Check spelling or try synonyms"
                     ))]));
                 }
 
-                let mut result = format!(
-                    "Found {} result(s) for query '{}':\n\n",
-                    results.len(),
-                    query
-                );
+                // Apply pagination offset
+                if offset as usize >= total_count {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Offset {offset} exceeds total results ({total_count}). Try a lower offset."
+                    ))]));
+                }
+
+                // Skip offset and take limit
+                results = results
+                    .into_iter()
+                    .skip(offset as usize)
+                    .take(limit as usize)
+                    .collect();
+                let page_count = results.len();
+
+                // If summary_only mode, return compact output
+                if summary_only {
+                    let mut summary = if offset > 0 {
+                        format!(
+                            "Found {total_count} result(s) for query '{query}' (showing {page_count} from offset {offset}):\n"
+                        )
+                    } else {
+                        format!("Found {total_count} result(s) for query '{query}':\n")
+                    };
+
+                    for search_result in &results {
+                        summary.push_str(&format!(
+                            "{} ({:?}) at {}:{}\n",
+                            search_result.name,
+                            search_result.kind,
+                            search_result.file_path,
+                            search_result.line
+                        ));
+                    }
+
+                    // Add pagination hints if there are more results
+                    let remaining =
+                        total_count.saturating_sub((offset + page_count as u32) as usize);
+                    if remaining > 0 {
+                        summary.push_str(&format!(
+                            "\n💡 {} more result(s) available. Use offset={} to see next page.",
+                            remaining,
+                            offset + page_count as u32
+                        ));
+                    }
+
+                    return Ok(CallToolResult::success(vec![Content::text(summary)]));
+                }
+
+                // Build the full result string first with pagination info
+                let mut result = if offset > 0 {
+                    format!(
+                        "Found {total_count} result(s) for query '{query}' (showing {page_count} result(s) from offset {offset}):\n\n"
+                    )
+                } else {
+                    format!("Found {total_count} result(s) for query '{query}':\n\n")
+                };
 
                 for (i, search_result) in results.iter().enumerate() {
                     result.push_str(&format!(
@@ -1221,11 +1608,65 @@ impl CodeIntelligenceServer {
                     result.push('\n');
                 }
 
+                // Add pagination hints if there are more results
+                let remaining = total_count.saturating_sub((offset + page_count as u32) as usize);
+                if remaining > 0 {
+                    result.push_str(&format!(
+                        "\n💡 {} more result(s) available. Use offset={} to see next page.",
+                        remaining,
+                        offset + page_count as u32
+                    ));
+                }
+
+                // Token limit check - estimate ~4 chars per token
+                const MAX_TOKENS: usize = 20000; // Leave 5K buffer for 25K Claude limit
+                let estimated_tokens = result.len() / 4;
+
+                if estimated_tokens > MAX_TOKENS {
+                    // Auto-truncate to summary mode
+                    let summary_count = 20.min(results.len());
+                    let summary = results
+                        .iter()
+                        .take(summary_count)
+                        .map(|r| format!("{} ({:?}) at {}:{}", r.name, r.kind, r.file_path, r.line))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let mut truncated = format!(
+                        "Found {total_count} symbols (showing first {summary_count} from offset {offset} due to size):\n{summary}"
+                    );
+
+                    if remaining > 0 {
+                        truncated.push_str(&format!(
+                            "\n\n💡 {} more result(s) available. Use offset={} to see next page.",
+                            remaining,
+                            offset + summary_count as u32
+                        ));
+                    }
+
+                    truncated.push_str(
+                        "\n💡 Tip: Use smaller limit or kind/module filters for detailed results",
+                    );
+
+                    return Ok(CallToolResult::success(vec![Content::text(truncated)]));
+                }
+
                 Ok(CallToolResult::success(vec![Content::text(result)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                "Search failed: {e}"
-            ))])),
+            Err(e) => {
+                let error_msg = format!("Search failed: {e}");
+                let suggestion = if error_msg.contains("token") || error_msg.contains("size") {
+                    "\n\n💡 Try: Use limit=10 or summary_only=true to reduce response size"
+                } else if error_msg.contains("index") || error_msg.contains("not found") {
+                    "\n\n💡 Try: Verify the index exists and is up to date with get_index_info"
+                } else {
+                    "\n\n💡 Try: Check query syntax or reduce complexity"
+                };
+
+                Ok(CallToolResult::error(vec![Content::text(format!(
+                    "{error_msg}{suggestion}"
+                ))]))
+            }
         }
     }
 }

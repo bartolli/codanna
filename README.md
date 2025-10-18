@@ -50,17 +50,40 @@ Codanna cuts the noise:
 # Install
 cargo install codanna --all-features
 
-# setup
+# Initialize with embedded Claude templates (recommended)
+codanna init --copy-claude
+
+# Or standard init (creates only settings.toml)
 codanna init
 
 # See what would be indexed (dry run, optional)
 codanna index src --dry-run
 
-# index your code
+# Index your code
 codanna index src --progress
 
-# ask real questions
+# Ask real questions
 codanna mcp semantic_search_docs query:"where do we resolve symbol references" limit:3
+```
+
+### Claude Configuration Templates
+
+When you run `codanna init --copy-claude`, it copies optimized Claude configuration to `.codanna/`:
+
+- **Agents** (`agents/codanna-navigator.md`) - Specialized agent for code navigation
+- **Commands** (`commands/find.md`, `commands/deps.md`) - Slash commands for smart searches
+- **Prompts** (`prompts/mcp-workflow.md`) - Reusable workflow templates
+- **Hooks** (`hooks/hooks-config.yml`) - Event hooks configuration
+
+These templates are embedded in the binary, so they're always available and version-matched to your installed codanna version.
+
+**Custom templates:**
+```bash
+# Use your own template directory
+codanna init --copy-claude-from /path/to/your/templates
+
+# Force overwrite existing files
+codanna init --copy-claude --force
 ```
 
 ## How Accurate and Fast is Codanna?
@@ -405,6 +428,8 @@ This encourages better documentation → better AI understanding → more motiva
 | Command | Description | Example |
 |---------|-------------|---------|
 | `codanna init` | Set up .codanna directory with default configuration | `codanna init --force` |
+| `codanna init --copy-claude` | Initialize with embedded Claude configuration templates (agents, commands, prompts, hooks) | `codanna init --copy-claude` |
+| `codanna init --copy-claude-from <PATH>` | Initialize with custom Claude templates from specified directory | `codanna init --copy-claude-from ../my-templates` |
 | `codanna index <PATH>` | Build searchable index from your codebase | `codanna index src --progress` |
 | `codanna config` | Display active settings | `codanna config` |
 | `codanna serve` | Start MCP server for AI assistants | `codanna serve --watch` |
@@ -458,6 +483,7 @@ Available tools when using the MCP server. All tools support `--json` flag for s
 | `search_symbols` | Search symbols with full-text fuzzy matching | `codanna mcp search_symbols query:parse kind:function limit:10` |
 | `semantic_search_docs` | Search using natural language queries | `codanna mcp semantic_search_docs query:"error handling" limit:5` |
 | `semantic_search_with_context` | Search with enhanced context | `codanna mcp semantic_search_with_context query:"parse files" threshold:0.7` |
+| `get_symbol_details` | Get detailed information about a specific symbol (use after search_symbols with summary_only=true) | `codanna mcp get_symbol_details symbol_name:Parser file_path:"src/main.rs"` |
 
 #### Language Filtering (Mixed Codebases)
 Semantic search tools support language filtering to reduce noise in mixed-language projects:
@@ -471,17 +497,40 @@ codanna mcp semantic_search_with_context query:"parse config" lang:typescript li
 
 Language filtering eliminates duplicate results when similar documentation exists across multiple languages, reducing result sets by up to 75% while maintaining identical similarity scores.
 
+#### Summary Mode (Token Optimization)
+For overview queries, use `summary_only:true` to get compact output with 25x fewer tokens:
+```bash
+# Compact output: just name, kind, location (200 tokens vs 5000 tokens)
+codanna mcp search_symbols query:"Service" limit:20 summary_only:true
+
+# Output:
+# Found 20 result(s) for query 'Service':
+# Service (Function) at .\Service.cs:10
+# Service (Field) at .\Models\ServicesConfig.cs:58
+# Service (Method) at .\Processes\Service.cs:25
+# ...
+```
+
+Use summary mode for:
+- Quick overviews and symbol discovery
+- Large result sets (50+ results)
+- When you only need to know what exists, not full details
+
+Then use `find_symbol` or full search for specific symbols you want to explore.
+
 #### Parameters Reference
+
 | Tool | Parameters |
 |------|------------|
-| `find_symbol` | `name` (required) |
-| `search_symbols` | `query`, `limit`, `kind`, `module` |
-| `semantic_search_docs` | `query`, `limit`, `threshold`, `lang` |
-| `semantic_search_with_context` | `query`, `limit`, `threshold`, `lang` |
-| `get_calls` | `function_name` |
-| `find_callers` | `function_name` |
-| `analyze_impact` | `symbol_name`, `max_depth` |
+| `find_symbol` | `name` (required), `lang` |
+| `get_calls` | `function_name` (required) |
+| `find_callers` | `function_name` (required) |
+| `analyze_impact` | `symbol_name` (required), `max_depth` |
 | `get_index_info` | None |
+| `search_symbols` | `query` (required), `limit`, `kind`, `module`, `lang`, `file_pattern`, `exclude_pattern`, `offset`, `summary_only` |
+| `semantic_search_docs` | `query` (required), `limit`, `threshold`, `lang` |
+| `semantic_search_with_context` | `query` (required), `limit`, `threshold`, `lang` |
+| `get_symbol_details` | `symbol_name` (required), `file_path`, `module` |
 
 
 ### Performance
