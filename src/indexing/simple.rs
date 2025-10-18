@@ -910,10 +910,15 @@ impl SimpleIndexer {
         module_path: &Option<String>,
         behavior: &dyn crate::parsing::LanguageBehavior,
     ) {
-        // Delegate full configuration to the language behavior.
-        // This allows languages to preserve parser-derived visibility and
-        // apply custom module path rules.
-        behavior.configure_symbol(symbol, module_path.as_deref());
+        // Only configure if module_path is not already set by the parser
+        // This allows parsers to set the correct namespace directly
+        // (e.g., C# parser extracts namespace declarations and sets them on symbols)
+        if symbol.module_path.is_none() {
+            // Delegate full configuration to the language behavior.
+            // This allows languages to preserve parser-derived visibility and
+            // apply custom module path rules.
+            behavior.configure_symbol(symbol, module_path.as_deref());
+        }
 
         debug_print!(
             self,
@@ -2324,7 +2329,31 @@ impl SimpleIndexer {
             let static_method = format!("{}::{}", receiver, method_call.method_name);
             let result = context
                 .resolve(&static_method)
-                .or_else(|| context.resolve(&method_call.method_name));
+                .or_else(|| context.resolve(&method_call.method_name))
+                // Fallback: search entire index for methods with this name in the receiver class
+                .or_else(|| {
+                    debug_print!(
+                        self,
+                        "Context resolution failed for {}::{}, searching entire index",
+                        receiver,
+                        method_call.method_name
+                    );
+                    // Find all symbols with this method name
+                    let candidates = self.find_symbols_by_name(&method_call.method_name, None);
+                    // Filter to only methods in the receiver class/module
+                    candidates
+                        .into_iter()
+                        .find(|sym| {
+                            // Check if this symbol's module path contains the receiver class name
+                            if let Some(module) = sym.as_module_path() {
+                                module.ends_with(receiver.as_str())
+                                    || module.ends_with(&format!(".{receiver}"))
+                            } else {
+                                false
+                            }
+                        })
+                        .map(|sym| sym.id)
+                });
             debug_print!(
                 self,
                 "Static method resolution result for {}: {:?}",
@@ -2592,21 +2621,45 @@ impl SimpleIndexer {
                     // If unresolved call, try language behavior external mapping
                     if result.is_none() && rel.kind == RelationKind::Calls {
                         if let Some(behavior) = self.file_behaviors.get(&file_id) {
-                            if let Some((module_path, symbol_name)) =
-                                behavior.resolve_external_call_target(&rel.to_name, file_id)
-                            {
-                                // Skip external symbol creation for mapped external calls
-                                debug_print!(
-                                    self,
-                                    "Skipping external symbol for mapped call: {} -> {}::{}",
-                                    rel.to_name,
-                                    module_path,
-                                    symbol_name
-                                );
-                                None
-                            } else {
-                                None
-                            }
+                            // Get all imports for this file
+                            let imports = behavior.get_imports_for_file(file_id);
+                            debug_print!(
+                                self,
+                                "Trying to resolve '{}' in {} imported namespaces",
+                                rel.to_name,
+                                imports.len()
+                            );
+
+                            // Try each imported namespace to find the symbol
+                            self.document_index.find_symbols_by_name(&rel.to_name, None)
+                                .ok()
+                                .and_then(|candidates| {
+                                    // Look for symbol in any of the imported namespaces
+                                    candidates.into_iter().find_map(|candidate| {
+                                        if let Some(ref cand_module) = candidate.module_path {
+                                            let cand_module_str = cand_module.as_ref();
+                                            // Check if this symbol is in any imported namespace
+                                            for import in &imports {
+                                                let import_path = &import.path;
+                                                // Exact match or the candidate is in a sub-namespace
+                                                if cand_module_str == import_path
+                                                    || cand_module_str.starts_with(&format!("{import_path}.")) {
+                                                    debug_print!(
+                                                        self,
+                                                        "Found external symbol: {} in {} (via import {})",
+                                                        rel.to_name,
+                                                        cand_module_str,
+                                                        import_path
+                                                    );
+                                                    return Some(candidate.id);
+                                                }
+                                            }
+                                            None
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                })
                         } else {
                             None
                         }

@@ -68,3 +68,9 @@ Icon?
 *.swo
 *.bak
 *.tmp
+
+# Local development notes (not for PR)
+PR_DESCRIPTION.md
+PR_NOTES_MCP_FIXES.md
+IMPROVEMENTS_ROADMAP.md
+.claude/settings.local.json
