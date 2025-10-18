@@ -27,3 +27,6 @@ mod test_python_module_level_calls;
 
 #[path = "parsers/csharp/test_parser.rs"]
 mod test_csharp_parser;
+
+#[path = "parsers/csharp/test_call_tracking_enhancements.rs"]
+mod test_csharp_call_tracking_enhancements;

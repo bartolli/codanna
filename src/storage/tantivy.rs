@@ -126,7 +126,7 @@ impl IndexSchema {
 
         // String fields for filtering (using STRING for exact match)
         let module_path = builder.add_text_field("module_path", STRING | STORED);
-        let kind = builder.add_text_field("kind", STRING | STORED);
+        let kind = builder.add_text_field("kind", STRING | STORED | FAST);
         let visibility = builder.add_u64_field("visibility", STORED);
         let scope_context = builder.add_text_field("scope_context", STRING | STORED);
         let language = builder.add_text_field("language", STRING | STORED | FAST);
@@ -2998,10 +2998,9 @@ mod tests {
         let debug_str = format!("{index_with_vectors:?}");
         assert!(debug_str.contains("DocumentIndex"));
         assert!(debug_str.contains("has_vector_engine: true"));
-        assert!(debug_str.contains(&format!(
-            "vector_storage_path: Some(\"{}\")",
-            vector_dir.display()
-        )));
+        // Check vector_storage_path is Some (platform-agnostic, handles Windows backslash escaping)
+        assert!(debug_str.contains("vector_storage_path: Some("));
+        assert!(debug_str.contains("vectors"));
     }
 
     #[test]

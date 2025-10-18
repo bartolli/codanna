@@ -272,7 +272,7 @@ enum Commands {
     #[command(
         about = "Execute MCP tools directly",
         long_about = "Execute MCP tools directly without spawning a server.\n\nSupports positional arguments, key=value pairs, and JSON arguments.",
-        after_help = "Examples:\n  codanna mcp find_symbol main\n  codanna mcp get_calls process_file\n  codanna mcp semantic_search_docs query:\"error handling\" limit:5\n  codanna mcp search_symbols query:parse kind:function\n  codanna mcp find_symbol Parser --json | jq '.data[].symbol.name'\n  codanna mcp search_symbols query:Parser --json | jq '.data[].name'\n\nTools:\n  find_symbol                  Find symbol by exact name\n  search_symbols               Full-text search with fuzzy matching\n  semantic_search_docs         Natural language search\n  semantic_search_with_context Natural language search with relationships\n  get_calls                    Functions called by a function\n  find_callers                 Functions that call a function\n  analyze_impact               Impact radius of symbol changes\n  get_index_info               Index statistics"
+        after_help = "Examples:\n  codanna mcp find_symbol main\n  codanna mcp get_calls process_file\n  codanna mcp semantic_search_docs query:\"error handling\" limit:5\n  codanna mcp search_symbols query:parse kind:function\n  codanna mcp find_symbol Parser --json | jq '.data[].symbol.name'\n  codanna mcp search_symbols query:Parser --json | jq '.data[].name'\n  codanna mcp get_symbol_details symbol_name:SendMessageToApi file_path:\"Processes/Helper.cs\"\n\nTools:\n  find_symbol                  Find symbol by exact name\n  search_symbols               Full-text search with fuzzy matching\n  semantic_search_docs         Natural language search\n  semantic_search_with_context Natural language search with relationships\n  get_calls                    Functions called by a function\n  find_callers                 Functions that call a function\n  analyze_impact               Impact radius of symbol changes\n  get_index_info               Index statistics\n  get_symbol_details           Get detailed info about a specific symbol"
     )]
     Mcp {
         /// Tool to call
@@ -2073,6 +2073,10 @@ async fn main() {
                             kind,
                             module,
                             lang,
+                            file_pattern: None,
+                            exclude_pattern: None,
+                            offset: 0,
+                            summary_only: false,
                         }))
                         .await
                 }
@@ -2146,6 +2150,33 @@ async fn main() {
                         ))
                         .await
                 }
+                "get_symbol_details" => {
+                    let symbol_name = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("symbol_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: get_symbol_details requires 'symbol_name' parameter");
+                            std::process::exit(1);
+                        });
+                    let file_path = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("file_path"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let module = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("module"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    server
+                        .get_symbol_details(Parameters(GetSymbolDetailsRequest {
+                            symbol_name: symbol_name.to_string(),
+                            file_path,
+                            module,
+                        }))
+                        .await
+                }
                 _ => {
                     if json {
                         use codanna::io::exit_code::ExitCode;
@@ -2154,14 +2185,14 @@ async fn main() {
                             ExitCode::GeneralError,
                             &format!("Unknown tool: {tool}"),
                             vec![
-                                "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context",
+                                "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, get_symbol_details",
                             ],
                         );
                         println!("{}", serde_json::to_string_pretty(&response).unwrap());
                     } else {
                         eprintln!("Unknown tool: {tool}");
                         eprintln!(
-                            "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context"
+                            "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, get_symbol_details"
                         );
                     }
                     std::process::exit(1);
