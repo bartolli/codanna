@@ -49,6 +49,20 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+fn path_to_file_url(path: &Path) -> String {
+    // Convert path to forward slashes for cross-platform compatibility
+    let path_str = path.display().to_string().replace('\\', "/");
+
+    // file:// URLs require three slashes total on all platforms:
+    // - Unix:    file:///path/to/repo
+    // - Windows: file:///C:/path/to/repo
+    if path_str.starts_with('/') {
+        format!("file://{path_str}")
+    } else {
+        format!("file:///{path_str}")
+    }
+}
+
 fn create_marketplace_with_plugin_root(workspace: &Path) -> String {
     let repo_path = workspace.join("marketplace");
     let marketplace_dir = repo_path.join(".claude-plugin");
@@ -145,6 +159,7 @@ fn install_supports_git_source_object() {
         fs::create_dir_all(&marketplace_dir).expect("create marketplace dir");
 
         let plugin_repo = create_external_plugin_repo(workspace, "external-source");
+        let file_url = path_to_file_url(&plugin_repo);
 
         let marketplace_json = format!(
             r#"{{
@@ -155,13 +170,12 @@ fn install_supports_git_source_object() {
       "name": "external-plugin",
       "source": {{
         "source": "git",
-        "url": "file://{}"
+        "url": "{file_url}"
       }},
       "description": "External plugin source"
     }}
   ]
-}}"#,
-            plugin_repo.display()
+}}"#
         );
 
         write_file(&marketplace_dir.join("marketplace.json"), &marketplace_json);
@@ -189,6 +203,7 @@ fn update_external_plugin_detects_up_to_date() {
         fs::create_dir_all(&marketplace_dir).expect("create marketplace dir");
 
         let plugin_repo = create_external_plugin_repo(workspace, "external-update-source");
+        let file_url = path_to_file_url(&plugin_repo);
 
         let marketplace_json = format!(
             r#"{{
@@ -199,12 +214,11 @@ fn update_external_plugin_detects_up_to_date() {
       "name": "external-plugin",
       "source": {{
         "source": "git",
-        "url": "file://{}"
+        "url": "{file_url}"
       }}
     }}
   ]
-}}"#,
-            plugin_repo.display()
+}}"#
         );
 
         write_file(&marketplace_dir.join("marketplace.json"), &marketplace_json);
