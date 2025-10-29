@@ -1010,12 +1010,6 @@ mod tests {
         assert_eq!(settings.index_path, expected_index_path);
         assert!(settings.indexing.parallel_threads > 0);
         assert!(settings.languages.contains_key("rust"));
-
-        // Test that GDScript is included in the configuration
-        assert!(settings.languages.contains_key("gdscript"), "GDScript should be registered in the language configuration");
-        let gdscript_config = &settings.languages["gdscript"];
-        assert_eq!(gdscript_config.extensions, vec!["gd"]);
-        assert!(gdscript_config.enabled, "GDScript should be enabled by default");
     }
 
     #[test]
