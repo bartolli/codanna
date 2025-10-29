@@ -40,7 +40,7 @@ impl LanguageDefinition for GdscriptLanguage {
     }
 
     fn default_enabled(&self) -> bool {
-        false // Experimental support; opt-in by default
+        true // GDScript support is now stable and enabled by default
     }
 
     fn is_enabled(&self, settings: &Settings) -> bool {
@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn test_default_enabled_flag() {
         let lang = GdscriptLanguage;
-        assert!(!lang.default_enabled());
+        assert!(lang.default_enabled());
 
         let settings = Settings::default();
         assert_eq!(lang.is_enabled(&settings), lang.default_enabled());

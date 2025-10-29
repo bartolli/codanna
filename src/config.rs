@@ -830,7 +830,7 @@ impl Settings {
             } else if line.starts_with("[languages.") {
                 if !in_languages_section {
                     result.push_str("\n# Language-specific settings\n");
-                    result.push_str("# Currently supported: Rust, Python, PHP, TypeScript, Go, C, C++, CSharp\n");
+                    result.push_str("# Currently supported: Rust, Python, PHP, TypeScript, Go, C, C++, CSharp, Gdscript\n");
                     in_languages_section = true;
                 }
                 result.push('\n');
@@ -1010,6 +1010,12 @@ mod tests {
         assert_eq!(settings.index_path, expected_index_path);
         assert!(settings.indexing.parallel_threads > 0);
         assert!(settings.languages.contains_key("rust"));
+
+        // Test that GDScript is included in the configuration
+        assert!(settings.languages.contains_key("gdscript"), "GDScript should be registered in the language configuration");
+        let gdscript_config = &settings.languages["gdscript"];
+        assert_eq!(gdscript_config.extensions, vec!["gd"]);
+        assert!(gdscript_config.enabled, "GDScript should be enabled by default");
     }
 
     #[test]
