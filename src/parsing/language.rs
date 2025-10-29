@@ -17,6 +17,7 @@ pub enum Language {
     C,
     Cpp,
     CSharp,
+    Gdscript,
 }
 
 impl Language {
@@ -36,6 +37,7 @@ impl Language {
             Language::C => super::LanguageId::new("c"),
             Language::Cpp => super::LanguageId::new("cpp"),
             Language::CSharp => super::LanguageId::new("csharp"),
+            Language::Gdscript => super::LanguageId::new("gdscript"),
         }
     }
 
@@ -54,6 +56,7 @@ impl Language {
             "c" => Some(Language::C),
             "cpp" => Some(Language::Cpp),
             "csharp" => Some(Language::CSharp),
+            "gdscript" => Some(Language::Gdscript),
             _ => None,
         }
     }
@@ -87,6 +90,7 @@ impl Language {
             "c" | "h" => Some(Language::C),
             "cpp" | "hpp" | "cc" | "cxx" | "hxx" => Some(Language::Cpp),
             "cs" | "csx" => Some(Language::CSharp),
+            "gd" => Some(Language::Gdscript),
             _ => None,
         }
     }
@@ -112,6 +116,7 @@ impl Language {
             Language::C => &["c", "h"],
             Language::Cpp => &["cpp", "hpp", "cc", "cxx", "hxx"],
             Language::CSharp => &["cs", "csx"],
+            Language::Gdscript => &["gd"],
         }
     }
 
@@ -127,6 +132,7 @@ impl Language {
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::CSharp => "csharp",
+            Language::Gdscript => "gdscript",
         }
     }
 
@@ -142,6 +148,7 @@ impl Language {
             Language::C => "C",
             Language::Cpp => "C++",
             Language::CSharp => "C#",
+            Language::Gdscript => "GDScript",
         }
     }
 }
@@ -175,6 +182,7 @@ mod tests {
         assert_eq!(Language::from_extension("go.mod"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.sum"), Some(Language::Go));
         assert_eq!(Language::from_extension("txt"), None);
+        assert_eq!(Language::from_extension("gd"), Some(Language::Gdscript));
     }
 
     #[test]
@@ -224,6 +232,10 @@ mod tests {
             Language::from_path(Path::new("header.hpp")),
             Some(Language::Cpp)
         );
+        assert_eq!(
+            Language::from_path(Path::new("player.gd")),
+            Some(Language::Gdscript)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -239,5 +251,6 @@ mod tests {
         assert!(Language::Go.extensions().contains(&"go"));
         assert!(Language::Go.extensions().contains(&"go.mod"));
         assert!(Language::Go.extensions().contains(&"go.sum"));
+        assert!(Language::Gdscript.extensions().contains(&"gd"));
     }
 }

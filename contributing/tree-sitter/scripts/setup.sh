@@ -32,16 +32,17 @@ if [ -n "$LANG" ]; then
         c) REPO="https://github.com/tree-sitter/tree-sitter-c" ;;
         cpp) REPO="https://github.com/tree-sitter/tree-sitter-cpp" ;;
         csharp) REPO="https://github.com/tree-sitter/tree-sitter-c-sharp" ;;
+        gdscript) REPO="https://github.com/PrestonKnopp/tree-sitter-gdscript" ;;
         *)
             echo "❌ Unknown language: $LANG"
-            echo "Supported: typescript, python, rust, go, php, c, cpp, csharp"
+            echo "Supported: typescript, python, rust, go, php, c, cpp, csharp, gdscript"
             exit 1
             ;;
     esac
-    
+
     GRAMMAR_NAME="tree-sitter-$LANG"
     dir="$GRAMMARS_DIR/$GRAMMAR_NAME"
-    
+
     if [ -d "$dir" ]; then
         echo "✓ $GRAMMAR_NAME already installed"
     else

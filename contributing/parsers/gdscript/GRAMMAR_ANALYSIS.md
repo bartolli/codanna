@@ -1,0 +1,152 @@
+# GDScript Grammar Analysis
+
+*Generated: 2025-10-29 08:44:20 UTC*
+
+## Statistics
+- Total nodes in grammar JSON: 91
+- Nodes found in comprehensive.gd: 78
+- Nodes handled by parser: 15
+- Symbol kinds extracted: 7
+
+## ✅ Successfully Handled Nodes
+- annotation
+- annotations
+- class_definition
+- class_name_statement
+- const_statement
+- constructor_definition
+- enum_definition
+- extends_statement
+- for_statement
+- function_definition
+- if_statement
+- match_statement
+- signal_statement
+- variable_statement
+- while_statement
+
+## ⚠️ Implementation Gaps
+- "
+- %
+- (
+- )
+- +
+- +=
+- ,
+- ->
+- .
+- /
+- :
+- :=
+- <
+- =
+- >=
+- @
+- ERROR
+- [
+- ]
+- _init
+- arguments
+- array
+- assignment
+- attribute
+- attribute_call
+- augmented_assignment
+- binary_operator
+- body
+- call
+- class
+- class_name
+- comment
+- const
+- default_parameter
+- enum
+- enumerator
+- enumerator_list
+- expression_statement
+- extends
+- float
+- for
+- func
+- identifier
+- if
+- in
+- inferred_type
+- integer
+- match
+- match_body
+- name
+- parameters
+- pattern_section
+- return
+- return_statement
+- signal
+- source
+- string
+- type
+- typed_parameter
+- var
+- while
+- {
+- }
+
+## ⭕ Missing from Examples
+- _attribute_expression
+- _compound_statement
+- _expression
+- _parameters
+- _pattern
+- _primary_expression
+- attribute_subscript
+- await_expression
+- base_call
+- break_statement
+- breakpoint_statement
+- class_body
+- conditional_expression
+- continue_statement
+- dictionary
+- elif_clause
+- else_clause
+- escape_sequence
+- export_variable_statement
+- false
+- get_body
+- get_node
+- getter
+- lambda
+- line_continuation
+- node_path
+- null
+- onready_variable_statement
+- pair
+- parenthesized_expression
+- pass_statement
+- pattern_binding
+- pattern_guard
+- pattern_open_ending
+- region_end
+- region_label
+- region_start
+- remote_keyword
+- set_body
+- setget
+- setter
+- static_keyword
+- string_name
+- subscript
+- subscript_arguments
+- true
+- typed_default_parameter
+- unary_operator
+- variadic_parameter
+
+## 🔍 Symbol Kinds Extracted
+- Class
+- Constant
+- Field
+- Function
+- Method
+- Module
+- Variable
+

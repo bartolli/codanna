@@ -4,9 +4,10 @@
 //! Validates language enablement and provides discovery of supported languages.
 
 use super::{
-    CBehavior, CParser, CSharpBehavior, CSharpParser, CppBehavior, CppParser, GoBehavior, GoParser,
-    Language, LanguageBehavior, LanguageId, LanguageParser, PhpBehavior, PhpParser, PythonBehavior,
-    PythonParser, RustBehavior, RustParser, TypeScriptBehavior, TypeScriptParser, get_registry,
+    CBehavior, CParser, CSharpBehavior, CSharpParser, CppBehavior, CppParser, GdscriptBehavior,
+    GdscriptParser, GoBehavior, GoParser, Language, LanguageBehavior, LanguageId, LanguageParser,
+    PhpBehavior, PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser,
+    TypeScriptBehavior, TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -163,6 +164,10 @@ impl ParserFactory {
                 let parser = CSharpParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Gdscript => {
+                let parser = GdscriptParser::new().map_err(IndexError::General)?;
+                Ok(Box::new(parser))
+            }
         }
     }
 
@@ -265,6 +270,13 @@ impl ParserFactory {
                     behavior: Box::new(CSharpBehavior::new()),
                 }
             }
+            Language::Gdscript => {
+                let parser = GdscriptParser::new().map_err(IndexError::General)?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(GdscriptBehavior::new()),
+                }
+            }
         };
 
         Ok(result)
@@ -300,6 +312,7 @@ impl ParserFactory {
             Language::Go,
             Language::C,
             Language::Cpp,
+            Language::Gdscript,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))
@@ -450,6 +463,17 @@ mod tests {
             },
         );
 
+        // Enable GDScript
+        languages.insert(
+            "gdscript".to_string(),
+            LanguageConfig {
+                enabled: true,
+                extensions: vec!["gd".to_string()],
+                parser_options: HashMap::new(),
+                config_files: Vec::new(),
+            },
+        );
+
         settings.languages = languages;
         let factory = ParserFactory::new(Arc::new(settings));
 
@@ -473,6 +497,13 @@ mod tests {
         let php_pair = result.unwrap();
         assert_eq!(php_pair.parser.language(), Language::Php);
         assert_eq!(php_pair.behavior.module_separator(), "\\");
+
+        // Test GDScript
+        let result = factory.create_parser_with_behavior(Language::Gdscript);
+        assert!(result.is_ok());
+        let gd_pair = result.unwrap();
+        assert_eq!(gd_pair.parser.language(), Language::Gdscript);
+        assert_eq!(gd_pair.behavior.module_separator(), "/");
     }
 
     #[test]
