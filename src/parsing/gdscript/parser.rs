@@ -291,12 +291,9 @@ impl GdscriptParser {
     fn extract_signal_name<'a>(&self, call_node: Node, code: &'a str) -> Option<&'a str> {
         let arguments = call_node.child_by_field_name("arguments").or_else(|| {
             let mut cursor = call_node.walk();
-            for child in call_node.children(&mut cursor) {
-                if child.kind() == "arguments" {
-                    return Some(child);
-                }
-            }
-            None
+            call_node
+                .children(&mut cursor)
+                .find(|&child| child.kind() == "arguments")
         })?;
         let first_arg = arguments.named_child(0)?;
         let raw = self.text_for_node(code, first_arg).trim();
@@ -314,12 +311,9 @@ impl GdscriptParser {
 
         let arguments = call_node.child_by_field_name("arguments").or_else(|| {
             let mut cursor = call_node.walk();
-            for child in call_node.children(&mut cursor) {
-                if child.kind() == "arguments" {
-                    return Some(child);
-                }
-            }
-            None
+            call_node
+                .children(&mut cursor)
+                .find(|&child| child.kind() == "arguments")
         })?;
         let first_arg = arguments.named_child(0)?;
         let raw = self.text_for_node(code, first_arg).trim();
@@ -497,12 +491,8 @@ impl GdscriptParser {
 
                 let value_node = node.child_by_field_name("value").or_else(|| {
                     let mut cursor = node.walk();
-                    for child in node.children(&mut cursor) {
-                        if child.kind() == "call" {
-                            return Some(child);
-                        }
-                    }
-                    None
+                    node.children(&mut cursor)
+                        .find(|&child| child.kind() == "call")
                 });
 
                 if let (Some(binding), Some(value_node)) = (binding_name, value_node) {
