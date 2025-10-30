@@ -12,6 +12,8 @@ use crate::{FileId, Range, Symbol, SymbolKind};
 use std::any::Any;
 use tree_sitter::{Node, Parser};
 
+const SCRIPT_SCOPE: &str = "<script>";
+
 /// Parser for GDScript source files
 pub struct GdscriptParser {
     parser: Parser,
@@ -269,6 +271,261 @@ impl GdscriptParser {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             self.find_imports_in_node(child, code, file_id, imports);
+        }
+    }
+
+    /// Remove wrapping quotes from string literals.
+    fn strip_string_quotes<'a>(&self, value: &'a str) -> &'a str {
+        let bytes = value.as_bytes();
+        if bytes.len() >= 2 {
+            let first = bytes[0];
+            let last = bytes[bytes.len() - 1];
+            if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+                return &value[1..value.len() - 1];
+            }
+        }
+        value
+    }
+
+    /// Extract the signal name from an `emit_signal("name")` call.
+    fn extract_signal_name<'a>(&self, call_node: Node, code: &'a str) -> Option<&'a str> {
+        let arguments = call_node.child_by_field_name("arguments").or_else(|| {
+            let mut cursor = call_node.walk();
+            for child in call_node.children(&mut cursor) {
+                if child.kind() == "arguments" {
+                    return Some(child);
+                }
+            }
+            None
+        })?;
+        let first_arg = arguments.named_child(0)?;
+        let raw = self.text_for_node(code, first_arg).trim();
+        let name = self.strip_string_quotes(raw);
+        if name.is_empty() { None } else { Some(name) }
+    }
+
+    /// Extract path from `preload("res://path.gd")`.
+    fn extract_preload_path<'a>(&self, call_node: Node, code: &'a str) -> Option<&'a str> {
+        let callee = call_node.child(0)?;
+        let callee_text = self.text_for_node(code, callee).trim();
+        if callee_text != "preload" && !callee_text.ends_with(".preload") {
+            return None;
+        }
+
+        let arguments = call_node.child_by_field_name("arguments").or_else(|| {
+            let mut cursor = call_node.walk();
+            for child in call_node.children(&mut cursor) {
+                if child.kind() == "arguments" {
+                    return Some(child);
+                }
+            }
+            None
+        })?;
+        let first_arg = arguments.named_child(0)?;
+        let raw = self.text_for_node(code, first_arg).trim();
+        let path = self.strip_string_quotes(raw);
+        if path.is_empty() { None } else { Some(path) }
+    }
+
+    fn collect_call_targets<'a>(&self, node: Node, code: &'a str) -> Vec<&'a str> {
+        let mut targets = Vec::new();
+        if let Some(callee) = node.child(0) {
+            let name = self.text_for_node(code, callee).trim();
+            if name.is_empty() {
+                return targets;
+            }
+
+            if name == "preload" || name.ends_with(".preload") {
+                return targets;
+            }
+
+            if name == "emit_signal" || name.ends_with(".emit_signal") {
+                if let Some(signal) = self.extract_signal_name(node, code) {
+                    targets.push(signal);
+                } else {
+                    targets.push(name);
+                }
+            } else {
+                targets.push(name);
+            }
+        }
+        targets
+    }
+
+    fn collect_calls<'a>(
+        &mut self,
+        node: Node,
+        code: &'a str,
+        calls: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: Option<&'a str>,
+    ) {
+        match node.kind() {
+            "class_definition" => {
+                self.register_node(&node);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_calls(child, code, calls, None);
+                }
+                return;
+            }
+            "function_definition" => {
+                self.register_node(&node);
+                let next_function = node
+                    .child_by_field_name("name")
+                    .map(|n| self.text_for_node(code, n).trim())
+                    .filter(|name| !name.is_empty())
+                    .or(current_function);
+
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_calls(child, code, calls, next_function);
+                }
+                return;
+            }
+            "constructor_definition" => {
+                self.register_node(&node);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_calls(child, code, calls, Some("_init"));
+                }
+                return;
+            }
+            "call" => {
+                self.register_node(&node);
+                let caller = current_function.unwrap_or(SCRIPT_SCOPE);
+                let range = self.node_to_range(node);
+                for target in self.collect_call_targets(node, code) {
+                    calls.push((caller, target, range));
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_calls(child, code, calls, current_function);
+        }
+    }
+
+    fn collect_uses<'a>(
+        &mut self,
+        node: Node,
+        code: &'a str,
+        uses: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: Option<&'a str>,
+        current_class: Option<&'a str>,
+    ) {
+        match node.kind() {
+            "class_definition" => {
+                self.register_node(&node);
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let class_name = self.text_for_node(code, name_node).trim();
+
+                    if let Some(extends_node) = node.child_by_field_name("extends") {
+                        if let Some(target) = extends_node.named_child(0) {
+                            let base =
+                                self.strip_string_quotes(self.text_for_node(code, target).trim());
+                            if !base.is_empty() {
+                                uses.push((class_name, base, self.node_to_range(extends_node)));
+                            }
+                        }
+                    }
+
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        self.collect_uses(child, code, uses, None, Some(class_name));
+                    }
+                } else {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        self.collect_uses(child, code, uses, current_function, current_class);
+                    }
+                }
+                return;
+            }
+            "function_definition" => {
+                self.register_node(&node);
+                let next_function = node
+                    .child_by_field_name("name")
+                    .map(|n| self.text_for_node(code, n).trim())
+                    .filter(|name| !name.is_empty())
+                    .or(current_function);
+
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_uses(child, code, uses, next_function, current_class);
+                }
+                return;
+            }
+            "constructor_definition" => {
+                self.register_node(&node);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_uses(child, code, uses, Some("_init"), current_class);
+                }
+                return;
+            }
+            "extends_statement" => {
+                self.register_node(&node);
+                if let Some(target) = node.named_child(0) {
+                    let base = self.strip_string_quotes(self.text_for_node(code, target).trim());
+                    if !base.is_empty() {
+                        let derived = current_class.unwrap_or(SCRIPT_SCOPE);
+                        uses.push((derived, base, self.node_to_range(node)));
+                    }
+                }
+            }
+            "const_statement" | "variable_statement" => {
+                self.register_node(&node);
+
+                let binding_name = node
+                    .child_by_field_name("name")
+                    .map(|n| self.text_for_node(code, n).trim())
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| {
+                        let mut cursor = node.walk();
+                        for child in node.children(&mut cursor) {
+                            if child.is_named() && child.kind() == "identifier" {
+                                let text = self.text_for_node(code, child).trim();
+                                if !text.is_empty() {
+                                    return Some(text);
+                                }
+                            }
+                        }
+                        None
+                    });
+
+                let value_node = node.child_by_field_name("value").or_else(|| {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == "call" {
+                            return Some(child);
+                        }
+                    }
+                    None
+                });
+
+                if let (Some(binding), Some(value_node)) = (binding_name, value_node) {
+                    if let Some(path) = self.extract_preload_path(value_node, code) {
+                        let owner = current_function.unwrap_or(binding);
+                        uses.push((owner, path, self.node_to_range(value_node)));
+                    }
+                }
+                return;
+            }
+            "call" => {
+                self.register_node(&node);
+                if let Some(path) = self.extract_preload_path(node, code) {
+                    let source = current_function.unwrap_or(SCRIPT_SCOPE);
+                    uses.push((source, path, self.node_to_range(node)));
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_uses(child, code, uses, current_function, current_class);
         }
     }
 
@@ -703,7 +960,7 @@ impl GdscriptParser {
             "extends_statement" => {
                 if let Some(target) = node.named_child(0) {
                     let base = self.text_for_node(code, target).trim().trim_matches('"');
-                    let derived = current_class.unwrap_or("<script>");
+                    let derived = current_class.unwrap_or(SCRIPT_SCOPE);
                     let range = self.node_to_range(node);
                     results.push((derived, base, range));
                 }
@@ -772,8 +1029,15 @@ impl LanguageParser for GdscriptParser {
         self.doc_comment_for(node, code)
     }
 
-    fn find_calls<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        Vec::new()
+    fn find_calls<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut calls = Vec::new();
+        self.collect_calls(tree.root_node(), code, &mut calls, None);
+        calls
     }
 
     fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
@@ -791,8 +1055,15 @@ impl LanguageParser for GdscriptParser {
         results
     }
 
-    fn find_uses<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        Vec::new()
+    fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut uses = Vec::new();
+        self.collect_uses(tree.root_node(), code, &mut uses, None, None);
+        uses
     }
 
     fn find_defines<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {

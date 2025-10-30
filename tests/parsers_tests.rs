@@ -39,3 +39,6 @@ mod test_gdscript_behavior_api;
 
 #[path = "parsers/gdscript/test_import_extraction.rs"]
 mod test_gdscript_import_extraction;
+
+#[path = "parsers/gdscript/test_relationships.rs"]
+mod test_gdscript_relationships;
