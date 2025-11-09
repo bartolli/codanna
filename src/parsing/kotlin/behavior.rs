@@ -6,7 +6,10 @@ use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::{Import, InheritanceResolver};
 use crate::types::compact_string;
 use crate::{FileId, Symbol, SymbolKind, Visibility};
+use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tree_sitter::Language;
 
 /// Language behavior for Kotlin
@@ -14,6 +17,7 @@ use tree_sitter::Language;
 pub struct KotlinBehavior {
     language: Language,
     state: BehaviorState,
+    expression_types: Arc<RwLock<HashMap<FileId, HashMap<String, String>>>>,
 }
 
 impl KotlinBehavior {
@@ -22,6 +26,7 @@ impl KotlinBehavior {
         Self {
             language: tree_sitter_kotlin::language(),
             state: BehaviorState::new(),
+            expression_types: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -148,6 +153,36 @@ impl LanguageBehavior for KotlinBehavior {
 
     fn get_module_path_for_file(&self, file_id: FileId) -> Option<String> {
         self.state.get_module_path(file_id)
+    }
+
+    fn register_expression_types(&self, file_id: FileId, entries: &[(String, String)]) {
+        if entries.is_empty() {
+            return;
+        }
+
+        let mut map = HashMap::with_capacity(entries.len());
+        for (expr, ty) in entries {
+            map.insert(expr.clone(), ty.clone());
+        }
+        self.expression_types.write().insert(file_id, map);
+        if crate::config::is_global_debug_enabled() {
+            eprintln!(
+                "[KOTLIN-RESOLVE] Registered {} expression types for file {:?}",
+                entries.len(),
+                file_id
+            );
+        }
+    }
+
+    fn initialize_resolution_context(&self, context: &mut dyn ResolutionScope, file_id: FileId) {
+        if let Some(kotlin_ctx) = context
+            .as_any_mut()
+            .downcast_mut::<crate::parsing::kotlin::KotlinResolutionContext>()
+        {
+            if let Some(entries) = self.expression_types.write().remove(&file_id) {
+                kotlin_ctx.set_expression_types(entries);
+            }
+        }
     }
 
     fn import_matches_symbol(

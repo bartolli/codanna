@@ -60,3 +60,15 @@ mod test_kotlin_interfaces_and_enums;
 
 #[path = "parsers/kotlin/test_nested_scopes.rs"]
 mod test_kotlin_nested_scopes;
+
+#[path = "parsers/kotlin/test_extension_calls.rs"]
+mod test_kotlin_extension_calls;
+
+#[path = "parsers/kotlin/test_extension_resolution.rs"]
+mod test_kotlin_extension_resolution;
+
+#[path = "parsers/kotlin/test_generic_flow.rs"]
+mod test_kotlin_generic_flow;
+
+#[path = "parsers/kotlin/test_reddit_challenge.rs"]
+mod test_kotlin_reddit_challenge;

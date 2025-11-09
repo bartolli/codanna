@@ -95,6 +95,18 @@ pub trait LanguageParser: Send + Sync {
         Vec::new()
     }
 
+    /// Optional: Extract variable types with complex generic substitution
+    ///
+    /// Returns owned strings to support type substitution like `List<T>` → `List<Int>`.
+    /// Languages with generics can override this for richer type inference.
+    /// Default returns None, causing indexer to fall back to zero-copy version.
+    fn find_variable_types_with_substitution(
+        &mut self,
+        _code: &str,
+    ) -> Option<Vec<(String, String, Range)>> {
+        None
+    }
+
     /// Find inherent methods (methods defined directly on types)
     /// Returns tuples of (type_name, method_name, range)
     ///

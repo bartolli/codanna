@@ -2,6 +2,7 @@
 //!
 //! Provides symbol extraction for Kotlin using tree-sitter.
 
+use crate::config;
 use crate::parsing::Import;
 use crate::parsing::parser::check_recursion_depth;
 use crate::parsing::{
@@ -10,7 +11,8 @@ use crate::parsing::{
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
 use std::any::Any;
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 use tree_sitter::{Node, Parser};
 
@@ -29,6 +31,7 @@ const NODE_SIMPLE_IDENTIFIER: &str = "simple_identifier";
 const NODE_CLASS_BODY: &str = "class_body";
 const NODE_ENUM_CLASS_BODY: &str = "enum_class_body";
 const NODE_FUNCTION_BODY: &str = "function_body";
+const NODE_BLOCK: &str = "block";
 const NODE_MODIFIERS: &str = "modifiers";
 const NODE_INTERFACE: &str = "interface";
 const NODE_ENUM: &str = "enum";
@@ -43,6 +46,7 @@ const NODE_PARAMETER: &str = "parameter";
 const NODE_CLASS_PARAMETER: &str = "class_parameter";
 const NODE_FUNCTION_VALUE_PARAMETERS: &str = "function_value_parameters";
 const NODE_PRIMARY_CONSTRUCTOR: &str = "primary_constructor";
+const CALL_INFER_MAX_DEPTH: usize = 3;
 
 // Lazy-initialized HashSet for primitive types
 static KOTLIN_PRIMITIVE_TYPES: OnceLock<HashSet<&'static str>> = OnceLock::new();
@@ -65,6 +69,45 @@ fn get_primitive_types() -> &'static HashSet<&'static str> {
         set
     })
 }
+
+fn literal_type_for_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "integer_literal" => Some("Int"),
+        "string_literal" => Some("String"),
+        "boolean_literal" => Some("Boolean"),
+        "real_literal" => Some("Double"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GenericParameter<'a> {
+    name: &'a str,
+    #[allow(dead_code)]
+    constraints: Vec<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+struct FunctionSignature<'a> {
+    name: &'a str,
+    generic_params: Vec<GenericParameter<'a>>,
+    param_types: Vec<&'a str>,
+    return_type: Option<&'a str>,
+}
+
+impl<'a> FunctionSignature<'a> {
+    #[inline]
+    fn arity(&self) -> usize {
+        self.param_types.len()
+    }
+
+    #[inline]
+    fn has_generics(&self) -> bool {
+        !self.generic_params.is_empty()
+    }
+}
+
+type FunctionSignatureMap<'a> = HashMap<&'a str, Vec<FunctionSignature<'a>>>;
 
 /// Parser for Kotlin source files
 pub struct KotlinParser {
@@ -115,6 +158,11 @@ impl KotlinParser {
     /// Extract raw source text for a node
     fn text_for_node<'a>(&self, code: &'a str, node: Node) -> &'a str {
         &code[node.byte_range()]
+    }
+
+    #[inline]
+    fn trimmed_text<'a>(&self, code: &'a str, node: Node) -> &'a str {
+        self.text_for_node(code, node).trim()
     }
 
     /// Extract documentation comments (/** */ or //) - optimized version
@@ -205,6 +253,475 @@ impl KotlinParser {
         None
     }
 
+    fn extract_generic_parameters<'a>(
+        &self,
+        params_node: Node,
+        code: &'a str,
+    ) -> Vec<GenericParameter<'a>> {
+        let mut generics = Vec::new();
+        let mut cursor = params_node.walk();
+        for child in params_node.children(&mut cursor) {
+            if child.kind() != "type_parameter" {
+                continue;
+            }
+
+            let mut name = None;
+            let mut constraints = Vec::new();
+            let mut param_cursor = child.walk();
+            for grandchild in child.children(&mut param_cursor) {
+                match grandchild.kind() {
+                    NODE_TYPE_IDENTIFIER | NODE_SIMPLE_IDENTIFIER => {
+                        if name.is_none() {
+                            name = Some(self.trimmed_text(code, grandchild));
+                        }
+                    }
+                    NODE_USER_TYPE | NODE_TYPE_REFERENCE | NODE_SIMPLE_USER_TYPE => {
+                        constraints.push(self.trimmed_text(code, grandchild));
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(name) = name {
+                generics.push(GenericParameter { name, constraints });
+            }
+        }
+        generics
+    }
+
+    fn extract_function_parameter_types<'a>(
+        &self,
+        params_node: Node,
+        code: &'a str,
+    ) -> Vec<&'a str> {
+        let mut types = Vec::new();
+        let mut cursor = params_node.walk();
+        for param in params_node.children(&mut cursor) {
+            if param.kind() != NODE_PARAMETER && param.kind() != NODE_CLASS_PARAMETER {
+                continue;
+            }
+            if let Some(param_type) = self.extract_parameter_type(param, code) {
+                types.push(param_type);
+            }
+        }
+        types
+    }
+
+    fn extract_parameter_type<'a>(&self, param_node: Node, code: &'a str) -> Option<&'a str> {
+        let mut cursor = param_node.walk();
+        for child in param_node.children(&mut cursor) {
+            match child.kind() {
+                NODE_USER_TYPE | NODE_TYPE_REFERENCE | NODE_SIMPLE_USER_TYPE | "nullable_type" => {
+                    return Some(self.trimmed_text(code, child));
+                }
+                "type_annotation" => {
+                    if let Some(type_child) = child.child_by_field_name("type") {
+                        return Some(self.trimmed_text(code, type_child));
+                    }
+                }
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    fn extract_return_type_annotation<'a>(
+        &self,
+        func_node: Node,
+        code: &'a str,
+    ) -> Option<&'a str> {
+        let mut cursor = func_node.walk();
+        let mut seen_params = false;
+        for child in func_node.children(&mut cursor) {
+            match child.kind() {
+                NODE_FUNCTION_VALUE_PARAMETERS | NODE_PRIMARY_CONSTRUCTOR => {
+                    seen_params = true;
+                }
+                NODE_FUNCTION_BODY | NODE_CLASS_BODY | NODE_BLOCK => {
+                    break;
+                }
+                NODE_USER_TYPE
+                | NODE_TYPE_REFERENCE
+                | NODE_SIMPLE_USER_TYPE
+                | "nullable_type"
+                | "type" => {
+                    if seen_params {
+                        return Some(self.trimmed_text(code, child));
+                    }
+                }
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    fn extract_function_signature<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+    ) -> Option<FunctionSignature<'a>> {
+        let mut cursor = node.walk();
+        let mut name = None;
+        let mut type_params = None;
+        let mut params_node = None;
+
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                NODE_SIMPLE_IDENTIFIER => {
+                    if name.is_none() {
+                        name = Some(self.trimmed_text(code, child));
+                    }
+                }
+                "type_parameters" => type_params = Some(child),
+                NODE_FUNCTION_VALUE_PARAMETERS => params_node = Some(child),
+                _ => continue,
+            }
+        }
+
+        let name = name?;
+        let param_types = params_node
+            .map(|node| self.extract_function_parameter_types(node, code))
+            .unwrap_or_default();
+
+        let generic_params = type_params
+            .map(|node| self.extract_generic_parameters(node, code))
+            .unwrap_or_default();
+
+        let return_type = self.extract_return_type_annotation(node, code);
+
+        Some(FunctionSignature {
+            name,
+            generic_params,
+            param_types,
+            return_type,
+        })
+    }
+
+    fn collect_function_signatures<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        signatures: &mut FunctionSignatureMap<'a>,
+        depth: usize,
+    ) {
+        if !check_recursion_depth(depth, node) {
+            return;
+        }
+
+        if node.kind() == NODE_FUNCTION_DECLARATION {
+            if let Some(signature) = self.extract_function_signature(node, code) {
+                signatures
+                    .entry(signature.name)
+                    .or_default()
+                    .push(signature);
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_function_signatures(child, code, signatures, depth + 1);
+        }
+    }
+
+    fn insert_var_type<'a>(
+        &self,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+        expr: &'a str,
+        typ: &'a str,
+        range: Range,
+    ) {
+        if var_types.iter().any(|(existing, _, _)| *existing == expr) {
+            return;
+        }
+        var_types.push((expr, typ, range));
+    }
+
+    fn lookup_var_type<'a>(
+        &self,
+        expr: &'a str,
+        var_types: &[(&'a str, &'a str, Range)],
+    ) -> Option<&'a str> {
+        var_types
+            .iter()
+            .rev()
+            .find(|(existing, _, _)| *existing == expr)
+            .map(|(_, typ, _)| *typ)
+    }
+
+    fn record_literal_type<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        if let Some(type_name) = literal_type_for_kind(node.kind()) {
+            let text = self.trimmed_text(code, node);
+            if self.lookup_var_type(text, var_types).is_none() {
+                let range = self.node_to_range(node);
+                self.insert_var_type(var_types, text, type_name, range);
+            }
+        }
+    }
+
+    fn extract_callee_name<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
+        if node.kind() == NODE_SIMPLE_IDENTIFIER {
+            return Some(self.trimmed_text(code, node));
+        }
+
+        match node.kind() {
+            "navigation_expression" | "navigation_suffix" => {
+                self.find_last_simple_identifier(node, code)
+            }
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if let Some(name) = self.extract_callee_name(child, code) {
+                        return Some(name);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn find_last_simple_identifier<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
+        let mut last = if node.kind() == NODE_SIMPLE_IDENTIFIER {
+            Some(self.trimmed_text(code, node))
+        } else {
+            None
+        };
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(name) = self.find_last_simple_identifier(child, code) {
+                last = Some(name);
+            }
+        }
+
+        last
+    }
+
+    fn collect_argument_types<'a>(
+        &self,
+        call_node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+        signatures: &FunctionSignatureMap<'a>,
+        infer_depth: usize,
+    ) -> Option<Vec<&'a str>> {
+        let mut types = Vec::new();
+        let mut cursor = call_node.walk();
+        for child in call_node.children(&mut cursor) {
+            if child.kind() != "call_suffix" {
+                continue;
+            }
+
+            let mut suffix_cursor = child.walk();
+            for suffix_child in child.children(&mut suffix_cursor) {
+                if suffix_child.kind() != "value_arguments" {
+                    continue;
+                }
+
+                let mut arg_cursor = suffix_child.walk();
+                for value_arg in suffix_child.children(&mut arg_cursor) {
+                    if value_arg.kind() != "value_argument" {
+                        continue;
+                    }
+
+                    if let Some(arg_type) = self.extract_value_argument_type(
+                        value_arg,
+                        code,
+                        var_types,
+                        signatures,
+                        infer_depth,
+                    ) {
+                        types.push(arg_type);
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(types)
+    }
+
+    fn extract_value_argument_type<'a>(
+        &self,
+        value_arg: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+        signatures: &FunctionSignatureMap<'a>,
+        infer_depth: usize,
+    ) -> Option<&'a str> {
+        let mut cursor = value_arg.walk();
+        for child in value_arg.children(&mut cursor) {
+            if child.kind() == "value_argument_name" {
+                continue;
+            }
+            if child.is_named() {
+                return self.resolve_expression_type(
+                    child,
+                    code,
+                    var_types,
+                    signatures,
+                    infer_depth,
+                );
+            }
+        }
+        None
+    }
+
+    fn resolve_expression_type<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+        signatures: &FunctionSignatureMap<'a>,
+        infer_depth: usize,
+    ) -> Option<&'a str> {
+        let expr_text = self.trimmed_text(code, node);
+        if let Some(existing) = self.lookup_var_type(expr_text, var_types) {
+            return Some(existing);
+        }
+
+        if let Some(literal_type) = literal_type_for_kind(node.kind()) {
+            let range = self.node_to_range(node);
+            self.insert_var_type(var_types, expr_text, literal_type, range);
+            return Some(literal_type);
+        }
+
+        if node.kind() == NODE_CALL_EXPRESSION {
+            return self.infer_call_expression_type(
+                node,
+                code,
+                var_types,
+                signatures,
+                infer_depth + 1,
+            );
+        }
+
+        None
+    }
+
+    fn apply_signature<'a>(
+        &self,
+        signature: &FunctionSignature<'a>,
+        arg_types: &[&'a str],
+    ) -> Option<Cow<'a, str>> {
+        let return_type = signature.return_type?;
+        if !signature.has_generics() {
+            return Some(Cow::Borrowed(return_type));
+        }
+
+        let substitutions = self.build_generic_substitution(signature, arg_types);
+        if substitutions.is_empty() {
+            return Some(Cow::Borrowed(return_type));
+        }
+
+        // Check for simple substitution (entire return type is a generic param)
+        let normalized_return = return_type.trim();
+        if let Some(concrete_type) = substitutions.get(normalized_return) {
+            return Some(Cow::Borrowed(concrete_type));
+        }
+
+        // Complex substitution needed (e.g., List<T> → List<Int>)
+        let substituted = self.apply_type_substitution(return_type, &substitutions);
+        Some(Cow::Owned(substituted))
+    }
+
+    fn infer_call_expression_type<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+        signatures: &FunctionSignatureMap<'a>,
+        infer_depth: usize,
+    ) -> Option<&'a str> {
+        if infer_depth >= CALL_INFER_MAX_DEPTH {
+            return None;
+        }
+
+        let call_text = self.trimmed_text(code, node);
+        if let Some(existing) = self.lookup_var_type(call_text, var_types) {
+            return Some(existing);
+        }
+
+        let callee_node = node.child(0)?;
+        let callee_name = self.extract_callee_name(callee_node, code)?;
+
+        let arg_types =
+            self.collect_argument_types(node, code, var_types, signatures, infer_depth)?;
+
+        let candidates = signatures.get(callee_name)?;
+        for signature in candidates {
+            if signature.arity() != arg_types.len() {
+                continue;
+            }
+
+            // For zero-copy path, we need a borrowed string
+            // If it's owned (complex substitution), we can't return it here
+            if let Some(Cow::Borrowed(result_type)) = self.apply_signature(signature, &arg_types) {
+                let range = self.node_to_range(node);
+                self.insert_var_type(var_types, call_text, result_type, range);
+                if config::is_global_debug_enabled() {
+                    eprintln!("[KOTLIN-VAR] Inferred type '{result_type}' for call '{call_text}'");
+                }
+                return Some(result_type);
+            }
+            // Complex substitution case - can't return borrowed, skip for zero-copy method
+        }
+
+        None
+    }
+
+    fn build_generic_substitution<'a>(
+        &self,
+        signature: &FunctionSignature<'a>,
+        arg_types: &[&'a str],
+    ) -> HashMap<&'a str, &'a str> {
+        let mut substitutions = HashMap::new();
+        if signature.generic_params.is_empty() {
+            return substitutions;
+        }
+
+        // TODO: extend substitution to cover return-type expressions such as List<T> or T?
+        for (param_type, arg_type) in signature.param_types.iter().zip(arg_types.iter()) {
+            let normalized_param = param_type.trim();
+            for generic in &signature.generic_params {
+                if normalized_param == generic.name {
+                    substitutions.insert(generic.name, *arg_type);
+                    break;
+                }
+            }
+        }
+
+        substitutions
+    }
+
+    /// Apply generic substitutions to a type expression
+    ///
+    /// Handles complex types like `List<T>` → `List<Int>` by replacing generic
+    /// parameters with their concrete types. Uses word boundaries to avoid
+    /// incorrect substitutions (e.g., won't replace T in "Stream").
+    fn apply_type_substitution(
+        &self,
+        type_expr: &str,
+        substitutions: &HashMap<&str, &str>,
+    ) -> String {
+        let mut result = type_expr.to_string();
+
+        for (generic_param, concrete_type) in substitutions {
+            // Use regex with word boundaries to avoid partial matches
+            // e.g., "T" won't match in "Stream", but will match in "List<T>"
+            let pattern = format!(r"\b{}\b", regex::escape(generic_param));
+            if let Ok(re) = regex::Regex::new(&pattern) {
+                result = re.replace_all(&result, *concrete_type).to_string();
+            }
+        }
+
+        result
+    }
+
     /// Peek at comment text without allocating - returns a reference when possible
     fn peek_comment_text<'a>(&self, raw: &'a str) -> Option<&'a str> {
         let trimmed = raw.trim();
@@ -283,8 +800,15 @@ impl KotlinParser {
         &self,
         node: Node<'a>,
         code: &str,
-    ) -> (Option<String>, Visibility, String, Option<Node<'a>>) {
+    ) -> (
+        Option<String>,
+        Option<String>,
+        Visibility,
+        String,
+        Option<Node<'a>>,
+    ) {
         let mut func_name = None;
+        let mut receiver_type = None;
         let mut visibility = Visibility::Public;
         let mut signature = String::with_capacity(100);
         let mut body_node = None;
@@ -293,9 +817,16 @@ impl KotlinParser {
         for child in node.children(&mut cursor) {
             let child_kind = child.kind();
             match child_kind {
+                "receiver_type" => {
+                    // Extension function receiver (e.g., "Int" in "fun Int.bar()")
+                    let receiver_text = self.text_for_node(code, child).trim();
+                    receiver_type = Some(receiver_text.to_string());
+                    signature.push_str(receiver_text);
+                    signature.push('.');
+                }
                 NODE_SIMPLE_IDENTIFIER if func_name.is_none() => {
                     func_name = Some(self.text_for_node(code, child).trim().to_string());
-                    if !signature.is_empty() {
+                    if !signature.is_empty() && !signature.ends_with('.') {
                         signature.push(' ');
                     }
                     signature.push_str(self.text_for_node(code, child));
@@ -333,7 +864,7 @@ impl KotlinParser {
             }
         }
 
-        (func_name, visibility, signature, body_node)
+        (func_name, receiver_type, visibility, signature, body_node)
     }
 
     /// Process AST recursively and collect symbols
@@ -603,12 +1134,20 @@ impl KotlinParser {
         self.register_node(&node);
 
         // Extract all function info in a single pass
-        let (func_name, visibility, signature, body_node) = self.extract_function_info(node, code);
+        let (func_name, receiver_type, visibility, signature, body_node) =
+            self.extract_function_info(node, code);
 
         let func_name = if let Some(name) = func_name {
             name
         } else {
             return;
+        };
+
+        // For extension functions, use qualified name (e.g., "Int.bar" instead of "bar")
+        let symbol_name = if let Some(ref receiver) = receiver_type {
+            format!("{receiver}.{func_name}")
+        } else {
+            func_name.clone()
         };
 
         let symbol_id = counter.next_id();
@@ -622,7 +1161,7 @@ impl KotlinParser {
             SymbolKind::Function
         };
 
-        let mut symbol = Symbol::new(symbol_id, func_name.as_str(), kind, file_id, range);
+        let mut symbol = Symbol::new(symbol_id, symbol_name.as_str(), kind, file_id, range);
         symbol.visibility = visibility;
         symbol.signature = Some(signature.into());
         if let Some(doc) = doc_comment {
@@ -841,10 +1380,16 @@ impl KotlinParser {
     ) {
         if node.kind() == NODE_CALL_EXPRESSION {
             if let Some(callee) = node.child(0) {
-                let caller = current_function.unwrap_or(FILE_SCOPE);
-                let callee_text = self.text_for_node(code, callee).trim();
-                if !callee_text.is_empty() {
-                    calls.push((caller, callee_text, self.node_to_range(node)));
+                // Skip method calls (where callee is a navigation_expression like foo(3).bar)
+                // Those are handled by find_method_calls
+                if callee.kind() == "navigation_expression" {
+                    // This is a method call, not a function call
+                } else {
+                    let caller = current_function.unwrap_or(FILE_SCOPE);
+                    let callee_text = self.text_for_node(code, callee).trim();
+                    if !callee_text.is_empty() {
+                        calls.push((caller, callee_text, self.node_to_range(node)));
+                    }
                 }
             }
         }
@@ -871,6 +1416,201 @@ impl KotlinParser {
         for child in node.children(&mut cursor) {
             self.collect_calls(child, code, calls, func_context);
         }
+    }
+
+    /// Collect method calls with enhanced receiver tracking
+    fn collect_method_calls(
+        &self,
+        node: Node,
+        code: &str,
+        method_calls: &mut Vec<crate::parsing::MethodCall>,
+        current_function: Option<&str>,
+    ) {
+        use crate::parsing::MethodCall;
+
+        // Handle navigation_expression: receiver.method() or receiver.property
+        if node.kind() == "navigation_expression" {
+            // Get the receiver (left side of the dot)
+            let receiver_text = if let Some(receiver_node) = node.child(0) {
+                self.text_for_node(code, receiver_node).trim()
+            } else {
+                ""
+            };
+
+            // Get the navigation_suffix (right side of the dot)
+            if let Some(nav_suffix) = node.child(1) {
+                if nav_suffix.kind() == "navigation_suffix" {
+                    // Find the simple_identifier child (skip the dot)
+                    let mut method_name = String::new();
+                    let mut cursor = nav_suffix.walk();
+                    for child in nav_suffix.children(&mut cursor) {
+                        if child.kind() == NODE_SIMPLE_IDENTIFIER {
+                            method_name = self.text_for_node(code, child).trim().to_string();
+                            break;
+                        }
+                    }
+
+                    if !method_name.is_empty() {
+                        // Check if this is followed by a call_suffix (making it a method call)
+                        let parent = node.parent();
+                        let is_method_call =
+                            parent.is_some_and(|p| p.kind() == NODE_CALL_EXPRESSION);
+
+                        if is_method_call {
+                            let caller = current_function.unwrap_or(FILE_SCOPE);
+                            let range = self.node_to_range(node);
+
+                            let call = MethodCall::new(caller, &method_name, range)
+                                .with_receiver(receiver_text);
+
+                            method_calls.push(call);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Note: Plain function calls (without receivers) are handled by find_calls,
+        // not here, to avoid duplicates
+
+        // Track current function context
+        let new_function = if node.kind() == NODE_FUNCTION_DECLARATION {
+            let mut cursor = node.walk();
+            let mut func_name = None;
+            for child in node.children(&mut cursor) {
+                if child.kind() == NODE_SIMPLE_IDENTIFIER {
+                    func_name = Some(self.text_for_node(code, child).trim());
+                    break;
+                }
+            }
+            func_name
+        } else {
+            None
+        };
+
+        let func_context = new_function.or(current_function);
+
+        // Recurse into children
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_method_calls(child, code, method_calls, func_context);
+        }
+    }
+
+    /// Collect variable/expression type mappings for type inference.
+    fn collect_variable_types<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+        signatures: &FunctionSignatureMap<'a>,
+        depth: usize,
+    ) {
+        if !check_recursion_depth(depth, node) {
+            return;
+        }
+
+        // Visit children first so nested expressions are processed before parents.
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_variable_types(child, code, var_types, signatures, depth + 1);
+        }
+
+        // Record literal expression types.
+        self.record_literal_type(node, code, var_types);
+
+        // Attempt to infer call expression return types.
+        if node.kind() == NODE_CALL_EXPRESSION {
+            let call_text = self.trimmed_text(code, node);
+            if self.lookup_var_type(call_text, var_types).is_none() {
+                self.infer_call_expression_type(node, code, var_types, signatures, 0);
+            }
+        }
+    }
+
+    /// Collect variable types with owned strings for complex generic substitution
+    fn collect_variable_types_owned<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(String, String, Range)>,
+        signatures: &FunctionSignatureMap<'a>,
+        depth: usize,
+    ) {
+        if !check_recursion_depth(depth, node) {
+            return;
+        }
+
+        // Visit children first
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_variable_types_owned(child, code, var_types, signatures, depth + 1);
+        }
+
+        // Record literal types
+        if let Some(literal_type) = literal_type_for_kind(node.kind()) {
+            let text = self.trimmed_text(code, node).to_string();
+            let range = self.node_to_range(node);
+            if !var_types.iter().any(|(expr, _, _)| expr == &text) {
+                var_types.push((text, literal_type.to_string(), range));
+            }
+        }
+
+        // Infer call expression types with complex substitution
+        if node.kind() == NODE_CALL_EXPRESSION {
+            let call_text = self.trimmed_text(code, node).to_string();
+            if var_types.iter().any(|(expr, _, _)| expr == &call_text) {
+                return; // Already processed
+            }
+
+            if let Some(inferred_type) =
+                self.infer_call_type_owned(node, code, var_types, signatures, 0)
+            {
+                let range = self.node_to_range(node);
+                var_types.push((call_text, inferred_type, range));
+            }
+        }
+    }
+
+    /// Infer call expression type with owned string result (supports complex substitution)
+    fn infer_call_type_owned<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &[(String, String, Range)],
+        signatures: &FunctionSignatureMap<'a>,
+        infer_depth: usize,
+    ) -> Option<String> {
+        if infer_depth >= CALL_INFER_MAX_DEPTH {
+            return None;
+        }
+
+        let callee_node = node.child(0)?;
+        let callee_name = self.extract_callee_name(callee_node, code)?;
+
+        // Convert owned types to borrowed for compatibility with collect_argument_types
+        // This allows nested calls to see previously-inferred types
+        let mut borrowed_types: Vec<(&str, &str, Range)> = var_types
+            .iter()
+            .map(|(expr, ty, range)| (expr.as_str(), ty.as_str(), *range))
+            .collect();
+
+        let arg_types =
+            self.collect_argument_types(node, code, &mut borrowed_types, signatures, infer_depth)?;
+
+        let candidates = signatures.get(callee_name)?;
+        for signature in candidates {
+            if signature.arity() != arg_types.len() {
+                continue;
+            }
+
+            if let Some(result_type_cow) = self.apply_signature(signature, &arg_types) {
+                // Convert Cow to owned
+                return Some(result_type_cow.into_owned());
+            }
+        }
+
+        None
     }
 
     /// Collect inheritance relationships (extends/implements)
@@ -1267,6 +2007,48 @@ impl LanguageParser for KotlinParser {
         self.find_imports_in_node(root_node, code, file_id, &mut imports);
 
         imports
+    }
+
+    fn find_method_calls(&mut self, code: &str) -> Vec<crate::parsing::MethodCall> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut method_calls = Vec::new();
+        self.collect_method_calls(tree.root_node(), code, &mut method_calls, None);
+        method_calls
+    }
+
+    fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let root = tree.root_node();
+        let mut signatures: FunctionSignatureMap = HashMap::new();
+        self.collect_function_signatures(root, code, &mut signatures, 0);
+
+        let mut var_types = Vec::new();
+        self.collect_variable_types(root, code, &mut var_types, &signatures, 0);
+        var_types
+    }
+
+    fn find_variable_types_with_substitution(
+        &mut self,
+        code: &str,
+    ) -> Option<Vec<(String, String, Range)>> {
+        let tree = self.parser.parse(code, None)?;
+        let root = tree.root_node();
+
+        let mut signatures: FunctionSignatureMap = HashMap::new();
+        self.collect_function_signatures(root, code, &mut signatures, 0);
+
+        let mut owned_types = Vec::new();
+        self.collect_variable_types_owned(root, code, &mut owned_types, &signatures, 0);
+
+        Some(owned_types)
     }
 
     fn language(&self) -> Language {

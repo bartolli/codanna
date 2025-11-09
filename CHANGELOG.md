@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2025-11-08
+
+### Added
+
+- Kotlin generic type flow with parameter inference and substitution
+- Kotlin extension function resolution with receiver type tracking
+- Cow-based type substitution for zero-copy simple types and owned complex types
+- Trait method find_variable_types_with_substitution for opt-in owned type inference
+- Regex word-boundary type parameter replacement to prevent partial matches
+- Expression type registration in behavior layer for cross-component access
+- Kotlin resolution context with expression type injection
+- Test suite for generic inference (simple, nested, multi-param, complex substitution)
+- Test suite for extension function resolution with receiver tracking
+- Example demonstrating generic + extension resolution
+- Debug test for tracking function and method call collection
+
+### Fixed
+
+- Function call deduplication now includes line and column to track each call site separately
+
+### Changed
+
+- Indexer prefers complex type substitution when available, falls back to zero-copy
+- Function call deduplication key changed from (caller, callee, kind) to (caller, callee, kind, line, column)
+
 ## [0.6.9] - 2025-11-05
 
 ### Added

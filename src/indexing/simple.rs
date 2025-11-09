@@ -77,11 +77,7 @@ pub struct SimpleIndexer {
     trait_symbols_by_file:
         std::collections::HashMap<FileId, std::collections::HashMap<String, crate::SymbolKind>>,
     /// Method calls with rich receiver information for enhanced resolution
-    /// Indexed by (caller_name, method_name) for O(1) lookup
-    method_calls_by_file: std::collections::HashMap<
-        FileId,
-        std::collections::HashMap<(String, String), crate::parsing::MethodCall>,
-    >,
+    method_calls_by_file: std::collections::HashMap<FileId, Vec<crate::parsing::MethodCall>>,
     /// Optional vector search engine
     vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
     /// Optional embedding generator
@@ -806,6 +802,41 @@ impl SimpleIndexer {
             })
     }
 
+    fn normalize_expression_key(expr: &str) -> String {
+        let mut normalized = String::with_capacity(expr.len());
+        let mut in_double = false;
+        let mut in_single = false;
+        let mut escape = false;
+        for ch in expr.chars() {
+            if escape {
+                normalized.push(ch);
+                escape = false;
+                continue;
+            }
+            match ch {
+                '\\' if in_double || in_single => {
+                    normalized.push(ch);
+                    escape = true;
+                }
+                '"' if !in_single => {
+                    in_double = !in_double;
+                    normalized.push(ch);
+                }
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                    normalized.push(ch);
+                }
+                _ => {
+                    if !in_double && !in_single && ch.is_whitespace() {
+                        continue;
+                    }
+                    normalized.push(ch);
+                }
+            }
+        }
+        normalized
+    }
+
     /// Create a parser with its language-specific behavior
     fn create_parser_with_behavior(
         &self,
@@ -1055,7 +1086,10 @@ impl SimpleIndexer {
     ) -> IndexResult<()> {
         use std::collections::HashSet;
         // Track relationships added in this file to avoid duplicates
-        let mut added: HashSet<(String, String, RelationKind)> = HashSet::new();
+        let mut method_call_entries: HashSet<(String, String, RelationKind, u32, u16)> =
+            HashSet::new();
+        let mut function_call_entries: HashSet<(String, String, RelationKind, u32, u16)> =
+            HashSet::new();
         // 1. Function/method calls
         let method_calls: Vec<MethodCall> = parser.find_method_calls(content);
         debug_print!(
@@ -1124,19 +1158,25 @@ impl SimpleIndexer {
 
             // Create metadata to store receiver information
             let metadata = method_call.receiver.as_ref().map(|receiver| {
+                let mut parts = Vec::with_capacity(3);
+                parts.push(format!("receiver:{receiver}"));
+                parts.push(format!(
+                    "receiver_norm:{}",
+                    Self::normalize_expression_key(receiver)
+                ));
+                parts.push(format!("static:{}", method_call.is_static));
                 RelationshipMetadata::new()
                     .at_position(method_call.range.start_line, method_call.range.start_column)
-                    .with_context(format!(
-                        "receiver:{},static:{}",
-                        receiver, method_call.is_static
-                    ))
+                    .with_context(parts.join(","))
             });
 
             let kind = behavior.map_relationship("calls");
-            if added.insert((
+            if method_call_entries.insert((
                 method_call.caller.clone(),
                 method_call.method_name.clone(),
                 kind,
+                method_call.range.start_line,
+                method_call.range.start_column,
             )) {
                 let from_id = symbol_map.get(&method_call.caller).copied();
                 self.add_relationships_by_name(
@@ -1183,7 +1223,13 @@ impl SimpleIndexer {
             );
 
             let kind = behavior.map_relationship("calls");
-            if added.insert((caller.to_string(), called_function.to_string(), kind)) {
+            if function_call_entries.insert((
+                caller.to_string(),
+                called_function.to_string(),
+                kind,
+                range.start_line,
+                range.start_column,
+            )) {
                 let from_id = symbol_map.get(caller).copied();
                 self.add_relationships_by_name(
                     from_id,
@@ -1343,10 +1389,31 @@ impl SimpleIndexer {
         }
 
         // Variable type tracking for method resolution
-        let var_types = parser.find_variable_types(content);
-        for (var_name, type_name, _range) in var_types {
+        // Prefer complex substitution if available (for generics like List<T> → List<Int>)
+        let owned_var_types: Vec<(String, String, crate::Range)> =
+            if let Some(complex_types) = parser.find_variable_types_with_substitution(content) {
+                complex_types
+            } else {
+                // Fall back to zero-copy version and convert to owned
+                parser
+                    .find_variable_types(content)
+                    .into_iter()
+                    .map(|(var, ty, range)| (var.to_string(), ty.to_string(), range))
+                    .collect()
+            };
+
+        let mut normalized_pairs = Vec::with_capacity(owned_var_types.len());
+        for (var_name, type_name, _range) in owned_var_types {
+            let normalized_expr = Self::normalize_expression_key(&var_name);
             self.variable_types
-                .insert((file_id, var_name.to_string()), type_name.to_string());
+                .insert((file_id, normalized_expr.clone()), type_name.clone());
+            normalized_pairs.push((normalized_expr, type_name));
+        }
+
+        if !normalized_pairs.is_empty() {
+            if let Ok(language_behavior) = self.get_behavior_for_file(file_id) {
+                language_behavior.register_expression_types(file_id, &normalized_pairs);
+            }
         }
 
         Ok(())
@@ -2502,12 +2569,10 @@ impl SimpleIndexer {
             method_call.receiver
         );
 
-        // Index by (caller_name, method_name) for O(1) lookup
-        let key = (method_call.caller.clone(), method_call.method_name.clone());
         self.method_calls_by_file
             .entry(file_id)
             .or_default()
-            .insert(key, method_call.clone());
+            .push(method_call.clone());
     }
 
     /// Resolves method calls using enhanced MethodCall data with fallback to legacy resolution.
@@ -2520,19 +2585,54 @@ impl SimpleIndexer {
         caller_name: &str,
         file_id: FileId,
         context: &dyn ResolutionScope,
+        metadata: Option<&RelationshipMetadata>,
     ) -> Option<SymbolId> {
-        // Try to find corresponding MethodCall object for enhanced resolution
         if let Some(method_calls) = self.method_calls_by_file.get(&file_id) {
-            // Normalize caller for language-specific matching (e.g., Python "<module>")
             let caller_normalized = if let Ok(behavior) = self.get_behavior_for_file(file_id) {
                 behavior.normalize_caller_name(caller_name, file_id)
             } else {
                 caller_name.to_string()
             };
 
-            // O(1) hashmap lookup instead of O(m) linear search
-            let key = (caller_normalized, call_target.to_string());
-            if let Some(method_call) = method_calls.get(&key) {
+            let (receiver_hint, receiver_norm_hint, static_hint, line_hint) =
+                self.extract_metadata_hints(metadata);
+
+            let mut candidates: Vec<_> = method_calls
+                .iter()
+                .filter(|mc| mc.caller == caller_normalized && mc.method_name == call_target)
+                .collect();
+
+            if candidates.len() > 1 {
+                if let Some(ref receiver) = receiver_hint {
+                    candidates.retain(|mc| mc.receiver.as_deref() == Some(receiver.as_str()));
+                }
+            }
+
+            if candidates.len() > 1 {
+                if let Some(ref receiver_norm) = receiver_norm_hint {
+                    candidates.retain(|mc| {
+                        mc.receiver
+                            .as_ref()
+                            .map(|r| Self::normalize_expression_key(r))
+                            .as_ref()
+                            == Some(receiver_norm)
+                    });
+                }
+            }
+
+            if candidates.len() > 1 {
+                if let Some(line) = line_hint {
+                    candidates.retain(|mc| mc.range.start_line == line);
+                }
+            }
+
+            if candidates.len() > 1 {
+                if let Some(is_static) = static_hint {
+                    candidates.retain(|mc| mc.is_static == is_static);
+                }
+            }
+
+            if let Some(method_call) = candidates.first() {
                 debug_print!(
                     self,
                     "Found MethodCall object for {}->{}! Using enhanced resolution",
@@ -2543,7 +2643,6 @@ impl SimpleIndexer {
             }
         }
 
-        // No MethodCall object found - treat as regular function call
         debug_print!(
             self,
             "No MethodCall object found for {}->{}. Resolving as regular function",
@@ -2551,6 +2650,32 @@ impl SimpleIndexer {
             call_target
         );
         context.resolve(call_target)
+    }
+
+    fn extract_metadata_hints(
+        &self,
+        metadata: Option<&RelationshipMetadata>,
+    ) -> (Option<String>, Option<String>, Option<bool>, Option<u32>) {
+        if let Some(meta) = metadata {
+            let mut receiver = None;
+            let mut receiver_norm = None;
+            let mut static_hint = None;
+            if let Some(ctx) = meta.context.as_deref() {
+                for part in ctx.split(',') {
+                    let trimmed = part.trim();
+                    if let Some(value) = trimmed.strip_prefix("receiver:") {
+                        receiver = Some(value.to_string());
+                    } else if let Some(value) = trimmed.strip_prefix("receiver_norm:") {
+                        receiver_norm = Some(value.to_string());
+                    } else if let Some(value) = trimmed.strip_prefix("static:") {
+                        static_hint = value.parse::<bool>().ok();
+                    }
+                }
+            }
+            (receiver, receiver_norm, static_hint, meta.line)
+        } else {
+            (None, None, None, None)
+        }
     }
 
     /// Resolve a method call using MethodCall struct with rich receiver information
@@ -2632,13 +2757,40 @@ impl SimpleIndexer {
         }
 
         // For instance methods, look up receiver's type
-        let type_name = self.variable_types.get(&(file_id, receiver.to_string()))?;
+        let receiver_key = Self::normalize_expression_key(receiver);
+        let type_name = self
+            .variable_types
+            .get(&(file_id, receiver_key.clone()))
+            .cloned()
+            .or_else(|| {
+                if crate::config::is_global_debug_enabled() {
+                    eprintln!(
+                        "[EXT-RESOLVE] Missing direct type entry for receiver '{receiver}' (key '{receiver_key}') in file {file_id:?}"
+                    );
+                }
+                let resolved = context.resolve_expression_type(receiver);
+                if let Some(ref ty) = resolved {
+                    if crate::config::is_global_debug_enabled() {
+                        eprintln!(
+                            "[EXT-RESOLVE] Context provided type '{ty}' for receiver '{receiver}'"
+                        );
+                    }
+                }
+                resolved
+            })?;
 
-        debug_print!(self, "Found type for {}: {}", receiver, type_name);
+        if crate::config::is_global_debug_enabled() {
+            eprintln!("[EXT-RESOLVE] Found type for receiver '{receiver}': {type_name}");
+        }
 
-        // Check if method comes from a trait
-        // Without legacy resolution, just try direct resolution
-        context.resolve(&method_call.method_name)
+        // Qualify method name with receiver type for extension function resolution
+        // E.g., receiver="42" type="Int" method="double" → "Int.double"
+        let qualified_method = format!("{}.{}", type_name, method_call.method_name);
+        if crate::config::is_global_debug_enabled() {
+            eprintln!("[EXT-RESOLVE] Resolving qualified: {qualified_method}");
+        }
+
+        context.resolve(&qualified_method)
     }
 
     /// Build resolution context for a file with all available symbols
@@ -2835,6 +2987,7 @@ impl SimpleIndexer {
                         &rel.from_name,
                         file_id,
                         context.as_ref(),
+                        rel.metadata.as_ref(),
                     );
                     debug_print!(
                         self,
@@ -2854,11 +3007,12 @@ impl SimpleIndexer {
                             let to_key = if let Some(method_calls) =
                                 self.method_calls_by_file.get(&file_id)
                             {
-                                // O(1) hashmap lookup by caller and method name
                                 let caller_name =
                                     from_symbols.first().map(|s| s.name.as_ref()).unwrap_or("");
-                                let key = (caller_name.to_string(), rel.to_name.to_string());
-                                if let Some(mc) = method_calls.get(&key) {
+                                let target_name = rel.to_name.as_ref();
+                                if let Some(mc) = method_calls.iter().find(|mc| {
+                                    mc.caller == caller_name && mc.method_name == target_name
+                                }) {
                                     if let Some(recv) = &mc.receiver {
                                         format!("{recv}.{}", mc.method_name)
                                     } else {

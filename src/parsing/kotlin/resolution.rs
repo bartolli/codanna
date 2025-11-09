@@ -28,6 +28,8 @@ pub struct KotlinResolutionContext {
     scope_stack: Vec<ScopeType>,
     /// Registered import bindings available to the file
     import_bindings: HashMap<String, ImportBinding>,
+    /// Expression-to-type mappings for receiver inference
+    expression_types: HashMap<String, String>,
 }
 
 impl KotlinResolutionContext {
@@ -43,7 +45,20 @@ impl KotlinResolutionContext {
             global_scope: HashMap::new(),
             scope_stack: vec![ScopeType::Global],
             import_bindings: HashMap::new(),
+            expression_types: HashMap::new(),
         }
+    }
+
+    /// Inject expression type mappings produced by the parser
+    pub fn set_expression_types(&mut self, entries: HashMap<String, String>) {
+        if crate::config::is_global_debug_enabled() {
+            eprintln!(
+                "[KOTLIN-RESOLVE] Loaded {} expression types into resolution context for file {:?}",
+                entries.len(),
+                self.file_id
+            );
+        }
+        self.expression_types = entries;
     }
 
     fn current_local_scope_mut(&mut self) -> &mut HashMap<String, SymbolId> {
@@ -264,6 +279,10 @@ impl ResolutionScope for KotlinResolutionContext {
 
     fn import_binding(&self, name: &str) -> Option<ImportBinding> {
         self.import_bindings.get(name).cloned()
+    }
+
+    fn resolve_expression_type(&self, expr: &str) -> Option<String> {
+        self.expression_types.get(expr).cloned()
     }
 }
 

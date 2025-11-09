@@ -478,6 +478,7 @@ pub trait LanguageBehavior: Send + Sync {
             }
         }
 
+        self.initialize_resolution_context(context.as_mut(), file_id);
         Ok(context)
     }
 
@@ -740,6 +741,7 @@ pub trait LanguageBehavior: Send + Sync {
             );
         }
 
+        self.initialize_resolution_context(context.as_mut(), file_id);
         Ok(context)
     }
 
@@ -858,6 +860,18 @@ pub trait LanguageBehavior: Send + Sync {
     fn get_module_path_for_file(&self, _file_id: FileId) -> Option<String> {
         None
     }
+
+    /// Register expression-to-type mappings extracted during parsing
+    ///
+    /// Languages that need additional resolution metadata (e.g., Kotlin generic
+    /// flow) can override this to persist data until resolution runs.
+    fn register_expression_types(&self, _file_id: FileId, _entries: &[(String, String)]) {}
+
+    /// Hook invoked after the base resolution context has been populated
+    ///
+    /// Allows languages to inject additional data (expression types, generic
+    /// metadata, etc.) into their resolution contexts.
+    fn initialize_resolution_context(&self, _context: &mut dyn ResolutionScope, _file_id: FileId) {}
 
     /// Classify the origin of an import (internal vs external)
     ///

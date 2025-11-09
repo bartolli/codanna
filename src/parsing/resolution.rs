@@ -140,6 +140,14 @@ pub trait ResolutionScope: Send + Sync {
         None
     }
 
+    /// Resolve an expression (e.g., receiver) to a concrete type string if available
+    ///
+    /// Default implementation returns None. Languages can override to provide
+    /// richer resolution data (e.g., Kotlin generic flow).
+    fn resolve_expression_type(&self, _expr: &str) -> Option<String> {
+        None
+    }
+
     /// Check if a name refers to an external import
     ///
     /// This method determines if a symbol name comes from an external library

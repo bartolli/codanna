@@ -1,6 +1,6 @@
 # Go Parser Symbol Extraction Coverage Report
 
-*Generated: 2025-11-03 17:26:58 UTC*
+*Generated: 2025-11-09 01:47:11 UTC*
 
 ## Summary
 - Nodes in file: 115
