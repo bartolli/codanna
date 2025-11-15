@@ -1,4 +1,23 @@
-//! Retrieve command implementations using UnifiedOutput schema
+//! シンボル取得コマンドの実装
+//!
+//! UnifiedOutput スキーマを使用してシンボルを検索・取得する機能を提供します。
+//!
+//! # 主な機能
+//!
+//! - 名前によるシンボル検索
+//! - シンボルIDによる直接取得
+//! - 言語フィルタリング
+//! - 統一された出力フォーマット
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! use codanna::{SimpleIndexer, retrieve::retrieve_symbol};
+//! use codanna::io::OutputFormat;
+//!
+//! let indexer = SimpleIndexer::default();
+//! retrieve_symbol(&indexer, "my_function", Some("rust"), OutputFormat::Json);
+//! ```
 
 use crate::io::{
     EntityType, ExitCode, OutputFormat, OutputManager, OutputStatus,

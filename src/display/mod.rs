@@ -1,7 +1,22 @@
-//! Rich terminal display utilities for enhanced CLI output.
+//! リッチターミナルディスプレイユーティリティ
 //!
-//! Provides styled tables, progress bars, and formatted output
-//! for a professional command-line experience.
+//! 強化されたCLI出力のためのスタイル付きテーブル、プログレスバー、
+//! フォーマット済み出力を提供します。プロフェッショナルなコマンドライン体験を実現します。
+//!
+//! # 主要なコンポーネント
+//!
+//! - スタイル付きテーブル
+//! - プログレスバー
+//! - テーマサポート
+//! - ヘルプテキストフォーマット
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! // use codanna::display::theme::Theme;
+//! // let theme = Theme::default();
+//! // println!("{}", theme.success("成功しました！"));
+//! ```
 
 pub mod help;
 pub mod progress;

@@ -1,4 +1,22 @@
-//! Profile system for project initialization
+//! プロファイルシステム
+//!
+//! プロジェクト初期化のためのプロファイルシステムを提供します。
+//! テンプレートベースのプロジェクトセットアップを可能にします。
+//!
+//! # 主要な機能
+//!
+//! - プロファイルのインストールと管理
+//! - プロジェクトマニフェストの処理
+//! - ロックファイル管理
+//! - ローカルオーバーライド
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! // use codanna::profiles::installer::ProfileInstaller;
+//! // let installer = ProfileInstaller::new();
+//! // installer.install_profile("typescript-project");
+//! ```
 
 pub mod commands;
 pub mod error;

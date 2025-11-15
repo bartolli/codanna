@@ -1,3 +1,23 @@
+//! シンボル定義モジュール
+//!
+//! コード内のシンボル（関数、構造体、変数など）を表現する型を提供します。
+//!
+//! # 主要な型
+//!
+//! - [`Symbol`]: シンボルの完全な情報
+//! - [`CompactSymbol`]: メモリ効率の良いシンボル表現
+//! - [`Visibility`]: シンボルの可視性
+//! - [`ScopeContext`]: スコープ情報
+//!
+//! # 使用例
+//!
+//! ```
+//! use codanna::symbol::Visibility;
+//!
+//! let vis = Visibility::Public;
+//! assert_eq!(vis, Visibility::Public);
+//! ```
+
 pub mod context;
 
 use crate::parsing::registry::LanguageId;

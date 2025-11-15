@@ -1,18 +1,28 @@
-//! Vector search functionality for code intelligence.
+//! ベクトル検索モジュール
 //!
-//! This module provides high-performance vector storage and search capabilities
-//! designed to integrate with the existing Tantivy-based text search infrastructure.
+//! コードインテリジェンスのための高性能なベクトルストレージと検索機能を提供します。
+//! 既存のTantivyベースのテキスト検索インフラと統合するように設計されています。
 //!
-//! # Performance Targets
-//! - Vector access: <1μs per vector
-//! - Memory usage: ~100 bytes per symbol
-//! - Indexing: 10,000+ files/second
-//! - Search latency: <10ms for semantic search
+//! # パフォーマンス目標
 //!
-//! # Architecture
-//! The vector search system uses IVFFlat (Inverted File with Flat vectors) indexing
-//! with K-means clustering to achieve sub-linear search performance. Vectors are
-//! stored in memory-mapped files for instant loading and minimal memory overhead.
+//! - ベクトルアクセス: <1μs per vector
+//! - メモリ使用量: ~100 bytes per symbol
+//! - インデックス作成: 10,000+ files/second
+//! - 検索レイテンシ: <10ms for semantic search
+//!
+//! # アーキテクチャ
+//!
+//! ベクトル検索システムは、IVFFlat（Inverted File with Flat vectors）インデックスと
+//! K-meansクラスタリングを使用して、準線形の検索パフォーマンスを実現します。
+//! ベクトルはメモリマップドファイルに保存され、即座のロードと最小限のメモリオーバーヘッドを実現します。
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! use codanna::vector::{VectorEngine, VectorStorage};
+//! // let engine = VectorEngine::new();
+//! // let results = engine.search(query_vector, top_k);
+//! ```
 
 mod clustering;
 mod embedding;

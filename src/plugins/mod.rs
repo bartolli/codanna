@@ -1,7 +1,22 @@
-//! Plugin management system for Claude Code plugins
+//! プラグイン管理システム
 //!
-//! This module provides functionality for installing, updating, and managing
-//! Claude Code plugins from Git-based marketplaces.
+//! Claude Code プラグインのインストール、更新、管理機能を提供します。
+//! Gitベースのマーケットプレイスからプラグインを取得できます。
+//!
+//! # 主要な機能
+//!
+//! - プラグインのインストールと更新
+//! - マーケットプレイスからの解決
+//! - ロックファイル管理
+//! - プラグインのマージ
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! // use codanna::plugins::marketplace::MarketplaceResolver;
+//! // let resolver = MarketplaceResolver::new();
+//! // resolver.install_plugin("my-plugin");
+//! ```
 
 pub mod error;
 pub mod fsops;

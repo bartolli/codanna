@@ -1,3 +1,25 @@
+//! インデックス作成モジュール
+//!
+//! コードベースのインデックス化、ファイル監視、進捗追跡などの機能を提供します。
+//!
+//! # 主要なコンポーネント
+//!
+//! - [`SimpleIndexer`]: メインのインデクサー実装
+//! - [`FileWalker`]: ファイルシステムの探索
+//! - [`FileSystemWatcher`]: ファイル変更の監視
+//! - [`IndexTransaction`]: トランザクション管理
+//! - [`ConfigFileWatcher`]: 設定ファイルの監視
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! use codanna::indexing::SimpleIndexer;
+//! use codanna::Settings;
+//!
+//! let settings = Settings::default();
+//! let indexer = SimpleIndexer::new(&settings);
+//! ```
+
 pub mod config_watcher;
 pub mod file_info;
 pub mod fs_watcher;

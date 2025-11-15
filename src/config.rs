@@ -1,18 +1,32 @@
-//! Configuration module for the codebase intelligence system.
+//! 設定管理モジュール
 //!
-//! This module provides a layered configuration system that supports:
-//! - Default values
-//! - TOML configuration file
-//! - Environment variable overrides
-//! - CLI argument overrides
+//! このモジュールは、コードベースインテリジェンスシステムのための
+//! レイヤード設定システムを提供します。以下の優先順位で設定を読み込みます：
+//! - デフォルト値
+//! - TOML設定ファイル
+//! - 環境変数によるオーバーライド
+//! - CLIコマンドライン引数によるオーバーライド
 //!
-//! # Environment Variables
+//! # 環境変数
 //!
-//! Environment variables must be prefixed with `CI_` and use double underscores
-//! to separate nested levels:
-//! - `CI_INDEXING__PARALLEL_THREADS=8` sets `indexing.parallel_threads`
-//! - `CI_MCP__DEBUG=true` sets `mcp.debug`
-//! - `CI_INDEXING__INCLUDE_TESTS=false` sets `indexing.include_tests`
+//! 環境変数は `CI_` プレフィックスを必要とし、ネストされたレベルを
+//! 区切るためにダブルアンダースコアを使用します：
+//! - `CI_INDEXING__PARALLEL_THREADS=8` は `indexing.parallel_threads` を設定
+//! - `CI_MCP__DEBUG=true` は `mcp.debug` を設定
+//! - `CI_INDEXING__INCLUDE_TESTS=false` は `indexing.include_tests` を設定
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! use codanna::config::Settings;
+//!
+//! // デフォルト設定を読み込む
+//! let settings = Settings::default();
+//!
+//! // 特定のパスから設定を読み込む
+//! let settings = Settings::from_workspace_root("/path/to/workspace")
+//!     .expect("設定の読み込みに失敗しました");
+//! ```
 
 use figment::{
     Figment,
@@ -23,178 +37,296 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// メイン設定構造体
+///
+/// Codannaシステム全体の設定を保持します。TOML形式の設定ファイル、
+/// 環境変数、CLIオプションから読み込まれます。
+///
+/// # フィールド
+///
+/// * `version` - 設定スキーマのバージョン
+/// * `index_path` - インデックスディレクトリへのパス
+/// * `workspace_root` - ワークスペースルートディレクトリ (.codanna の場所)
+/// * `debug` - グローバルデバッグモード
+/// * `indexing` - インデックス作成設定
+/// * `languages` - 言語固有の設定
+/// * `mcp` - MCPサーバー設定
+/// * `semantic_search` - セマンティック検索設定
+/// * `file_watch` - ファイル監視設定
+/// * `server` - サーバー設定
+/// * `guidance` - AIガイダンス設定
+///
+/// # 使用例
+///
+/// ```no_run
+/// use codanna::config::Settings;
+///
+/// let settings = Settings::default();
+/// println!("インデックスパス: {:?}", settings.index_path);
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Settings {
-    /// Version of the configuration schema
+    /// 設定スキーマのバージョン
     #[serde(default = "default_version")]
     pub version: u32,
 
-    /// Path to the index directory
+    /// インデックスディレクトリへのパス
     #[serde(default = "default_index_path")]
     pub index_path: PathBuf,
 
-    /// Workspace root directory (where .codanna is located)
+    /// ワークスペースルートディレクトリ (.codanna の場所)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
 
-    /// Global debug mode
+    /// グローバルデバッグモード
     #[serde(default = "default_false")]
     pub debug: bool,
 
-    /// Indexing configuration
+    /// インデックス作成設定
     #[serde(default)]
     pub indexing: IndexingConfig,
 
-    /// Cached canonicalized paths for fast lookups (not serialized)
+    /// 高速検索のためのキャッシュされた正規化パス (シリアライズ対象外)
     #[serde(skip)]
     pub indexed_paths_cache: Vec<PathBuf>,
 
-    /// Language-specific settings
+    /// 言語固有の設定
     #[serde(default)]
     pub languages: HashMap<String, LanguageConfig>,
 
-    /// MCP server settings
+    /// MCPサーバー設定
     #[serde(default)]
     pub mcp: McpConfig,
 
-    /// Semantic search settings
+    /// セマンティック検索設定
     #[serde(default)]
     pub semantic_search: SemanticSearchConfig,
 
-    /// File watching settings
+    /// ファイル監視設定
     #[serde(default)]
     pub file_watch: FileWatchConfig,
 
-    /// Server settings (stdio/http mode)
+    /// サーバー設定 (stdio/httpモード)
     #[serde(default)]
     pub server: ServerConfig,
 
-    /// AI guidance settings for multi-hop queries
+    /// マルチホップクエリ用のAIガイダンス設定
     #[serde(default)]
     pub guidance: GuidanceConfig,
 }
 
+/// インデックス作成設定
+///
+/// コードベースのインデックス作成に関する設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::IndexingConfig;
+///
+/// let config = IndexingConfig::default();
+/// assert!(config.parallel_threads > 0);
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct IndexingConfig {
-    /// Number of parallel threads for indexing
+    /// インデックス作成の並列スレッド数
     #[serde(default = "default_parallel_threads")]
     pub parallel_threads: usize,
 
-    /// Tantivy heap size in megabytes
-    /// Controls memory usage before flushing to disk
+    /// Tantivyヒープサイズ（メガバイト単位）
+    /// ディスクにフラッシュする前のメモリ使用量を制御
     #[serde(default = "default_tantivy_heap_mb")]
     pub tantivy_heap_mb: usize,
 
-    /// Maximum retry attempts for transient file system errors
-    /// Handles permission delays from antivirus, SELinux, etc.
+    /// 一時的なファイルシステムエラーの最大再試行回数
+    /// アンチウイルス、SELinuxなどによる権限遅延に対処
     #[serde(default = "default_max_retry_attempts")]
     pub max_retry_attempts: u32,
 
-    /// Project root directory (defaults to workspace root)
-    /// Used for gitignore resolution and module path calculation
+    /// プロジェクトルートディレクトリ（デフォルトはワークスペースルート）
+    /// gitignore解決とモジュールパス計算に使用
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_root: Option<PathBuf>,
 
-    /// Patterns to ignore during indexing
+    /// インデックス作成時に無視するパターン
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
 
-    /// List of directories to index
-    /// This list is managed by the add-dir and remove-dir commands
+    /// インデックス対象ディレクトリのリスト
+    /// このリストは add-dir および remove-dir コマンドで管理される
     #[serde(default)]
     pub indexed_paths: Vec<PathBuf>,
 }
 
+/// 言語固有の設定
+///
+/// 各プログラミング言語のパーサーと動作設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::LanguageConfig;
+///
+/// let mut config = LanguageConfig::default();
+/// config.enabled = true;
+/// config.extensions = vec!["rs".to_string(), "rust".to_string()];
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LanguageConfig {
-    /// Whether this language is enabled
+    /// この言語が有効かどうか
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// File extensions for this language
+    /// この言語のファイル拡張子
     #[serde(default)]
     pub extensions: Vec<String>,
 
-    /// Additional parser options
+    /// 追加のパーサーオプション
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub parser_options: HashMap<String, serde_json::Value>,
 
-    /// Project configuration files to monitor (e.g., tsconfig.json, pyproject.toml)
-    /// Empty by default - project resolution is opt-in
+    /// 監視するプロジェクト設定ファイル (例: tsconfig.json, pyproject.toml)
+    /// デフォルトは空 - プロジェクト解決はオプトイン
     #[serde(default)]
     pub config_files: Vec<PathBuf>,
 }
 
+/// MCP (Model Context Protocol) サーバー設定
+///
+/// MCPサーバーの動作設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::McpConfig;
+///
+/// let config = McpConfig::default();
+/// assert!(config.max_context_size > 0);
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpConfig {
-    /// Maximum context size in bytes
+    /// 最大コンテキストサイズ（バイト単位）
     #[serde(default = "default_max_context_size")]
     pub max_context_size: usize,
 
-    /// Enable debug logging
+    /// デバッグログを有効化
     #[serde(default = "default_false")]
     pub debug: bool,
 }
 
+/// セマンティック検索設定
+///
+/// コードの意味的な検索機能の設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::SemanticSearchConfig;
+///
+/// let mut config = SemanticSearchConfig::default();
+/// config.enabled = true;
+/// config.threshold = 0.7;
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SemanticSearchConfig {
-    /// Enable semantic search
+    /// セマンティック検索を有効化
     #[serde(default = "default_false")]
     pub enabled: bool,
 
-    /// Model to use for embeddings
+    /// 埋め込みに使用するモデル
     #[serde(default = "default_embedding_model")]
     pub model: String,
 
-    /// Similarity threshold for search results
+    /// 検索結果の類似度閾値
     #[serde(default = "default_similarity_threshold")]
     pub threshold: f32,
 }
 
+/// ファイル監視設定
+///
+/// インデックス対象ファイルの自動監視設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::FileWatchConfig;
+///
+/// let config = FileWatchConfig::default();
+/// assert!(config.enabled);
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FileWatchConfig {
-    /// Enable automatic file watching for indexed files
+    /// インデックス対象ファイルの自動監視を有効化
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Debounce interval in milliseconds (default: 500ms)
+    /// デバウンス間隔（ミリ秒単位、デフォルト: 500ms）
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u64,
 }
 
+/// サーバー設定
+///
+/// MCPサーバーの起動モードと接続設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::ServerConfig;
+///
+/// let config = ServerConfig::default();
+/// assert_eq!(config.mode, "stdio");
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
-    /// Default server mode: "stdio" or "http"
+    /// デフォルトのサーバーモード: "stdio" または "http"
     #[serde(default = "default_server_mode")]
     pub mode: String,
 
-    /// HTTP server bind address
+    /// HTTPサーバーのバインドアドレス
     #[serde(default = "default_bind_address")]
     pub bind: String,
 
-    /// Watch interval for stdio mode (seconds)
+    /// stdioモードの監視間隔（秒単位）
     #[serde(default = "default_watch_interval")]
     pub watch_interval: u64,
 }
 
+/// AIガイダンス設定
+///
+/// マルチホップクエリのためのAIガイダンスシステムの設定を保持します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::config::GuidanceConfig;
+/// use std::collections::HashMap;
+///
+/// let mut config = GuidanceConfig::default();
+/// config.enabled = true;
+/// config.variables.insert("key".to_string(), "value".to_string());
+/// ```
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GuidanceConfig {
-    /// Enable AI guidance system
+    /// AIガイダンスシステムを有効化
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Templates for specific tools
+    /// 特定のツール用のテンプレート
     #[serde(default)]
     pub templates: HashMap<String, GuidanceTemplate>,
 
-    /// Global template variables
+    /// グローバルテンプレート変数
     #[serde(default)]
     pub variables: HashMap<String, String>,
 }
 
+/// ガイダンステンプレート
+///
+/// 特定の状況におけるガイダンスメッセージのテンプレートを保持します。
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GuidanceTemplate {
-    /// Template for no results
+    /// 結果がない場合のテンプレート
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_results: Option<String>,
 

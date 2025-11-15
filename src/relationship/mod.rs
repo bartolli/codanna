@@ -1,3 +1,22 @@
+//! リレーションシップモジュール
+//!
+//! シンボル間の関係（呼び出し、継承、実装など）を表現します。
+//!
+//! # 主要な型
+//!
+//! - [`RelationKind`]: 関係の種類
+//! - [`Relationship`]: シンボル間の関係
+//! - [`RelationshipEdge`]: 関係のエッジ表現
+//!
+//! # 使用例
+//!
+//! ```
+//! use codanna::relationship::RelationKind;
+//!
+//! let kind = RelationKind::Calls;
+//! assert_eq!(kind, RelationKind::Calls);
+//! ```
+
 use crate::types::SymbolId;
 use serde::{Deserialize, Serialize};
 

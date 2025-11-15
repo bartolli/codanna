@@ -1,9 +1,28 @@
-//! Input/Output handling for CLI and tool integration.
+//! 入出力処理モジュール
 //!
-//! This module provides:
-//! - Unified output formatting (text, JSON)
-//! - Consistent error handling and exit codes
-//! - Future: JSON-RPC 2.0 support for IDE integration
+//! CLIとツール統合のための入出力処理を提供します。
+//!
+//! # 主な機能
+//!
+//! - 統一された出力フォーマット（テキスト、JSON）
+//! - 一貫性のあるエラーハンドリングと終了コード
+//! - 将来: IDE統合のためのJSON-RPC 2.0サポート
+//!
+//! # 主要なコンポーネント
+//!
+//! - [`OutputFormat`]: 出力フォーマット（Text, JSON）
+//! - [`OutputManager`]: 出力管理
+//! - [`ExitCode`]: 終了コード
+//! - [`UnifiedOutput`]: 統一出力スキーマ
+//!
+//! # 使用例
+//!
+//! ```
+//! use codanna::io::{OutputFormat, OutputManager};
+//!
+//! let mut output = OutputManager::new(OutputFormat::Json);
+//! // output.success("操作が成功しました");
+//! ```
 
 pub mod args;
 pub mod exit_code;

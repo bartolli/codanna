@@ -1,11 +1,23 @@
-//! Cross-language project configuration resolver (Sprint 0)
+//! クロスランゲージプロジェクト設定リゾルバ
 //!
-//! Resolves project-level configuration files (tsconfig.json, pyproject.toml, go.mod, etc.)
-//! to determine module resolution rules, import paths, and project-specific settings.
+//! プロジェクトレベルの設定ファイル (tsconfig.json, pyproject.toml, go.mod など) を解決して、
+//! モジュール解決ルール、インポートパス、プロジェクト固有の設定を決定します。
 //!
-//! This is distinct from `parsing::resolution` which handles symbol resolution within code.
-//! - project_resolver: "What tsconfig.json applies to this file?"
-//! - parsing::resolution: "What does the identifier 'foo' refer to in this scope?"
+//! これは `parsing::resolution` とは異なり、コード内のシンボル解決ではなく、
+//! プロジェクト設定の解決を担当します。
+//!
+//! # 役割の違い
+//!
+//! - `project_resolver`: "このファイルにはどのtsconfig.jsonが適用されるか？"
+//! - `parsing::resolution`: "このスコープで識別子 'foo' は何を参照するか？"
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! // use codanna::project_resolver::registry::SimpleProviderRegistry;
+//! // let registry = SimpleProviderRegistry::new();
+//! // let config = registry.resolve_config(file_path);
+//! ```
 
 pub mod memo;
 pub mod persist;

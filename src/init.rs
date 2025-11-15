@@ -1,9 +1,29 @@
-//! Global initialization module for Codanna
+//! グローバル初期化モジュール
 //!
-//! Manages:
-//! - Global models directory for FastEmbed
-//! - Project registry
-//! - Symlink creation for model cache
+//! Codannaのグローバルディレクトリ構造とプロジェクトレジストリを管理します。
+//!
+//! # 管理対象
+//!
+//! - FastEmbed用のグローバルモデルディレクトリ
+//! - プロジェクトレジストリ
+//! - モデルキャッシュ用のシンボリックリンク作成
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! use codanna::init::{init_global_dirs, global_dir, models_dir};
+//!
+//! // グローバルディレクトリを初期化
+//! init_global_dirs().expect("初期化に失敗しました");
+//!
+//! // グローバルディレクトリのパスを取得
+//! let dir = global_dir();
+//! println!("グローバルディレクトリ: {:?}", dir);
+//!
+//! // モデルディレクトリのパスを取得
+//! let models = models_dir();
+//! println!("モデルディレクトリ: {:?}", models);
+//! ```
 
 use crate::error::IndexError;
 use serde::{Deserialize, Serialize};

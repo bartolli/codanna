@@ -1,3 +1,36 @@
+//! パーシングモジュール
+//!
+//! 複数のプログラミング言語のパーサーと言語固有の動作を提供します。
+//!
+//! # サポート言語
+//!
+//! - Rust
+//! - Python
+//! - TypeScript / JavaScript
+//! - Go
+//! - Kotlin
+//! - C / C++
+//! - C#
+//! - PHP
+//! - GDScript
+//!
+//! # 主要なコンポーネント
+//!
+//! - [`LanguageParser`]: パーサートレイト
+//! - [`LanguageBehavior`]: 言語固有の動作
+//! - [`ParserFactory`]: パーサーのファクトリ
+//! - [`LanguageRegistry`]: 言語登録システム
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! use codanna::parsing::{RustParser, LanguageParser};
+//!
+//! let parser = RustParser;
+//! let source = "fn main() {}";
+//! // let symbols = parser.parse(source, file_id);
+//! ```
+
 pub mod behavior_state;
 pub mod c;
 pub mod context;

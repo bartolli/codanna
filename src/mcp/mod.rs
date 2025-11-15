@@ -1,21 +1,28 @@
-//! MCP (Model Context Protocol) server implementation for code intelligence
+//! MCP (Model Context Protocol) サーバー実装モジュール
 //!
-//! This module provides MCP tools that allow AI assistants to query
-//! the code intelligence index.
+//! このモジュールは、AIアシスタントがコードインテリジェンスインデックスを
+//! クエリできるようにするMCPツールを提供します。
 //!
-//! ## Architecture
+//! # アーキテクチャ
 //!
-//! The MCP server can run in two modes:
+//! MCPサーバーは2つのモードで実行できます：
 //!
-//! 1. **Standalone Server Mode**: Run with `cargo run -- serve`
-//!    - Loads index once into memory
-//!    - Listens for client connections via stdio
-//!    - Efficient for production use with AI assistants
+//! 1. **スタンドアロンサーバーモード**: `cargo run -- serve` で実行
+//!    - インデックスを一度メモリにロード
+//!    - stdioを介してクライアント接続をリッスン
+//!    - AIアシスタントとの本番使用に効率的
 //!
-//! 2. **Embedded Mode**: Used by the CLI directly
-//!    - No separate process needed
-//!    - Direct access to already-loaded index
-//!    - Most memory efficient for CLI operations
+//! 2. **埋め込みモード**: CLIから直接使用
+//!    - 別プロセス不要
+//!    - 既にロードされたインデックスへの直接アクセス
+//!    - CLI操作に最もメモリ効率的
+//!
+//! # 使用例
+//!
+//! ```no_run
+//! // サーバーモードでの起動
+//! // cargo run -- serve --stdio
+//! ```
 
 pub mod client;
 pub mod http_server;

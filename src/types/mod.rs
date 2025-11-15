@@ -1,3 +1,24 @@
+//! 基本型定義モジュール
+//!
+//! このモジュールは、Codannaシステム全体で使用される基本的な型を定義します。
+//! シンボルID、ファイルID、範囲、シンボル種別などが含まれます。
+//!
+//! # 使用例
+//!
+//! ```
+//! use codanna::types::{SymbolId, FileId, Range, SymbolKind};
+//!
+//! // シンボルIDの作成
+//! let symbol_id = SymbolId::new(42).expect("有効なID");
+//!
+//! // ファイルIDの作成
+//! let file_id = FileId::new(1).expect("有効なID");
+//!
+//! // 範囲の作成
+//! let range = Range::new(10, 5, 15, 20);
+//! assert!(range.contains(12, 10));
+//! ```
+
 mod symbol_counter;
 
 pub use symbol_counter::SymbolCounter;
@@ -5,22 +26,75 @@ pub use symbol_counter::SymbolCounter;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+/// シンボルの一意識別子
+///
+/// 各シンボル（関数、構造体、変数など）に割り当てられる一意のIDです。
+/// 0は無効な値として扱われます。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::types::SymbolId;
+///
+/// let id = SymbolId::new(42).expect("有効なID");
+/// assert_eq!(id.value(), 42);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolId(pub u32);
 
+/// ファイルの一意識別子
+///
+/// インデックス化された各ファイルに割り当てられる一意のIDです。
+/// 0は無効な値として扱われます。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::types::FileId;
+///
+/// let id = FileId::new(1).expect("有効なID");
+/// assert_eq!(id.value(), 1);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileId(pub u32);
 
-/// Result of an indexing operation
+/// インデックス操作の結果
+///
+/// ファイルが新規にインデックス化されたか、
+/// キャッシュから読み込まれたかを示します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::types::{IndexingResult, FileId};
+///
+/// let result = IndexingResult::Indexed(FileId::new(1).unwrap());
+/// assert!(!result.is_cached());
+/// assert_eq!(result.file_id(), FileId::new(1).unwrap());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexingResult {
-    /// File was newly indexed
+    /// ファイルが新規にインデックス化された
     Indexed(FileId),
-    /// File was loaded from cache (unchanged)
+    /// ファイルがキャッシュから読み込まれた（変更なし）
     Cached(FileId),
 }
 
 impl IndexingResult {
+    /// ファイルIDを取得します
+    ///
+    /// # 戻り値
+    ///
+    /// インデックス化されたファイルのID
+    ///
+    /// # 使用例
+    ///
+    /// ```
+    /// use codanna::types::{IndexingResult, FileId};
+    ///
+    /// let result = IndexingResult::Indexed(FileId::new(1).unwrap());
+    /// assert_eq!(result.file_id(), FileId::new(1).unwrap());
+    /// ```
     pub fn file_id(&self) -> FileId {
         match self {
             IndexingResult::Indexed(id) => *id,
@@ -28,34 +102,82 @@ impl IndexingResult {
         }
     }
 
+    /// キャッシュから読み込まれたかどうかを判定します
+    ///
+    /// # 戻り値
+    ///
+    /// キャッシュから読み込まれた場合は`true`、新規にインデックス化された場合は`false`
     pub fn is_cached(&self) -> bool {
         matches!(self, IndexingResult::Cached(_))
     }
 }
 
+/// ソースコード内の範囲
+///
+/// 行と列の位置で範囲を表現します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::types::Range;
+///
+/// let range = Range::new(10, 5, 15, 20);
+/// assert!(range.contains(12, 10));
+/// assert!(!range.contains(5, 0));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Range {
+    /// 開始行
     pub start_line: u32,
+    /// 開始列
     pub start_column: u16,
+    /// 終了行
     pub end_line: u32,
+    /// 終了列
     pub end_column: u16,
 }
 
+/// シンボルの種類
+///
+/// 関数、構造体、クラスなど、様々な種類のシンボルを表現します。
+///
+/// # 使用例
+///
+/// ```
+/// use codanna::types::SymbolKind;
+///
+/// let kind = SymbolKind::Function;
+/// assert_eq!(kind, SymbolKind::Function);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
+    /// 関数
     Function,
+    /// メソッド
     Method,
+    /// 構造体
     Struct,
+    /// 列挙型
     Enum,
+    /// トレイト
     Trait,
+    /// インターフェース
     Interface,
+    /// クラス
     Class,
+    /// モジュール
     Module,
+    /// 変数
     Variable,
+    /// 定数
     Constant,
+    /// フィールド
     Field,
+    /// パラメータ
     Parameter,
+    /// 型エイリアス
     TypeAlias,
+    /// マクロ
     Macro,
 }
 
