@@ -136,7 +136,7 @@ impl LanguageBehavior for RustBehavior {
             match scope_context {
                 ScopeContext::Module | ScopeContext::Global | ScopeContext::Package => true,
                 ScopeContext::Local { .. } | ScopeContext::Parameter => false,
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     // Rust-specific: trait methods and impl methods should be resolvable
                     // even if they're private, for within-file resolution
                     matches!(symbol.kind, SymbolKind::Method)

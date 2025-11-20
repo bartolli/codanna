@@ -54,11 +54,21 @@ codanna mcp semantic_search_with_context query:"parse config" lang:typescript li
 
 Language filtering eliminates duplicate results when similar documentation exists across multiple languages, reducing result sets by up to 75% while maintaining identical similarity scores.
 
-## Current Limitations
+## Platform Support
 
-- Supports Rust, Python, TypeScript, Go, PHP, C, and C++ (more language support coming)
-- Semantic search requires English documentation/comments
-- Windows support is experimental
+**Supported Languages:**
+- See [Language Support](../architecture/language-support.md) for complete list
+- Tree-sitter based parsing with language-specific resolution
+
+**Embedding Models:**
+- Default: `AllMiniLML6V2` (English-optimized, 384 dimensions)
+- Multilingual: `MultilingualE5Small` (100+ languages, 384 dimensions)
+- Configurable via `model` setting in `.codanna/settings.toml`
+
+**Operating Systems:**
+- Linux: Fully supported
+- macOS: Fully supported
+- Windows: Experimental
 
 ## Requirements
 

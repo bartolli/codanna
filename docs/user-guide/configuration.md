@@ -42,18 +42,77 @@ enabled = true
 
 ### TypeScript
 
-Reads `tsconfig.json` to resolve path aliases:
+Reads `tsconfig.json` to resolve path aliases and imports.
 
+**Configuration:**
 ```toml
 [languages.typescript]
 enabled = true
 config_files = [
     "tsconfig.json",
-    "packages/web/tsconfig.json"  # For monorepos
+    "packages/web/tsconfig.json",  # For monorepos
+    "packages/api/tsconfig.json"
 ]
 ```
 
-When your TypeScript code imports `@app/utils`, Codanna uses your `tsconfig.json` path mappings to resolve it to the actual file location (`src/app/utils`). This works across modules in monorepos.
+**Process:**
+1. Reads your `tsconfig.json` files
+2. Extracts `baseUrl`, `paths`, and resolution rules
+3. Stores rules in `.codanna/index/resolvers/`
+4. Uses rules during indexing to resolve imports
+
+**Example:** Given `tsconfig.json` with:
+```json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@app/*": ["src/app/*"],
+      "@utils/*": ["src/utils/*"]
+    }
+  }
+}
+```
+
+Codanna resolves:
+- `@app/main` → `src/app/main`
+- `@utils/config` → `src/utils/config`
+
+### Java
+
+Reads `pom.xml` to resolve Maven project structure and dependencies.
+
+**Configuration:**
+```toml
+[languages.java]
+enabled = true
+config_files = [
+    "pom.xml",
+    "module-a/pom.xml",  # For multi-module projects
+    "module-b/pom.xml"
+]
+```
+
+**Process:**
+1. Reads your `pom.xml` files
+2. Extracts package structure and source directories
+3. Stores rules in `.codanna/index/resolvers/`
+4. Uses rules during indexing to resolve imports
+
+**Example:** Given `pom.xml` with:
+```xml
+<project>
+  <groupId>com.example</groupId>
+  <artifactId>my-app</artifactId>
+  <build>
+    <sourceDirectory>src/main/java</sourceDirectory>
+  </build>
+</project>
+```
+
+Codanna resolves:
+- `com.example.service.UserService` → `src/main/java/com/example/service/UserService.java`
+- `com.example.util.Helper` → `src/main/java/com/example/util/Helper.java`
 
 ### Other Languages
 
@@ -213,22 +272,6 @@ codanna --config custom.toml config
 3. Project `.codanna/settings.toml`
 4. Built-in defaults (lowest priority)
 
-## Project-Specific Path Resolution
-
-### How It Works
-
-1. Codanna reads your project config files (`tsconfig.json`)
-2. Extracts path aliases, baseUrl, and other resolution rules
-3. Stores them in `.codanna/index/resolvers/`
-4. Uses these rules during indexing to resolve imports accurately
-
-### Benefits
-
-- Accurate import resolution
-- Cross-module navigation in monorepos
-- Support for path aliases (`@app/*`, `~/utils/*`)
-- No manual configuration needed
-
 ## Troubleshooting
 
 ### Index Not Updating
@@ -247,10 +290,37 @@ watch_interval = 5  # Lower for more frequent checks
 
 ### Path Resolution Issues
 
-Verify config files are listed:
+**Check config files are listed:**
+```bash
+codanna config | grep config_files
+```
+
+**Verify paths in your project config:**
+- TypeScript: Check `baseUrl` and `paths` in `tsconfig.json`
+- Java: Check `sourceDirectory` in `pom.xml`
+
+**Re-index after config changes:**
+```bash
+codanna index . --force --progress
+```
+
+### Monorepo Issues
+
+Ensure all relevant config files are listed in settings.toml:
 ```toml
 [languages.typescript]
-config_files = ["tsconfig.json"]
+config_files = [
+    "tsconfig.json",
+    "packages/web/tsconfig.json",
+    "packages/api/tsconfig.json"
+]
+
+[languages.java]
+config_files = [
+    "pom.xml",
+    "module-a/pom.xml",
+    "module-b/pom.xml"
+]
 ```
 
 ## See Also

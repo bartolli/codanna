@@ -59,9 +59,9 @@ pub struct TsConfig {
     pub compilerOptions: CompilerOptions,
 }
 
-/// JSONC parsing helper using json5 for comment and trailing comma support
+/// JSONC parsing helper using serde_json5 for comment and trailing comma support
 pub fn parse_jsonc_tsconfig(content: &str) -> ResolutionResult<TsConfig> {
-    json5::from_str(content)
+    serde_json5::from_str(content)
         .map_err(|e| ResolutionError::invalid_cache(
             format!("Failed to parse tsconfig.json: {e}\nSuggestion: Check JSON syntax, comments, and trailing commas")
         ))

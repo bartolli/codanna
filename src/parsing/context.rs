@@ -140,7 +140,9 @@ impl ParserContext {
                     };
                 }
                 ScopeType::Class => {
-                    return ScopeContext::ClassMember;
+                    return ScopeContext::ClassMember {
+                        class_name: None, // Parsers can populate this if they track class names
+                    };
                 }
                 ScopeType::Package | ScopeType::Namespace => {
                     return ScopeContext::Package;
@@ -228,7 +230,10 @@ mod tests {
         ctx.enter_scope(ScopeType::Class);
         ctx.set_current_class(Some("MyClass".to_string()));
 
-        assert_eq!(ctx.current_scope_context(), ScopeContext::ClassMember);
+        assert!(matches!(
+            ctx.current_scope_context(),
+            ScopeContext::ClassMember { .. }
+        ));
         assert!(ctx.is_in_class());
         assert!(!ctx.is_module_level());
         assert_eq!(ctx.current_class(), Some("MyClass"));
@@ -266,7 +271,10 @@ mod tests {
 
         // Enter class
         ctx.enter_scope(ScopeType::Class);
-        assert_eq!(ctx.current_scope_context(), ScopeContext::ClassMember);
+        assert!(matches!(
+            ctx.current_scope_context(),
+            ScopeContext::ClassMember { .. }
+        ));
 
         // Enter method within class
         ctx.enter_scope(ScopeType::Function { hoisting: false });
@@ -284,7 +292,10 @@ mod tests {
 
         // Exit method
         ctx.exit_scope();
-        assert_eq!(ctx.current_scope_context(), ScopeContext::ClassMember);
+        assert!(matches!(
+            ctx.current_scope_context(),
+            ScopeContext::ClassMember { .. }
+        ));
 
         // Exit class
         ctx.exit_scope();

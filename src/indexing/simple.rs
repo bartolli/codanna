@@ -921,6 +921,38 @@ impl SimpleIndexer {
         Ok(SymbolCounter::from_value(start_value))
     }
 
+    /// Resolve a symbol from the symbol map based on relationship semantics
+    ///
+    /// When multiple symbols share the same name (e.g., Java class + constructor),
+    /// this function selects the appropriate symbol based on the relationship type.
+    fn resolve_symbol_for_relationship(
+        name: &str,
+        rel_kind: RelationKind,
+        symbol_map: &std::collections::HashMap<String, Vec<(SymbolId, crate::SymbolKind)>>,
+    ) -> Option<SymbolId> {
+        let candidates = symbol_map.get(name)?;
+
+        // Define valid symbol kinds for each relationship type
+        let valid_kinds: &[crate::SymbolKind] = match rel_kind {
+            // Extends: Only classes and interfaces can extend
+            RelationKind::Extends => &[crate::SymbolKind::Class, crate::SymbolKind::Interface],
+            // Implements: Only classes can implement interfaces
+            RelationKind::Implements => &[crate::SymbolKind::Class],
+            // Calls: Functions and methods
+            RelationKind::Calls => &[crate::SymbolKind::Function, crate::SymbolKind::Method],
+            // For other relationship types, accept first match
+            _ => {
+                return candidates.first().map(|(id, _)| *id);
+            }
+        };
+
+        // Find first symbol matching valid kinds
+        candidates
+            .iter()
+            .find(|(_, kind)| valid_kinds.contains(kind))
+            .map(|(id, _)| *id)
+    }
+
     /// Extract symbols from content and store them in Tantivy
     fn extract_and_store_symbols(
         &mut self,
@@ -932,7 +964,7 @@ impl SimpleIndexer {
         behavior: &dyn crate::parsing::LanguageBehavior,
         symbol_counter: &mut SymbolCounter,
         language_id: LanguageId,
-    ) -> IndexResult<std::collections::HashMap<String, SymbolId>> {
+    ) -> IndexResult<std::collections::HashMap<String, Vec<(SymbolId, crate::SymbolKind)>>> {
         let symbols = parser.parse(content, file_id, symbol_counter);
 
         // Extract and register imports
@@ -983,15 +1015,20 @@ impl SimpleIndexer {
             // Set the language_id on the symbol
             symbol.language_id = Some(language_id);
 
-            // Capture name and ID before configuring
+            // Capture name, ID, and kind before configuring
             let name = symbol.name.to_string();
             let id = symbol.id;
+            let kind = symbol.kind;
 
             self.configure_symbol(&mut symbol, module_path, behavior);
             self.store_symbol(symbol, path_str)?;
 
-            // Map name to ID for relationship resolution
-            symbol_map.insert(name, id);
+            // Map name to (ID, kind) for relationship resolution
+            // Multiple symbols can share the same name (e.g., Java class + constructor)
+            symbol_map
+                .entry(name)
+                .or_insert_with(Vec::new)
+                .push((id, kind));
         }
 
         // Store trait symbols for this file
@@ -1082,7 +1119,7 @@ impl SimpleIndexer {
         content: &str,
         file_id: FileId,
         behavior: &dyn crate::parsing::LanguageBehavior,
-        symbol_map: &std::collections::HashMap<String, SymbolId>,
+        symbol_map: &std::collections::HashMap<String, Vec<(SymbolId, crate::SymbolKind)>>,
     ) -> IndexResult<()> {
         use std::collections::HashSet;
         // Track relationships added in this file to avoid duplicates
@@ -1178,7 +1215,8 @@ impl SimpleIndexer {
                 method_call.range.start_line,
                 method_call.range.start_column,
             )) {
-                let from_id = symbol_map.get(&method_call.caller).copied();
+                let from_id =
+                    Self::resolve_symbol_for_relationship(&method_call.caller, kind, symbol_map);
                 self.add_relationships_by_name(
                     from_id,
                     &method_call.caller,
@@ -1230,7 +1268,7 @@ impl SimpleIndexer {
                 range.start_line,
                 range.start_column,
             )) {
-                let from_id = symbol_map.get(caller).copied();
+                let from_id = Self::resolve_symbol_for_relationship(caller, kind, symbol_map);
                 self.add_relationships_by_name(
                     from_id,
                     caller,
@@ -1264,14 +1302,10 @@ impl SimpleIndexer {
             // For TypeScript: TypeScriptBehavior tracks interface implementations
             // This replaces the old TraitResolver.add_trait_impl() functionality
             behavior.add_trait_impl(type_name.to_string(), trait_name.to_string(), file_id);
-            let from_id = symbol_map.get(type_name).copied();
+            let rel_kind = behavior.map_relationship("implements");
+            let from_id = Self::resolve_symbol_for_relationship(type_name, rel_kind, symbol_map);
             self.add_relationships_by_name(
-                from_id,
-                type_name,
-                trait_name,
-                file_id,
-                behavior.map_relationship("implements"),
-                None,
+                from_id, type_name, trait_name, file_id, rel_kind, None,
             )?;
         }
 
@@ -1284,13 +1318,14 @@ impl SimpleIndexer {
                 derived_type,
                 base_type
             );
-            let from_id = symbol_map.get(derived_type).copied();
+            let rel_kind = behavior.map_relationship("extends");
+            let from_id = Self::resolve_symbol_for_relationship(derived_type, rel_kind, symbol_map);
             self.add_relationships_by_name(
                 from_id,
                 derived_type,
                 base_type,
                 file_id,
-                behavior.map_relationship("extends"),
+                rel_kind,
                 None,
             )?;
         }
@@ -1330,13 +1365,14 @@ impl SimpleIndexer {
         // 3. Type usage (in fields, parameters, returns)
         let uses = parser.find_uses(content);
         for (context_name, used_type, _range) in uses {
-            let from_id = symbol_map.get(context_name).copied();
+            let rel_kind = behavior.map_relationship("uses");
+            let from_id = Self::resolve_symbol_for_relationship(context_name, rel_kind, symbol_map);
             self.add_relationships_by_name(
                 from_id,
                 context_name,
                 used_type,
                 file_id,
-                behavior.map_relationship("uses"),
+                rel_kind,
                 None,
             )?;
         }
@@ -1377,13 +1413,14 @@ impl SimpleIndexer {
                     }
                 }
             }
-            let from_id = symbol_map.get(definer_name).copied();
+            let rel_kind = behavior.map_relationship("defines");
+            let from_id = Self::resolve_symbol_for_relationship(definer_name, rel_kind, symbol_map);
             self.add_relationships_by_name(
                 from_id,
                 definer_name,
                 method_name,
                 file_id,
-                behavior.map_relationship("defines"),
+                rel_kind,
                 None,
             )?;
         }
@@ -1894,6 +1931,39 @@ impl SimpleIndexer {
             }
         }
 
+        if include.contains(crate::symbol::context::ContextIncludes::EXTENDS) {
+            match symbol.kind {
+                SymbolKind::Class | SymbolKind::Struct => {
+                    // What does this class extend?
+                    let extends = self.get_extends(symbol_id);
+                    if !extends.is_empty() {
+                        relationships.extends = Some(extends);
+                    }
+
+                    // What classes extend this class?
+                    let extended_by = self.get_extended_by(symbol_id);
+                    if !extended_by.is_empty() {
+                        relationships.extended_by = Some(extended_by);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if include.contains(crate::symbol::context::ContextIncludes::USES) {
+            // What types does this symbol use?
+            let uses = self.get_uses(symbol_id);
+            if !uses.is_empty() {
+                relationships.uses = Some(uses);
+            }
+
+            // What symbols use this type?
+            let used_by = self.get_used_by(symbol_id);
+            if !used_by.is_empty() {
+                relationships.used_by = Some(used_by);
+            }
+        }
+
         Some(SymbolContext {
             symbol,
             file_path,
@@ -1905,6 +1975,65 @@ impl SimpleIndexer {
         // Query relationships where to_symbol_id = trait_id and kind = Implements
         self.document_index
             .get_relationships_to(trait_id, RelationKind::Implements)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(from_id, _, _)| self.get_symbol(from_id))
+            .collect()
+    }
+
+    /// Get what base class(es) this class extends
+    ///
+    /// Returns the parent class(es) in an inheritance hierarchy.
+    /// For Java/Kotlin: typically one base class
+    /// For C++: potentially multiple base classes
+    pub fn get_extends(&self, class_id: SymbolId) -> Vec<Symbol> {
+        // Query relationships where from_symbol_id = class_id and kind = Extends
+        self.document_index
+            .get_relationships_from(class_id, RelationKind::Extends)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(_, to_id, _)| self.get_symbol(to_id))
+            .collect()
+    }
+
+    /// Get what classes extend this base class
+    ///
+    /// Returns all derived classes that inherit from this base class.
+    pub fn get_extended_by(&self, base_class_id: SymbolId) -> Vec<Symbol> {
+        // Query relationships where to_symbol_id = base_class_id and kind = Extends
+        self.document_index
+            .get_relationships_to(base_class_id, RelationKind::Extends)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(from_id, _, _)| self.get_symbol(from_id))
+            .collect()
+    }
+
+    /// Get what types this symbol uses
+    ///
+    /// Returns types used by this symbol (e.g., function parameters, variable types, generic constraints).
+    /// Important for TypeScript/Java where type usage creates dependencies.
+    pub fn get_uses(&self, symbol_id: SymbolId) -> Vec<Symbol> {
+        // Query relationships where from_symbol_id = symbol_id and kind = Uses
+        self.document_index
+            .get_relationships_from(symbol_id, RelationKind::Uses)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(_, to_id, _)| self.get_symbol(to_id))
+            .collect()
+    }
+
+    /// Get what symbols use this type
+    ///
+    /// Returns all symbols that depend on this type.
+    pub fn get_used_by(&self, type_id: SymbolId) -> Vec<Symbol> {
+        // Query relationships where to_symbol_id = type_id and kind = Uses
+        self.document_index
+            .get_relationships_to(type_id, RelationKind::Uses)
             .ok()
             .unwrap_or_default()
             .into_iter()
@@ -2018,6 +2147,7 @@ impl SimpleIndexer {
                 RelationKind::Calls,
                 RelationKind::Uses,
                 RelationKind::Implements,
+                RelationKind::Extends,
             ] {
                 if let Ok(relationships) =
                     self.document_index.get_relationships_to(current_id, *kind)
@@ -2965,6 +3095,13 @@ impl SimpleIndexer {
                         from_symbols.len()
                     );
 
+                    if from_symbols.is_empty() && rel.kind == RelationKind::Extends {
+                        println!(
+                            "[SKIP-EMPTY-FROM] No '{}' symbol found in file {:?} for Extends -> '{}'",
+                            from_query_name, file_id, rel.to_name
+                        );
+                    }
+
                     if from_symbols.is_empty() && rel.kind == RelationKind::Calls {
                         debug_print!(
                             self,
@@ -3164,6 +3301,16 @@ impl SimpleIndexer {
                     // Check symbol kind compatibility
                     if !Self::is_compatible_relationship(from_symbol.kind, to_symbol.kind, rel.kind)
                     {
+                        if rel.kind == RelationKind::Extends {
+                            println!(
+                                "[SKIP-INCOMPATIBLE] {} ({:?}) -> {} ({:?}) for {:?}",
+                                from_symbol.name,
+                                from_symbol.kind,
+                                to_symbol.name,
+                                to_symbol.kind,
+                                rel.kind
+                            );
+                        }
                         debug_print!(
                             self,
                             "[SKIP-INCOMPATIBLE] {} ({:?}) -> {} ({:?}) for {:?}",

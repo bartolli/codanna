@@ -749,7 +749,10 @@ impl CodeIntelligenceServer {
         let mut result = format!("Analyzing impact of changing: {identifier}\n");
 
         // Show the specific symbol being analyzed
-        if let Some(ctx) = indexer.get_symbol_context(symbol.id, ContextIncludes::CALLERS) {
+        if let Some(ctx) = indexer.get_symbol_context(
+            symbol.id,
+            ContextIncludes::CALLERS | ContextIncludes::EXTENDS | ContextIncludes::USES,
+        ) {
             let location = ctx.format_location();
             let direct_callers = ctx
                 .relationships
@@ -757,9 +760,57 @@ impl CodeIntelligenceServer {
                 .as_ref()
                 .map(|c| c.len())
                 .unwrap_or(0);
+
+            // For classes, also show inheritance info
+            let inheritance_info = if matches!(
+                symbol.kind,
+                crate::SymbolKind::Class | crate::SymbolKind::Struct
+            ) {
+                let extends_count = ctx
+                    .relationships
+                    .extends
+                    .as_ref()
+                    .map(|e| e.len())
+                    .unwrap_or(0);
+                let extended_by_count = ctx
+                    .relationships
+                    .extended_by
+                    .as_ref()
+                    .map(|e| e.len())
+                    .unwrap_or(0);
+
+                if extends_count > 0 || extended_by_count > 0 {
+                    format!(", extends: {extends_count}, extended by: {extended_by_count}")
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            // Show uses info for all symbols
+            let uses_count = ctx
+                .relationships
+                .uses
+                .as_ref()
+                .map(|u| u.len())
+                .unwrap_or(0);
+            let used_by_count = ctx
+                .relationships
+                .used_by
+                .as_ref()
+                .map(|u| u.len())
+                .unwrap_or(0);
+
+            let uses_info = if uses_count > 0 || used_by_count > 0 {
+                format!(", uses: {uses_count}, used by: {used_by_count}")
+            } else {
+                String::new()
+            };
+
             result.push_str(&format!(
-                "Symbol: {:?} at {} (direct callers: {})\n\n",
-                symbol.kind, location, direct_callers
+                "Symbol: {:?} at {} (direct callers: {}{}{})\n\n",
+                symbol.kind, location, direct_callers, inheritance_info, uses_info
             ));
         }
 
@@ -1317,6 +1368,115 @@ impl CodeIntelligenceServer {
                         }
                     }
 
+                    // Show inheritance relationships for classes
+                    if matches!(
+                        symbol.kind,
+                        crate::SymbolKind::Class | crate::SymbolKind::Struct
+                    ) {
+                        // What does this class extend?
+                        let extends = indexer.get_extends(symbol.id);
+                        if !extends.is_empty() {
+                            output.push_str(&format!(
+                                "\n   {} extends {} class(es):\n",
+                                symbol.name,
+                                extends.len()
+                            ));
+                            for (i, base_class) in extends.iter().take(5).enumerate() {
+                                output.push_str(&format!(
+                                    "     -> {:?} {} at {} [symbol_id:{}]\n",
+                                    base_class.kind,
+                                    base_class.name,
+                                    crate::symbol::context::SymbolContext::symbol_location(
+                                        base_class
+                                    ),
+                                    base_class.id.value()
+                                ));
+                                if i == 4 && extends.len() > 5 {
+                                    output.push_str(&format!(
+                                        "     ... and {} more\n",
+                                        extends.len() - 5
+                                    ));
+                                }
+                            }
+                        }
+
+                        // What classes extend this class?
+                        let extended_by = indexer.get_extended_by(symbol.id);
+                        if !extended_by.is_empty() {
+                            output.push_str(&format!(
+                                "\n   {} class(es) extend {}:\n",
+                                extended_by.len(),
+                                symbol.name
+                            ));
+                            for (i, derived_class) in extended_by.iter().take(5).enumerate() {
+                                output.push_str(&format!(
+                                    "     <- {:?} {} at {} [symbol_id:{}]\n",
+                                    derived_class.kind,
+                                    derived_class.name,
+                                    crate::symbol::context::SymbolContext::symbol_location(
+                                        derived_class
+                                    ),
+                                    derived_class.id.value()
+                                ));
+                                if i == 4 && extended_by.len() > 5 {
+                                    output.push_str(&format!(
+                                        "     ... and {} more\n",
+                                        extended_by.len() - 5
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    // Show uses relationships (for all symbols)
+                    let uses = indexer.get_uses(symbol.id);
+                    if !uses.is_empty() {
+                        output.push_str(&format!(
+                            "\n   {} uses {} type(s):\n",
+                            symbol.name,
+                            uses.len()
+                        ));
+                        for (i, used_type) in uses.iter().take(5).enumerate() {
+                            output.push_str(&format!(
+                                "     -> {:?} {} at {} [symbol_id:{}]\n",
+                                used_type.kind,
+                                used_type.name,
+                                crate::symbol::context::SymbolContext::symbol_location(used_type),
+                                used_type.id.value()
+                            ));
+                            if i == 4 && uses.len() > 5 {
+                                output.push_str(&format!("     ... and {} more\n", uses.len() - 5));
+                            }
+                        }
+                    }
+
+                    // What symbols use this type?
+                    let used_by = indexer.get_used_by(symbol.id);
+                    if !used_by.is_empty() {
+                        output.push_str(&format!(
+                            "\n   {} type(s) use {}:\n",
+                            used_by.len(),
+                            symbol.name
+                        ));
+                        for (i, using_symbol) in used_by.iter().take(5).enumerate() {
+                            output.push_str(&format!(
+                                "     <- {:?} {} at {} [symbol_id:{}]\n",
+                                using_symbol.kind,
+                                using_symbol.name,
+                                crate::symbol::context::SymbolContext::symbol_location(
+                                    using_symbol
+                                ),
+                                using_symbol.id.value()
+                            ));
+                            if i == 4 && used_by.len() > 5 {
+                                output.push_str(&format!(
+                                    "     ... and {} more\n",
+                                    used_by.len() - 5
+                                ));
+                            }
+                        }
+                    }
+
                     output.push('\n');
                 }
 
@@ -1467,9 +1627,14 @@ impl ServerHandler for CodeIntelligenceServer {
 
     async fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        request: InitializeRequestParam,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
+        // Register client capabilities (required for MCP handshake)
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+
         // Store the peer reference for sending notifications
         let mut peer_guard = self.peer.lock().await;
         *peer_guard = Some(context.peer.clone());

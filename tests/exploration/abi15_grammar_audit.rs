@@ -28,7 +28,7 @@ mod tests {
     use codanna::parsing::{
         c::audit::CParserAudit, cpp::audit::CppParserAudit, csharp::audit::CSharpParserAudit,
         gdscript::audit::GdscriptParserAudit, go::audit::GoParserAudit,
-        kotlin::audit::KotlinParserAudit, php::audit::PhpParserAudit,
+        java::audit::JavaParserAudit, kotlin::audit::KotlinParserAudit, php::audit::PhpParserAudit,
         python::audit::PythonParserAudit, rust::audit::RustParserAudit,
         typescript::audit::TypeScriptParserAudit,
     };
@@ -3603,6 +3603,142 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
         println!("✅ Kotlin node_discovery.txt saved");
     }
 
+    #[test]
+    #[ignore]
+    fn comprehensive_java_analysis() {
+        println!("=== Java Comprehensive Grammar Analysis ===\n");
+
+        // 1. Load ALL nodes from grammar JSON
+        let grammar_json = fs::read_to_string("contributing/parsers/java/node-types.json")
+            .expect("Failed to read Java grammar file");
+        let grammar: Value =
+            serde_json::from_str(&grammar_json).expect("Failed to parse grammar JSON");
+
+        let mut all_grammar_nodes = HashSet::new();
+        if let Value::Array(nodes) = &grammar {
+            for node in nodes {
+                if let (Some(Value::Bool(true)), Some(Value::String(node_type))) =
+                    (node.get("named"), node.get("type"))
+                {
+                    all_grammar_nodes.insert(node_type.clone());
+                }
+            }
+        }
+
+        // 2. Run the REAL parser audit to get everything at once
+        let audit = match JavaParserAudit::audit_file("examples/java/comprehensive.java") {
+            Ok(audit) => audit,
+            Err(e) => {
+                println!("Warning: Failed to audit Java file: {e}");
+                // Create empty audit for fallback
+                JavaParserAudit {
+                    grammar_nodes: HashMap::new(),
+                    implemented_nodes: HashSet::new(),
+                    extracted_symbol_kinds: HashSet::new(),
+                }
+            }
+        };
+
+        // The audit already discovered all nodes in the example file!
+        let example_nodes: HashSet<String> = audit.grammar_nodes.keys().cloned().collect();
+
+        // Save the audit report
+        let report = audit.generate_report();
+        fs::write("contributing/parsers/java/AUDIT_REPORT.md", &report)
+            .expect("Failed to write Java audit report");
+
+        // 3. Generate comprehensive analysis comparing all three sources
+        let mut analysis = String::new();
+        analysis.push_str("# Java Grammar Analysis\n\n");
+        analysis.push_str(&format!("*Generated: {}*\n\n", get_formatted_timestamp()));
+        analysis.push_str("## Statistics\n");
+        analysis.push_str(&format!(
+            "- Total nodes in grammar JSON: {}\n",
+            all_grammar_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes found in comprehensive.java: {}\n",
+            example_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes handled by parser: {}\n",
+            audit.implemented_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            audit.extracted_symbol_kinds.len()
+        ));
+        analysis.push('\n');
+
+        // Categorize nodes
+        let mut in_grammar_only: Vec<_> = all_grammar_nodes.difference(&example_nodes).collect();
+        let mut in_example_not_handled: Vec<_> = example_nodes
+            .iter()
+            .filter(|n| !audit.implemented_nodes.contains(n.as_str()))
+            .collect();
+        let mut handled_well: Vec<_> = audit
+            .implemented_nodes
+            .iter()
+            .filter(|n| example_nodes.contains(n.as_str()))
+            .collect();
+
+        in_grammar_only.sort();
+        in_example_not_handled.sort();
+        handled_well.sort();
+
+        if !handled_well.is_empty() {
+            analysis.push_str("## ✅ Successfully Handled Nodes\n");
+            analysis.push_str("These nodes are in examples and handled by parser:\n");
+            for node in &handled_well {
+                analysis.push_str(&format!("- {node}\n"));
+                println!("✓ {node}");
+            }
+            analysis.push('\n');
+        }
+
+        if !in_example_not_handled.is_empty() {
+            analysis.push_str("## ⚠️ Implementation Gaps\n");
+            analysis.push_str("These nodes appear in comprehensive.java but aren't handled:\n");
+            for node in &in_example_not_handled {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !in_grammar_only.is_empty() {
+            analysis.push_str("## 📚 Grammar-Only Nodes\n");
+            analysis.push_str("These nodes exist in grammar but not in comprehensive.java:\n");
+            for node in &in_grammar_only {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        // Save comprehensive analysis
+        fs::write("contributing/parsers/java/GRAMMAR_ANALYSIS.md", &analysis)
+            .expect("Failed to write Java grammar analysis");
+
+        // Save node discovery
+        let node_discovery = generate_java_node_discovery();
+        fs::write(
+            "contributing/parsers/java/node_discovery.txt",
+            &node_discovery,
+        )
+        .expect("Failed to write Java node discovery");
+
+        // Summary
+        println!("\n=== Summary ===");
+        println!(
+            "Grammar nodes: {} | Example nodes: {} | Handled: {}",
+            all_grammar_nodes.len(),
+            example_nodes.len(),
+            audit.implemented_nodes.len()
+        );
+        println!("✅ Java AUDIT_REPORT.md saved");
+        println!("✅ Java GRAMMAR_ANALYSIS.md saved");
+        println!("✅ Java node_discovery.txt saved");
+    }
+
     fn generate_kotlin_node_discovery() -> String {
         let mut parser = Parser::new();
         let language = tree_sitter_kotlin::language();
@@ -3749,6 +3885,58 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
                 let id = node_registry[node];
                 output.push_str(&format!("  {node} (ID: {id})\n"));
             }
+        }
+
+        output
+    }
+
+    fn generate_java_node_discovery() -> String {
+        let mut parser = Parser::new();
+        let language: Language = tree_sitter_java::LANGUAGE.into();
+        parser
+            .set_language(&language)
+            .expect("Failed to set Java language");
+
+        let code = fs::read_to_string("examples/java/comprehensive.java")
+            .expect("Failed to read comprehensive.java");
+
+        let tree = parser.parse(&code, None).expect("Failed to parse Java");
+
+        let mut node_registry: HashMap<String, u16> = HashMap::new();
+        let mut found_in_file: HashSet<String> = HashSet::new();
+
+        fn collect_nodes(
+            node: Node,
+            registry: &mut HashMap<String, u16>,
+            found: &mut HashSet<String>,
+        ) {
+            let kind = node.kind();
+            registry.insert(kind.to_string(), node.kind_id());
+            found.insert(kind.to_string());
+
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_nodes(child, registry, found);
+            }
+        }
+
+        collect_nodes(tree.root_node(), &mut node_registry, &mut found_in_file);
+
+        let mut output = String::new();
+        output.push_str("=== Java Grammar Node Discovery ===\n");
+        output.push_str(&format!("Generated: {}\n\n", get_formatted_timestamp()));
+        output.push_str(&format!(
+            "Total unique node types found: {}\n\n",
+            node_registry.len()
+        ));
+
+        // Sort nodes by name for consistent output
+        let mut sorted_nodes: Vec<_> = node_registry.iter().collect();
+        sorted_nodes.sort_by_key(|(name, _)| *name);
+
+        output.push_str("--- ALL NODES ---\n");
+        for (node, id) in sorted_nodes {
+            output.push_str(&format!("  {node} (ID: {id})\n"));
         }
 
         output

@@ -309,7 +309,7 @@ impl LanguageBehavior for GoBehavior {
             match scope_context {
                 ScopeContext::Module | ScopeContext::Global | ScopeContext::Package => true,
                 ScopeContext::Local { .. } | ScopeContext::Parameter => false,
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     // Struct/interface members are resolvable if exported (uppercase)
                     matches!(symbol.visibility, Visibility::Public)
                 }

@@ -36,7 +36,11 @@ pub enum ScopeContext {
     /// Parameter of function/method
     Parameter,
     /// Class/struct/trait member
-    ClassMember,
+    ClassMember {
+        /// Name of the containing class (e.g., "MyClass" or "com.example.MyClass")
+        /// Optional for backward compatibility and languages that don't track this
+        class_name: Option<CompactString>,
+    },
     /// Module/file level definition
     #[default]
     Module,

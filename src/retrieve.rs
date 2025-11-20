@@ -721,6 +721,35 @@ pub fn retrieve_describe(
         _ => {}
     }
 
+    // Load extends relationships (for classes)
+    match symbol.kind {
+        SymbolKind::Class | SymbolKind::Struct => {
+            // What does this class extend?
+            let extends = indexer.get_extends(symbol.id);
+            if !extends.is_empty() {
+                context.relationships.extends = Some(extends);
+            }
+
+            // What classes extend this class?
+            let extended_by = indexer.get_extended_by(symbol.id);
+            if !extended_by.is_empty() {
+                context.relationships.extended_by = Some(extended_by);
+            }
+        }
+        _ => {}
+    }
+
+    // Load uses relationships (for all symbols)
+    let uses = indexer.get_uses(symbol.id);
+    if !uses.is_empty() {
+        context.relationships.uses = Some(uses);
+    }
+
+    let used_by = indexer.get_used_by(symbol.id);
+    if !used_by.is_empty() {
+        context.relationships.used_by = Some(used_by);
+    }
+
     let unified = UnifiedOutput {
         status: OutputStatus::Success,
         entity_type: EntityType::Symbol,

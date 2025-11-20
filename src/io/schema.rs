@@ -146,6 +146,18 @@ pub struct ItemRelationships<'a> {
     pub implemented_by: Vec<RelatedItem<'a>>,
 
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extends: Vec<RelatedItem<'a>>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extended_by: Vec<RelatedItem<'a>>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<RelatedItem<'a>>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub used_by: Vec<RelatedItem<'a>>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub defines: Vec<RelatedItem<'a>>,
 
     #[serde(skip_serializing_if = "Vec::is_empty")]

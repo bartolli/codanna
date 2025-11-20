@@ -1,10 +1,10 @@
 # GDScript Parser Symbol Extraction Coverage Report
 
-*Generated: 2025-11-09 01:47:11 UTC*
+*Generated: 2025-11-20 14:36:43 UTC*
 
 ## Summary
-- Nodes in file: 78
-- Nodes with symbol extraction: 15
+- Nodes in file: 76
+- Nodes with symbol extraction: 14
 - Symbol kinds extracted: 7
 
 > **Note:** This focuses on nodes that produce indexable symbols used for IDE features.
@@ -13,23 +13,23 @@
 
 | Node Type | ID | Status |
 |-----------|-----|--------|
-| class_definition | 150 | ✅ implemented |
-| class_name_statement | 143 | ✅ implemented |
-| extends_statement | 144 | ✅ implemented |
-| function_definition | 185 | ✅ implemented |
-| constructor_definition | 187 | ✅ implemented |
-| signal_statement | 142 | ✅ implemented |
-| variable_statement | 134 | ✅ implemented |
-| const_statement | 137 | ✅ implemented |
-| enum_definition | 151 | ✅ implemented |
-| match_statement | 155 | ✅ implemented |
-| for_statement | 148 | ✅ implemented |
-| while_statement | 149 | ✅ implemented |
-| if_statement | 145 | ✅ implemented |
+| class_definition | 159 | ✅ implemented |
+| class_name_statement | 152 | ✅ implemented |
+| extends_statement | 153 | ✅ implemented |
+| function_definition | 201 | ✅ implemented |
+| constructor_definition | - | ⭕ not found |
+| signal_statement | 151 | ✅ implemented |
+| variable_statement | 143 | ✅ implemented |
+| const_statement | 146 | ✅ implemented |
+| enum_definition | 165 | ✅ implemented |
+| match_statement | 169 | ✅ implemented |
+| for_statement | 157 | ✅ implemented |
+| while_statement | 158 | ✅ implemented |
+| if_statement | 154 | ✅ implemented |
 | tool_statement | - | ⭕ not found |
 | export_variable_statement | - | ⭕ not found |
-| annotation | 117 | ✅ implemented |
-| annotations | 119 | ✅ implemented |
+| annotation | 125 | ✅ implemented |
+| annotations | 127 | ✅ implemented |
 
 ## Legend
 
@@ -40,6 +40,7 @@
 ## Recommended Actions
 
 ### Missing Samples
+- `constructor_definition`: include representative code in audit fixtures to track coverage.
 - `tool_statement`: include representative code in audit fixtures to track coverage.
 - `export_variable_statement`: include representative code in audit fixtures to track coverage.
 

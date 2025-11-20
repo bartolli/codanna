@@ -4,15 +4,19 @@ Parser architecture and supported languages.
 
 ## Supported Languages
 
-| Language | Parser | Status |
-|----------|--------|--------|
-| Rust | tree-sitter-rust | Production |
-| Python | tree-sitter-python | Production |
-| TypeScript | tree-sitter-typescript | Production |
-| Go | tree-sitter-go | Production |
-| PHP | tree-sitter-php | Production |
-| C | tree-sitter-c | Production |
-| C++ | tree-sitter-cpp | Production |
+| Language | Parser |
+|----------|--------|
+| Rust | tree-sitter-rust |
+| Python | tree-sitter-python |
+| TypeScript | tree-sitter-typescript |
+| Java | tree-sitter-java |
+| Kotlin | tree-sitter-kotlin-codanna |
+| Go | tree-sitter-go |
+| PHP | tree-sitter-php |
+| C | tree-sitter-c |
+| C++ | tree-sitter-cpp |
+| C# | tree-sitter-c-sharp |
+| GDScript | tree-sitter-gdscript |
 
 ## Parser Technology
 

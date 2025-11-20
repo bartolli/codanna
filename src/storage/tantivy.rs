@@ -1434,6 +1434,41 @@ impl DocumentIndex {
         Ok(symbols)
     }
 
+    /// Find all symbols in a specific module/package
+    ///
+    /// Used for same-package symbol resolution (Java, Kotlin, etc.)
+    /// Returns all symbols that have the specified module_path.
+    pub fn find_symbols_by_module(&self, module_path: &str) -> StorageResult<Vec<crate::Symbol>> {
+        let searcher = self.reader.searcher();
+
+        let query = BooleanQuery::from(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.doc_type, "symbol"),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.module_path, module_path),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+        ]);
+
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let mut symbols = Vec::new();
+
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            symbols.push(self.document_to_symbol(&doc)?);
+        }
+
+        Ok(symbols)
+    }
+
     /// Get all symbols (use with caution on large indexes)
     pub fn get_all_symbols(&self, limit: usize) -> StorageResult<Vec<crate::Symbol>> {
         let searcher = self.reader.searcher();
@@ -1558,7 +1593,19 @@ impl DocumentIndex {
                     "Global" => Some(crate::ScopeContext::Global),
                     "Package" => Some(crate::ScopeContext::Package),
                     "Parameter" => Some(crate::ScopeContext::Parameter),
-                    "ClassMember" => Some(crate::ScopeContext::ClassMember),
+                    s if s.starts_with("ClassMember") => {
+                        // Handle ClassMember { class_name: Option<String> } format
+                        let class_name = if s.contains("class_name: Some(") {
+                            // Extract class_name value
+                            s.split("class_name: Some(\"")
+                                .nth(1)
+                                .and_then(|rest| rest.split("\")").next())
+                                .map(|name| name.to_string().into())
+                        } else {
+                            None
+                        };
+                        Some(crate::ScopeContext::ClassMember { class_name })
+                    }
                     s if s.starts_with("Local") => {
                         // Handle Local { hoisted: bool, parent_name: Option<String>, parent_kind: Option<SymbolKind> } format
                         let hoisted = s.contains("hoisted: true") || s.contains("hoisted:true");
@@ -4237,5 +4284,159 @@ mod tests {
         // Verify imports are gone
         let imports_after = index.get_imports_for_file(file_id).unwrap();
         assert_eq!(imports_after.len(), 0, "Imports should be deleted");
+    }
+
+    #[test]
+    #[ignore] // Run with: cargo test test_java_owner_extends_person -- --ignored --nocapture
+    fn test_java_owner_extends_person() {
+        // Verify Java import resolution: Owner extends Person across packages
+        // This test queries the production .codanna/index to verify relationships exist
+
+        let index_base = Path::new(".codanna/index");
+        let tantivy_path = index_base.join("tantivy");
+        if !tantivy_path.exists() {
+            eprintln!(
+                "Skipping test: .codanna/index/tantivy not found. Run: ./target/release/codanna index test_monorepos/spring-petclinic"
+            );
+            return;
+        }
+
+        let settings = crate::config::Settings::default();
+        let index =
+            DocumentIndex::new(&tantivy_path, &settings).expect("Failed to open production index");
+
+        // Find Owner class in org.springframework.samples.petclinic.owner
+        let owner_candidates = index
+            .find_symbols_by_name("Owner", None)
+            .expect("Failed to find Owner");
+
+        println!("Found {} Owner symbols:", owner_candidates.len());
+        for candidate in &owner_candidates {
+            println!(
+                "  - Owner at {:?}, module: {:?}",
+                candidate.file_id, candidate.module_path
+            );
+        }
+
+        let owner = owner_candidates
+            .iter()
+            .find(|s| {
+                s.module_path
+                    .as_ref()
+                    .map(|m| m.as_ref() == "org.springframework.samples.petclinic.owner")
+                    .unwrap_or(false)
+            })
+            .expect("Owner class in petclinic.owner package should exist");
+
+        println!(
+            "Found Owner: symbol_id={}, module={:?}",
+            owner.id.0, owner.module_path
+        );
+
+        // Find Person class in org.springframework.samples.petclinic.model
+        let person_candidates = index
+            .find_symbols_by_name("Person", None)
+            .expect("Failed to find Person");
+
+        let person = person_candidates
+            .iter()
+            .find(|s| {
+                s.module_path
+                    .as_ref()
+                    .map(|m| m.as_ref() == "org.springframework.samples.petclinic.model")
+                    .unwrap_or(false)
+            })
+            .expect("Person class in petclinic.model package should exist");
+
+        println!(
+            "Found Person: symbol_id={}, module={:?}",
+            person.id.0, person.module_path
+        );
+
+        // Query ALL relationship types FROM Owner to see what exists
+        let all_rel_kinds = [
+            RelationKind::Calls,
+            RelationKind::Extends,
+            RelationKind::Implements,
+            RelationKind::Uses,
+            RelationKind::Defines,
+            RelationKind::References,
+        ];
+
+        for kind in &all_rel_kinds {
+            let rels = index
+                .get_relationships_from(owner.id, *kind)
+                .expect("Failed to query relationships");
+            if !rels.is_empty() {
+                println!("Owner has {} {:?} relationships", rels.len(), kind);
+                for (from_id, to_id, rel) in rels.iter().take(5) {
+                    println!(
+                        "  {:?}: {} -> {} (weight: {})",
+                        kind, from_id.0, to_id.0, rel.weight
+                    );
+                    // Show target symbol name
+                    if let Ok(Some(target)) = index.find_symbol_by_id(*to_id) {
+                        println!("    -> {}", target.name);
+                    }
+                }
+            }
+        }
+
+        // Query Extends relationships FROM Owner
+        let extends_rels = index
+            .get_relationships_from(owner.id, RelationKind::Extends)
+            .expect("Failed to query Extends relationships");
+
+        println!(
+            "\nFinal check: Owner has {} Extends relationships",
+            extends_rels.len()
+        );
+
+        // ALSO check if Person has any relationships (to see if it's Owner-specific or all Java)
+        let person_extends = index
+            .get_relationships_to(person.id, RelationKind::Extends)
+            .expect("Failed to query who extends Person");
+        println!("Person is extended by {} classes", person_extends.len());
+
+        // Check total relationship count to compare with reported numbers
+        let total_rel_count = index
+            .count_relationships()
+            .expect("Failed to count relationships");
+        println!("Total relationships in index: {total_rel_count}");
+
+        // Check if ANY Extends relationships exist in the entire index
+        let all_extends = index
+            .get_all_relationships_by_kind(RelationKind::Extends)
+            .expect("Failed to query all Extends relationships");
+        println!(
+            "Total Extends relationships in entire index: {}",
+            all_extends.len()
+        );
+        if !all_extends.is_empty() {
+            println!("Sample Extends relationships:");
+            for (from_id, to_id, _) in all_extends.iter().take(5) {
+                if let (Ok(Some(from_sym)), Ok(Some(to_sym))) = (
+                    index.find_symbol_by_id(*from_id),
+                    index.find_symbol_by_id(*to_id),
+                ) {
+                    println!("  {} extends {}", from_sym.name, to_sym.name);
+                }
+            }
+        }
+
+        // Verify Owner extends Person
+        let extends_person = extends_rels
+            .iter()
+            .any(|(_from, to_id, _rel)| *to_id == person.id);
+
+        assert!(
+            extends_person,
+            "Owner (id={}) should extend Person (id={}), but Extends relationship not found. Found {} Extends relationships.",
+            owner.id.0,
+            person.id.0,
+            extends_rels.len()
+        );
+
+        println!("✅ SUCCESS: Owner extends Person relationship verified!");
     }
 }

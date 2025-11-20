@@ -67,7 +67,7 @@ codanna mcp semantic_search_docs query:"error handling" limit:5
 
 ## How Indexing Works
 
-1. **Parse fast** - Tree-sitter AST parsing (same as GitHub code navigator) for Rust, Python, TypeScript, Go and PHP
+1. **Parse fast** - Tree-sitter AST parsing (same as GitHub code navigator) for [11 languages](../architecture/language-support.md)
 2. **Extract real stuff** - functions, traits, type relationships, call graphs
 3. **Embed** - semantic vectors built from your doc comments
 4. **Index** - Tantivy + memory-mapped symbol cache for <10ms lookups
@@ -106,7 +106,7 @@ When identical documentation exists across multiple languages (e.g., Python back
 ### No Results in Search
 
 - Ensure files have documentation comments
-- Check that the language is supported (Rust, Python, TypeScript, Go, PHP, C, C++)
+- Check that the language is [supported](../architecture/language-support.md)
 - Verify files aren't excluded by `.gitignore` or `.codannaignore`
 
 ## Next Steps

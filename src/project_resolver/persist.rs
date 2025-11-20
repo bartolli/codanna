@@ -86,7 +86,12 @@ impl ResolutionIndex {
 
     /// Get the config file for a source file using longest-prefix match
     pub fn get_config_for_file(&self, file_path: &Path) -> Option<&PathBuf> {
-        let file_str = file_path.to_str()?;
+        // Canonicalize file path to resolve symlinks and make absolute
+        // Fall back to original path if file doesn't exist (for tests with non-existent paths)
+        let resolved_file = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+        let file_str = resolved_file.to_str()?;
 
         // Find all matching patterns
         let mut matches: Vec<(&String, &PathBuf)> = self
@@ -94,12 +99,26 @@ impl ResolutionIndex {
             .iter()
             .filter(|(pattern, _)| {
                 // Simple glob matching (for MVP, just check prefix)
-                // TODO: Implement proper glob matching
-                let pattern_prefix = pattern
-                    .trim_end_matches("**/*.ts")
-                    .trim_end_matches("**/*.tsx")
-                    .trim_end_matches('/');
-                file_str.starts_with(pattern_prefix)
+                // Strip any **/*.ext pattern to get the base directory
+                let pattern_prefix = if let Some(pos) = pattern.find("/**/*") {
+                    &pattern[..pos]
+                } else {
+                    pattern.trim_end_matches('/')
+                };
+
+                // Try canonicalizing the pattern prefix to handle symlinks
+                // Fall back to non-canonicalized if it doesn't exist
+                let pattern_path = std::path::Path::new(pattern_prefix);
+                let canon_pattern = pattern_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| pattern_path.to_path_buf());
+
+                // Convert to string, return false if conversion fails
+                let Some(canon_pattern_str) = canon_pattern.to_str() else {
+                    return false;
+                };
+
+                file_str.starts_with(canon_pattern_str)
             })
             .collect();
 
@@ -226,6 +245,7 @@ mod tests {
 
     #[test]
     fn test_resolution_index_with_settings() {
+        // NOTE: Requires examples/typescript/src/components/Button.ts to exist for file mapping test
         let settings = create_test_settings_with_tsconfigs();
         let ts_configs = settings
             .languages
@@ -280,6 +300,7 @@ mod tests {
 
     #[test]
     fn test_persistence_with_settings() {
+        // NOTE: Requires examples/typescript/src/main.ts to exist for file mapping test
         let settings = create_test_settings_with_tsconfigs();
         let ts_configs = &settings
             .languages

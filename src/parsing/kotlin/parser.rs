@@ -937,7 +937,8 @@ impl KotlinParser {
         context: &mut ParserContext,
         depth: usize,
     ) {
-        self.register_node(&node);
+        // Register ALL child nodes recursively for audit (modifiers, type_parameters, value_parameters, etc.)
+        self.register_node_recursively(node);
 
         // Check if this is actually an interface or enum (keywords are children of class_declaration)
         let mut is_interface = false;
@@ -946,11 +947,9 @@ impl KotlinParser {
         for child in node.children(&mut cursor) {
             if child.kind() == NODE_INTERFACE {
                 is_interface = true;
-                self.register_node(&child); // Register the interface keyword node
                 break;
             } else if child.kind() == NODE_ENUM {
                 is_enum = true;
-                self.register_node(&child); // Register the enum keyword node
                 break;
             }
         }
@@ -992,7 +991,16 @@ impl KotlinParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
-        symbol.scope_context = Some(crate::symbol::ScopeContext::ClassMember);
+        // Set scope context based on nesting
+        // Nested class/object: ClassMember with parent class name
+        // Top-level class/object: Module scope
+        symbol.scope_context = Some(if let Some(parent_class) = context.current_class() {
+            crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(parent_class.to_string().into()),
+            }
+        } else {
+            crate::symbol::ScopeContext::Module
+        });
 
         // Save parent context before entering new scope
         let saved_function = context.current_function().map(|s| s.to_string());
@@ -1007,9 +1015,6 @@ impl KotlinParser {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == NODE_CLASS_BODY || child.kind() == NODE_ENUM_CLASS_BODY {
-                if child.kind() == NODE_ENUM_CLASS_BODY {
-                    self.register_node(&child); // Register enum_class_body
-                }
                 let mut body_cursor = child.walk();
                 for body_child in child.children(&mut body_cursor) {
                     // Extract enum entries as constants
@@ -1048,7 +1053,8 @@ impl KotlinParser {
         context: &mut ParserContext,
         depth: usize,
     ) {
-        self.register_node(&node);
+        // Register ALL child nodes recursively for audit (modifiers, etc.)
+        self.register_node_recursively(node);
 
         // Extract object name - find the type_identifier child
         let mut object_name = None;
@@ -1084,7 +1090,16 @@ impl KotlinParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
-        symbol.scope_context = Some(crate::symbol::ScopeContext::ClassMember);
+        // Set scope context based on nesting
+        // Nested class/object: ClassMember with parent class name
+        // Top-level class/object: Module scope
+        symbol.scope_context = Some(if let Some(parent_class) = context.current_class() {
+            crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(parent_class.to_string().into()),
+            }
+        } else {
+            crate::symbol::ScopeContext::Module
+        });
 
         // Save parent context before entering new scope
         let saved_function = context.current_function().map(|s| s.to_string());
@@ -1131,7 +1146,8 @@ impl KotlinParser {
         context: &mut ParserContext,
         depth: usize,
     ) {
-        self.register_node(&node);
+        // Register ALL child nodes recursively for audit (modifiers, type_parameters, value_parameters, etc.)
+        self.register_node_recursively(node);
 
         // Extract all function info in a single pass
         let (func_name, receiver_type, visibility, signature, body_node) =
@@ -1232,7 +1248,8 @@ impl KotlinParser {
         counter: &mut SymbolCounter,
         _context: &mut ParserContext,
     ) {
-        self.register_node(&node);
+        // Register ALL child nodes recursively for audit (modifiers, type, variable_declaration, etc.)
+        self.register_node_recursively(node);
 
         // Extract property name - find within variable_declaration
         let mut prop_name = None;
@@ -1287,7 +1304,8 @@ impl KotlinParser {
         counter: &mut SymbolCounter,
         _context: &mut ParserContext,
     ) {
-        self.register_node(&node);
+        // Register ALL child nodes recursively for audit (modifiers, value_parameters, etc.)
+        self.register_node_recursively(node);
 
         let symbol_id = counter.next_id();
         let range = self.node_to_range(node);
@@ -1893,6 +1911,16 @@ impl KotlinParser {
     /// Access handled nodes for audit tooling
     pub fn get_handled_nodes(&self) -> &std::collections::HashSet<HandledNode> {
         self.node_tracker.get_handled_nodes()
+    }
+
+    /// Register a node and all its children recursively for audit tracking
+    /// This ensures nested nodes (modifiers, type_parameters, value_parameters, etc.) are tracked
+    fn register_node_recursively(&mut self, node: Node) {
+        self.register_handled_node(node.kind(), node.kind_id());
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.register_node_recursively(child);
+        }
     }
 }
 

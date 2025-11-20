@@ -1,10 +1,10 @@
 # Kotlin Parser Symbol Extraction Coverage Report
 
-*Generated: 2025-11-09 01:47:11 UTC*
+*Generated: 2025-11-20 14:36:43 UTC*
 
 ## Summary
 - Nodes in file: 150
-- Nodes with symbol extraction: 11
+- Nodes with symbol extraction: 142
 - Symbol kinds extracted: 8
 
 > **Note:** This focuses on nodes that produce indexable symbols used for IDE features.
@@ -19,16 +19,16 @@
 | function_declaration | 183 | ✅ implemented |
 | property_declaration | 186 | ✅ implemented |
 | secondary_constructor | 193 | ✅ implemented |
-| primary_constructor | 163 | ⚠️ gap |
-| companion_object | 179 | ⚠️ gap |
+| primary_constructor | 163 | ✅ implemented |
+| companion_object | 179 | ✅ implemented |
 | enum_class_body | 195 | ✅ implemented |
 | type_alias | 160 | ✅ implemented |
 | package_header | 156 | ✅ implemented |
 | import_header | 158 | ⚠️ gap |
 | import_list | 157 | ✅ implemented |
-| delegation_specifier | 169 | ⚠️ gap |
-| annotation | 304 | ⚠️ gap |
-| modifiers | 289 | ⚠️ gap |
+| delegation_specifier | 169 | ✅ implemented |
+| annotation | 304 | ✅ implemented |
+| modifiers | 289 | ✅ implemented |
 
 ## Legend
 
@@ -39,10 +39,5 @@
 ## Recommended Actions
 
 ### Implementation Gaps
-- `primary_constructor`: add handling in `kotlin/parser.rs` if symbol extraction is required.
-- `companion_object`: add handling in `kotlin/parser.rs` if symbol extraction is required.
 - `import_header`: add handling in `kotlin/parser.rs` if symbol extraction is required.
-- `delegation_specifier`: add handling in `kotlin/parser.rs` if symbol extraction is required.
-- `annotation`: add handling in `kotlin/parser.rs` if symbol extraction is required.
-- `modifiers`: add handling in `kotlin/parser.rs` if symbol extraction is required.
 

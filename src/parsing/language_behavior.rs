@@ -450,6 +450,30 @@ pub trait LanguageBehavior: Send + Sync {
             }
         }
 
+        // 2.5. Add same-package/same-module symbols (for Java, Kotlin, Go, etc.)
+        // Languages with package-level visibility can reference symbols in the same package
+        // without explicit imports. Only add if the file has a module path set.
+        if let Some(current_module) = &importing_module {
+            let same_package_symbols = document_index
+                .find_symbols_by_module(current_module)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbols_by_module".to_string(),
+                    cause: e.to_string(),
+                })?;
+
+            for symbol in same_package_symbols {
+                // Skip symbols from current file (already added in section 2)
+                if symbol.file_id == file_id {
+                    continue;
+                }
+
+                // Add to package scope (resolution context decides how to handle it)
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Package);
+                }
+            }
+        }
+
         // 3. Add visible symbols from other files (public/exported symbols)
         // Note: This is expensive, so we limit to a reasonable number
         let all_symbols =
@@ -651,6 +675,30 @@ pub trait LanguageBehavior: Send + Sync {
             }
         }
 
+        // 2.5. Add same-package/same-module symbols (for Java, Kotlin, Go, etc.)
+        // Languages with package-level visibility can reference symbols in the same package
+        // without explicit imports. Only add if the file has a module path set.
+        if let Some(current_module) = &importing_module {
+            let same_package_symbols = document_index
+                .find_symbols_by_module(current_module)
+                .map_err(|e| IndexError::TantivyError {
+                    operation: "find_symbols_by_module".to_string(),
+                    cause: e.to_string(),
+                })?;
+
+            for symbol in same_package_symbols {
+                // Skip symbols from current file (already added in section 2)
+                if symbol.file_id == file_id {
+                    continue;
+                }
+
+                // Add to package scope (resolution context decides how to handle it)
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Package);
+                }
+            }
+        }
+
         // 3. THIRD: ELIMINATE get_all_symbols entirely!
         // Instead of loading thousands of symbols, we'll only load symbols that are:
         // - Public/exported
@@ -760,7 +808,7 @@ pub trait LanguageBehavior: Send + Sync {
             match scope_context {
                 ScopeContext::Module | ScopeContext::Global | ScopeContext::Package => true,
                 ScopeContext::Local { .. } | ScopeContext::Parameter => false,
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     // Class members might be resolvable depending on visibility
                     matches!(symbol.visibility, Visibility::Public)
                 }

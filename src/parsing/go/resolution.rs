@@ -400,7 +400,7 @@ impl GoResolutionContext {
                 // Local variables and function parameters
                 self.local_scope.insert(name, symbol_id);
             }
-            Some(ScopeContext::ClassMember) => {
+            Some(ScopeContext::ClassMember { .. }) => {
                 // Struct/interface members - treat as local within the type
                 self.local_scope.insert(name, symbol_id);
             }

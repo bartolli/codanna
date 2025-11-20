@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2025-11-19
+
+### Added
+
+- Resolution pipeline: Multi-symbol disambiguation with relationship-aware resolution
+- Java language support with complete six-file architecture
+- JavaProvider for Maven pom.xml parsing and dependency resolution
+- Storage: find_symbols_by_module() for package-scoped resolution
+- Symbol relationships: extends, extended_by, uses, used_by
+- Symbol context: ClassMember now tracks class_name
+- JavaParser with class, interface, method, field, enum extraction
+- JavaBehavior with package-based module path formatting
+- JavaResolutionContext with Java scope order (local → class → imported → package)
+- JavaInheritanceResolver for interface and class hierarchy tracking
+- Reranking comparison integration test
+- Java audit test in abi15_grammar_audit.rs
+- Java-specific inheritance test in tantivy.rs
+
+### Changed
+
+- Symbol map: HashMap<String, SymbolId> → HashMap<String, Vec<(SymbolId, SymbolKind)>>
+- ClassMember: unit variant → struct with class_name field
+- Relationship flags: expanded from 4 to 6 bits (added EXTENDS | USES)
+- Version: 0.7.0 → 0.8.0
+- Updated 15 dependencies (anyhow, bitflags, clap, crossbeam-channel, etc)
+- Commented out release profile optimizations for faster dev builds
+
+### Fixed
+
+- MCP protocol: Added peer info registration in initialize handler
+- mcp-test command: Moved to early execution before index loading
+- stdout corruption: Changed diagnostic output to stderr
+- Security: Replaced unmaintained json5 with serde_json5 (RUSTSEC-2025-0120)
+
+### Enhanced
+
+- Kotlin parser: More granular relationship tracking
+- C# resolution: Better namespace handling
+- Project resolver: Improved glob matching for multi-extension support
+- All parser audit reports regenerated with current timestamps
+
+### Documentation
+
+- Updated README.md with Java in multi-language feature list
+- Updated language support tables across docs/ and contributing/ (7 files updated)
+- Added Java to implementation status table with Maven integration details
+- Synchronized language lists across architecture, getting-started, and reference docs
+
 ## [0.7.0] - 2025-11-08
 
 ### Added

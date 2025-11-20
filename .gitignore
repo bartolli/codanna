@@ -1,6 +1,7 @@
 /target
 .codanna/
 .codanna/index/
+.codanna-test-local/
 .fastembed_cache
 .logs/
 

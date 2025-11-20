@@ -34,9 +34,10 @@ if [ -n "$LANG" ]; then
         csharp) REPO="https://github.com/tree-sitter/tree-sitter-c-sharp" ;;
         gdscript) REPO="https://github.com/PrestonKnopp/tree-sitter-gdscript" ;;
         kotlin) REPO="https://github.com/bartolli/tree-sitter-kotlin" ;;
+        java) REPO="https://github.com/tree-sitter/tree-sitter-java" ;;
         *)
             echo "❌ Unknown language: $LANG"
-            echo "Supported: typescript, python, rust, go, php, c, cpp, csharp, gdscript, kotlin"
+            echo "Supported: typescript, python, rust, go, php, c, cpp, csharp, gdscript, kotlin, java"
             exit 1
             ;;
     esac

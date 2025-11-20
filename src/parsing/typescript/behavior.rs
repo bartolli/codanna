@@ -50,7 +50,8 @@ impl TypeScriptBehavior {
 
             // Load fresh from disk if needed
             if needs_reload {
-                let persistence = ResolutionPersistence::new(Path::new(".codanna"));
+                let persistence =
+                    ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
                 if let Ok(index) = persistence.load("typescript") {
                     *cache = Some((Instant::now(), index));
                 } else {
@@ -117,7 +118,7 @@ impl LanguageBehavior for TypeScriptBehavior {
         // This ensures symbols use the SAME path format as enhanced imports
 
         // Load the resolution index to find which tsconfig governs this file
-        let persistence = ResolutionPersistence::new(Path::new(".codanna"));
+        let persistence = ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
         let index = persistence.load("typescript").ok()?;
 
         // get_config_for_file() expects a relative path (relative to workspace root)
@@ -994,7 +995,7 @@ impl LanguageBehavior for TypeScriptBehavior {
             match scope_context {
                 ScopeContext::Module | ScopeContext::Global | ScopeContext::Package => true,
                 ScopeContext::Local { .. } | ScopeContext::Parameter => false,
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     // Class members are resolvable if public or exported
                     matches!(symbol.visibility, Visibility::Public)
                 }

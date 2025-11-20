@@ -565,7 +565,7 @@ impl LanguageBehavior for PythonBehavior {
                     // But functions defined at module level are available
                     !hoisted && symbol.kind == SymbolKind::Function
                 }
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     // Class members are resolvable through the class
                     true
                 }

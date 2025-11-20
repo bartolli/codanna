@@ -145,7 +145,7 @@ impl TypeScriptResolutionContext {
                 // Block-scoped declarations (let, const, arrow functions)
                 self.local_scope.insert(name, symbol_id);
             }
-            Some(ScopeContext::ClassMember) => {
+            Some(ScopeContext::ClassMember { .. }) => {
                 // Class members go to local scope within the class
                 self.local_scope.insert(name, symbol_id);
             }

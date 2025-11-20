@@ -33,31 +33,7 @@ codanna mcp semantic_search_with_context query:"file processing pipeline"
 
 ## Writing Better Documentation Comments
 
-Semantic search works by understanding your documentation comments:
-
-### Good Documentation
-```rust
-/// Parse configuration from a TOML file and validate required fields
-/// This handles missing files gracefully and provides helpful error messages
-fn load_config(path: &Path) -> Result<Config, Error> {
-    // implementation...
-}
-```
-
-With good comments, semantic search can find this function when prompted for:
-- "configuration validation"
-- "handle missing config files"
-- "TOML parsing with error handling"
-
-### Poor Documentation
-```rust
-// Load config
-fn load_config(path: &Path) -> Result<Config, Error> {
-    // implementation...
-}
-```
-
-This won't be found by semantic search effectively.
+Semantic search requires meaningful documentation. "Parse configuration from TOML file and validate required fields" enables search, while "Load config" does not.
 
 ## Query Writing Tips
 
@@ -102,56 +78,13 @@ codanna mcp semantic_search_docs query:"authentication" threshold:0.5
 
 ## Search Workflows
 
-### Finding Implementation Details
-1. Start broad with semantic search
-2. Extract symbol_id from results
-3. Trace relationships using IDs
+### Common Patterns
 
-```bash
-# Find authentication concepts
-codanna mcp semantic_search_docs query:"user authentication" limit:5
-# Returns: authenticate_user [symbol_id:456]
+**Find Implementation:** Semantic search → extract `symbol_id` → trace relationships
 
-# Use symbol_id for unambiguous lookup
-codanna mcp find_callers symbol_id:456
+**Understand Flow:** Find entry point → `get_calls symbol_id:X` → `analyze_impact`
 
-# Or by name if unambiguous
-codanna mcp find_symbol authenticate_user
-```
-
-### Understanding Code Flow
-1. Find entry point
-2. Trace calls using symbol_id
-3. Analyze impact
-
-```bash
-# Find main processing function
-codanna mcp semantic_search_with_context query:"main processing pipeline"
-# Returns: process_file [symbol_id:789]
-
-# Trace what it calls (using ID for precision)
-codanna mcp get_calls symbol_id:789
-
-# Understand impact
-codanna mcp analyze_impact symbol_id:789
-```
-
-### Debugging Issues
-1. Search for error-related code
-2. Find callers using symbol_id
-3. Trace to source
-
-```bash
-# Find error handling
-codanna mcp semantic_search_docs query:"error recovery retry logic"
-# Returns: handle_error [symbol_id:234]
-
-# Find who calls the error handler (use ID from previous result)
-codanna mcp find_callers symbol_id:234
-
-# Trace back to source
-codanna mcp analyze_impact symbol_id:234
-```
+**Debug Issues:** Search error code → `find_callers symbol_id:X` → trace source
 
 ## Advanced Techniques
 

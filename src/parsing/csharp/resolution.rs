@@ -96,7 +96,7 @@ impl CSharpResolutionContext {
             Some(ScopeContext::Local { .. }) => {
                 self.local_scope.insert(name, symbol_id);
             }
-            Some(ScopeContext::ClassMember) => {
+            Some(ScopeContext::ClassMember { .. }) => {
                 self.member_scope.insert(name, symbol_id);
             }
             Some(ScopeContext::Parameter) => {

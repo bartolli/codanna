@@ -14,8 +14,9 @@ use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::ResolutionScope;
 use crate::storage::DocumentIndex;
+use crate::symbol::ScopeContext;
 use crate::types::FileId;
-use crate::{SymbolId, Visibility};
+use crate::{Symbol, SymbolId, Visibility};
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
 
@@ -40,6 +41,42 @@ impl CSharpBehavior {
     pub fn new() -> Self {
         Self {
             state: BehaviorState::new(),
+        }
+    }
+
+    /// Get the fully qualified class name containing this symbol (C# implementation)
+    pub fn get_containing_class(&self, symbol: &Symbol) -> Option<String> {
+        if let Some(ScopeContext::ClassMember {
+            class_name: Some(class),
+        }) = &symbol.scope_context
+        {
+            if let Some(pkg) = &symbol.module_path {
+                if pkg.is_empty() {
+                    return Some(class.to_string());
+                }
+                return Some(format!("{pkg}.{class}"));
+            }
+            return Some(class.to_string());
+        }
+        None
+    }
+
+    /// Check if symbol is visible from another file (C# visibility rules)
+    ///
+    /// C# visibility: private, protected, internal, protected internal, private protected, public
+    /// For now, simplified implementation (similar to backward-compatible mode)
+    pub fn is_symbol_visible_from_file(&self, symbol: &Symbol, from_file: FileId) -> bool {
+        // Same file: always visible
+        if symbol.file_id == from_file {
+            return true;
+        }
+
+        // C# visibility check - simplified for now
+        // TODO: Implement full C# visibility rules (internal, protected, etc.)
+        match symbol.visibility {
+            Visibility::Private => false,
+            Visibility::Public => true,
+            _ => true, // Be permissive for other levels
         }
     }
 }
@@ -421,7 +458,7 @@ impl LanguageBehavior for CSharpBehavior {
             match scope_context {
                 ScopeContext::Module | ScopeContext::Global | ScopeContext::Package => true,
                 ScopeContext::Local { .. } | ScopeContext::Parameter => false,
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     matches!(symbol.visibility, Visibility::Public | Visibility::Module)
                 }
             }

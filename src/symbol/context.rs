@@ -24,6 +24,14 @@ pub struct SymbolRelationships {
     pub implements: Option<Vec<Symbol>>,
     /// What types implement this trait
     pub implemented_by: Option<Vec<Symbol>>,
+    /// What base class(es) this class extends
+    pub extends: Option<Vec<Symbol>>,
+    /// What classes extend this base class
+    pub extended_by: Option<Vec<Symbol>>,
+    /// What types this symbol uses
+    pub uses: Option<Vec<Symbol>>,
+    /// What symbols use this type
+    pub used_by: Option<Vec<Symbol>>,
     /// What methods/fields this symbol defines
     pub defines: Option<Vec<Symbol>>,
     /// What this symbol calls (with relationship metadata including call site location)
@@ -39,7 +47,9 @@ bitflags! {
         const DEFINITIONS    = 0b00000010;
         const CALLS         = 0b00000100;
         const CALLERS       = 0b00001000;
-        const ALL           = 0b00001111;
+        const EXTENDS       = 0b00010000;
+        const USES          = 0b00100000;
+        const ALL           = 0b00111111;
     }
 }
 
@@ -160,6 +170,74 @@ impl SymbolContext {
                         impl_type.name,
                         impl_type.kind,
                         SymbolContext::symbol_location(impl_type)
+                    ));
+                }
+            }
+        }
+
+        // Extends (what base class this extends)
+        if let Some(extends) = &self.relationships.extends {
+            if !extends.is_empty() {
+                output.push_str(&format!("{indent}Extends:\n"));
+                for base_class in extends {
+                    output.push_str(&format!(
+                        "{}  - {} ({:?}) at {}\n",
+                        indent,
+                        base_class.name,
+                        base_class.kind,
+                        SymbolContext::symbol_location(base_class)
+                    ));
+                }
+            }
+        }
+
+        // Extended by (what classes extend this base class)
+        if let Some(extended_by) = &self.relationships.extended_by {
+            if !extended_by.is_empty() {
+                output.push_str(&format!(
+                    "{}Extended by {} class(es):\n",
+                    indent,
+                    extended_by.len()
+                ));
+                for derived_class in extended_by {
+                    output.push_str(&format!(
+                        "{}  - {} ({:?}) at {}\n",
+                        indent,
+                        derived_class.name,
+                        derived_class.kind,
+                        SymbolContext::symbol_location(derived_class)
+                    ));
+                }
+            }
+        }
+
+        // Uses (what types this symbol uses)
+        if let Some(uses) = &self.relationships.uses {
+            if !uses.is_empty() {
+                output.push_str(&format!("{indent}Uses {} type(s):\n", uses.len()));
+                for used_type in uses {
+                    output.push_str(&format!(
+                        "{}  - {} ({:?}) at {}\n",
+                        indent,
+                        used_type.name,
+                        used_type.kind,
+                        SymbolContext::symbol_location(used_type)
+                    ));
+                }
+            }
+        }
+
+        // Used by (what symbols use this type)
+        if let Some(used_by) = &self.relationships.used_by {
+            if !used_by.is_empty() {
+                output.push_str(&format!("{}Used by {} symbol(s):\n", indent, used_by.len()));
+                for using_symbol in used_by {
+                    output.push_str(&format!(
+                        "{}  - {} ({:?}) at {}\n",
+                        indent,
+                        using_symbol.name,
+                        using_symbol.kind,
+                        SymbolContext::symbol_location(using_symbol)
                     ));
                 }
             }

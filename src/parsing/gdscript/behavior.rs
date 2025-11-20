@@ -285,7 +285,7 @@ impl LanguageBehavior for GdscriptBehavior {
                 scope_context,
                 ScopeContext::Module
                     | ScopeContext::Global
-                    | ScopeContext::ClassMember
+                    | ScopeContext::ClassMember { .. }
                     | ScopeContext::Package
             )
         } else {

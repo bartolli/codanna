@@ -379,6 +379,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::cpp::register(registry);
     super::csharp::register(registry);
     super::gdscript::register(registry);
+    super::java::register(registry);
     super::kotlin::register(registry);
 
     // Future languages will be added here:

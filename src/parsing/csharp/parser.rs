@@ -1243,7 +1243,7 @@ impl CSharpParser {
 
         // Default C# visibility rules
         match self.context.current_scope_context() {
-            crate::symbol::ScopeContext::ClassMember => Visibility::Private, // Class members are private by default
+            crate::symbol::ScopeContext::ClassMember { .. } => Visibility::Private, // Class members are private by default
             _ => Visibility::Module, // Top-level types are internal by default
         }
     }

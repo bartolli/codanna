@@ -168,97 +168,39 @@ codanna mcp get_index_info --json
 
 ## Understanding Relationship Types
 
-### Calls
-Function invocation with parentheses
-- `functionA()` invokes `functionB()`
-- Shown by: `get_calls`, `find_callers`
+**Calls:** Function invocation (`functionA()` invokes `functionB()`) - shown by `get_calls`, `find_callers`
 
-### Uses
-Type dependencies, composition, rendering
-- Function parameters/returns: `fn process(data: MyType)`
-- Component rendering: `<CustomButton>` in JSX
-- Struct fields: `struct Container { inner: Type }`
-- Shown by: `analyze_impact`
+**Uses:** Type dependencies, composition, rendering (parameters, JSX components, struct fields) - shown by `analyze_impact`
 
 ## Language Filtering
 
-Mixed codebases (e.g., Python backend + TypeScript frontend): use `lang` parameter to reduce noise.
+Add `lang:rust` to any search tool to filter by language. Reduces search space by up to 75% in mixed codebases.
 
-Supported languages: rust, python, typescript, go, php, c, cpp
-
-Language filtering eliminates duplicate results when similar documentation exists across multiple languages, reducing result sets by up to 75% while maintaining identical similarity scores.
+See [Language Filtering](../reference/concepts.md#language-filtering) for supported languages.
 
 ## JSON Output
 
-All tools support `--json` flag for structured output, perfect for piping:
+All tools support `--json` flag for structured output. Pipe to `jq` for filtering and extraction.
 
-```bash
-# Extract specific fields
-codanna mcp find_symbol Parser --json | jq '.data[].symbol.name'
+See [JSON Output](../reference/concepts.md#json-output) for examples.
 
-# Build call graphs
-codanna mcp find_callers parse_file --json | \
-jq -r '.data[]? | "\(.name) - \(.file_path):\(.range.start_line)"'
+## Using symbol_id
 
-# Filter by score
-codanna mcp semantic_search_docs query:"config" --json | \
-jq '.data[] | select(.score > 0.5)'
-```
+All tools return `[symbol_id:123]` for unambiguous follow-up queries. Use IDs instead of names to avoid disambiguation and enable direct lookups.
 
-## Using symbol_id for Unambiguous Queries
-
-All tools return `[symbol_id:123]` in their results. Use these IDs for precise follow-up queries instead of symbol names.
-
-**Benefits:**
-- **Unambiguous** - Works even when multiple symbols share the same name
-- **Efficient** - No disambiguation needed, direct lookup
-- **Workflow-optimized** - Copy ID from results, paste into next command
-
-**Example workflow:**
-```bash
-# Step 1: Search returns symbol_id
-codanna mcp semantic_search_with_context query:"indexing" limit:1 --json
-# Returns: SimpleIndexer [symbol_id:1883]
-
-# Step 2: Use symbol_id for precise follow-up
-codanna mcp get_calls symbol_id:1883
-
-# Step 3: Follow relationships with IDs from results
-codanna mcp analyze_impact symbol_id:1926
-```
+See [symbol_id](../reference/concepts.md#symbol_id) for workflow patterns.
 
 ## Tool Workflow
 
 ### Recommended Approach
 
-**Tier 1: High-Quality Context (Start Here)**
-- `semantic_search_with_context` - Returns symbols WITH full context, impact analysis, and relationships
-- `analyze_impact` - Shows complete dependency graph (Calls + Uses + Composes)
+Start with `semantic_search_with_context` or `analyze_impact` for complete context. Use `get_calls`/`find_callers` for specific invocations. Chain queries using `symbol_id` from results.
 
-**Tier 2: Precise Lookups (When You Know Names)**
-- `find_symbol` - Exact name lookup
-- `search_symbols` - Fuzzy text search with filters
-
-**Tier 3: Relationship Details (Verify Specific Patterns)**
-- `get_calls` - Function invocation only (parentheses)
-- `find_callers` - Reverse function invocation only
-
-### When to Use What
-
-- **Need complete picture?** → Start with `semantic_search_with_context` or `analyze_impact`
-- **Need specific invocations?** → Use `get_calls` or `find_callers`
-- **Unsure?** → Use Tier 1 tools, they show everything
-- **Following relationships?** → Use `symbol_id:ID` from previous results
+See [Agent Workflows](../reference/concepts.md#agent-workflows) for detailed tool priority and patterns.
 
 ## System Messages
 
-Each tool response includes a `system_message` that guides agents toward the next action. These are hidden from users but help AI assistants chain commands effectively.
-
-```bash
-# Extract system messages
-codanna mcp find_callers walk_and_stream --json | jq -r '.system_message'
-# Output: Found 18 callers. Run 'analyze_impact' to map the change radius.
-```
+Each tool response includes hidden guidance messages for AI assistants. See [Agent Guidance](../integrations/agent-guidance.md) for configuration.
 
 ## See Also
 

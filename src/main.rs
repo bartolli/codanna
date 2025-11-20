@@ -12,7 +12,8 @@ use codanna::parsing::{
     CSharpParser, GoParser, LanguageParser, PhpParser, PythonParser, RustParser, TypeScriptParser,
 };
 use codanna::project_resolver::{
-    providers::typescript::TypeScriptProvider, registry::SimpleProviderRegistry,
+    providers::{java::JavaProvider, typescript::TypeScriptProvider},
+    registry::SimpleProviderRegistry,
 };
 use codanna::storage::IndexMetadata;
 use codanna::types::SymbolCounter;
@@ -623,6 +624,9 @@ fn create_provider_registry() -> SimpleProviderRegistry {
     // Add TypeScript provider for tsconfig.json resolution
     registry.add(Arc::new(TypeScriptProvider::new()));
 
+    // Add Java provider for pom.xml/build.gradle resolution
+    registry.add(Arc::new(JavaProvider::new()));
+
     // Future: Add more providers here
     // registry.add(Arc::new(PythonProvider::new()));
     // registry.add(Arc::new(RustProvider::new()));
@@ -650,7 +654,9 @@ fn initialize_providers(
             continue; // Skip if no config files specified
         }
 
-        println!("Initializing {lang_id} project resolver...");
+        if settings.debug {
+            eprintln!("Initializing {lang_id} project resolver...");
+        }
 
         // Validate config paths
         let mut invalid_paths = Vec::new();
@@ -671,7 +677,7 @@ fn initialize_providers(
 
         // Build cache
         if settings.debug {
-            println!(
+            eprintln!(
                 "  Building resolution cache from {} config file(s)...",
                 config_paths.len()
             );
@@ -683,7 +689,7 @@ fn initialize_providers(
                 eprintln!("  Continuing without alias resolution for {lang_id}");
             }
         } else if settings.debug {
-            println!("  {lang_id} resolution cache built successfully");
+            eprintln!("  {lang_id} resolution cache built successfully");
         }
     }
 
@@ -914,6 +920,57 @@ async fn main() {
             Settings::default()
         })
     };
+
+    // Handle thin client commands early (before index loading)
+    // These commands don't need the index and should not conflict with server processes
+    if let Commands::McpTest {
+        server_binary,
+        tool,
+        args,
+        delay,
+    } = &cli.command
+    {
+        use codanna::mcp::client::CodeIntelligenceClient;
+
+        let server_path = server_binary.clone().unwrap_or_else(|| {
+            std::env::current_exe().expect("Failed to get current executable path")
+        });
+
+        if let Err(e) = CodeIntelligenceClient::test_server(
+            server_path,
+            cli.config.clone(),
+            tool.clone(),
+            args.clone(),
+            *delay,
+        )
+        .await
+        {
+            eprintln!("MCP test failed: {e}");
+            std::process::exit(1);
+        }
+        return; // Exit early - don't load index
+    }
+
+    // Initialize project resolution providers BEFORE any command
+    // This ensures caches are built before indexing starts
+    let provider_registry = create_provider_registry();
+    if let Err(e) = initialize_providers(&provider_registry, &config) {
+        // Only fatal for commands that need providers (like index)
+        if matches!(cli.command, Commands::Index { .. }) {
+            eprintln!("\n{e}");
+            let suggestions = e.recovery_suggestions();
+            if !suggestions.is_empty() {
+                eprintln!("\nSuggestions:");
+                for suggestion in suggestions {
+                    eprintln!("  • {suggestion}");
+                }
+            }
+            std::process::exit(1);
+        } else {
+            // For other commands, just warn
+            eprintln!("Warning: Provider initialization failed: {e}");
+        }
+    }
 
     match &cli.command {
         Commands::Init { force } => {
@@ -1570,25 +1627,8 @@ async fn main() {
                 config_paths
             };
 
-            // Initialize project resolution providers before indexing
-            let provider_registry = create_provider_registry();
-            if let Err(e) = initialize_providers(&provider_registry, &config) {
-                eprintln!("\n{e}");
-
-                // Display recovery suggestions
-                let suggestions = e.recovery_suggestions();
-                if !suggestions.is_empty() {
-                    eprintln!("\nRecovery steps:");
-                    for suggestion in suggestions {
-                        eprintln!("  • {suggestion}");
-                    }
-                }
-
-                // Exit with ConfigError code
-                use codanna::io::ExitCode;
-                let exit_code = ExitCode::from_error(&e);
-                std::process::exit(exit_code as i32);
-            }
+            // Providers already initialized at startup (see line 924)
+            // Cache is ready before indexing starts
 
             // Process each path
             for path in &paths_to_index {

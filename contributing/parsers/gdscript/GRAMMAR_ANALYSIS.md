@@ -1,11 +1,11 @@
 # GDScript Grammar Analysis
 
-*Generated: 2025-11-09 01:47:11 UTC*
+*Generated: 2025-11-20 14:36:43 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 91
-- Nodes found in comprehensive.gd: 78
-- Nodes handled by parser: 15
+- Nodes found in comprehensive.gd: 76
+- Nodes handled by parser: 14
 - Symbol kinds extracted: 7
 
 ## ✅ Successfully Handled Nodes
@@ -14,7 +14,6 @@
 - class_definition
 - class_name_statement
 - const_statement
-- constructor_definition
 - enum_definition
 - extends_statement
 - for_statement
@@ -42,10 +41,8 @@
 - =
 - >=
 - @
-- ERROR
 - [
 - ]
-- _init
 - arguments
 - array
 - assignment
@@ -56,10 +53,10 @@
 - body
 - call
 - class
+- class_body
 - class_name
 - comment
 - const
-- default_parameter
 - enum
 - enumerator
 - enumerator_list
@@ -84,6 +81,7 @@
 - source
 - string
 - type
+- typed_default_parameter
 - typed_parameter
 - var
 - while
@@ -102,9 +100,10 @@
 - base_call
 - break_statement
 - breakpoint_statement
-- class_body
 - conditional_expression
+- constructor_definition
 - continue_statement
+- default_parameter
 - dictionary
 - elif_clause
 - else_clause
@@ -137,7 +136,6 @@
 - subscript
 - subscript_arguments
 - true
-- typed_default_parameter
 - unary_operator
 - variadic_parameter
 

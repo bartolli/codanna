@@ -5,9 +5,9 @@
 
 use super::{
     CBehavior, CParser, CSharpBehavior, CSharpParser, CppBehavior, CppParser, GdscriptBehavior,
-    GdscriptParser, GoBehavior, GoParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior,
-    LanguageId, LanguageParser, PhpBehavior, PhpParser, PythonBehavior, PythonParser, RustBehavior,
-    RustParser, TypeScriptBehavior, TypeScriptParser, get_registry,
+    GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser, KotlinBehavior, KotlinParser,
+    Language, LanguageBehavior, LanguageId, LanguageParser, PhpBehavior, PhpParser, PythonBehavior,
+    PythonParser, RustBehavior, RustParser, TypeScriptBehavior, TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -168,6 +168,10 @@ impl ParserFactory {
                 let parser = GdscriptParser::new().map_err(IndexError::General)?;
                 Ok(Box::new(parser))
             }
+            Language::Java => {
+                let parser = JavaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
             Language::Kotlin => {
                 let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
@@ -279,6 +283,13 @@ impl ParserFactory {
                 ParserWithBehavior {
                     parser: Box::new(parser),
                     behavior: Box::new(GdscriptBehavior::new()),
+                }
+            }
+            Language::Java => {
+                let parser = JavaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(JavaBehavior::new()),
                 }
             }
             Language::Kotlin => {

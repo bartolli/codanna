@@ -8,7 +8,7 @@ High-performance code intelligence system in Rust. Indexes code, tracks relation
 
 ## How It Works
 
-1. **Parse fast** - Tree-sitter AST parsing (same as GitHub code navigator) for Rust, Python, TypeScript, Go and PHP (more on deck)
+1. **Parse fast** - Tree-sitter AST parsing (same as GitHub code navigator) for Rust, Python, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, and GDScript
 2. **Extract real stuff** - functions, traits, type relationships, call graphs
 3. **Embed** - semantic vectors built from your doc comments
 4. **Index** - Tantivy + memory-mapped symbol cache for <10ms lookups

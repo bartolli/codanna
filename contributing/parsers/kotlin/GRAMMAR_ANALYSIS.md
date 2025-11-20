@@ -1,29 +1,15 @@
 # Kotlin Grammar Analysis
 
-*Generated: 2025-11-09 01:47:11 UTC*
+*Generated: 2025-11-20 14:36:43 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 136
 - Nodes found in comprehensive.kt: 150
-- Nodes handled by parser: 11
+- Nodes handled by parser: 142
 - Symbol kinds extracted: 8
 
 ## ✅ Successfully Handled Nodes
 These nodes are in examples and handled by parser:
-- class_declaration
-- enum
-- enum_class_body
-- function_declaration
-- import_list
-- interface
-- object_declaration
-- package_header
-- property_declaration
-- secondary_constructor
-- type_alias
-
-## ⚠️ Implementation Gaps
-These nodes appear in comprehensive.kt but aren't handled:
 - $
 - ${
 - (
@@ -58,6 +44,7 @@ These nodes appear in comprehensive.kt but aren't handled:
 - check_expression
 - class
 - class_body
+- class_declaration
 - class_modifier
 - class_parameter
 - companion
@@ -72,6 +59,8 @@ These nodes appear in comprehensive.kt but aren't handled:
 - directly_assignable_expression
 - else
 - elvis_expression
+- enum
+- enum_class_body
 - enum_entry
 - equality_expression
 - explicit_delegation
@@ -79,16 +68,15 @@ These nodes appear in comprehensive.kt but aren't handled:
 - for_statement
 - fun
 - function_body
+- function_declaration
 - function_modifier
 - function_type
 - function_type_parameters
 - function_value_parameters
 - get
-- identifier
 - if
 - if_expression
-- import
-- import_header
+- import_list
 - in
 - indexing_expression
 - indexing_suffix
@@ -96,6 +84,7 @@ These nodes appear in comprehensive.kt but aren't handled:
 - inline
 - inner
 - integer_literal
+- interface
 - internal
 - interpolated_expression
 - interpolated_identifier
@@ -113,17 +102,18 @@ These nodes appear in comprehensive.kt but aren't handled:
 - null_literal
 - nullable_type
 - object
+- object_declaration
 - operator
 - out
 - override
-- package
+- package_header
 - parameter
 - parameter_modifier
 - parameter_modifiers
-- parenthesized_expression
 - prefix_expression
 - primary_constructor
 - private
+- property_declaration
 - property_delegate
 - property_modifier
 - protected
@@ -132,8 +122,8 @@ These nodes appear in comprehensive.kt but aren't handled:
 - reification_modifier
 - return
 - sealed
+- secondary_constructor
 - simple_identifier
-- source_file
 - statements
 - string_content
 - string_literal
@@ -143,13 +133,13 @@ These nodes appear in comprehensive.kt but aren't handled:
 - this_expression
 - throw
 - true
+- type_alias
 - type_arguments
 - type_identifier
 - type_parameter
 - type_parameter_modifiers
 - type_parameters
 - type_projection
-- typealias
 - user_type
 - val
 - value
@@ -160,9 +150,19 @@ These nodes appear in comprehensive.kt but aren't handled:
 - variable_declaration
 - variance_modifier
 - visibility_modifier
-- wildcard_import
 - {
 - }
+
+## ⚠️ Implementation Gaps
+These nodes appear in comprehensive.kt but aren't handled:
+- identifier
+- import
+- import_header
+- package
+- parenthesized_expression
+- source_file
+- typealias
+- wildcard_import
 
 ## 📝 Missing from Examples
 These grammar nodes aren't in comprehensive.kt:

@@ -110,7 +110,7 @@ impl LanguageBehavior for CBehavior {
             match scope_context {
                 ScopeContext::Module | ScopeContext::Global | ScopeContext::Package => true,
                 ScopeContext::Local { .. } | ScopeContext::Parameter => false,
-                ScopeContext::ClassMember => {
+                ScopeContext::ClassMember { .. } => {
                     matches!(symbol.kind, SymbolKind::Method)
                         || matches!(symbol.visibility, crate::Visibility::Public)
                 }

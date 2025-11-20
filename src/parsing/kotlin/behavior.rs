@@ -4,6 +4,7 @@ use crate::parsing::LanguageBehavior;
 use crate::parsing::ResolutionScope;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::{Import, InheritanceResolver};
+use crate::symbol::ScopeContext;
 use crate::types::compact_string;
 use crate::{FileId, Symbol, SymbolKind, Visibility};
 use parking_lot::RwLock;
@@ -28,6 +29,83 @@ impl KotlinBehavior {
             state: BehaviorState::new(),
             expression_types: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Get the fully qualified class name containing this symbol
+    ///
+    /// Extracts the class name from ClassMember scope context and combines
+    /// with module_path (package) to form fully qualified name.
+    pub fn get_containing_class(&self, symbol: &Symbol) -> Option<String> {
+        if let Some(ScopeContext::ClassMember {
+            class_name: Some(class),
+        }) = &symbol.scope_context
+        {
+            // Combine package + class for fully qualified name
+            if let Some(pkg) = &symbol.module_path {
+                if pkg.is_empty() {
+                    return Some(class.to_string()); // Default package
+                }
+                return Some(format!("{pkg}.{class}")); // Qualified
+            }
+            return Some(class.to_string()); // No package info
+        }
+        None
+    }
+
+    /// Check if symbol is visible from another file with full inheritance support
+    ///
+    /// Enhanced visibility check that supports:
+    /// - Inheritance-based protected access (requires inheritance resolver)
+    ///
+    /// Kotlin visibility levels:
+    /// - private: file-scoped
+    /// - internal: module-scoped (mapped to Crate)
+    /// - protected: subclasses only (mapped to Module)
+    /// - public: everywhere
+    pub fn is_symbol_visible_from_context(
+        &self,
+        symbol: &Symbol,
+        from_file: FileId,
+        accessing_class: Option<&str>,
+        inheritance: &dyn InheritanceResolver,
+    ) -> bool {
+        // Same file: always visible
+        if symbol.file_id == from_file {
+            return true;
+        }
+
+        // Check visibility modifiers
+        match symbol.visibility {
+            Visibility::Private => false, // Private symbols are file-scoped
+            Visibility::Crate => {
+                // Kotlin internal - module-scoped
+                // For now, be permissive (would need module boundary tracking)
+                true
+            }
+            Visibility::Module => {
+                // Kotlin protected - accessible to subclasses
+                // Check inheritance if context available
+                if let Some(accessing) = accessing_class {
+                    if let Some(containing) = self.get_containing_class(symbol) {
+                        return inheritance.is_subtype(accessing, &containing);
+                    }
+                }
+
+                // No context for inheritance check: be permissive
+                true
+            }
+            Visibility::Public => true, // Public symbols visible everywhere
+        }
+    }
+
+    /// Check if symbol is visible from another file (backward compatible)
+    ///
+    /// Delegates to is_symbol_visible_from_context() without inheritance context.
+    /// For full inheritance-based protected checks, use is_symbol_visible_from_context().
+    pub fn is_symbol_visible_from_file(&self, symbol: &Symbol, from_file: FileId) -> bool {
+        // Delegate to enhanced method without inheritance context
+        let resolver = super::KotlinInheritanceResolver::new();
+        self.is_symbol_visible_from_context(symbol, from_file, None, &resolver)
     }
 }
 
@@ -241,34 +319,11 @@ impl LanguageBehavior for KotlinBehavior {
                 scope_context,
                 ScopeContext::Module
                     | ScopeContext::Global
-                    | ScopeContext::ClassMember
+                    | ScopeContext::ClassMember { .. }
                     | ScopeContext::Package
             )
         } else {
             true
-        }
-    }
-
-    fn is_symbol_visible_from_file(&self, symbol: &Symbol, from_file: FileId) -> bool {
-        // Same file: always visible
-        if symbol.file_id == from_file {
-            return true;
-        }
-
-        // Check visibility modifiers
-        match symbol.visibility {
-            Visibility::Private => false, // Private symbols are file-scoped
-            Visibility::Crate => {
-                // Crate-level symbols (Kotlin internal) are module-scoped
-                // For now, we'll be permissive and allow all internal access
-                true
-            }
-            Visibility::Module => {
-                // Module-level symbols (Kotlin protected) are accessible to subclasses
-                // This requires inheritance analysis, so we'll be permissive for now
-                true
-            }
-            Visibility::Public => true,
         }
     }
 }
@@ -342,5 +397,147 @@ mod tests {
     fn test_supports_traits() {
         let behavior = KotlinBehavior::new();
         assert!(behavior.supports_traits());
+    }
+
+    #[test]
+    fn test_protected_visibility_with_inheritance() {
+        use crate::types::{FileId, Range, SymbolId};
+
+        let behavior = KotlinBehavior::new();
+
+        // Create a protected method in com.example.Parent
+        let mut symbol = Symbol::new(
+            SymbolId(1),
+            "protectedMethod",
+            SymbolKind::Method,
+            FileId(1),
+            Range {
+                start_line: 10,
+                start_column: 5,
+                end_line: 12,
+                end_column: 6,
+            },
+        );
+        symbol.module_path = Some("com.example".to_string().into());
+        symbol.visibility = Visibility::Module; // Protected
+        symbol.scope_context = Some(ScopeContext::ClassMember {
+            class_name: Some("Parent".to_string().into()),
+        });
+
+        // Setup inheritance: Child extends Parent
+        let mut resolver = super::super::KotlinInheritanceResolver::new();
+        resolver.add_inheritance(
+            "com.other.Child".to_string(),
+            "com.example.Parent".to_string(),
+            "extends",
+        );
+
+        // Test: Should be visible to subclass
+        assert!(
+            behavior.is_symbol_visible_from_context(
+                &symbol,
+                FileId(2),
+                Some("com.other.Child"),
+                &resolver
+            ),
+            "Protected symbol should be visible to subclass"
+        );
+    }
+
+    #[test]
+    fn test_protected_visibility_without_inheritance() {
+        use crate::types::{FileId, Range, SymbolId};
+
+        let behavior = KotlinBehavior::new();
+
+        // Create a protected method in com.example.Parent
+        let mut symbol = Symbol::new(
+            SymbolId(1),
+            "protectedMethod",
+            SymbolKind::Method,
+            FileId(1),
+            Range {
+                start_line: 10,
+                start_column: 5,
+                end_line: 12,
+                end_column: 6,
+            },
+        );
+        symbol.module_path = Some("com.example".to_string().into());
+        symbol.visibility = Visibility::Module; // Protected
+        symbol.scope_context = Some(ScopeContext::ClassMember {
+            class_name: Some("Parent".to_string().into()),
+        });
+
+        // No inheritance relationship
+        let resolver = super::super::KotlinInheritanceResolver::new();
+
+        // Test: Should be denied when no inheritance
+        assert!(
+            !behavior.is_symbol_visible_from_context(
+                &symbol,
+                FileId(2),
+                Some("com.other.Unrelated"),
+                &resolver
+            ),
+            "Protected symbol should NOT be visible to non-subclass"
+        );
+    }
+
+    #[test]
+    fn test_get_containing_class_kotlin() {
+        use crate::types::{FileId, Range, SymbolId};
+
+        let behavior = KotlinBehavior::new();
+
+        // Method in com.example.MyClass
+        let mut symbol = Symbol::new(
+            SymbolId(1),
+            "myMethod",
+            SymbolKind::Method,
+            FileId(1),
+            Range {
+                start_line: 10,
+                start_column: 5,
+                end_line: 12,
+                end_column: 6,
+            },
+        );
+        symbol.module_path = Some("com.example".to_string().into());
+        symbol.scope_context = Some(ScopeContext::ClassMember {
+            class_name: Some("MyClass".to_string().into()),
+        });
+
+        // Test: Should return fully qualified class name
+        assert_eq!(
+            behavior.get_containing_class(&symbol),
+            Some("com.example.MyClass".to_string()),
+            "Should combine package and class name"
+        );
+
+        // Method in default package
+        let mut symbol2 = Symbol::new(
+            SymbolId(2),
+            "method2",
+            SymbolKind::Method,
+            FileId(2),
+            Range {
+                start_line: 5,
+                start_column: 5,
+                end_line: 7,
+                end_column: 6,
+            },
+        );
+        symbol2.module_path = Some("".to_string().into()); // Empty package
+        symbol2.scope_context = Some(ScopeContext::ClassMember {
+            class_name: Some("SimpleClass".to_string().into()),
+        });
+
+        // Test: Default package should return simple name
+        assert_eq!(
+            behavior.get_containing_class(&symbol2),
+            Some("SimpleClass".to_string()),
+            "Should return simple name for default package"
+        );
     }
 }

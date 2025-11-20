@@ -18,6 +18,7 @@ pub enum Language {
     Cpp,
     CSharp,
     Gdscript,
+    Java,
     Kotlin,
 }
 
@@ -39,6 +40,7 @@ impl Language {
             Language::Cpp => super::LanguageId::new("cpp"),
             Language::CSharp => super::LanguageId::new("csharp"),
             Language::Gdscript => super::LanguageId::new("gdscript"),
+            Language::Java => super::LanguageId::new("java"),
             Language::Kotlin => super::LanguageId::new("kotlin"),
         }
     }
@@ -59,6 +61,7 @@ impl Language {
             "cpp" => Some(Language::Cpp),
             "csharp" => Some(Language::CSharp),
             "gdscript" => Some(Language::Gdscript),
+            "java" => Some(Language::Java),
             "kotlin" => Some(Language::Kotlin),
             _ => None,
         }
@@ -94,6 +97,7 @@ impl Language {
             "cpp" | "hpp" | "cc" | "cxx" | "hxx" => Some(Language::Cpp),
             "cs" | "csx" => Some(Language::CSharp),
             "gd" => Some(Language::Gdscript),
+            "java" => Some(Language::Java),
             "kt" | "kts" => Some(Language::Kotlin),
             _ => None,
         }
@@ -121,6 +125,7 @@ impl Language {
             Language::Cpp => &["cpp", "hpp", "cc", "cxx", "hxx"],
             Language::CSharp => &["cs", "csx"],
             Language::Gdscript => &["gd"],
+            Language::Java => &["java"],
             Language::Kotlin => &["kt", "kts"],
         }
     }
@@ -138,6 +143,7 @@ impl Language {
             Language::Cpp => "cpp",
             Language::CSharp => "csharp",
             Language::Gdscript => "gdscript",
+            Language::Java => "java",
             Language::Kotlin => "kotlin",
         }
     }
@@ -155,6 +161,7 @@ impl Language {
             Language::Cpp => "C++",
             Language::CSharp => "C#",
             Language::Gdscript => "GDScript",
+            Language::Java => "Java",
             Language::Kotlin => "Kotlin",
         }
     }

@@ -52,62 +52,15 @@ fn load_config(path: &Path) -> Result<Config, Error>
 
 ## Semantic Understanding
 
-Embeddings capture:
-- **Conceptual meaning** - Not just keywords
-- **Context** - Related terms clustered together
-- **Intent** - "error handling" matches "graceful failure recovery"
-
-### Example
-
-Query: "authentication logic"
-
-Matches:
-- "user authentication and session management"
-- "verify credentials and create tokens"
-- "login flow with password hashing"
-
-Doesn't match:
-- "configuration parser" (different concept)
-- "file system operations" (unrelated)
+Embeddings capture conceptual meaning, not just keywords. Query "authentication logic" matches "verify credentials and create tokens" but not "configuration parser".
 
 ## Similarity Computation
 
-Uses cosine similarity for comparing vectors:
+Cosine similarity scores: 0.7+ (very similar), 0.5-0.7 (related), 0.3-0.5 (somewhat related), <0.3 (different).
 
-```
-similarity = dot(v1, v2) / (||v1|| × ||v2||)
-```
+## Language Filtering
 
-Scores range from 0 to 1:
-- **0.7+** - Very similar
-- **0.5-0.7** - Related
-- **0.3-0.5** - Somewhat related
-- **<0.3** - Different concepts
-
-## Language-Aware Embeddings
-
-Each embedding tracks its source language:
-
-```rust
-struct EmbeddedSymbol {
-    symbol_id: SymbolId,
-    vector: Vec<f32>,
-    language: LanguageId,  // rust, python, typescript, etc.
-}
-```
-
-### Language Filtering
-
-Filtering happens **before** similarity computation:
-
-```bash
-# Only search Rust code
-codanna mcp semantic_search_docs query:"error handling" lang:rust
-```
-
-**Performance benefit**: Reduces search space by up to 75% in mixed codebases.
-
-**Accuracy**: Identical documentation in different languages produces identical scores.
+Each embedding tracks its source language. Filter before similarity computation with `lang:rust` to reduce search space by up to 75% in mixed codebases.
 
 ## IVFFlat Index
 
@@ -129,32 +82,6 @@ Vectors are organized using Inverted File with Flat vectors for fast search:
 ```
 
 **Speed improvement**: O(sqrt(N)) instead of O(N) comparisons.
-
-## Model Characteristics
-
-### AllMiniLML6V2
-- **Size**: ~25MB
-- **Speed**: Fast inference
-- **Quality**: Good for English
-- **Use**: Default choice
-
-### MultilingualE5Small
-- **Size**: ~118MB
-- **Speed**: Similar to AllMiniLM
-- **Quality**: 94 languages
-- **Use**: Multilingual teams
-
-### MultilingualE5Base
-- **Size**: ~278MB
-- **Speed**: Slower inference
-- **Quality**: Better accuracy
-- **Use**: Quality-critical applications
-
-### MultilingualE5Large
-- **Size**: ~560MB
-- **Speed**: Slowest
-- **Quality**: Best accuracy
-- **Use**: Maximum quality needs
 
 ## Performance Characteristics
 
@@ -195,35 +122,20 @@ if symbol.doc_comment != old_symbol.doc_comment {
 
 ## Troubleshooting
 
-### Poor Search Results
-1. Check documentation quality
-2. Try different model (multilingual if needed)
-3. Adjust threshold parameter
-4. Use language filtering
+**Poor search results:** Check documentation quality, try multilingual model, use language filtering
 
-### Slow Embedding Generation
-1. First run downloads model (one-time)
-2. Large codebases take time initially
-3. Incremental updates are fast
-4. Use `--threads` to parallelize
+**Slow first run:** Model downloads once (~25-560MB), subsequent runs use cache
 
-### Model Not Found
-- Check internet connection (first use)
-- Verify `~/.cache/fastembed/` permissions
-- Re-download with `rm -rf ~/.cache/fastembed/`
+**Model errors:** Check internet connection and `~/.cache/fastembed/` permissions
 
 ## Storage Requirements
 
-For 100,000 symbols:
+**Formula:** `symbols × dimensions × 4 bytes`
 
-**AllMiniLML6V2 (384-dim):**
-- 100k × 384 floats × 4 bytes = 153.6 MB
-
-**MultilingualE5Base (768-dim):**
-- 100k × 768 floats × 4 bytes = 307.2 MB
-
-**MultilingualE5Large (1024-dim):**
-- 100k × 1024 floats × 4 bytes = 409.6 MB
+**Examples (100k symbols):**
+- 384-dim: ~154 MB
+- 768-dim: ~307 MB
+- 1024-dim: ~410 MB
 
 ## See Also
 

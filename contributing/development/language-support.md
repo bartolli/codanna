@@ -12,6 +12,7 @@ Languages self-register via the modular registry system. Each language lives in 
 **✅ Supported Languages:**
 - **Rust** - Traits, generics, lifetimes, comprehensive type system
 - **TypeScript** - Interfaces, type aliases, generics, inheritance tracking, TSX/JSX support
+- **Java** - Classes, interfaces, enums, methods, fields, package-based modules with Maven integration
 - **Kotlin** - Classes, objects, interfaces, data classes, companion objects, nested scopes
 - **Python** - Classes, functions, type hints, inheritance
 - **PHP** - Classes, traits, interfaces, namespaces
@@ -31,6 +32,7 @@ All languages have custom resolution contexts with language-specific scoping:
 |----------|-------------------|---------------|-------------|-----------------|
 | **TypeScript** | TypeScriptResolutionContext | Hoisting + type space | ✅ Interfaces | ✅ ESM + tsconfig paths |
 | **Rust** | RustResolutionContext | Crate hierarchy | ✅ Traits | ✅ use statements |
+| **Java** | JavaResolutionContext | Package hierarchy | ✅ Interfaces + Abstract | ✅ import + Maven pom.xml |
 | **Kotlin** | KotlinResolutionContext | Package-based | ✅ Interfaces | ✅ import statements |
 | **Python** | PythonResolutionContext | LEGB scoping | ✅ Classes | ✅ import/from |
 | **Go** | GoResolutionContext | Package-level | ✅ Interfaces (implicit) | ✅ go.mod imports |
