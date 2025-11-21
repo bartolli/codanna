@@ -347,6 +347,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires local filesystem write permissions - run with: cargo test -- --ignored"]
     fn rebuild_cache_succeeds_without_actual_files() {
         let provider = TypeScriptProvider::new();
         let settings = create_test_settings_with_ts_config(vec![PathBuf::from("tsconfig.json")]);
