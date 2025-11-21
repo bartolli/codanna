@@ -244,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires examples/ directory with tsconfig files - run with: cargo test -- --ignored"]
     fn test_resolution_index_with_settings() {
         // NOTE: Requires examples/typescript/src/components/Button.ts to exist for file mapping test
         let settings = create_test_settings_with_tsconfigs();
@@ -299,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires examples/ directory with tsconfig files - run with: cargo test -- --ignored"]
     fn test_persistence_with_settings() {
         // NOTE: Requires examples/typescript/src/main.ts to exist for file mapping test
         let settings = create_test_settings_with_tsconfigs();
