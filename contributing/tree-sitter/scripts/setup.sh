@@ -25,6 +25,7 @@ echo "✅ Tree-sitter configured to use: $GRAMMARS_DIR"
 if [ -n "$LANG" ]; then
     case "$LANG" in
         typescript) REPO="https://github.com/tree-sitter/tree-sitter-typescript" ;;
+        javascript) REPO="https://github.com/tree-sitter/tree-sitter-javascript" ;;
         python) REPO="https://github.com/tree-sitter/tree-sitter-python" ;;
         rust) REPO="https://github.com/tree-sitter/tree-sitter-rust" ;;
         go) REPO="https://github.com/tree-sitter/tree-sitter-go" ;;
@@ -37,7 +38,7 @@ if [ -n "$LANG" ]; then
         java) REPO="https://github.com/tree-sitter/tree-sitter-java" ;;
         *)
             echo "❌ Unknown language: $LANG"
-            echo "Supported: typescript, python, rust, go, php, c, cpp, csharp, gdscript, kotlin, java"
+            echo "Supported: typescript, javascript, python, rust, go, php, c, cpp, csharp, gdscript, kotlin, java"
             exit 1
             ;;
     esac

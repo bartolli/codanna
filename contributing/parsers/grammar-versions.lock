@@ -38,6 +38,12 @@
       "updated": "2025-09-14T23:45:52-04:00",
       "abi_version": "15"
     },
+    "javascript": {
+      "repo": "https://github.com/tree-sitter/tree-sitter-javascript",
+      "commit": "58404d8cf191d69f2674a8fd507bd5776f46cb11",
+      "updated": "2025-09-14T23:42:24-04:00",
+      "abi_version": "15"
+    },
     "kotlin": {
       "repo": "https://github.com/bartolli/tree-sitter-kotlin",
       "commit": "7f675c3e2c60cab4c63eb623b9e669fa27df0419",
