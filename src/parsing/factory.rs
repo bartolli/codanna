@@ -5,9 +5,10 @@
 
 use super::{
     CBehavior, CParser, CSharpBehavior, CSharpParser, CppBehavior, CppParser, GdscriptBehavior,
-    GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser, KotlinBehavior, KotlinParser,
-    Language, LanguageBehavior, LanguageId, LanguageParser, PhpBehavior, PhpParser, PythonBehavior,
-    PythonParser, RustBehavior, RustParser, TypeScriptBehavior, TypeScriptParser, get_registry,
+    GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser, JavaScriptBehavior,
+    JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior, LanguageId,
+    LanguageParser, PhpBehavior, PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser,
+    TypeScriptBehavior, TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -245,10 +246,12 @@ impl ParserFactory {
                 }
             }
             Language::JavaScript => {
-                return Err(IndexError::General(format!(
-                    "{} parser not yet implemented.",
-                    language.name()
-                )));
+                let parser =
+                    JavaScriptParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(JavaScriptBehavior::new()),
+                }
             }
             Language::Go => {
                 let parser = GoParser::new().map_err(|e| IndexError::General(e.to_string()))?;
