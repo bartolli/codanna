@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2025-11-25
+
+### Fixed
+
+- Added AllMpnetBaseV2 support for fastembed 5.3.0 compatibility
+
+### Changed
+
+- Updated fastembed from 5.2.1 to 5.3.0
+- Updated tower-http from 0.6.6 to 0.6.7
+
 ## [0.8.0] - 2025-11-19
 
 ### Added

@@ -198,6 +198,7 @@ pub fn parse_embedding_model(model_name: &str) -> Result<EmbeddingModel, VectorE
         "ParaphraseMLMiniLML12V2" => Ok(EmbeddingModel::ParaphraseMLMiniLML12V2),
         "ParaphraseMLMiniLML12V2Q" => Ok(EmbeddingModel::ParaphraseMLMiniLML12V2Q),
         "ParaphraseMLMpnetBaseV2" => Ok(EmbeddingModel::ParaphraseMLMpnetBaseV2),
+        "AllMpnetBaseV2" => Ok(EmbeddingModel::AllMpnetBaseV2),
 
         // Multilingual models (94 languages)
         "MultilingualE5Small" => Ok(EmbeddingModel::MultilingualE5Small),
@@ -247,6 +248,7 @@ pub fn model_to_string(model: &EmbeddingModel) -> String {
         EmbeddingModel::ParaphraseMLMiniLML12V2 => "ParaphraseMLMiniLML12V2",
         EmbeddingModel::ParaphraseMLMiniLML12V2Q => "ParaphraseMLMiniLML12V2Q",
         EmbeddingModel::ParaphraseMLMpnetBaseV2 => "ParaphraseMLMpnetBaseV2",
+        EmbeddingModel::AllMpnetBaseV2 => "AllMpnetBaseV2",
         EmbeddingModel::MultilingualE5Small => "MultilingualE5Small",
         EmbeddingModel::MultilingualE5Base => "MultilingualE5Base",
         EmbeddingModel::MultilingualE5Large => "MultilingualE5Large",

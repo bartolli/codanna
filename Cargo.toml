@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.8.0"
+version = "0.8.1"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -52,7 +52,7 @@ tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
 bincode = "2.0.1"
-fastembed = "5.2.1"
+fastembed = "5.3.0"
 rand = "0.9.2"
 indicatif = "0.18.3"
 comfy-table = "7.2.1"
@@ -60,7 +60,7 @@ console = "0.16.1"
 owo-colors = "4.2.3"
 axum = { version = "0.8.7", optional = true }
 tower = { version = "0.5.2", optional = true }
-tower-http = { version = "0.6.6", features = ["cors"], optional = true }
+tower-http = { version = "0.6.7", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
 tokio-util = "0.7.17"
 axum-server = { version = "0.7.3", features = ["tls-rustls-no-provider"], optional = true }
