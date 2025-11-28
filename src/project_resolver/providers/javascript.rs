@@ -222,7 +222,12 @@ mod tests {
         let mut settings = Settings::default();
         let js_config = LanguageConfig {
             enabled: true,
-            extensions: vec!["js".to_string(), "jsx".to_string(), "mjs".to_string(), "cjs".to_string()],
+            extensions: vec![
+                "js".to_string(),
+                "jsx".to_string(),
+                "mjs".to_string(),
+                "cjs".to_string(),
+            ],
             parser_options: HashMap::new(),
             config_files,
         };

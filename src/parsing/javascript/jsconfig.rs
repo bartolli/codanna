@@ -70,8 +70,8 @@ pub fn parse_jsonc_jsconfig(content: &str) -> ResolutionResult<JsConfig> {
 
 /// Read and parse a jsconfig.json file with JSONC support
 pub fn read_jsconfig(path: &Path) -> ResolutionResult<JsConfig> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| ResolutionError::cache_io(path.to_path_buf(), e))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| ResolutionError::cache_io(path.to_path_buf(), e))?;
 
     parse_jsonc_jsconfig(&content)
 }
@@ -384,9 +384,11 @@ mod tests {
 
     #[test]
     fn path_rule_resolves_wildcards() {
-        let rule =
-            PathRule::new("@components/*".to_string(), vec!["src/components/*".to_string()])
-                .expect("Should create rule");
+        let rule = PathRule::new(
+            "@components/*".to_string(),
+            vec!["src/components/*".to_string()],
+        )
+        .expect("Should create rule");
 
         let result = rule.try_resolve("@components/Button");
         assert_eq!(result, Some("src/components/Button".to_string()));

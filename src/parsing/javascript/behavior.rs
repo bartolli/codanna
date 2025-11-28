@@ -794,7 +794,12 @@ impl LanguageBehavior for JavaScriptBehavior {
                         };
 
                         // Convert path to module path (replace / with .)
-                        return Some(final_path.replace('/', ".").trim_start_matches('.').to_string());
+                        return Some(
+                            final_path
+                                .replace('/', ".")
+                                .trim_start_matches('.')
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -830,7 +835,8 @@ impl LanguageBehavior for JavaScriptBehavior {
             };
 
             // JavaScript uses relative import normalization with jsconfig path alias support
-            let target_module = normalize_js_import(&import.path, &importing_module, project_rules.as_ref());
+            let target_module =
+                normalize_js_import(&import.path, &importing_module, project_rules.as_ref());
             debug_print!(
                 self,
                 "[build_context] local_name='{}' target_module='{}'",
