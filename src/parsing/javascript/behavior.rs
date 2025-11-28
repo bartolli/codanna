@@ -4,10 +4,13 @@ use crate::debug_print;
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
+use crate::project_resolver::persist::{ResolutionPersistence, ResolutionRules};
 use crate::storage::DocumentIndex;
 use crate::types::FileId;
 use crate::{SymbolId, Visibility};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tree_sitter::Language;
 
 use super::resolution::{JavaScriptInheritanceResolver, JavaScriptResolutionContext};
@@ -24,6 +27,55 @@ impl JavaScriptBehavior {
         Self {
             state: BehaviorState::new(),
         }
+    }
+
+    /// Load project resolution rules for a file from the persisted index
+    ///
+    /// Uses a thread-local cache to avoid repeated disk reads.
+    /// Cache is invalidated after 1 second to pick up changes.
+    fn load_project_rules_for_file(&self, file_id: FileId) -> Option<ResolutionRules> {
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
+
+        RULES_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+
+            // Check if cache is fresh (< 1 second old)
+            let needs_reload = if let Some((timestamp, _)) = *cache {
+                timestamp.elapsed() >= Duration::from_secs(1)
+            } else {
+                true
+            };
+
+            // Load fresh from disk if needed
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load("javascript") {
+                    *cache = Some((Instant::now(), index));
+                } else {
+                    // No index file exists yet - that's OK
+                    return None;
+                }
+            }
+
+            // Get rules for the file
+            if let Some((_, ref index)) = *cache {
+                // Get the file path for this FileId from our behavior state
+                if let Some(file_path) = self.state.get_file_path(file_id) {
+                    // Find the config that applies to this file
+                    if let Some(config_path) = index.get_config_for_file(&file_path) {
+                        return index.rules.get(config_path).cloned();
+                    }
+                }
+
+                // Fallback: return any rules we have (for tests without proper file registration)
+                index.rules.values().next().cloned()
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -63,10 +115,66 @@ impl LanguageBehavior for JavaScriptBehavior {
     }
 
     fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
-        // JavaScript uses simple path-based module resolution
-        // No tsconfig infrastructure needed - just compute relative path from project root
+        // Use jsconfig infrastructure to compute canonical module paths
+        // This ensures symbols use the SAME path format as enhanced imports
 
-        // Compute path relative to the project root
+        // Load the resolution index to find which jsconfig governs this file
+        let persistence = ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
+
+        // Try jsconfig-based resolution first
+        if let Ok(index) = persistence.load("javascript") {
+            // get_config_for_file() expects a relative path (relative to workspace root)
+            let relative_to_workspace = file_path
+                .strip_prefix(project_root)
+                .ok()
+                .unwrap_or(file_path);
+
+            // Find which jsconfig applies to this file
+            if let Some(config_path) = index.get_config_for_file(relative_to_workspace) {
+                debug_print!(
+                    self,
+                    "[module_path_from_file] relative_to_workspace={:?} config_path={:?}",
+                    relative_to_workspace,
+                    config_path
+                );
+
+                // Get the jsconfig's directory (the project root for this file)
+                if let Some(parent) = config_path.parent() {
+                    let jsconfig_dir = project_root.join(parent);
+                    debug_print!(
+                        self,
+                        "[module_path_from_file] jsconfig_dir={:?}",
+                        jsconfig_dir
+                    );
+
+                    // Compute path relative to the jsconfig's directory
+                    if let Ok(relative_path) = file_path.strip_prefix(&jsconfig_dir) {
+                        if let Some(path) = relative_path.to_str() {
+                            let module_path = path
+                                .trim_start_matches("./")
+                                .trim_end_matches(".js")
+                                .trim_end_matches(".jsx")
+                                .trim_end_matches(".mjs")
+                                .trim_end_matches(".cjs")
+                                .trim_end_matches("/index");
+
+                            let result = module_path.replace('/', ".");
+
+                            debug_print!(
+                                self,
+                                "[module_path_from_file] file_path={:?} -> module_path={}",
+                                file_path,
+                                result
+                            );
+
+                            return Some(result);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: simple path-based module resolution
         let relative_path = file_path.strip_prefix(project_root).ok()?;
         let path = relative_path.to_str()?;
 
@@ -600,8 +708,16 @@ impl LanguageBehavior for JavaScriptBehavior {
         // Create JavaScript-specific resolution context
         let mut context = JavaScriptResolutionContext::new(file_id);
 
+        // Load project resolution rules for path alias support
+        let project_rules = self.load_project_rules_for_file(file_id);
+
         // Helper: normalize JS import to module path relative to importing module
-        fn normalize_js_import(import_path: &str, importing_mod: &str) -> String {
+        // Now supports jsconfig path aliases
+        fn normalize_js_import(
+            import_path: &str,
+            importing_mod: &str,
+            rules: Option<&ResolutionRules>,
+        ) -> String {
             fn parent_module(m: &str) -> String {
                 let mut parts: Vec<&str> = if m.is_empty() {
                     Vec::new()
@@ -612,6 +728,13 @@ impl LanguageBehavior for JavaScriptBehavior {
                     parts.pop();
                 }
                 parts.join(".")
+            }
+
+            // Try path alias resolution first (e.g., @/components/Button)
+            if let Some(rules) = rules {
+                if let Some(resolved) = resolve_path_alias(import_path, rules) {
+                    return resolved;
+                }
             }
 
             if import_path.starts_with("./") {
@@ -648,6 +771,36 @@ impl LanguageBehavior for JavaScriptBehavior {
             }
         }
 
+        // Helper: resolve path alias using jsconfig rules
+        fn resolve_path_alias(import_path: &str, rules: &ResolutionRules) -> Option<String> {
+            for (pattern, targets) in &rules.paths {
+                // Convert glob pattern to simple prefix match
+                // e.g., "@/*" matches "@/components/Button"
+                let prefix = pattern.trim_end_matches('*');
+                if let Some(suffix) = import_path.strip_prefix(prefix) {
+                    if let Some(target) = targets.first() {
+                        let target_prefix = target.trim_end_matches('*');
+                        let resolved = format!("{target_prefix}{suffix}");
+
+                        // Apply baseUrl if present
+                        let final_path = if let Some(ref base) = rules.base_url {
+                            if base == "." || base == "./" {
+                                resolved
+                            } else {
+                                format!("{}/{}", base.trim_end_matches('/'), resolved)
+                            }
+                        } else {
+                            resolved
+                        };
+
+                        // Convert path to module path (replace / with .)
+                        return Some(final_path.replace('/', ".").trim_start_matches('.').to_string());
+                    }
+                }
+            }
+            None
+        }
+
         // 1) Imports: prefer cache for imported names
         let imports = self.get_imports_for_file(file_id);
         if crate::config::is_global_debug_enabled() {
@@ -676,8 +829,8 @@ impl LanguageBehavior for JavaScriptBehavior {
                 continue;
             };
 
-            // JavaScript uses simple relative import normalization (no tsconfig)
-            let target_module = normalize_js_import(&import.path, &importing_module);
+            // JavaScript uses relative import normalization with jsconfig path alias support
+            let target_module = normalize_js_import(&import.path, &importing_module, project_rules.as_ref());
             debug_print!(
                 self,
                 "[build_context] local_name='{}' target_module='{}'",
