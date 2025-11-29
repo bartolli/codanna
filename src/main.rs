@@ -12,7 +12,9 @@ use codanna::parsing::{
     CSharpParser, GoParser, LanguageParser, PhpParser, PythonParser, RustParser, TypeScriptParser,
 };
 use codanna::project_resolver::{
-    providers::{java::JavaProvider, typescript::TypeScriptProvider},
+    providers::{
+        java::JavaProvider, javascript::JavaScriptProvider, typescript::TypeScriptProvider,
+    },
     registry::SimpleProviderRegistry,
 };
 use codanna::storage::IndexMetadata;
@@ -624,12 +626,11 @@ fn create_provider_registry() -> SimpleProviderRegistry {
     // Add TypeScript provider for tsconfig.json resolution
     registry.add(Arc::new(TypeScriptProvider::new()));
 
+    // Add JavaScript provider for jsconfig.json resolution
+    registry.add(Arc::new(JavaScriptProvider::new()));
+
     // Add Java provider for pom.xml/build.gradle resolution
     registry.add(Arc::new(JavaProvider::new()));
-
-    // Future: Add more providers here
-    // registry.add(Arc::new(PythonProvider::new()));
-    // registry.add(Arc::new(RustProvider::new()));
 
     registry
 }

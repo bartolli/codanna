@@ -2954,7 +2954,7 @@ impl SimpleIndexer {
         );
 
         if unresolved.is_empty() {
-            eprintln!("DEBUG: No unresolved relationships to process");
+            debug_print!(self, "No unresolved relationships to process");
             return Ok(());
         }
 

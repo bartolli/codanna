@@ -9,6 +9,7 @@ Parser architecture and supported languages.
 | Rust | tree-sitter-rust |
 | Python | tree-sitter-python |
 | TypeScript | tree-sitter-typescript |
+| JavaScript | tree-sitter-javascript |
 | Java | tree-sitter-java |
 | Kotlin | tree-sitter-kotlin-codanna |
 | Go | tree-sitter-go |

@@ -1,0 +1,171 @@
+=== JavaScript Language ABI-15 COMPREHENSIVE NODE MAPPING ===
+  Generated: 2025-11-29 00:46:16 UTC
+  ABI Version: 15
+  Node kind count: 142
+
+=== IMPORT/EXPORT NODES ===
+  ✓ import_statement                    -> ID: 142
+  ✓ import_clause                       -> ID: 143
+  ✓ named_imports                       -> ID: 146
+  ✓ namespace_import                    -> ID: 145
+  ✓ export_statement                    -> ID: 135
+  ✓ export_clause                       -> ID: 137
+  ✓ export_specifier                    -> ID: 138
+  ✓ import_specifier                    -> ID: 147
+
+=== CLASS NODES ===
+  ✓ class_declaration                   -> ID: 198
+  ✓ class_body                          -> ID: 230
+  ✓ class_heritage                      -> ID: 199
+  ✓ method_definition                   -> ID: 236
+  ✓ field_definition                    -> ID: 231
+  ✗ static_block                        NOT FOUND
+  ✗ computed_property_name              NOT FOUND
+
+=== FUNCTION NODES ===
+  ✓ function_declaration                -> ID: 201
+  ✓ function_expression                 -> ID: 200
+  ✓ arrow_function                      -> ID: 204
+  ✗ generator_function                  NOT FOUND
+  ✓ generator_function_declaration      -> ID: 203
+  ✓ formal_parameters                   -> ID: 232
+  ✓ rest_pattern                        -> ID: 235
+
+=== VARIABLE NODES ===
+  ✓ variable_declaration                -> ID: 151
+  ✓ lexical_declaration                 -> ID: 152
+  ✓ variable_declarator                 -> ID: 154
+  ✓ assignment_expression               -> ID: 210
+  ✓ assignment_pattern                  -> ID: 184
+  ✓ object_pattern                      -> ID: 183
+  ✓ array_pattern                       -> ID: 187
+
+=== EXPRESSION NODES ===
+  ✓ call_expression                     -> ID: 205
+  ✓ new_expression                      -> ID: 206
+  ✓ member_expression                   -> ID: 208
+  ✓ binary_expression                   -> ID: 217
+  ✓ unary_expression                    -> ID: 218
+  ✓ update_expression                   -> ID: 219
+  ✓ ternary_expression                  -> ID: 216
+  ✓ await_expression                    -> ID: 207
+  ✓ yield_expression                    -> ID: 181
+  ✓ spread_element                      -> ID: 215
+  ✓ parenthesized_expression            -> ID: 178
+
+=== JSX NODES ===
+  ✓ jsx_element                         -> ID: 188
+  ✓ jsx_self_closing_element            -> ID: 194
+  ✓ jsx_opening_element                 -> ID: 190
+  ✓ jsx_closing_element                 -> ID: 193
+  ✓ jsx_expression                      -> ID: 189
+  ✓ jsx_attribute                       -> ID: 195
+  ✓ jsx_text                            -> ID: 133
+
+=== CONTROL FLOW NODES ===
+  ✓ if_statement                        -> ID: 157
+  ✓ for_statement                       -> ID: 159
+  ✓ for_in_statement                    -> ID: 160
+  ✓ while_statement                     -> ID: 162
+  ✗ do_statement                        NOT FOUND
+  ✓ switch_statement                    -> ID: 158
+  ✓ try_statement                       -> ID: 164
+  ✓ catch_clause                        -> ID: 176
+  ✓ return_statement                    -> ID: 169
+  ✓ throw_statement                     -> ID: 170
+
+=== LITERAL NODES ===
+  ✓ string                              -> ID: 221
+  ✓ string_fragment                     -> ID: 130
+  ✓ template_string                     -> ID: 222
+  ✓ template_substitution               -> ID: 223
+  ✓ number                              -> ID: 114
+  ✓ true                                -> ID: 120
+  ✓ false                               -> ID: 121
+  ✓ null                                -> ID: 122
+  ✗ regex                               NOT FOUND
+  ✓ object                              -> ID: 182
+  ✓ array                               -> ID: 186
+
+=== UNCATEGORIZED NODES ===
+  ✓ !                                   -> ID: 98
+  ✓ !==                                 -> ID: 94
+  ✓ "                                   -> ID: 50
+  ✓ ${                                  -> ID: 110
+  ✓ '                                   -> ID: 51
+  ✓ (                                   -> ID: 23
+  ✓ )                                   -> ID: 25
+  ✓ *                                   -> ID: 4
+  ✓ ++                                  -> ID: 103
+  ✓ ,                                   -> ID: 8
+  ✓ .                                   -> ID: 47
+  ✓ ...                                 -> ID: 76
+  ✓ /                                   -> ID: 87
+  ✓ />                                  -> ID: 49
+  ✓ :                                   -> ID: 35
+  ✓ ;                                   -> ID: 24
+  ✓ <                                   -> ID: 44
+  ✓ </                                  -> ID: 48
+  ✓ =                                   -> ID: 40
+  ✓ ===                                 -> ID: 92
+  ✓ =>                                  -> ID: 58
+  ✓ >                                   -> ID: 45
+  ✓ >=                                  -> ID: 95
+  ✓ ?                                   -> ID: 131
+  ✓ [                                   -> ID: 41
+  ✓ ]                                   -> ID: 42
+  ✓ `                                   -> ID: 109
+  ✓ arguments                           -> ID: 226
+  ✓ as                                  -> ID: 6
+  ✓ async                               -> ID: 56
+  ✓ await                               -> ID: 17
+  ✓ break                               -> ID: 30
+  ✓ break_statement                     -> ID: 166
+  ✓ case                                -> ID: 36
+  ✓ catch                               -> ID: 37
+  ✓ class                               -> ID: 54
+  ✓ comment                             -> ID: 108
+  ✓ const                               -> ID: 15
+  ✓ continue                            -> ID: 31
+  ✓ continue_statement                  -> ID: 167
+  ✓ default                             -> ID: 5
+  ✓ export                              -> ID: 3
+  ✓ expression_statement                -> ID: 150
+  ✓ extends                             -> ID: 55
+  ✓ for                                 -> ID: 22
+  ✓ from                                -> ID: 11
+  ✓ function                            -> ID: 57
+  ✓ identifier                          -> ID: 1
+  ✓ if                                  -> ID: 20
+  ✓ import                              -> ID: 10
+  ✓ let                                 -> ID: 14
+  ✓ new                                 -> ID: 60
+  ✓ object_assignment_pattern           -> ID: 185
+  ✓ of                                  -> ID: 18
+  ✓ pair                                -> ID: 237
+  ✓ program                             -> ID: 134
+  ✓ property_identifier                 -> ID: 261
+  ✓ return                              -> ID: 33
+  ✓ shorthand_property_identifier       -> ID: 262
+  ✓ shorthand_property_identifier_pattern -> ID: 263
+  ✓ statement_block                     -> ID: 155
+  ✓ static                              -> ID: 125
+  ✓ subscript_expression                -> ID: 209
+  ✓ super                               -> ID: 119
+  ✓ switch                              -> ID: 21
+  ✓ switch_body                         -> ID: 173
+  ✓ switch_case                         -> ID: 174
+  ✓ switch_default                      -> ID: 175
+  ✓ this                                -> ID: 118
+  ✓ throw                               -> ID: 34
+  ✓ try                                 -> ID: 29
+  ✓ typeof                              -> ID: 100
+  ✓ undefined                           -> ID: 123
+  ✓ var                                 -> ID: 13
+  ✓ while                               -> ID: 27
+  ✓ yield                               -> ID: 39
+  ✓ {                                   -> ID: 7
+  ✓ ||                                  -> ID: 78
+  ✓ }                                   -> ID: 9
+
+Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar

@@ -28,7 +28,8 @@ mod tests {
     use codanna::parsing::{
         c::audit::CParserAudit, cpp::audit::CppParserAudit, csharp::audit::CSharpParserAudit,
         gdscript::audit::GdscriptParserAudit, go::audit::GoParserAudit,
-        java::audit::JavaParserAudit, kotlin::audit::KotlinParserAudit, php::audit::PhpParserAudit,
+        java::audit::JavaParserAudit, javascript::audit::JavaScriptParserAudit,
+        kotlin::audit::KotlinParserAudit, php::audit::PhpParserAudit,
         python::audit::PythonParserAudit, rust::audit::RustParserAudit,
         typescript::audit::TypeScriptParserAudit,
     };
@@ -751,6 +752,153 @@ mod tests {
             audit.implemented_nodes.len() as f32 / example_nodes.len() as f32 * 100.0
         );
         println!("✅ TypeScript node_discovery.txt saved");
+    }
+
+    #[test]
+    fn comprehensive_javascript_analysis() {
+        println!("=== JavaScript Comprehensive Grammar Analysis ===\n");
+
+        // 1. Load ALL nodes from grammar JSON
+        let grammar_json = fs::read_to_string("contributing/parsers/javascript/node-types.json")
+            .expect("Failed to read JavaScript grammar file");
+        let grammar: Value =
+            serde_json::from_str(&grammar_json).expect("Failed to parse grammar JSON");
+
+        let mut all_grammar_nodes = HashSet::new();
+        if let Value::Array(nodes) = &grammar {
+            for node in nodes {
+                if let (Some(Value::Bool(true)), Some(Value::String(node_type))) =
+                    (node.get("named"), node.get("type"))
+                {
+                    all_grammar_nodes.insert(node_type.clone());
+                }
+            }
+        }
+
+        // 2. Run the REAL parser audit to get everything at once
+        let audit = match JavaScriptParserAudit::audit_file("examples/javascript/comprehensive.js")
+        {
+            Ok(audit) => audit,
+            Err(e) => {
+                println!("Warning: Failed to audit JavaScript file: {e}");
+                // Create empty audit for fallback
+                JavaScriptParserAudit {
+                    grammar_nodes: HashMap::new(),
+                    implemented_nodes: HashSet::new(),
+                    extracted_symbol_kinds: HashSet::new(),
+                }
+            }
+        };
+
+        // The audit already discovered all nodes in the example file!
+        let example_nodes: HashSet<String> = audit.grammar_nodes.keys().cloned().collect();
+
+        // Save the audit report
+        let report = audit.generate_report();
+        fs::write("contributing/parsers/javascript/AUDIT_REPORT.md", &report)
+            .expect("Failed to write JavaScript audit report");
+
+        // 3. Generate comprehensive analysis comparing all three sources
+        let mut analysis = String::new();
+        analysis.push_str("# JavaScript Grammar Analysis\n\n");
+        analysis.push_str(&format!("*Generated: {}*\n\n", get_formatted_timestamp()));
+        analysis.push_str("## Statistics\n");
+        analysis.push_str(&format!(
+            "- Total nodes in grammar JSON: {}\n",
+            all_grammar_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes found in comprehensive.js: {}\n",
+            example_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes handled by parser: {}\n",
+            audit.implemented_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            audit.extracted_symbol_kinds.len()
+        ));
+        analysis.push('\n');
+
+        // Categorize nodes
+        let mut in_grammar_only: Vec<_> = all_grammar_nodes.difference(&example_nodes).collect();
+        let mut in_example_not_handled: Vec<_> = example_nodes
+            .iter()
+            .filter(|n| !audit.implemented_nodes.contains(n.as_str()))
+            .collect();
+        let mut handled_well: Vec<_> = audit
+            .implemented_nodes
+            .iter()
+            .filter(|n| example_nodes.contains(n.as_str()))
+            .collect();
+
+        in_grammar_only.sort();
+        in_example_not_handled.sort();
+        handled_well.sort();
+
+        if !handled_well.is_empty() {
+            analysis.push_str("## Successfully Handled Nodes\n");
+            analysis.push_str("These nodes are in examples and handled by parser:\n");
+            for node in &handled_well {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !in_example_not_handled.is_empty() {
+            analysis.push_str("## Implementation Gaps\n");
+            analysis.push_str("These nodes appear in comprehensive.js but aren't handled:\n");
+            for node in &in_example_not_handled {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !in_grammar_only.is_empty() {
+            analysis.push_str("## Missing from Examples\n");
+            analysis.push_str("These grammar nodes aren't in comprehensive.js:\n");
+            for node in &in_grammar_only {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        // Add extracted symbol kinds info
+        if !audit.extracted_symbol_kinds.is_empty() {
+            analysis.push_str("## Symbol Kinds Extracted\n");
+            let mut kinds: Vec<_> = audit.extracted_symbol_kinds.iter().collect();
+            kinds.sort();
+            for kind in kinds {
+                analysis.push_str(&format!("- {kind}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        fs::write(
+            "contributing/parsers/javascript/GRAMMAR_ANALYSIS.md",
+            &analysis,
+        )
+        .expect("Failed to write JavaScript grammar analysis");
+
+        // Also generate node_discovery.txt
+        let node_discovery = generate_javascript_node_discovery();
+        fs::write(
+            "contributing/parsers/javascript/node_discovery.txt",
+            node_discovery,
+        )
+        .expect("Failed to write JavaScript node discovery");
+
+        println!("JavaScript Analysis:");
+        println!("  - Grammar nodes: {}", all_grammar_nodes.len());
+        println!("  - Example nodes: {}", example_nodes.len());
+        println!("  - Handled nodes: {}", audit.implemented_nodes.len());
+        println!("  - Symbol kinds: {:?}", audit.extracted_symbol_kinds);
+        println!(
+            "  - Coverage: {:.1}%",
+            audit.implemented_nodes.len() as f32 / example_nodes.len() as f32 * 100.0
+        );
+        println!("JavaScript node_discovery.txt saved");
     }
 
     #[test]
@@ -3939,6 +4087,201 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
             output.push_str(&format!("  {node} (ID: {id})\n"));
         }
 
+        output
+    }
+
+    fn generate_javascript_node_discovery() -> String {
+        use super::abi15_exploration_common::print_node_tree;
+        use tree_sitter::{Language, Parser};
+
+        let mut output = String::new();
+        output.push_str("=== JavaScript Language ABI-15 COMPREHENSIVE NODE MAPPING ===\n");
+        output.push_str(&format!("  Generated: {}\n", get_formatted_timestamp()));
+
+        let language: Language = tree_sitter_javascript::LANGUAGE.into();
+        output.push_str(&format!("  ABI Version: {}\n", language.abi_version()));
+
+        // Parse the comprehensive example
+        let mut parser = Parser::new();
+        parser.set_language(&language).unwrap();
+
+        let code = fs::read_to_string("examples/javascript/comprehensive.js")
+            .unwrap_or_else(|_| "function main() {}\n".to_string());
+
+        let tree = parser.parse(&code, None).unwrap();
+        let root = tree.root_node();
+
+        // Debug: print tree structure if verbose env var is set
+        if std::env::var("DEBUG_TREE").is_ok() {
+            println!("\n=== JavaScript Tree Structure ===");
+            print_node_tree(root, &code, 0);
+        }
+
+        // Collect all nodes with their actual IDs from the parsed file
+        let mut node_registry: HashMap<String, u16> = HashMap::new();
+        let mut found_in_file = HashSet::new();
+        discover_nodes_with_ids(root, &mut node_registry, &mut found_in_file);
+
+        output.push_str(&format!("  Node kind count: {}\n\n", node_registry.len()));
+
+        // Define JavaScript node categories for organization
+        let node_categories = vec![
+            (
+                "IMPORT/EXPORT NODES",
+                vec![
+                    "import_statement",
+                    "import_clause",
+                    "named_imports",
+                    "namespace_import",
+                    "export_statement",
+                    "export_clause",
+                    "export_specifier",
+                    "import_specifier",
+                ],
+            ),
+            (
+                "CLASS NODES",
+                vec![
+                    "class_declaration",
+                    "class_body",
+                    "class_heritage",
+                    "method_definition",
+                    "field_definition",
+                    "static_block",
+                    "computed_property_name",
+                ],
+            ),
+            (
+                "FUNCTION NODES",
+                vec![
+                    "function_declaration",
+                    "function_expression",
+                    "arrow_function",
+                    "generator_function",
+                    "generator_function_declaration",
+                    "formal_parameters",
+                    "rest_pattern",
+                ],
+            ),
+            (
+                "VARIABLE NODES",
+                vec![
+                    "variable_declaration",
+                    "lexical_declaration",
+                    "variable_declarator",
+                    "assignment_expression",
+                    "assignment_pattern",
+                    "object_pattern",
+                    "array_pattern",
+                ],
+            ),
+            (
+                "EXPRESSION NODES",
+                vec![
+                    "call_expression",
+                    "new_expression",
+                    "member_expression",
+                    "binary_expression",
+                    "unary_expression",
+                    "update_expression",
+                    "ternary_expression",
+                    "await_expression",
+                    "yield_expression",
+                    "spread_element",
+                    "parenthesized_expression",
+                ],
+            ),
+            (
+                "JSX NODES",
+                vec![
+                    "jsx_element",
+                    "jsx_self_closing_element",
+                    "jsx_opening_element",
+                    "jsx_closing_element",
+                    "jsx_expression",
+                    "jsx_attribute",
+                    "jsx_text",
+                ],
+            ),
+            (
+                "CONTROL FLOW NODES",
+                vec![
+                    "if_statement",
+                    "for_statement",
+                    "for_in_statement",
+                    "while_statement",
+                    "do_statement",
+                    "switch_statement",
+                    "try_statement",
+                    "catch_clause",
+                    "return_statement",
+                    "throw_statement",
+                ],
+            ),
+            (
+                "LITERAL NODES",
+                vec![
+                    "string",
+                    "string_fragment",
+                    "template_string",
+                    "template_substitution",
+                    "number",
+                    "true",
+                    "false",
+                    "null",
+                    "regex",
+                    "object",
+                    "array",
+                ],
+            ),
+        ];
+
+        // Output node mappings with discovered IDs
+        for (category, expected_nodes) in &node_categories {
+            output.push_str(&format!("=== {category} ===\n"));
+            for node_name in expected_nodes {
+                if let Some(node_id) = node_registry.get(*node_name) {
+                    let status = if found_in_file.contains(*node_name) {
+                        "✓"
+                    } else {
+                        "○" // In grammar but not in example file
+                    };
+                    output.push_str(&format!("  {status} {node_name:35} -> ID: {node_id}\n"));
+                } else {
+                    output.push_str(&format!("  ✗ {node_name:35} NOT FOUND\n"));
+                }
+            }
+            output.push('\n');
+        }
+
+        // Find additional nodes not in our categories
+        let mut uncategorized: Vec<_> = node_registry
+            .keys()
+            .filter(|k| {
+                !node_categories
+                    .iter()
+                    .any(|(_, nodes)| nodes.contains(&k.as_str()))
+            })
+            .collect();
+        uncategorized.sort();
+
+        if !uncategorized.is_empty() {
+            output.push_str("=== UNCATEGORIZED NODES ===\n");
+            for node_name in uncategorized {
+                if let Some(node_id) = node_registry.get(node_name) {
+                    let status = if found_in_file.contains(node_name.as_str()) {
+                        "✓"
+                    } else {
+                        "○"
+                    };
+                    output.push_str(&format!("  {status} {node_name:35} -> ID: {node_id}\n"));
+                }
+            }
+        }
+
+        output.push_str(
+            "\nLegend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar\n",
+        );
         output
     }
 }

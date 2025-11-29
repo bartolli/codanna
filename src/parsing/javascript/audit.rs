@@ -122,8 +122,6 @@ impl JavaScriptParserAudit {
             "export_statement",
             "namespace_import",
             "named_imports",
-            "required_parameter",
-            "optional_parameter",
             "rest_pattern",
             "jsx_element",
             "jsx_self_closing_element",

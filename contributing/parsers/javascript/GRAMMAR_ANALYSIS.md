@@ -1,102 +1,203 @@
 # JavaScript Grammar Analysis
 
-*Generated: 2025-11-24 03:07:00 UTC*
+*Generated: 2025-11-29 00:46:16 UTC*
 
 ## Statistics
-- Total nodes in grammar JSON: 180+
-- Nodes handled by parser: 150+
-- Symbol kinds extracted: 5
+- Total nodes in grammar JSON: 119
+- Nodes found in comprehensive.js: 142
+- Nodes handled by parser: 141
+- Symbol kinds extracted: 6
 
-## ✅ Successfully Handled Nodes
-
-### Core Language Constructs
-- class_declaration
-- class_body
-- class_heritage
-- method_definition
-- function_declaration
-- function_expression
+## Successfully Handled Nodes
+These nodes are in examples and handled by parser:
+- !
+- !==
+- "
+- ${
+- '
+- (
+- )
+- *
+- ++
+- ,
+- .
+- ...
+- /
+- />
+- :
+- ;
+- <
+- </
+- =
+- ===
+- =>
+- >
+- >=
+- ?
+- [
+- ]
+- `
+- arguments
+- array
+- array_pattern
 - arrow_function
-- generator_function_declaration
-- variable_declaration
-- variable_declarator
-- lexical_declaration
+- as
+- assignment_expression
+- assignment_pattern
+- async
+- await
+- await_expression
+- binary_expression
+- break
+- break_statement
+- call_expression
+- case
+- catch
+- catch_clause
+- class
+- class_body
+- class_declaration
+- class_heritage
+- comment
 - const
-- let
-- var
-
-### Module System
-- import_statement
-- import_clause
-- import_specifier
-- named_imports
-- namespace_import
-- export_statement
+- continue
+- continue_statement
+- default
+- export
 - export_clause
 - export_specifier
-
-### JSX Support
-- jsx_element
-- jsx_opening_element
-- jsx_closing_element
-- jsx_self_closing_element
-- jsx_attribute
-- jsx_expression
-
-### Expressions & Operators
-- call_expression
-- member_expression
-- binary_expression
-- unary_expression
-- assignment_expression
-- conditional_expression
-- await_expression
-- yield_expression
-- new_expression
-
-### Type Literals
-- identifier
-- string
-- number
-- boolean
-- null
-- undefined
-- template_string
-- regex
-
-### Control Flow
-- if_statement
-- for_statement
+- export_statement
+- expression_statement
+- extends
+- false
+- field_definition
+- for
 - for_in_statement
-- while_statement
-- do_statement
-- switch_statement
-- try_statement
+- for_statement
+- formal_parameters
+- from
+- function
+- function_declaration
+- function_expression
+- generator_function_declaration
+- identifier
+- if
+- if_statement
+- import
+- import_clause
+- import_specifier
+- import_statement
+- jsx_attribute
+- jsx_closing_element
+- jsx_element
+- jsx_expression
+- jsx_opening_element
+- jsx_self_closing_element
+- jsx_text
+- let
+- lexical_declaration
+- member_expression
+- method_definition
+- named_imports
+- namespace_import
+- new
+- new_expression
+- null
+- number
+- object
+- object_assignment_pattern
+- object_pattern
+- of
+- pair
+- parenthesized_expression
+- program
+- property_identifier
+- rest_pattern
+- return
 - return_statement
+- shorthand_property_identifier
+- shorthand_property_identifier_pattern
+- spread_element
+- statement_block
+- static
+- string
+- string_fragment
+- subscript_expression
+- super
+- switch
+- switch_body
+- switch_case
+- switch_default
+- switch_statement
+- template_string
+- template_substitution
+- ternary_expression
+- this
+- throw
 - throw_statement
+- true
+- try
+- try_statement
+- typeof
+- unary_expression
+- undefined
+- update_expression
+- variable_declaration
+- variable_declarator
+- while
+- while_statement
+- yield
+- yield_expression
+- {
+- ||
+- }
 
-## 🎯 Symbol Kinds Extracted
-- **Class**: ES6 classes with constructor and methods
-- **Function**: Function declarations, expressions, arrows, and generators
-- **Variable**: var declarations (hoisted to function scope)
-- **Constant**: const and let declarations (block-scoped)
-- **Method**: Class method definitions
+## Implementation Gaps
+These nodes appear in comprehensive.js but aren't handled:
+- var
 
-## Implementation Highlights
+## Missing from Examples
+These grammar nodes aren't in comprehensive.js:
+- augmented_assignment_expression
+- class_static_block
+- computed_property_name
+- debugger_statement
+- declaration
+- decorator
+- do_statement
+- else_clause
+- empty_statement
+- escape_sequence
+- expression
+- finally_clause
+- generator_function
+- hash_bang_line
+- html_character_reference
+- html_comment
+- import_attribute
+- jsx_namespace_name
+- labeled_statement
+- meta_property
+- namespace_export
+- optional_chain
+- pair_pattern
+- pattern
+- primary_expression
+- private_property_identifier
+- regex
+- regex_flags
+- regex_pattern
+- sequence_expression
+- statement
+- statement_identifier
+- using_declaration
+- with_statement
 
-### JavaScript-Specific Features
-1. **Hoisting**: Proper handling of function and var hoisting semantics
-2. **Block Scoping**: let/const variables scoped to blocks
-3. **JSX**: Full React component support
-4. **ES6+ Modules**: import/export statement tracking
-5. **Class Inheritance**: extends clause resolution
-6. **Generator Functions**: async/await and yield support
+## Symbol Kinds Extracted
+- Class
+- Constant
+- Field
+- Function
+- Method
+- Variable
 
-### Differences from TypeScript Parser
-- No TypeScript-specific syntax (interfaces, type annotations, enums)
-- No tsconfig.json path mapping complexity
-- Simpler module resolution (no type space)
-- Focus on runtime semantics vs compile-time types
-
-## ABI Version
-Tree-sitter ABI: 15 (compatible with tree-sitter >=0.22)

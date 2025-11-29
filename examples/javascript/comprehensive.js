@@ -30,6 +30,14 @@ var legacyFlag = true;
  * Base service class for API interactions
  */
 class BaseService {
+    // Class field definitions (field_definition nodes)
+    baseUrl = '';
+    headers = {};
+    requestCount = 0;
+
+    // Static field
+    static instance = null;
+
     constructor(baseUrl) {
         this.baseUrl = baseUrl;
         this.headers = {
@@ -231,6 +239,25 @@ export function UserProfile({ userId }) {
 }
 
 /**
+ * List component using JSX fragment
+ * @param {Object} props - Component props
+ * @param {Array} props.items - Items to render
+ */
+export function ItemList({ items }) {
+    // jsx_fragment - render multiple elements without wrapper
+    return (
+        <>
+            <h2>Items</h2>
+            <ul>
+                {items.map((item, index) => (
+                    <li key={index}>{item.name}</li>
+                ))}
+            </ul>
+        </>
+    );
+}
+
+/**
  * Main App component
  */
 export default function App() {
@@ -247,6 +274,64 @@ export default function App() {
         </div>
     );
 }
+
+// ============================================================================
+// Control Flow (for_statement, switch_statement, throw_statement, ternary_expression)
+// ============================================================================
+
+/**
+ * Process items with various control flow patterns
+ * @param {Array} items - Items to process
+ * @param {string} mode - Processing mode
+ */
+function processItems(items, mode) {
+    const results = [];
+
+    // for_statement - traditional for loop
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+
+        // ternary_expression - conditional expression
+        const processed = item.active ? item.value * 2 : item.value;
+
+        // switch_statement - multi-branch selection
+        switch (mode) {
+            case 'double':
+                results.push(processed * 2);
+                break;
+            case 'half':
+                results.push(processed / 2);
+                break;
+            case 'skip':
+                continue;
+            default:
+                results.push(processed);
+        }
+    }
+
+    return results;
+}
+
+/**
+ * Validate input and throw on error
+ * @param {*} value - Value to validate
+ * @throws {Error} If validation fails
+ */
+function validateInput(value) {
+    if (value === null || value === undefined) {
+        // throw_statement - explicit error throwing
+        throw new Error('Value cannot be null or undefined');
+    }
+
+    if (typeof value !== 'object') {
+        throw new TypeError('Value must be an object');
+    }
+
+    return true;
+}
+
+// Nested ternary expression
+const getStatus = (code) => code === 200 ? 'success' : code >= 400 ? 'error' : 'pending';
 
 // ============================================================================
 // Hoisting examples

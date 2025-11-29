@@ -18,7 +18,7 @@ if [ -z "$INPUT" ]; then
     echo "  $0 <language>       # Compare using comprehensive.* (with audit)"
     echo "  $0 <file>           # Compare specific file (output to .log)"
     echo ""
-    echo "Languages: typescript, python, rust, go, php, c, cpp, csharp, gdscript, java, kotlin"
+    echo "Languages: typescript, javascript, python, rust, go, php, c, cpp, csharp, gdscript, java, kotlin"
     exit 1
 fi
 
@@ -152,6 +152,7 @@ else
     # Map language to expected file extension
     case "$LANG" in
         typescript) EXT="ts" ;;
+        javascript) EXT="js" ;;
         python) EXT="py" ;;
         rust) EXT="rs" ;;
         go) EXT="go" ;;
@@ -164,7 +165,7 @@ else
         kotlin) EXT="kt" ;;
         *)
             echo "❌ Unsupported language: $LANG"
-            echo "Supported: typescript, python, rust, go, php, c, cpp, csharp, gdscript, java, kotlin"
+            echo "Supported: typescript, javascript, python, rust, go, php, c, cpp, csharp, gdscript, java, kotlin"
             exit 1
             ;;
     esac

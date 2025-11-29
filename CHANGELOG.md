@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2025-11-28
+
+### Added
+
+- JavaScript language support
+- JavaScriptProvider for jsconfig.json parsing and path alias resolution
+- JavaScriptParser with class, function, method, arrow function, export extraction, etc
+- JavaScriptBehavior with ES module path formatting and .js extension handling
+- JavaScriptResolutionContext with JavaScript scope order (local → module → imported → global)
+- Example JavaScript projects: React app, Next.js app, vanilla JavaScript
+- JavaScript inheritance resolution with extends/extended_by relationships
+- Test suite for JavaScript nested functions
+- Project resolution documentation in docs/advanced/project-resolution.md
+
+### Fixed
+
+- JavaScript module path normalization now strips .js/.jsx/.mjs/.cjs extensions
+- JavaScript class inheritance resolution (extends relationships now resolve correctly)
+
+### Changed
+
+- Refactored JavaScript behavior to use shared normalize_js_import helper
+- Updated all language documentation to include JavaScript
+- JavaScript audit reports regenerated with current timestamps
+
+### Documentation
+
+- Added docs/advanced/project-resolution.md explaining tsconfig.json/jsconfig.json resolution
+- Added JavaScript to supported languages list across all documentation
+
 ## [0.8.1] - 2025-11-25
 
 ### Fixed

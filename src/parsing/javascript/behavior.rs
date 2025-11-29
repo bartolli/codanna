@@ -15,6 +15,67 @@ use tree_sitter::Language;
 
 use super::resolution::{JavaScriptInheritanceResolver, JavaScriptResolutionContext};
 
+/// Strip JavaScript file extensions from a path
+fn strip_js_extensions(path: &str) -> &str {
+    path.trim_end_matches(".js")
+        .trim_end_matches(".jsx")
+        .trim_end_matches(".mjs")
+        .trim_end_matches(".cjs")
+}
+
+/// Normalize a JavaScript import path to a module path
+///
+/// Handles relative imports (./foo, ../bar) and strips JS extensions.
+/// Returns a dot-separated module path that matches how modules are stored.
+fn normalize_js_import(import_path: &str, importing_mod: &str) -> String {
+    fn parent_module(m: &str) -> String {
+        let mut parts: Vec<&str> = if m.is_empty() {
+            Vec::new()
+        } else {
+            m.split('.').collect()
+        };
+        if !parts.is_empty() {
+            parts.pop();
+        }
+        parts.join(".")
+    }
+
+    let result = if import_path.starts_with("./") {
+        let base = parent_module(importing_mod);
+        let rel = import_path.trim_start_matches("./").replace('/', ".");
+        if base.is_empty() {
+            rel
+        } else {
+            format!("{base}.{rel}")
+        }
+    } else if import_path.starts_with("../") {
+        let base_owned = parent_module(importing_mod);
+        let mut parts: Vec<&str> = base_owned.split('.').collect();
+        let mut rest = import_path;
+        while rest.starts_with("../") {
+            if !parts.is_empty() {
+                parts.pop();
+            }
+            rest = &rest[3..];
+        }
+        let rest = rest.trim_start_matches("./").replace('/', ".");
+        let mut combined = parts.join(".");
+        if !rest.is_empty() {
+            combined = if combined.is_empty() {
+                rest
+            } else {
+                format!("{combined}.{rest}")
+            };
+        }
+        combined
+    } else {
+        import_path.replace('/', ".")
+    };
+
+    // Strip JS extensions to match module paths
+    strip_js_extensions(&result).to_string()
+}
+
 /// JavaScript language behavior implementation
 #[derive(Clone)]
 pub struct JavaScriptBehavior {
@@ -292,53 +353,6 @@ impl LanguageBehavior for JavaScriptBehavior {
                 eprintln!("DEBUG[JS]: no imports tracked for file {from_file:?}");
             }
             return None;
-        }
-
-        // Helper: normalize JS import path relative to importing module
-        fn parent_module(m: &str) -> String {
-            let mut parts: Vec<&str> = if m.is_empty() {
-                Vec::new()
-            } else {
-                m.split('.').collect()
-            };
-            if !parts.is_empty() {
-                parts.pop();
-            }
-            parts.join(".")
-        }
-        fn normalize_js_import(import_path: &str, importing_mod: &str) -> String {
-            if import_path.starts_with("./") {
-                let base_owned = parent_module(importing_mod);
-                let base = base_owned.as_str();
-                let rel = import_path.trim_start_matches("./").replace('/', ".");
-                if base.is_empty() {
-                    rel
-                } else {
-                    format!("{base}.{rel}")
-                }
-            } else if import_path.starts_with("../") {
-                let base_owned = parent_module(importing_mod);
-                let mut parts: Vec<&str> = base_owned.split('.').collect();
-                let mut rest = import_path;
-                while rest.starts_with("../") {
-                    if !parts.is_empty() {
-                        parts.pop();
-                    }
-                    rest = &rest[3..];
-                }
-                let rest = rest.trim_start_matches("./").replace('/', ".");
-                let mut combined = parts.join(".");
-                if !rest.is_empty() {
-                    combined = if combined.is_empty() {
-                        rest
-                    } else {
-                        format!("{combined}.{rest}")
-                    };
-                }
-                combined
-            } else {
-                import_path.replace('/', ".")
-            }
         }
 
         let importing_module = self.get_module_path_for_file(from_file).unwrap_or_default();
@@ -708,104 +722,6 @@ impl LanguageBehavior for JavaScriptBehavior {
         // Create JavaScript-specific resolution context
         let mut context = JavaScriptResolutionContext::new(file_id);
 
-        // Load project resolution rules for path alias support
-        let project_rules = self.load_project_rules_for_file(file_id);
-
-        // Helper: normalize JS import to module path relative to importing module
-        // Now supports jsconfig path aliases
-        fn normalize_js_import(
-            import_path: &str,
-            importing_mod: &str,
-            rules: Option<&ResolutionRules>,
-        ) -> String {
-            fn parent_module(m: &str) -> String {
-                let mut parts: Vec<&str> = if m.is_empty() {
-                    Vec::new()
-                } else {
-                    m.split('.').collect()
-                };
-                if !parts.is_empty() {
-                    parts.pop();
-                }
-                parts.join(".")
-            }
-
-            // Try path alias resolution first (e.g., @/components/Button)
-            if let Some(rules) = rules {
-                if let Some(resolved) = resolve_path_alias(import_path, rules) {
-                    return resolved;
-                }
-            }
-
-            if import_path.starts_with("./") {
-                let base_owned = parent_module(importing_mod);
-                let base = base_owned.as_str();
-                let rel = import_path.trim_start_matches("./").replace('/', ".");
-                if base.is_empty() {
-                    rel
-                } else {
-                    format!("{base}.{rel}")
-                }
-            } else if import_path.starts_with("../") {
-                let base_owned = parent_module(importing_mod);
-                let mut parts: Vec<&str> = base_owned.split('.').collect();
-                let mut rest = import_path;
-                while rest.starts_with("../") {
-                    if !parts.is_empty() {
-                        parts.pop();
-                    }
-                    rest = &rest[3..];
-                }
-                let rest = rest.trim_start_matches("./").replace('/', ".");
-                let mut combined = parts.join(".");
-                if !rest.is_empty() {
-                    combined = if combined.is_empty() {
-                        rest
-                    } else {
-                        format!("{combined}.{rest}")
-                    };
-                }
-                combined
-            } else {
-                import_path.replace('/', ".")
-            }
-        }
-
-        // Helper: resolve path alias using jsconfig rules
-        fn resolve_path_alias(import_path: &str, rules: &ResolutionRules) -> Option<String> {
-            for (pattern, targets) in &rules.paths {
-                // Convert glob pattern to simple prefix match
-                // e.g., "@/*" matches "@/components/Button"
-                let prefix = pattern.trim_end_matches('*');
-                if let Some(suffix) = import_path.strip_prefix(prefix) {
-                    if let Some(target) = targets.first() {
-                        let target_prefix = target.trim_end_matches('*');
-                        let resolved = format!("{target_prefix}{suffix}");
-
-                        // Apply baseUrl if present
-                        let final_path = if let Some(ref base) = rules.base_url {
-                            if base == "." || base == "./" {
-                                resolved
-                            } else {
-                                format!("{}/{}", base.trim_end_matches('/'), resolved)
-                            }
-                        } else {
-                            resolved
-                        };
-
-                        // Convert path to module path (replace / with .)
-                        return Some(
-                            final_path
-                                .replace('/', ".")
-                                .trim_start_matches('.')
-                                .to_string(),
-                        );
-                    }
-                }
-            }
-            None
-        }
-
         // 1) Imports: prefer cache for imported names
         let imports = self.get_imports_for_file(file_id);
         if crate::config::is_global_debug_enabled() {
@@ -834,9 +750,38 @@ impl LanguageBehavior for JavaScriptBehavior {
                 continue;
             };
 
-            // JavaScript uses relative import normalization with jsconfig path alias support
-            let target_module =
-                normalize_js_import(&import.path, &importing_module, project_rules.as_ref());
+            // Use jsconfig enhancer for path alias resolution (mirrors TypeScript)
+            let target_module = if let Some(rules) = self.load_project_rules_for_file(file_id) {
+                let enhancer = super::resolution::JavaScriptProjectEnhancer::new(rules);
+                use crate::parsing::resolution::ProjectResolutionEnhancer;
+
+                if let Some(enhanced_path) = enhancer.enhance_import_path(&import.path, file_id) {
+                    // Successfully enhanced - this is a jsconfig alias
+                    // Enhanced path is absolute from jsconfig root, convert to module path
+                    debug_print!(
+                        self,
+                        "[build_context] ENHANCED '{}' -> '{}'",
+                        import.path,
+                        enhanced_path
+                    );
+                    enhanced_path.trim_start_matches("./").replace('/', ".")
+                } else {
+                    // Not a jsconfig alias - regular relative import
+                    debug_print!(
+                        self,
+                        "[build_context] NOT ENHANCED '{}' - using relative normalization",
+                        import.path
+                    );
+                    normalize_js_import(&import.path, &importing_module)
+                }
+            } else {
+                // No jsconfig rules - treat as regular relative import
+                debug_print!(
+                    self,
+                    "[build_context] NO RULES for file - using relative normalization"
+                );
+                normalize_js_import(&import.path, &importing_module)
+            };
             debug_print!(
                 self,
                 "[build_context] local_name='{}' target_module='{}'",
@@ -1061,53 +1006,6 @@ impl LanguageBehavior for JavaScriptBehavior {
         let importing_module = self
             .get_module_path_for_file(import.file_id)
             .unwrap_or_default();
-
-        // Normalize import path to module path (relative to importing module)
-        fn normalize_js_import(import_path: &str, importing_mod: &str) -> String {
-            fn parent_module(m: &str) -> String {
-                let mut parts: Vec<&str> = if m.is_empty() {
-                    Vec::new()
-                } else {
-                    m.split('.').collect()
-                };
-                if !parts.is_empty() {
-                    parts.pop();
-                }
-                parts.join(".")
-            }
-            if import_path.starts_with("./") {
-                let base_owned = parent_module(importing_mod);
-                let base = base_owned.as_str();
-                let rel = import_path.trim_start_matches("./").replace('/', ".");
-                if base.is_empty() {
-                    rel
-                } else {
-                    format!("{base}.{rel}")
-                }
-            } else if import_path.starts_with("../") {
-                let base_owned = parent_module(importing_mod);
-                let mut parts: Vec<&str> = base_owned.split('.').collect();
-                let mut rest = import_path;
-                while rest.starts_with("../") {
-                    if !parts.is_empty() {
-                        parts.pop();
-                    }
-                    rest = &rest[3..];
-                }
-                let rest = rest.trim_start_matches("./").replace('/', ".");
-                let mut combined = parts.join(".");
-                if !rest.is_empty() {
-                    combined = if combined.is_empty() {
-                        rest
-                    } else {
-                        format!("{combined}.{rest}")
-                    };
-                }
-                combined
-            } else {
-                import_path.replace('/', ".")
-            }
-        }
 
         let target_module = normalize_js_import(&import.path, &importing_module);
 
