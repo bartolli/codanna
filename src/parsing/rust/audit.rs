@@ -90,23 +90,6 @@ impl RustParserAudit {
         report.push_str("# Rust Parser Coverage Report\n\n");
         report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
-        // Summary
-        report.push_str("## Summary\n");
-        report.push_str(&format!("- Nodes in file: {}\n", self.grammar_nodes.len()));
-        report.push_str(&format!(
-            "- Nodes handled by parser: {}\n",
-            self.implemented_nodes.len()
-        ));
-        report.push_str(&format!(
-            "- Symbol kinds extracted: {}\n",
-            self.extracted_symbol_kinds.len()
-        ));
-
-        // Coverage table
-        report.push_str("\n## Coverage Table\n\n");
-        report.push_str("| Node Type | ID | Status |\n");
-        report.push_str("|-----------|-----|--------|\n");
-
         // Key nodes we care about for symbol extraction
         let key_nodes = vec![
             "function_item",
@@ -117,29 +100,56 @@ impl RustParserAudit {
             "mod_item",
             "const_item",
             "static_item",
-            "type_alias",
-            "macro_definition",
-            "macro_rules",
+            "type_item",        // type alias: `type Foo = Bar;`
+            "macro_definition", // macro_rules! definitions
             "field_declaration",
             "enum_variant",
             "function_signature_item",
             "associated_type",
             "use_declaration",
-            "use_as_clause",
+            "use_as_clause", // aliased import: `use foo as bar;`
             "use_wildcard",
+            "use_list", // grouped imports: `use foo::{bar, baz};`
             "parameter",
             "type_parameter",
             "lifetime",
             "closure_expression",
-            "async_block",
+            "async_block", // async { } expression
         ];
+
+        // Count key nodes coverage
+        let key_implemented = key_nodes
+            .iter()
+            .filter(|n| self.implemented_nodes.contains(**n))
+            .count();
+
+        // Summary
+        report.push_str("## Summary\n");
+        report.push_str(&format!(
+            "- Key nodes: {}/{} ({}%)\n",
+            key_implemented,
+            key_nodes.len(),
+            (key_implemented * 100) / key_nodes.len()
+        ));
+        report.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            self.extracted_symbol_kinds.len()
+        ));
+        report.push_str(
+            "\n> **Note:** Key nodes are symbol-producing constructs (functions, structs, traits).\n\n",
+        );
+
+        // Coverage table
+        report.push_str("## Coverage Table\n\n");
+        report.push_str("| Node Type | ID | Status |\n");
+        report.push_str("|-----------|-----|--------|\n");
 
         let mut gaps = Vec::new();
         let mut missing = Vec::new();
 
-        for node_name in key_nodes {
-            let status = if let Some(id) = self.grammar_nodes.get(node_name) {
-                if self.implemented_nodes.contains(node_name) {
+        for node_name in &key_nodes {
+            let status = if let Some(id) = self.grammar_nodes.get(*node_name) {
+                if self.implemented_nodes.contains(*node_name) {
                     format!("{id} | ✅ implemented")
                 } else {
                     gaps.push(node_name);

@@ -567,6 +567,89 @@ impl JavaParser {
         }
     }
 
+    fn handle_annotation_type_declaration(
+        &mut self,
+        node: Node,
+        code: &str,
+        file_id: FileId,
+        symbols: &mut Vec<Symbol>,
+        counter: &mut SymbolCounter,
+        context: &mut ParserContext,
+        module_path: &str,
+        depth: usize,
+    ) {
+        // Register ALL child nodes recursively for audit
+        self.register_node_recursively(node);
+
+        // Extract annotation type name - look for "identifier" child
+        let mut annotation_name = None;
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier" {
+                annotation_name = Some(self.text_for_node(code, child).trim().to_string());
+                break;
+            }
+        }
+
+        let annotation_name = match annotation_name {
+            Some(name) => name,
+            None => return,
+        };
+
+        let symbol_id = counter.next_id();
+        let range = self.node_to_range(node);
+        let visibility = self.determine_visibility(node, code);
+        let signature = self.extract_signature(node, code);
+        let doc_comment = self.doc_comment_for(&node, code);
+
+        let mut symbol = Symbol::new(
+            symbol_id,
+            annotation_name.as_str(),
+            crate::SymbolKind::Interface, // Annotation types are similar to interfaces
+            file_id,
+            range,
+        );
+        symbol.visibility = visibility;
+        symbol.signature = Some(signature.into());
+        if let Some(doc) = doc_comment {
+            symbol.doc_comment = Some(doc.into());
+        }
+        symbol.scope_context = Some(crate::symbol::ScopeContext::Module);
+
+        // Save parent context before entering new scope
+        let saved_class = context.current_class().map(String::from);
+
+        // Enter new scope
+        context.enter_scope(crate::parsing::ScopeType::Class);
+        context.set_current_class(Some(annotation_name.clone()));
+        symbols.push(symbol);
+
+        // Process annotation type body (annotation_type_body)
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "annotation_type_body" {
+                let mut body_cursor = child.walk();
+                for body_child in child.children(&mut body_cursor) {
+                    self.extract_symbols_from_node(
+                        body_child,
+                        code,
+                        file_id,
+                        symbols,
+                        counter,
+                        context,
+                        module_path,
+                        depth + 1,
+                    );
+                }
+                break;
+            }
+        }
+
+        // Exit scope and restore context
+        context.exit_scope();
+        context.set_current_class(saved_class);
+    }
+
     // =========================================================================
     // PACKAGE EXTRACTION
     // =========================================================================
@@ -638,6 +721,19 @@ impl JavaParser {
             NODE_PACKAGE_DECLARATION | NODE_IMPORT_DECLARATION => {
                 // Register recursively to track scoped_identifier chains
                 self.register_node_recursively(node);
+            }
+            "annotation_type_declaration" => {
+                // Handle @interface definitions (e.g., @interface CustomAnnotation {})
+                self.handle_annotation_type_declaration(
+                    node,
+                    code,
+                    file_id,
+                    symbols,
+                    counter,
+                    context,
+                    module_path,
+                    depth,
+                );
             }
             "ERROR" => {
                 // Register error nodes but don't recurse (handled separately below)

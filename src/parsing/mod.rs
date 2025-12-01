@@ -19,6 +19,7 @@ pub mod python;
 pub mod registry;
 pub mod resolution;
 pub mod rust;
+pub mod swift;
 pub mod typescript;
 
 pub use c::{CBehavior, CParser};
@@ -47,4 +48,5 @@ pub use resolution::{
     ScopeLevel,
 };
 pub use rust::{RustBehavior, RustParser};
+pub use swift::{SwiftBehavior, SwiftParser};
 pub use typescript::{TypeScriptBehavior, TypeScriptParser};

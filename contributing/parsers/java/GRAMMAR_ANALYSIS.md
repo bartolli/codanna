@@ -1,11 +1,11 @@
 # Java Grammar Analysis
 
-*Generated: 2025-11-16 17:06:53 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 151
 - Nodes found in comprehensive.java: 92
-- Nodes handled by parser: 87
+- Nodes handled by parser: 91
 - Symbol kinds extracted: 5
 
 ## ✅ Successfully Handled Nodes
@@ -22,7 +22,11 @@ These nodes are in examples and handled by parser:
 - =
 - >
 - @
+- @interface
 - abstract
+- annotation_type_body
+- annotation_type_declaration
+- annotation_type_element_declaration
 - argument_list
 - assignment_expression
 - block
@@ -100,10 +104,6 @@ These nodes are in examples and handled by parser:
 
 ## ⚠️ Implementation Gaps
 These nodes appear in comprehensive.java but aren't handled:
-- @interface
-- annotation_type_body
-- annotation_type_declaration
-- annotation_type_element_declaration
 - program
 
 ## 📚 Grammar-Only Nodes

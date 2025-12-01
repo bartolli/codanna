@@ -252,7 +252,7 @@ pub fn execute_parse(
     let ts_language = match language {
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
-        Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        Language::TypeScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
         Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
@@ -262,6 +262,7 @@ pub fn execute_parse(
         Language::Gdscript => tree_sitter_gdscript::LANGUAGE.into(),
         Language::Java => tree_sitter_java::LANGUAGE.into(),
         Language::Kotlin => tree_sitter_kotlin::language(),
+        Language::Swift => tree_sitter_swift::LANGUAGE.into(),
     };
 
     parser

@@ -8,7 +8,7 @@ use super::{
     GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser, JavaScriptBehavior,
     JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior, LanguageId,
     LanguageParser, PhpBehavior, PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser,
-    TypeScriptBehavior, TypeScriptParser, get_registry,
+    SwiftBehavior, SwiftParser, TypeScriptBehavior, TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -177,6 +177,10 @@ impl ParserFactory {
                 let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Swift => {
+                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
         }
     }
 
@@ -300,6 +304,13 @@ impl ParserFactory {
                 ParserWithBehavior {
                     parser: Box::new(parser),
                     behavior: Box::new(KotlinBehavior::new()),
+                }
+            }
+            Language::Swift => {
+                let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(SwiftBehavior::new()),
                 }
             }
         };

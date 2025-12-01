@@ -1,11 +1,12 @@
 # JavaScript Parser Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 142
-- Nodes handled by parser: 141
+- Key nodes: 16/16 (100%)
 - Symbol kinds extracted: 6
+
+> **Note:** Key nodes are symbol-producing constructs (classes, functions, imports).
 
 ## Coverage Table
 

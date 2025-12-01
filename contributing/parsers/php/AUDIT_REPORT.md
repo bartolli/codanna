@@ -1,11 +1,12 @@
 # PHP Parser Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 177
-- Nodes handled by parser: 176
+- Key nodes: 18/18 (100%)
 - Symbol kinds extracted: 8
+
+> **Note:** Key nodes are symbol-producing constructs (classes, functions, traits).
 
 ## Coverage Table
 
@@ -21,7 +22,6 @@
 | function_definition | 244 | ✅ implemented |
 | property_declaration | 231 | ✅ implemented |
 | const_declaration | 229 | ✅ implemented |
-| class_const_declaration | - | ❌ not found |
 | simple_parameter | 252 | ✅ implemented |
 | property_promotion_parameter | 251 | ✅ implemented |
 | variadic_parameter | 253 | ✅ implemented |
@@ -39,8 +39,4 @@
 
 ## Recommended Actions
 
-### Priority 2: Missing Examples
-These nodes aren't in the comprehensive example. Consider:
-
-- `class_const_declaration`: Add example to comprehensive.php or verify node name
-
+✨ **Excellent coverage!** All key nodes are implemented.

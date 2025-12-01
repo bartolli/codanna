@@ -17,6 +17,7 @@ Parser architecture and supported languages.
 | C | tree-sitter-c |
 | C++ | tree-sitter-cpp |
 | C# | tree-sitter-c-sharp |
+| Swift | tree-sitter-swift |
 | GDScript | tree-sitter-gdscript |
 
 ## Parser Technology

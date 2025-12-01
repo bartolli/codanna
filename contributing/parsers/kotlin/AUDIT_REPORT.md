@@ -1,13 +1,12 @@
 # Kotlin Parser Symbol Extraction Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 150
-- Nodes with symbol extraction: 142
+- Key nodes: 17/17 (100%)
 - Symbol kinds extracted: 8
 
-> **Note:** This focuses on nodes that produce indexable symbols used for IDE features.
+> **Note:** Key nodes are symbol-producing constructs (classes, functions, imports).
 
 ## Coverage Table
 
@@ -24,11 +23,12 @@
 | enum_class_body | 195 | ✅ implemented |
 | type_alias | 160 | ✅ implemented |
 | package_header | 156 | ✅ implemented |
-| import_header | 158 | ⚠️ gap |
+| import_header | 158 | ✅ implemented |
 | import_list | 157 | ✅ implemented |
 | delegation_specifier | 169 | ✅ implemented |
 | annotation | 304 | ✅ implemented |
 | modifiers | 289 | ✅ implemented |
+| infix_expression | 234 | ✅ implemented |
 
 ## Legend
 
@@ -38,6 +38,4 @@
 
 ## Recommended Actions
 
-### Implementation Gaps
-- `import_header`: add handling in `kotlin/parser.rs` if symbol extraction is required.
-
+All tracked nodes are currently implemented ✅

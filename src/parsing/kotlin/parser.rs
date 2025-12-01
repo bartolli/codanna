@@ -907,8 +907,17 @@ impl KotlinParser {
             NODE_SECONDARY_CONSTRUCTOR => {
                 self.handle_secondary_constructor(node, code, file_id, symbols, counter, context);
             }
-            NODE_PACKAGE_HEADER | "import_list" | "type_alias" => {
+            NODE_PACKAGE_HEADER | "import_list" | "import_header" | "type_alias" => {
                 self.register_node(&node);
+            }
+            "infix_expression" => {
+                // Check for context receiver pattern: context(...) fun name() { }
+                // AST: infix_expression > call_expression("context") + simple_identifier("fun") + call_expression(name + lambda)
+                if self.try_extract_context_receiver_function(
+                    node, code, file_id, symbols, counter, context, depth,
+                ) {
+                    return;
+                }
             }
             _ => {}
         }
@@ -1134,6 +1143,92 @@ impl KotlinParser {
         // Restore parent context
         context.set_current_function(saved_function);
         context.set_current_class(saved_class);
+    }
+
+    /// Try to extract a function from context receiver pattern
+    /// Pattern: context(View, Database) fun save() { }
+    /// AST: infix_expression > call_expression("context") + simple_identifier("fun") + call_expression(name + lambda)
+    fn try_extract_context_receiver_function(
+        &mut self,
+        node: Node,
+        code: &str,
+        file_id: FileId,
+        symbols: &mut Vec<Symbol>,
+        counter: &mut SymbolCounter,
+        context: &mut ParserContext,
+        _depth: usize,
+    ) -> bool {
+        self.register_node(&node);
+
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.children(&mut cursor).collect();
+
+        // Need at least 3 children: context(...), fun, name()
+        if children.len() < 3 {
+            return false;
+        }
+
+        // First child: call_expression with "context"
+        let first = children[0];
+        if first.kind() != "call_expression" {
+            return false;
+        }
+        let mut fc = first.walk();
+        let first_id = first
+            .children(&mut fc)
+            .find(|c| c.kind() == "simple_identifier");
+        if let Some(id) = first_id {
+            let name = &code[id.byte_range()];
+            if name != "context" {
+                return false;
+            }
+        } else {
+            return false;
+        }
+
+        // Second child: simple_identifier "fun"
+        let second = children[1];
+        if second.kind() != "simple_identifier" {
+            return false;
+        }
+        let fun_keyword = &code[second.byte_range()];
+        if fun_keyword != "fun" {
+            return false;
+        }
+
+        // Third child: call_expression with function name and lambda body
+        let third = children[2];
+        if third.kind() != "call_expression" {
+            return false;
+        }
+
+        // Extract function name from third child
+        let mut tc = third.walk();
+        let func_name_node = third
+            .children(&mut tc)
+            .find(|c| c.kind() == "simple_identifier");
+        let func_name = if let Some(id) = func_name_node {
+            code[id.byte_range()].to_string()
+        } else {
+            return false;
+        };
+
+        // Create the function symbol
+        let symbol_id = counter.next_id();
+        let range = self.node_to_range(node);
+
+        let kind = if context.is_in_class() {
+            SymbolKind::Method
+        } else {
+            SymbolKind::Function
+        };
+
+        let mut symbol = Symbol::new(symbol_id, func_name.as_str(), kind, file_id, range);
+        symbol.visibility = Visibility::Public;
+        symbol.signature = Some(format!("context fun {func_name}()").into());
+
+        symbols.push(symbol);
+        true
     }
 
     fn handle_function_declaration(

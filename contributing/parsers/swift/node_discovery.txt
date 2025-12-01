@@ -1,0 +1,238 @@
+=== Swift Node Discovery ===
+
+Total unique nodes found: 201
+
+=== Type Declarations ===
+  found      class_declaration                   -> ID: 398
+  found      protocol_declaration                -> ID: 438
+  not found  struct_declaration                  -> ID: -
+  not found  enum_declaration                    -> ID: -
+  not found  actor_declaration                   -> ID: -
+  not found  extension_declaration               -> ID: -
+
+=== Member Declarations ===
+  found      function_declaration                -> ID: 388
+  found      init_declaration                    -> ID: 442
+  found      deinit_declaration                  -> ID: 443
+  found      property_declaration                -> ID: 378
+  found      subscript_declaration               -> ID: 444
+  found      typealias_declaration               -> ID: 386
+
+=== Enum Members ===
+  found      enum_entry                          -> ID: 435
+
+=== Imports ===
+  found      import_declaration                  -> ID: 374
+
+=== Modifiers ===
+  found      modifiers                           -> ID: 475
+  found      visibility_modifier                 -> ID: 483
+
+=== Inheritance ===
+  found      inheritance_specifier               -> ID: 402
+  found      type_constraint                     -> ID: 408
+
+=== ALL NODES FOUND IN FILE ===
+  !                                   -> ID: 1
+  "                                   -> ID: 22
+  %                                   -> ID: 99
+  &&                                  -> ID: 188
+  (                                   -> ID: 39
+  )                                   -> ID: 28
+  *                                   -> ID: 97
+  +                                   -> ID: 95
+  +=                                  -> ID: 82
+  ,                                   -> ID: 31
+  -                                   -> ID: 96
+  -=                                  -> ID: 83
+  ->                                  -> ID: 186
+  .                                   -> ID: 42
+  ...                                 -> ID: 92
+  ..<                                 -> ID: 93
+  :                                   -> ID: 37
+  <                                   -> ID: 57
+  =                                   -> ID: 191
+  ==                                  -> ID: 192
+  >                                   -> ID: 58
+  ?                                   -> ID: 45
+  ??                                  -> ID: 190
+  @                                   -> ID: 144
+  [                                   -> ID: 40
+  \(                                  -> ID: 30
+  ]                                   -> ID: 41
+  actor                               -> ID: 8
+  additive_expression                 -> ID: 274
+  array_literal                       -> ID: 305
+  array_type                          -> ID: 247
+  as                                  -> ID: 202
+  as!                                 -> ID: 204
+  as?                                 -> ID: 203
+  as_expression                       -> ID: 270
+  as_operator                         -> ID: 344
+  assignment                          -> ID: 362
+  associatedtype                      -> ID: 143
+  associatedtype_declaration          -> ID: 458
+  async                               -> ID: 9
+  attribute                           -> ID: 459
+  await                               -> ID: 59
+  await_expression                    -> ID: 295
+  bang                                -> ID: 430
+  boolean_literal                     -> ID: 220
+  call_expression                     -> ID: 301
+  call_suffix                         -> ID: 286
+  case                                -> ID: 77
+  catch_block                         -> ID: 328
+  catch_keyword                       -> ID: 201
+  class                               -> ID: 119
+  class_body                          -> ID: 400
+  class_declaration                   -> ID: 398
+  comment                             -> ID: 3
+  comparison_expression               -> ID: 279
+  computed_getter                     -> ID: 446
+  computed_property                   -> ID: 445
+  computed_setter                     -> ID: 448
+  conjunction_expression              -> ID: 281
+  constructor_expression              -> ID: 262
+  constructor_suffix                  -> ID: 287
+  control_transfer_statement          -> ID: 359
+  custom_operator                     -> ID: 284
+  default_keyword                     -> ID: 198
+  deinit                              -> ID: 133
+  deinit_declaration                  -> ID: 443
+  dictionary_literal                  -> ID: 306
+  dictionary_type                     -> ID: 248
+  didSet                              -> ID: 126
+  didset_clause                       -> ID: 385
+  directly_assignable_expression      -> ID: 348
+  disjunction_expression              -> ID: 282
+  do                                  -> ID: 79
+  do_statement                        -> ID: 327
+  else                                -> ID: 200
+  enum                                -> ID: 120
+  enum_class_body                     -> ID: 434
+  enum_entry                          -> ID: 435
+  enum_type_parameters                -> ID: 437
+  equality_constraint                 -> ID: 410
+  equality_expression                 -> ID: 280
+  extension                           -> ID: 129
+  false                               -> ID: 21
+  fileprivate                         -> ID: 153
+  final                               -> ID: 161
+  for                                 -> ID: 107
+  for_statement                       -> ID: 354
+  func                                -> ID: 124
+  function_body                       -> ID: 392
+  function_declaration                -> ID: 388
+  function_type                       -> ID: 246
+  get                                 -> ID: 135
+  getter_specifier                    -> ID: 449
+  guard                               -> ID: 76
+  guard_statement                     -> ID: 323
+  identifier                          -> ID: 218
+  if                                  -> ID: 51
+  if_statement                        -> ID: 320
+  import                              -> ID: 116
+  import_declaration                  -> ID: 374
+  in                                  -> ID: 73
+  infix_expression                    -> ID: 276
+  inheritance_constraint              -> ID: 409
+  inheritance_modifier                -> ID: 488
+  inheritance_specifier               -> ID: 402
+  init                                -> ID: 132
+  init_declaration                    -> ID: 442
+  inout                               -> ID: 162
+  integer_literal                     -> ID: 16
+  internal                            -> ID: 152
+  interpolated_expression             -> ID: 549
+  is                                  -> ID: 94
+  lambda_literal                      -> ID: 310
+  let                                 -> ID: 122
+  line_str_text                       -> ID: 224
+  line_string_literal                 -> ID: 222
+  member_modifier                     -> ID: 482
+  modifiers                           -> ID: 475
+  multiplicative_expression           -> ID: 273
+  mutating                            -> ID: 155
+  mutation_modifier                   -> ID: 486
+  navigation_expression               -> ID: 264
+  navigation_suffix                   -> ID: 285
+  nil                                 -> ID: 14
+  nil_coalescing_expression           -> ID: 277
+  opaque_type                         -> ID: 253
+  open                                -> ID: 154
+  optional_type                       -> ID: 249
+  override                            -> ID: 146
+  parameter                           -> ID: 416
+  parameter_modifier                  -> ID: 489
+  parameter_modifiers                 -> ID: 477
+  pattern                             -> ID: 465
+  prefix_expression                   -> ID: 269
+  private                             -> ID: 151
+  property_declaration                -> ID: 378
+  property_modifier                   -> ID: 487
+  protocol                            -> ID: 121
+  protocol_body                       -> ID: 439
+  protocol_declaration                -> ID: 438
+  protocol_function_declaration       -> ID: 550
+  protocol_property_declaration       -> ID: 376
+  protocol_property_requirements      -> ID: 377
+  public                              -> ID: 150
+  range_expression                    -> ID: 275
+  real_literal                        -> ID: 15
+  return                              -> ID: 110
+  self                                -> ID: 74
+  self_expression                     -> ID: 317
+  set                                 -> ID: 136
+  setter_specifier                    -> ID: 450
+  simple_identifier                   -> ID: 216
+  some                                -> ID: 47
+  source_file                         -> ID: 213
+  statements                          -> ID: 349
+  static                              -> ID: 157
+  str_escaped_char                    -> ID: 225
+  struct                              -> ID: 118
+  subscript                           -> ID: 134
+  subscript_declaration               -> ID: 444
+  super                               -> ID: 75
+  super_expression                    -> ID: 318
+  switch                              -> ID: 52
+  switch_entry                        -> ID: 325
+  switch_pattern                      -> ID: 326
+  switch_statement                    -> ID: 324
+  ternary_expression                  -> ID: 297
+  throw_keyword                       -> ID: 109
+  throws                              -> ID: 433
+  true                                -> ID: 20
+  try                                 -> ID: 81
+  try_expression                      -> ID: 294
+  try_operator                        -> ID: 334
+  tuple_type                          -> ID: 243
+  tuple_type_item                     -> ID: 244
+  type_annotation                     -> ID: 237
+  type_arguments                      -> ID: 290
+  type_constraint                     -> ID: 408
+  type_constraints                    -> ID: 407
+  type_identifier                     -> ID: 551
+  type_parameter                      -> ID: 405
+  type_parameters                     -> ID: 404
+  typealias                           -> ID: 117
+  typealias_declaration               -> ID: 386
+  user_type                           -> ID: 241
+  value_argument                      -> ID: 293
+  value_argument_label                -> ID: 292
+  value_arguments                     -> ID: 291
+  value_binding_pattern               -> ID: 467
+  var                                 -> ID: 123
+  visibility_modifier                 -> ID: 483
+  where_keyword                       -> ID: 199
+  while                               -> ID: 108
+  while_statement                     -> ID: 357
+  wildcard_pattern                    -> ID: 145
+  willSet                             -> ID: 125
+  willset_clause                      -> ID: 384
+  willset_didset_block                -> ID: 383
+  {                                   -> ID: 70
+  ||                                  -> ID: 189
+  }                                   -> ID: 72
+
+Legend: found = in example file, not found = in grammar but not in file

@@ -21,12 +21,13 @@ get_repo_url() {
         php) echo "https://github.com/tree-sitter/tree-sitter-php" ;;
         python) echo "https://github.com/tree-sitter/tree-sitter-python" ;;
         rust) echo "https://github.com/tree-sitter/tree-sitter-rust" ;;
+        swift) echo "https://github.com/alex-pinkus/tree-sitter-swift" ;;
         typescript) echo "https://github.com/tree-sitter/tree-sitter-typescript" ;;
     esac
 }
 
 # Supported languages
-LANGUAGES="c cpp csharp gdscript go java javascript kotlin php python rust typescript"
+LANGUAGES="c cpp csharp gdscript go java javascript kotlin php python rust swift typescript"
 
 echo "🔍 Checking grammar versions..."
 echo ""

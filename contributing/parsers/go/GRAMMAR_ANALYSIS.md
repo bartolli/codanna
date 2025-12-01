@@ -1,34 +1,15 @@
 # Go Grammar Analysis
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 112
 - Nodes found in comprehensive.go: 115
-- Nodes handled by parser: 16
+- Nodes handled by parser: 114
 - Symbol kinds extracted: 9
 
 ## ✅ Successfully Handled Nodes
 These nodes are in examples and handled by parser:
-- block
-- const_declaration
-- const_spec
-- field_declaration
-- for_statement
-- function_declaration
-- if_statement
-- interface_type
-- method_declaration
-- parameter_declaration
-- short_var_declaration
-- struct_type
-- type_declaration
-- type_spec
-- var_declaration
-- var_spec
-
-## ⚠️ Implementation Gaps
-These nodes appear in comprehensive.go but aren't handled:
 - !=
 - "
 - &
@@ -51,6 +32,7 @@ These nodes appear in comprehensive.go but aren't handled:
 - argument_list
 - assignment_statement
 - binary_expression
+- block
 - break
 - break_statement
 - call_expression
@@ -59,24 +41,30 @@ These nodes appear in comprehensive.go but aren't handled:
 - comment
 - composite_literal
 - const
+- const_declaration
+- const_spec
 - defer
 - defer_statement
 - else
 - escape_sequence
 - expression_list
 - expression_statement
+- field_declaration
 - field_declaration_list
 - field_identifier
 - for
 - for_clause
+- for_statement
 - func
 - func_literal
+- function_declaration
 - function_type
 - generic_type
 - go
 - go_statement
 - identifier
 - if
+- if_statement
 - import
 - import_declaration
 - import_spec
@@ -85,18 +73,21 @@ These nodes appear in comprehensive.go but aren't handled:
 - index_expression
 - int_literal
 - interface
+- interface_type
 - interpreted_string_literal
 - interpreted_string_literal_content
 - iota
 - keyed_element
 - literal_element
 - literal_value
+- method_declaration
 - method_elem
 - negated_type
 - nil
 - package
 - package_clause
 - package_identifier
+- parameter_declaration
 - parameter_list
 - parenthesized_expression
 - pointer_type
@@ -109,25 +100,34 @@ These nodes appear in comprehensive.go but aren't handled:
 - return_statement
 - selector_expression
 - send_statement
+- short_var_declaration
 - slice_type
-- source_file
 - statement_list
 - struct
+- struct_type
 - true
 - type
 - type_alias
 - type_arguments
 - type_constraint
+- type_declaration
 - type_elem
 - type_identifier
 - type_parameter_declaration
 - type_parameter_list
+- type_spec
 - unary_expression
 - var
+- var_declaration
+- var_spec
 - var_spec_list
 - {
 - }
 - ~
+
+## ⚠️ Implementation Gaps
+These nodes appear in comprehensive.go but aren't handled:
+- source_file
 
 ## 📝 Missing from Examples
 These grammar nodes aren't in comprehensive.go:

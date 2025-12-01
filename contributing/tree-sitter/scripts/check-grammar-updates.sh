@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 LOCKFILE="$PROJECT_ROOT/contributing/parsers/grammar-versions.lock"
 
 # Supported languages
-LANGUAGES="c cpp csharp gdscript go php python rust typescript"
+LANGUAGES="c cpp csharp gdscript go java javascript kotlin php python rust swift typescript"
 
 echo "🔍 Checking for grammar updates from remote..."
 echo ""

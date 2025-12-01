@@ -1,9 +1,10 @@
 //! Comprehensive Rust test file for parser maturity assessment
 //! Tests all major Rust language features and constructs
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};  // use_list
 use std::sync::Arc;
 use std::marker::PhantomData;
+use std::io::Result as IoResult;  // use_as_clause
 
 // === TEST SCENARIO: Clear Relationship Testing ===
 
@@ -289,6 +290,10 @@ where
 /// # Returns
 /// A Result containing the processed URL string or an error
 pub async fn async_operation(url: &str) -> Result<String> {
+    // async_block example
+    let result = async {
+        url.to_uppercase()
+    };
     Ok(url.to_string())
 }
 

@@ -15,7 +15,7 @@ Without context, `@services/user` is meaningless. It could be:
 - `lib/services/user/index.ts`
 - Something else entirely
 
-The mapping is defined in your project's configuration files (`tsconfig.json`, `jsconfig.json`, `pom.xml`). Codanna reads these files to understand how your project resolves imports.
+The mapping is defined in your project's configuration files (`tsconfig.json`, `jsconfig.json`, `pom.xml`, `Package.swift`). Codanna reads these files to understand how your project resolves imports.
 
 ## How It Works
 
@@ -38,6 +38,11 @@ config_files = [
 [languages.java]
 config_files = [
     "pom.xml"
+]
+
+[languages.swift]
+config_files = [
+    "Package.swift"
 ]
 ```
 
@@ -84,7 +89,8 @@ Extracted rules are saved to `.codanna/index/resolvers/`:
 .codanna/index/resolvers/
 ├── typescript_resolution.json
 ├── javascript_resolution.json
-└── java_resolution.json
+├── java_resolution.json
+└── swift_resolution.json
 ```
 
 This means Codanna doesn't re-parse config files on every query - it uses the cached rules.
@@ -160,6 +166,52 @@ config_files = [
 ```
 
 Each module's `pom.xml` defines its source directory, so imports resolve to the correct module.
+
+### Swift
+
+Swift resolution uses Swift Package Manager (SPM) conventions from `Package.swift`.
+
+**Configuration:**
+```toml
+[languages.swift]
+config_files = [
+    "Package.swift"
+]
+```
+
+**Package.swift example:**
+```swift
+// swift-tools-version:5.5
+import PackageDescription
+
+let package = Package(
+    name: "MyApp",
+    targets: [
+        .target(name: "MyLib"),
+        .target(name: "MyApp", dependencies: ["MyLib"]),
+        .testTarget(name: "MyLibTests", dependencies: ["MyLib"]),
+    ]
+)
+```
+
+**SPM conventions:**
+- `Sources/<ModuleName>/` for library and executable targets
+- `Tests/<ModuleName>Tests/` for test targets
+- Custom paths via `path:` parameter in target definitions
+
+**Module path mapping:**
+```
+Sources/MyLib/Types/User.swift -> MyLib.Types
+Sources/MyApp/Main.swift -> MyApp
+Tests/MyLibTests/UserTests.swift -> MyLibTests
+```
+
+**Custom source paths:**
+```swift
+.target(name: "MyLib", path: "CustomSources/MyLib")
+```
+
+Codanna detects custom paths and adjusts resolution accordingly.
 
 ## Monorepo Support
 

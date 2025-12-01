@@ -319,7 +319,7 @@ impl RustParser {
 
         match node.kind() {
             "function_item" => {
-                self.register_handled_node("function_item", node.kind_id());
+                self.register_node_recursively(node);
                 // Extract function name for parent tracking
                 let func_name = node
                     .child_by_field_name("name")
@@ -391,7 +391,7 @@ impl RustParser {
                 return; // Don't process children again
             }
             "struct_item" => {
-                self.register_handled_node("struct_item", node.kind_id());
+                self.register_node_recursively(node);
                 // Extract struct name for parent tracking
                 let struct_name = node
                     .child_by_field_name("name")
@@ -469,7 +469,7 @@ impl RustParser {
                 self.context.set_current_class(saved_class);
             }
             "enum_item" => {
-                self.register_handled_node("enum_item", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let symbol = self.create_symbol(
                         counter,
@@ -510,7 +510,7 @@ impl RustParser {
                 }
             }
             "type_item" => {
-                self.register_handled_node("type_item", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let symbol = self.create_symbol(
                         counter,
@@ -530,7 +530,7 @@ impl RustParser {
                 }
             }
             "const_item" => {
-                self.register_handled_node("const_item", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let symbol = self.create_symbol(
                         counter,
@@ -550,7 +550,7 @@ impl RustParser {
                 }
             }
             "static_item" => {
-                self.register_handled_node("static_item", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let symbol = self.create_symbol(
                         counter,
@@ -570,7 +570,7 @@ impl RustParser {
                 }
             }
             "trait_item" => {
-                self.register_handled_node("trait_item", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     // For traits, we need the full node range, not just the name
                     let symbol = self.create_symbol(
@@ -623,7 +623,7 @@ impl RustParser {
                 return;
             }
             "impl_item" => {
-                self.register_handled_node("impl_item", node.kind_id());
+                self.register_node_recursively(node);
                 // Extract the type being implemented for parent tracking
                 let impl_type_name = node
                     .child_by_field_name("type")
@@ -663,7 +663,7 @@ impl RustParser {
                 return; // Don't process children again
             }
             "mod_item" => {
-                self.register_handled_node("mod_item", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let symbol = self.create_symbol(
                         counter,
@@ -695,7 +695,7 @@ impl RustParser {
                 return; // Skip default traversal since we handled children
             }
             "macro_definition" => {
-                self.register_handled_node("macro_definition", node.kind_id());
+                self.register_node_recursively(node);
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let symbol = self.create_symbol(
                         counter,
@@ -710,6 +710,14 @@ impl RustParser {
                         symbols.push(sym);
                     }
                 }
+            }
+            // Register use declarations and their children for audit tracking
+            "use_declaration" => {
+                self.register_node_recursively(node);
+            }
+            // Register closure expressions for audit tracking
+            "closure_expression" => {
+                self.register_node_recursively(node);
             }
             _ => {}
         }
@@ -1713,6 +1721,16 @@ impl RustParser {
         } else {
             doc_lines.reverse(); // Restore original order
             Some(doc_lines.join("\n"))
+        }
+    }
+
+    /// Recursively register all nodes for audit tracking
+    /// This ensures child nodes (parameter, type_parameter, lifetime, etc.) are counted
+    fn register_node_recursively(&mut self, node: Node) {
+        self.register_handled_node(node.kind(), node.kind_id());
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.register_node_recursively(child);
         }
     }
 }

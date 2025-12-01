@@ -98,7 +98,7 @@ impl IndexSchema {
         // Symbol fields (existing)
         let symbol_id = builder.add_u64_field("symbol_id", indexed_u64_options.clone());
         let file_path = builder.add_text_field("file_path", STRING | STORED);
-        let line_number = builder.add_u64_field("line_number", STORED | FAST);
+        let line_number = builder.add_u64_field("line_number", indexed_u64_options.clone());
         let column = builder.add_u64_field("column", STORED);
         let end_line = builder.add_u64_field("end_line", STORED | FAST);
         let end_column = builder.add_u64_field("end_column", STORED);
@@ -1401,6 +1401,64 @@ impl DocumentIndex {
         }
 
         Ok(symbols)
+    }
+
+    /// Find a symbol by name, file, and range
+    ///
+    /// Used for Defines relationships to disambiguate overloaded methods.
+    /// Returns the symbol that matches both the name AND the exact range.
+    pub fn find_symbol_by_name_and_range(
+        &self,
+        name: &str,
+        file_id: FileId,
+        range: &crate::Range,
+    ) -> StorageResult<Option<crate::Symbol>> {
+        let searcher = self.reader.searcher();
+
+        // Query by name, file_id, and start line
+        let query = BooleanQuery::from(vec![
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.doc_type, "symbol"),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_text(self.schema.name, name),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(self.schema.file_id, file_id.0 as u64),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+            (
+                Occur::Must,
+                Box::new(TermQuery::new(
+                    Term::from_field_u64(self.schema.line_number, range.start_line as u64),
+                    IndexRecordOption::Basic,
+                )) as Box<dyn Query>,
+            ),
+        ]);
+
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+
+        for (_score, doc_address) in top_docs {
+            let doc = searcher.doc::<Document>(doc_address)?;
+            let symbol = self.document_to_symbol(&doc)?;
+            // Verify full range match (start_line matched in query, check end_line too)
+            if symbol.range.end_line == range.end_line {
+                return Ok(Some(symbol));
+            }
+        }
+
+        Ok(None)
     }
 
     /// Find symbols by file ID

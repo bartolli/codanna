@@ -1,16 +1,17 @@
 # TypeScript Grammar Analysis
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 183
 - Nodes found in comprehensive.ts: 203
-- Nodes handled by parser: 189
+- Nodes handled by parser: 203
 - Symbol kinds extracted: 9
 
 ## ✅ Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - !
+- "
 - ${
 - &
 - &&
@@ -21,8 +22,10 @@ These nodes are in examples and handled by parser:
 - +
 - ++
 - ,
+- -
 - .
 - ...
+- />
 - :
 - ;
 - <
@@ -71,6 +74,7 @@ These nodes are in examples and handled by parser:
 - constraint
 - declare
 - decorator
+- default
 - enum
 - enum_assignment
 - enum_body
@@ -90,6 +94,7 @@ These nodes are in examples and handled by parser:
 - from
 - function
 - function_declaration
+- function_expression
 - function_signature
 - function_type
 - generator_function_declaration
@@ -119,6 +124,8 @@ These nodes are in examples and handled by parser:
 - jsx_element
 - jsx_expression
 - jsx_opening_element
+- jsx_self_closing_element
+- jsx_text
 - keyof
 - let
 - lexical_declaration
@@ -140,6 +147,7 @@ These nodes are in examples and handled by parser:
 - null
 - number
 - object
+- object_pattern
 - object_type
 - opting_type_annotation
 - optional_parameter
@@ -159,8 +167,12 @@ These nodes are in examples and handled by parser:
 - rest_pattern
 - return
 - return_statement
+- satisfies
+- satisfies_expression
 - set
 - shorthand_property_identifier
+- shorthand_property_identifier_pattern
+- spread_element
 - statement_block
 - static
 - string
@@ -170,6 +182,7 @@ These nodes are in examples and handled by parser:
 - template_string
 - template_substitution
 - template_type
+- ternary_expression
 - this
 - this_type
 - true
@@ -189,6 +202,7 @@ These nodes are in examples and handled by parser:
 - union_type
 - unknown
 - update_expression
+- var
 - variable_declaration
 - variable_declarator
 - void
@@ -199,23 +213,6 @@ These nodes are in examples and handled by parser:
 - {
 - |
 - }
-
-## ⚠️ Implementation Gaps
-These nodes appear in comprehensive.ts but aren't handled:
-- "
-- -
-- />
-- default
-- function_expression
-- jsx_self_closing_element
-- jsx_text
-- object_pattern
-- satisfies
-- satisfies_expression
-- shorthand_property_identifier_pattern
-- spread_element
-- ternary_expression
-- var
 
 ## 📝 Missing from Examples
 These grammar nodes aren't in comprehensive.ts:

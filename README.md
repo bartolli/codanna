@@ -97,7 +97,7 @@ codanna mcp semantic_search_docs query:"where do we resolve symbol references" l
 - **Fast parsing** - Tree-sitter AST (same as GitHub code navigator)
 - **Semantic search** - Natural language queries that understand your code
 - **Relationship tracking** - Call graphs, implementations, dependencies
-- **Multi-language** - Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, GDScript
+- **Multi-language** - Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Swift, GDScript
 - **MCP protocol** - Native integration with Claude and other AI assistants
 - **Profiles** - Package configs for different project types and custom workflows
 - **Plugins** - Claude Code manifest format for project-scoped commands and agents

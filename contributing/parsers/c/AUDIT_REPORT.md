@@ -1,11 +1,12 @@
 # C Parser Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 145
-- Nodes handled by parser: 29
+- Key nodes: 19/21 (90%)
 - Symbol kinds extracted: 6
+
+> **Note:** Key nodes are symbol-producing constructs (functions, structs, typedefs).
 
 ## Coverage Table
 

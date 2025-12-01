@@ -1,11 +1,12 @@
 # C++ Parser Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 154
-- Nodes handled by parser: 154
+- Key nodes: 26/26 (100%)
 - Symbol kinds extracted: 5
+
+> **Note:** Key nodes are symbol-producing constructs (classes, functions, templates).
 
 ## Coverage Table
 

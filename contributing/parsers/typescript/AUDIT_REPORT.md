@@ -1,11 +1,12 @@
 # TypeScript Parser Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 203
-- Nodes handled by parser: 189
+- Key nodes: 28/28 (100%)
 - Symbol kinds extracted: 9
+
+> **Note:** Key nodes are symbol-producing constructs (classes, functions, imports).
 
 ## Coverage Table
 
@@ -22,7 +23,7 @@
 | variable_declaration | 189 | ✅ implemented |
 | lexical_declaration | 190 | ✅ implemented |
 | arrow_function | 241 | ✅ implemented |
-| function_expression | 237 | ⚠️ gap |
+| function_expression | 237 | ✅ implemented |
 | generator_function_declaration | 240 | ✅ implemented |
 | import_statement | 180 | ✅ implemented |
 | export_statement | 173 | ✅ implemented |
@@ -35,9 +36,10 @@
 | type_annotation | 315 | ✅ implemented |
 | predefined_type | 348 | ✅ implemented |
 | internal_module | 297 | ✅ implemented |
-| module_declaration | - | ❌ not found |
+| module | 137 | ✅ implemented |
+| ambient_declaration | 294 | ✅ implemented |
 | jsx_element | 225 | ✅ implemented |
-| jsx_self_closing_element | 231 | ⚠️ gap |
+| jsx_self_closing_element | 231 | ✅ implemented |
 
 ## Legend
 
@@ -47,14 +49,4 @@
 
 ## Recommended Actions
 
-### Priority 1: Implementation Gaps
-These nodes exist in your code but aren't being captured:
-
-- `function_expression`: Add parsing logic in parser.rs
-- `jsx_self_closing_element`: Add parsing logic in parser.rs
-
-### Priority 2: Missing Examples
-These nodes aren't in the comprehensive example. Consider:
-
-- `module_declaration`: Add example to comprehensive.ts or verify node name
-
+✨ **Excellent coverage!** All key nodes are implemented.

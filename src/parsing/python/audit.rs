@@ -90,35 +90,15 @@ impl PythonParserAudit {
         report.push_str("# Python Parser Symbol Extraction Coverage Report\n\n");
         report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
-        // Summary
-        report.push_str("## Summary\n");
-        report.push_str(&format!("- Nodes in file: {}\n", self.grammar_nodes.len()));
-        report.push_str(&format!(
-            "- Nodes with symbol extraction: {}\n",
-            self.implemented_nodes.len()
-        ));
-        report.push_str(&format!(
-            "- Symbol kinds extracted: {}\n",
-            self.extracted_symbol_kinds.len()
-        ));
-
-        report.push_str("\n> **Note**: This report tracks nodes that produce indexed symbols for code intelligence.\n");
-        report.push_str("> For complete grammar coverage, see GRAMMAR_ANALYSIS.md\n");
-
-        // Coverage table for key symbol extraction nodes
-        report.push_str("\n## Coverage Table\n\n");
-        report.push_str("*Showing key nodes relevant for symbol extraction. Status determined by dynamic tracking.*\n\n");
-        report.push_str("| Node Type | ID | Status |\n");
-        report.push_str("|-----------|-----|--------|\n");
-
         // Key nodes we care about for symbol extraction
+        // Note: Python grammar uses function_definition for both sync and async functions
+        // (async is a child modifier node, not a separate statement type)
         let key_nodes = vec![
             "class_definition",
-            "function_definition",
+            "function_definition", // includes async functions
             "decorated_definition",
             "assignment",
             "augmented_assignment",
-            "annotated_assignment",
             "typed_parameter",
             "typed_default_parameter",
             "parameters",
@@ -130,11 +110,7 @@ impl PythonParserAudit {
             "dictionary_comprehension",
             "set_comprehension",
             "generator_expression",
-            "async_function_definition",
-            "async_for_statement",
-            "async_with_statement",
             "decorator",
-            "type_alias_statement",
             "type",
             "global_statement",
             "nonlocal_statement",
@@ -143,12 +119,39 @@ impl PythonParserAudit {
             "while_statement",
         ];
 
+        // Count key nodes coverage
+        let key_implemented = key_nodes
+            .iter()
+            .filter(|n| self.implemented_nodes.contains(**n))
+            .count();
+
+        // Summary
+        report.push_str("## Summary\n");
+        report.push_str(&format!(
+            "- Key nodes: {}/{} ({}%)\n",
+            key_implemented,
+            key_nodes.len(),
+            (key_implemented * 100) / key_nodes.len()
+        ));
+        report.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            self.extracted_symbol_kinds.len()
+        ));
+        report.push_str(
+            "\n> **Note:** Key nodes are symbol-producing constructs (classes, functions, imports).\n\n",
+        );
+
+        // Coverage table
+        report.push_str("## Coverage Table\n\n");
+        report.push_str("| Node Type | ID | Status |\n");
+        report.push_str("|-----------|-----|--------|\n");
+
         let mut gaps = Vec::new();
         let mut missing = Vec::new();
 
-        for node_name in key_nodes {
-            let status = if let Some(id) = self.grammar_nodes.get(node_name) {
-                if self.implemented_nodes.contains(node_name) {
+        for node_name in &key_nodes {
+            let status = if let Some(id) = self.grammar_nodes.get(*node_name) {
+                if self.implemented_nodes.contains(*node_name) {
                     format!("{id} | ✅ implemented")
                 } else {
                     gaps.push(node_name);

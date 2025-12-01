@@ -1,11 +1,11 @@
 # Kotlin Grammar Analysis
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 136
-- Nodes found in comprehensive.kt: 150
-- Nodes handled by parser: 142
+- Nodes found in comprehensive.kt: 152
+- Nodes handled by parser: 144
 - Symbol kinds extracted: 8
 
 ## ✅ Successfully Handled Nodes
@@ -76,11 +76,13 @@ These nodes are in examples and handled by parser:
 - get
 - if
 - if_expression
+- import_header
 - import_list
 - in
 - indexing_expression
 - indexing_suffix
 - infix
+- infix_expression
 - inline
 - inner
 - integer_literal
@@ -155,9 +157,9 @@ These nodes are in examples and handled by parser:
 
 ## ⚠️ Implementation Gaps
 These nodes appear in comprehensive.kt but aren't handled:
+- ERROR
 - identifier
 - import
-- import_header
 - package
 - parenthesized_expression
 - source_file
@@ -183,7 +185,6 @@ These grammar nodes aren't in comprehensive.kt:
 - getter
 - hex_literal
 - import_alias
-- infix_expression
 - inheritance_modifier
 - label
 - long_literal

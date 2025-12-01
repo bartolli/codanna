@@ -25,6 +25,36 @@ __MANGLED_CONSTANT = "mangled"
 global_counter = 0
 _module_cache: Dict[str, any] = {}
 
+# Aliased imports (for audit coverage)
+import json as json_module
+from pathlib import Path as FilePath
+
+# Augmented assignment
+counter = 0
+counter += 1
+counter -= 1
+counter *= 2
+
+# Global and nonlocal statements
+def outer_function():
+    outer_var = 10
+    def inner_function():
+        nonlocal outer_var
+        global global_counter
+        outer_var += 1
+        global_counter += 1
+    inner_function()
+
+# While statement
+def countdown(n: int):
+    while n > 0:
+        n -= 1
+
+# With statement
+def read_file(path: str):
+    with open(path) as f:
+        return f.read()
+
 # Type variables and aliases
 T = TypeVar('T')
 K = TypeVar('K')

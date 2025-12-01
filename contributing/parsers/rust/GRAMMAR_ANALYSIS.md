@@ -1,31 +1,15 @@
 # Rust Grammar Analysis
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 169
-- Nodes found in comprehensive.rs: 143
-- Nodes handled by parser: 13
+- Nodes found in comprehensive.rs: 147
+- Nodes handled by parser: 140
 - Symbol kinds extracted: 10
 
 ## ✅ Successfully Handled Nodes
 These nodes are in examples and handled by parser:
-- const_item
-- enum_item
-- enum_variant
-- field_declaration
-- function_item
-- function_signature_item
-- impl_item
-- macro_definition
-- mod_item
-- static_item
-- struct_item
-- trait_item
-- type_item
-
-## ⚠️ Implementation Gaps
-These nodes appear in comprehensive.rs but aren't handled:
 - !
 - "
 - #
@@ -56,6 +40,7 @@ These nodes appear in comprehensive.rs but aren't handled:
 - assignment_expression
 - associated_type
 - async
+- async_block
 - attribute
 - attribute_item
 - binary_expression
@@ -66,15 +51,17 @@ These nodes appear in comprehensive.rs but aren't handled:
 - closure_expression
 - closure_parameters
 - const
+- const_item
 - declaration_list
 - doc_comment
 - dyn
 - dynamic_type
 - enum
+- enum_item
+- enum_variant
 - enum_variant_list
 - expression_statement
-- extern
-- extern_modifier
+- field_declaration
 - field_declaration_list
 - field_expression
 - field_identifier
@@ -82,27 +69,30 @@ These nodes appear in comprehensive.rs but aren't handled:
 - field_initializer_list
 - fn
 - for
-- foreign_mod_item
 - fragment_specifier
+- function_item
 - function_modifiers
+- function_signature_item
 - function_type
 - generic_type
 - higher_ranked_trait_bound
 - ident
 - identifier
 - impl
-- inner_doc_comment_marker
+- impl_item
 - integer_literal
 - let
 - let_declaration
 - lifetime
 - lifetime_parameter
 - line_comment
+- macro_definition
 - macro_invocation
 - macro_rule
 - macro_rules!
 - metavariable
 - mod
+- mod_item
 - mutable_specifier
 - ordered_field_declaration_list
 - outer_doc_comment_marker
@@ -115,21 +105,24 @@ These nodes appear in comprehensive.rs but aren't handled:
 - reference_type
 - scoped_identifier
 - scoped_type_identifier
+- scoped_use_list
 - self
 - self_parameter
 - shorthand_field_initializer
-- source_file
 - static
+- static_item
 - string_content
 - string_literal
 - struct
 - struct_expression
+- struct_item
 - super
 - token_binding_pattern
 - token_tree
 - token_tree_pattern
 - trait
 - trait_bounds
+- trait_item
 - true
 - tuple_expression
 - tuple_type
@@ -138,16 +131,17 @@ These nodes appear in comprehensive.rs but aren't handled:
 - type_binding
 - type_cast_expression
 - type_identifier
+- type_item
 - type_parameter
 - type_parameters
 - unary_expression
-- union
-- union_item
 - unit_expression
 - unit_type
 - unsafe
 - use
+- use_as_clause
 - use_declaration
+- use_list
 - use_wildcard
 - visibility_modifier
 - where
@@ -156,6 +150,16 @@ These nodes appear in comprehensive.rs but aren't handled:
 - {
 - |
 - }
+
+## ⚠️ Implementation Gaps
+These nodes appear in comprehensive.rs but aren't handled:
+- extern
+- extern_modifier
+- foreign_mod_item
+- inner_doc_comment_marker
+- source_file
+- union
+- union_item
 
 ## 📝 Missing from Examples
 These grammar nodes aren't in comprehensive.rs:
@@ -166,7 +170,6 @@ These grammar nodes aren't in comprehensive.rs:
 - _pattern
 - _type
 - array_expression
-- async_block
 - await_expression
 - base_field_initializer
 - block_comment
@@ -216,7 +219,6 @@ These grammar nodes aren't in comprehensive.rs:
 - remaining_field_pattern
 - removed_trait_bound
 - return_expression
-- scoped_use_list
 - shebang
 - shorthand_field_identifier
 - slice_pattern
@@ -228,9 +230,7 @@ These grammar nodes aren't in comprehensive.rs:
 - tuple_pattern
 - tuple_struct_pattern
 - unsafe_block
-- use_as_clause
 - use_bounds
-- use_list
 - variadic_parameter
 - while_expression
 - yield_expression

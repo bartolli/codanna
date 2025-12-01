@@ -13,7 +13,8 @@ use codanna::parsing::{
 };
 use codanna::project_resolver::{
     providers::{
-        java::JavaProvider, javascript::JavaScriptProvider, typescript::TypeScriptProvider,
+        java::JavaProvider, javascript::JavaScriptProvider, swift::SwiftProvider,
+        typescript::TypeScriptProvider,
     },
     registry::SimpleProviderRegistry,
 };
@@ -631,6 +632,9 @@ fn create_provider_registry() -> SimpleProviderRegistry {
 
     // Add Java provider for pom.xml/build.gradle resolution
     registry.add(Arc::new(JavaProvider::new()));
+
+    // Add Swift provider for Package.swift resolution
+    registry.add(Arc::new(SwiftProvider::new()));
 
     registry
 }

@@ -1,11 +1,11 @@
 # Python Grammar Analysis
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 129
-- Nodes found in comprehensive.py: 121
-- Nodes handled by parser: 120
+- Nodes found in comprehensive.py: 136
+- Nodes handled by parser: 135
 - Symbol kinds extracted: 6
 
 ## ✅ Successfully Handled Nodes
@@ -15,9 +15,12 @@ These nodes are in examples and handled by parser:
 - )
 - *
 - **
+- *=
 - +
+- +=
 - ,
 - -
+- -=
 - ->
 - .
 - //
@@ -32,6 +35,7 @@ These nodes are in examples and handled by parser:
 - [
 - ]
 - _
+- aliased_import
 - argument_list
 - as
 - as_pattern
@@ -39,6 +43,7 @@ These nodes are in examples and handled by parser:
 - assignment
 - async
 - attribute
+- augmented_assignment
 - await
 - binary_operator
 - block
@@ -76,6 +81,8 @@ These nodes are in examples and handled by parser:
 - function_definition
 - generator_expression
 - generic_type
+- global
+- global_statement
 - identifier
 - if
 - if_clause
@@ -100,6 +107,8 @@ These nodes are in examples and handled by parser:
 - module
 - named_expression
 - none
+- nonlocal
+- nonlocal_statement
 - not
 - not in
 - pair
@@ -127,6 +136,12 @@ These nodes are in examples and handled by parser:
 - type_parameter
 - typed_default_parameter
 - typed_parameter
+- while
+- while_statement
+- with
+- with_clause
+- with_item
+- with_statement
 - yield
 - {
 - }
@@ -139,9 +154,7 @@ These nodes appear in comprehensive.py but aren't handled:
 These grammar nodes aren't in comprehensive.py:
 - _compound_statement
 - _simple_statement
-- aliased_import
 - assert_statement
-- augmented_assignment
 - boolean_operator
 - break_statement
 - chevron
@@ -162,13 +175,11 @@ These grammar nodes aren't in comprehensive.py:
 - format_expression
 - format_specifier
 - future_import_statement
-- global_statement
 - import_prefix
 - keyword_pattern
 - keyword_separator
 - line_continuation
 - member_type
-- nonlocal_statement
 - not_operator
 - parameter
 - parenthesized_list_splat
@@ -186,11 +197,7 @@ These grammar nodes aren't in comprehensive.py:
 - unary_operator
 - union_pattern
 - union_type
-- while_statement
 - wildcard_import
-- with_clause
-- with_item
-- with_statement
 
 ## 🎯 Symbol Kinds Extracted
 - Class

@@ -1,16 +1,16 @@
 === Rust Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2025-11-29 00:46:16 UTC
+  Generated: 2025-12-01 15:24:41 UTC
   ABI Version: 15
-  Node kind count: 143
+  Node kind count: 147
 
 === MODULE & USE NODES ===
   ✓ mod_item                            -> ID: 173
   ✓ use_declaration                     -> ID: 204
   ✗ use_clause                          NOT FOUND
-  ✗ use_list                            NOT FOUND
-  ✗ use_as_clause                       NOT FOUND
+  ✓ use_list                            -> ID: 207
+  ✓ use_as_clause                       -> ID: 208
   ✓ use_wildcard                        -> ID: 209
-  ✗ scoped_use_list                     NOT FOUND
+  ✓ scoped_use_list                     -> ID: 206
   ✗ extern_crate                        NOT FOUND
 
 === STRUCT & ENUM NODES ===
@@ -47,7 +47,7 @@
   ✗ optional_type_parameter             NOT FOUND
   ✓ closure_expression                  -> ID: 281
   ✓ closure_parameters                  -> ID: 282
-  ✗ async_block                         NOT FOUND
+  ✓ async_block                         -> ID: 290
 
 === TYPE NODES ===
   ✗ type_alias                          NOT FOUND

@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2025-11-30
+
+### Added
+
+- Swift language support with tree-sitter-swift parser
+- SwiftParser with class, struct, enum, protocol, function, property extraction
+- SwiftBehavior with Swift module path formatting
+- SwiftResolutionContext with Swift scope order
+- SwiftProvider for project structure handling
+- Swift ERROR recovery for `@unchecked Sendable` syntax
+- Nested type extraction in ERROR-recovered Swift classes
+- TypeScript ERROR recovery for `export type *` pattern
+- Kotlin context receiver function detection from `infix_expression` pattern
+- Test suite for Swift error recovery, relationships, visibility, nested types
+- Test suite for TypeScript error recovery
+- Test suite for Kotlin context receivers, value classes
+- Test suite for PHP readonly classes
+- Swift grammar documentation and audit reports
+- Example Swift files for testing
+- tree-sitter-swift dependency
+
+### Fixed
+
+- Swift nested types now extracted when parent class has ERROR nodes
+- TypeScript `export type * as Name` now resolves as Module symbol
+- Kotlin `context(...)` receiver functions now extracted as Function symbols
+- Swift recursive helper functions converted to static methods for clippy compliance
+
+### Changed
+
+- Swift parser handles both regular and ERROR-recovered class declarations
+- Kotlin audit.rs includes `infix_expression` in key_nodes tracking
+- Updated grammar-versions.lock with Swift grammar info
+
 ## [0.8.2] - 2025-11-28
 
 ### Added

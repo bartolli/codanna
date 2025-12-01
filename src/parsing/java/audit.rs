@@ -81,26 +81,6 @@ impl JavaParserAudit {
         report.push_str("# Java Parser Symbol Extraction Coverage Report\n\n");
         report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
-        // Summary block
-        report.push_str("## Summary\n");
-        report.push_str(&format!("- Nodes in file: {}\n", self.grammar_nodes.len()));
-        report.push_str(&format!(
-            "- Nodes with symbol extraction: {}\n",
-            self.implemented_nodes.len()
-        ));
-        report.push_str(&format!(
-            "- Symbol kinds extracted: {}\n",
-            self.extracted_symbol_kinds.len()
-        ));
-        report.push_str(
-            "\n> **Note:** This focuses on nodes that produce indexable symbols used for IDE features.\n\n",
-        );
-
-        // Coverage table
-        report.push_str("## Coverage Table\n\n");
-        report.push_str("| Node Type | ID | Status |\n");
-        report.push_str("|-----------|-----|--------|\n");
-
         let key_nodes = vec![
             "class_declaration",
             "interface_declaration",
@@ -114,8 +94,35 @@ impl JavaParserAudit {
             "modifiers",
             "formal_parameters",
             "type_parameters",
-            "annotation",
+            "marker_annotation", // @Override, @Deprecated (simple annotations)
         ];
+
+        // Count key nodes coverage
+        let key_implemented = key_nodes
+            .iter()
+            .filter(|n| self.implemented_nodes.contains(**n))
+            .count();
+
+        // Summary block
+        report.push_str("## Summary\n");
+        report.push_str(&format!(
+            "- Key nodes: {}/{} ({}%)\n",
+            key_implemented,
+            key_nodes.len(),
+            (key_implemented * 100) / key_nodes.len()
+        ));
+        report.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            self.extracted_symbol_kinds.len()
+        ));
+        report.push_str(
+            "\n> **Note:** Key nodes are symbol-producing constructs (classes, functions, imports).\n\n",
+        );
+
+        // Coverage table
+        report.push_str("## Coverage Table\n\n");
+        report.push_str("| Node Type | ID | Status |\n");
+        report.push_str("|-----------|-----|--------|\n");
 
         let mut gaps = Vec::new();
         let mut missing = Vec::new();

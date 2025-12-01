@@ -68,6 +68,12 @@
       "updated": "2025-09-09T04:29:59+02:00",
       "abi_version": "15"
     },
+    "swift": {
+      "repo": "https://github.com/alex-pinkus/tree-sitter-swift",
+      "commit": "78d84ef82c387fceeb6094038da28717ea052e39",
+      "updated": "2025-07-27T12:20:37-07:00",
+      "abi_version": "15"
+    },
     "typescript": {
       "repo": "https://github.com/tree-sitter/tree-sitter-typescript",
       "commit": "75b3874edb2dc714fb1fd77a32013d0f8699989f",

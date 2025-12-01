@@ -267,7 +267,7 @@ impl TypeScriptParser {
                 }
             }
             "lexical_declaration" | "variable_declaration" => {
-                self.register_handled_node(node.kind(), node.kind_id());
+                self.register_node_recursively(node);
                 self.process_variable_declaration(
                     node,
                     code,
@@ -286,6 +286,12 @@ impl TypeScriptParser {
                 {
                     symbols.push(symbol);
                 }
+            }
+            "function_expression" => {
+                // Register function_expression and all its children for audit
+                self.register_node_recursively(node);
+                // Function expressions are handled similarly to arrow functions
+                // when assigned to variables (processed in variable_declarator)
             }
             "ERROR" => {
                 // ERROR nodes occur when tree-sitter can't parse something
@@ -387,6 +393,48 @@ impl TypeScriptParser {
                     }
                 }
 
+                // Check for "export type *" pattern (grammar produces ERROR for "type")
+                // AST structure: export_statement > ERROR("type") + namespace_export > identifier
+                let has_error = children.iter().any(|c| c.kind() == "ERROR");
+                if has_error {
+                    for child in &children {
+                        if child.kind() == "namespace_export" {
+                            // Found "export type * as Name" pattern
+                            // Find the identifier child of namespace_export
+                            let mut ns_cursor = child.walk();
+                            for ns_child in child.children(&mut ns_cursor) {
+                                if ns_child.kind() == "identifier" {
+                                    let export_name = &code[ns_child.byte_range()];
+                                    let symbol_id = counter.next_id();
+                                    let range = Range::new(
+                                        node.start_position().row as u32,
+                                        node.start_position().column as u16,
+                                        node.end_position().row as u32,
+                                        node.end_position().column as u16,
+                                    );
+                                    let mut symbol = Symbol::new(
+                                        symbol_id,
+                                        export_name.to_string(),
+                                        SymbolKind::Module,
+                                        file_id,
+                                        range,
+                                    );
+                                    symbol = symbol
+                                        .with_visibility(Visibility::Public)
+                                        .with_signature(format!("export type * as {export_name}"));
+                                    if !module_path.is_empty() {
+                                        symbol = symbol.with_module_path(module_path.to_string());
+                                    }
+                                    symbol.scope_context =
+                                        Some(self.context.current_scope_context());
+                                    symbols.push(symbol);
+                                    return; // Handled this export
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Check for named export lists (export { Card, CardHeader })
                 for child in &children {
                     if child.kind() == "export_clause" {
@@ -421,7 +469,7 @@ impl TypeScriptParser {
             }
             "jsx_element" | "jsx_self_closing_element" => {
                 // Track JSX component usage as Uses relationship
-                self.register_handled_node(node.kind(), node.kind_id());
+                self.register_node_recursively(node);
 
                 if crate::config::is_global_debug_enabled() {
                     eprintln!(
@@ -439,6 +487,23 @@ impl TypeScriptParser {
                 self.track_jsx_component_usage(node, code);
 
                 // Process children to find nested JSX elements
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.extract_symbols_from_node(
+                        child,
+                        code,
+                        file_id,
+                        counter,
+                        symbols,
+                        module_path,
+                        depth + 1,
+                    );
+                }
+            }
+            // Ambient declarations: declare module "foo" { }
+            "ambient_declaration" | "module" => {
+                self.register_node_recursively(node);
+                // Process children for nested declarations
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     self.extract_symbols_from_node(

@@ -501,6 +501,16 @@ infix fun Int.times(str: String): String {
     return str.repeat(this)
 }
 
+// === CONTEXT RECEIVERS ===
+
+/**
+ * Context receiver function (Kotlin 1.6.20+ experimental feature)
+ * Tree-sitter parses this as infix_expression, not function_declaration
+ */
+context(Logger) fun logMessage(message: String) {
+    log("Context receiver: $message")
+}
+
 // === TAILREC FUNCTIONS ===
 
 /**

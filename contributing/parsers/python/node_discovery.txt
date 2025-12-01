@@ -1,12 +1,12 @@
 === Python Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2025-11-29 00:46:16 UTC
+  Generated: 2025-12-01 15:24:41 UTC
   ABI Version: 15
-  Node kind count: 121
+  Node kind count: 136
 
 === IMPORT NODES ===
   ✓ import_statement                    -> ID: 111
   ✓ import_from_statement               -> ID: 115
-  ✗ aliased_import                      NOT FOUND
+  ✓ aliased_import                      -> ID: 117
   ✓ dotted_name                         -> ID: 162
   ✗ relative_import                     NOT FOUND
   ✗ wildcard_import                     NOT FOUND
@@ -35,18 +35,18 @@
   ✓ if_statement                        -> ID: 131
   ✗ elif_clause                         NOT FOUND
   ✓ else_clause                         -> ID: 133
-  ✗ while_statement                     NOT FOUND
+  ✓ while_statement                     -> ID: 138
   ✓ for_statement                       -> ID: 137
   ✓ try_statement                       -> ID: 139
   ✓ except_clause                       -> ID: 140
   ✓ finally_clause                      -> ID: 141
-  ✗ with_statement                      NOT FOUND
+  ✓ with_statement                      -> ID: 142
   ✓ match_statement                     -> ID: 134
   ✓ case_clause                         -> ID: 136
 
 === EXPRESSION NODES ===
   ✓ assignment                          -> ID: 198
-  ✗ augmented_assignment                NOT FOUND
+  ✓ augmented_assignment                -> ID: 199
   ✗ annotated_assignment                NOT FOUND
   ✓ binary_operator                     -> ID: 191
   ✗ unary_operator                      NOT FOUND
@@ -79,9 +79,12 @@
   ✓ )                                   -> ID: 8
   ✓ *                                   -> ID: 11
   ✓ **                                  -> ID: 39
+  ✓ *=                                  -> ID: 76
   ✓ +                                   -> ID: 54
+  ✓ +=                                  -> ID: 74
   ✓ ,                                   -> ID: 9
   ✓ -                                   -> ID: 49
+  ✓ -=                                  -> ID: 75
   ✓ ->                                  -> ID: 38
   ✓ .                                   -> ID: 4
   ✓ //                                  -> ID: 60
@@ -123,6 +126,8 @@
   ✓ float                               -> ID: 94
   ✓ for                                 -> ID: 29
   ✓ from                                -> ID: 5
+  ✓ global                              -> ID: 40
+  ✓ global_statement                    -> ID: 150
   ✓ identifier                          -> ID: 1
   ✓ if                                  -> ID: 22
   ✓ import                              -> ID: 3
@@ -139,6 +144,8 @@
   ✓ match                               -> ID: 26
   ✓ module                              -> ID: 108
   ✓ none                                -> ID: 98
+  ✓ nonlocal                            -> ID: 41
+  ✓ nonlocal_statement                  -> ID: 151
   ✓ not                                 -> ID: 55
   ✓ not in                              -> ID: 193
   ✓ pair                                -> ID: 219
@@ -159,6 +166,10 @@
   ✓ true                                -> ID: 96
   ✓ try                                 -> ID: 32
   ✓ type_conversion                     -> ID: 92
+  ✓ while                               -> ID: 31
+  ✓ with                                -> ID: 36
+  ✓ with_clause                         -> ID: 143
+  ✓ with_item                           -> ID: 144
   ✓ yield                               -> ID: 87
   ✓ {                                   -> ID: 52
   ✓ }                                   -> ID: 53

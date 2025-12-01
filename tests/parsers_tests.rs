@@ -75,3 +75,33 @@ mod test_kotlin_generic_flow;
 
 #[path = "parsers/kotlin/test_reddit_challenge.rs"]
 mod test_kotlin_reddit_challenge;
+
+#[path = "parsers/kotlin/test_visibility.rs"]
+mod test_kotlin_visibility;
+
+#[path = "parsers/swift/test_relationships.rs"]
+mod test_swift_relationships;
+
+#[path = "parsers/swift/debug_relationships.rs"]
+mod debug_swift_relationships;
+
+#[path = "parsers/swift/test_visibility.rs"]
+mod test_swift_visibility;
+
+#[path = "parsers/swift/test_error_recovery.rs"]
+mod test_swift_error_recovery;
+
+#[path = "parsers/typescript/test_error_recovery.rs"]
+mod test_typescript_error_recovery;
+
+#[path = "parsers/kotlin/test_value_class.rs"]
+mod test_kotlin_value_class;
+
+#[path = "parsers/php/test_readonly_class.rs"]
+mod test_php_readonly_class;
+
+#[path = "parsers/kotlin/test_context_receiver.rs"]
+mod test_kotlin_context_receiver;
+
+#[path = "parsers/swift/test_nested_types.rs"]
+mod test_swift_nested_types;

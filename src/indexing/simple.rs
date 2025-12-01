@@ -60,6 +60,8 @@ struct UnresolvedRelationship {
     kind: RelationKind,
     #[allow(dead_code)]
     metadata: Option<RelationshipMetadata>,
+    /// Range of the target symbol (for Defines relationships with overloads)
+    to_range: Option<crate::Range>,
 }
 
 /// The main indexer struct that handles parsing and indexing of source code
@@ -934,8 +936,16 @@ impl SimpleIndexer {
 
         // Define valid symbol kinds for each relationship type
         let valid_kinds: &[crate::SymbolKind] = match rel_kind {
-            // Extends: Only classes and interfaces can extend
-            RelationKind::Extends => &[crate::SymbolKind::Class, crate::SymbolKind::Interface],
+            // Extends: Classes, interfaces, structs, enums, and traits can extend/conform
+            // In Swift: structs and enums can conform to protocols
+            // In Rust: traits can have supertraits
+            RelationKind::Extends => &[
+                crate::SymbolKind::Class,
+                crate::SymbolKind::Interface,
+                crate::SymbolKind::Struct,
+                crate::SymbolKind::Enum,
+                crate::SymbolKind::Trait,
+            ],
             // Implements: Only classes can implement interfaces
             RelationKind::Implements => &[crate::SymbolKind::Class],
             // Calls: Functions and methods
@@ -1385,12 +1395,13 @@ impl SimpleIndexer {
             defines.len(),
             file_id
         );
-        for (definer_name, method_name, _range) in defines {
+        for (definer_name, method_name, range) in defines {
             debug_print!(
                 self,
-                "Processing define: {} defines {}",
+                "Processing define: {} defines {} at {:?}",
                 definer_name,
-                method_name
+                method_name,
+                range
             );
             // Check if definer is a trait using our cached symbol kinds
             if let Some(symbol_kinds) = self.trait_symbols_by_file.get(&file_id) {
@@ -1415,13 +1426,15 @@ impl SimpleIndexer {
             }
             let rel_kind = behavior.map_relationship("defines");
             let from_id = Self::resolve_symbol_for_relationship(definer_name, rel_kind, symbol_map);
-            self.add_relationships_by_name(
+            // Pass range for Defines to disambiguate overloaded methods
+            self.add_relationships_by_name_with_range(
                 from_id,
                 definer_name,
                 method_name,
                 file_id,
                 rel_kind,
                 None,
+                Some(range),
             )?;
         }
 
@@ -1727,17 +1740,35 @@ impl SimpleIndexer {
         kind: RelationKind,
         metadata: Option<RelationshipMetadata>,
     ) -> IndexResult<()> {
+        self.add_relationships_by_name_with_range(
+            from_id, from_name, to_name, file_id, kind, metadata, None,
+        )
+    }
+
+    /// Helper method to add relationships by symbol names with optional target range
+    /// The range is used for Defines relationships to disambiguate overloaded methods
+    fn add_relationships_by_name_with_range(
+        &mut self,
+        from_id: Option<SymbolId>,
+        from_name: &str,
+        to_name: &str,
+        file_id: FileId,
+        kind: RelationKind,
+        metadata: Option<RelationshipMetadata>,
+        to_range: Option<crate::Range>,
+    ) -> IndexResult<()> {
         // Store as unresolved for later resolution when all symbols are committed
         // This allows us to:
         // 1. Wait until all symbols in the batch are searchable
         // 2. Use import context for accurate resolution
         debug_print!(
             self,
-            "Adding unresolved relationship: {} -> {} (kind: {:?}, from_id: {:?})",
+            "Adding unresolved relationship: {} -> {} (kind: {:?}, from_id: {:?}, range: {:?})",
             from_name,
             to_name,
             kind,
-            from_id
+            from_id,
+            to_range
         );
         self.unresolved_relationships.push(UnresolvedRelationship {
             from_id,
@@ -1746,6 +1777,7 @@ impl SimpleIndexer {
             file_id,
             kind,
             metadata,
+            to_range,
         });
 
         Ok(())
@@ -3116,7 +3148,44 @@ impl SimpleIndexer {
                 };
 
                 // Use the clean resolution API that delegates to language-specific logic
-                let to_symbol_id = if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
+                let to_symbol_id = if rel.kind == RelationKind::Defines && rel.to_range.is_some() {
+                    // Range-based resolution for Defines - disambiguates overloaded methods
+                    let range = rel.to_range.as_ref().unwrap();
+                    debug_print!(
+                        self,
+                        "Resolving Defines by range: {} at {:?}",
+                        rel.to_name,
+                        range
+                    );
+                    match self.document_index.find_symbol_by_name_and_range(
+                        &rel.to_name,
+                        file_id,
+                        range,
+                    ) {
+                        Ok(Some(symbol)) => {
+                            debug_print!(
+                                self,
+                                "Found symbol by range: {} (id: {:?})",
+                                symbol.name,
+                                symbol.id
+                            );
+                            Some(symbol.id)
+                        }
+                        Ok(None) => {
+                            debug_print!(
+                                self,
+                                "No symbol found at range {:?} for {}",
+                                range,
+                                rel.to_name
+                            );
+                            None
+                        }
+                        Err(e) => {
+                            debug_print!(self, "Error finding symbol by range: {}", e);
+                            None
+                        }
+                    }
+                } else if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
                     // Special handling for method calls with enhanced resolution
                     debug_print!(self, "Resolving as method call: '{}'", rel.to_name);
                     let res = self.resolve_method_call_enhanced(

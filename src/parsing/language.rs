@@ -20,6 +20,7 @@ pub enum Language {
     Gdscript,
     Java,
     Kotlin,
+    Swift,
 }
 
 impl Language {
@@ -42,6 +43,7 @@ impl Language {
             Language::Gdscript => super::LanguageId::new("gdscript"),
             Language::Java => super::LanguageId::new("java"),
             Language::Kotlin => super::LanguageId::new("kotlin"),
+            Language::Swift => super::LanguageId::new("swift"),
         }
     }
 
@@ -63,6 +65,7 @@ impl Language {
             "gdscript" => Some(Language::Gdscript),
             "java" => Some(Language::Java),
             "kotlin" => Some(Language::Kotlin),
+            "swift" => Some(Language::Swift),
             _ => None,
         }
     }
@@ -99,6 +102,7 @@ impl Language {
             "gd" => Some(Language::Gdscript),
             "java" => Some(Language::Java),
             "kt" | "kts" => Some(Language::Kotlin),
+            "swift" => Some(Language::Swift),
             _ => None,
         }
     }
@@ -127,6 +131,7 @@ impl Language {
             Language::Gdscript => &["gd"],
             Language::Java => &["java"],
             Language::Kotlin => &["kt", "kts"],
+            Language::Swift => &["swift"],
         }
     }
 
@@ -145,6 +150,7 @@ impl Language {
             Language::Gdscript => "gdscript",
             Language::Java => "java",
             Language::Kotlin => "kotlin",
+            Language::Swift => "swift",
         }
     }
 
@@ -163,6 +169,7 @@ impl Language {
             Language::Gdscript => "GDScript",
             Language::Java => "Java",
             Language::Kotlin => "Kotlin",
+            Language::Swift => "Swift",
         }
     }
 }

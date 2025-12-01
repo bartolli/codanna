@@ -1,11 +1,12 @@
 # C# Parser Coverage Report
 
-*Generated: 2025-11-29 00:46:16 UTC*
+*Generated: 2025-12-01 15:24:41 UTC*
 
 ## Summary
-- Nodes in file: 142
-- Nodes handled by parser: 142
+- Key nodes: 31/32 (96%)
 - Symbol kinds extracted: 9
+
+> **Note:** Key nodes are symbol-producing constructs (classes, methods, properties).
 
 ## Coverage Table
 

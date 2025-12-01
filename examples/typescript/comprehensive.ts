@@ -447,6 +447,12 @@ declare function require(module: string): any;
 /// <reference types="node" />
 /// <reference path="./types.d.ts" />
 
+// Ambient module declaration
+declare module "custom-module" {
+  export const version: string;
+  export function doSomething(): void;
+}
+
 // JSX/TSX
 const element = <div className="container">Hello World</div>;
 const selfClosing = <input type="text" />;

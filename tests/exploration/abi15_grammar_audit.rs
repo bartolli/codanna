@@ -31,7 +31,7 @@ mod tests {
         java::audit::JavaParserAudit, javascript::audit::JavaScriptParserAudit,
         kotlin::audit::KotlinParserAudit, php::audit::PhpParserAudit,
         python::audit::PythonParserAudit, rust::audit::RustParserAudit,
-        typescript::audit::TypeScriptParserAudit,
+        swift::audit::SwiftParserAudit, typescript::audit::TypeScriptParserAudit,
     };
     use serde_json::Value;
     use std::collections::{HashMap, HashSet};
@@ -3752,7 +3752,6 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
     }
 
     #[test]
-    #[ignore]
     fn comprehensive_java_analysis() {
         println!("=== Java Comprehensive Grammar Analysis ===\n");
 
@@ -4281,6 +4280,247 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
 
         output.push_str(
             "\nLegend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar\n",
+        );
+        output
+    }
+
+    #[test]
+    #[ignore]
+    fn comprehensive_swift_analysis() {
+        println!("=== Swift Comprehensive Grammar Analysis ===\n");
+
+        // 1. Load ALL nodes from grammar JSON
+        let grammar_json = fs::read_to_string("contributing/parsers/swift/node-types.json")
+            .expect("Failed to read Swift grammar file");
+        let grammar: Value =
+            serde_json::from_str(&grammar_json).expect("Failed to parse grammar JSON");
+
+        let mut all_grammar_nodes = HashSet::new();
+        if let Value::Array(nodes) = &grammar {
+            for node in nodes {
+                if let (Some(Value::Bool(true)), Some(Value::String(node_type))) =
+                    (node.get("named"), node.get("type"))
+                {
+                    all_grammar_nodes.insert(node_type.clone());
+                }
+            }
+        }
+
+        // 2. Run the REAL parser audit to get everything at once
+        let audit = match SwiftParserAudit::audit_file("examples/swift/comprehensive.swift") {
+            Ok(audit) => audit,
+            Err(e) => {
+                println!("Warning: Failed to audit Swift file: {e}");
+                // Create empty audit for fallback
+                SwiftParserAudit {
+                    grammar_nodes: HashMap::new(),
+                    implemented_nodes: HashSet::new(),
+                    extracted_symbol_kinds: HashSet::new(),
+                }
+            }
+        };
+
+        // The audit already discovered all nodes in the example file!
+        let example_nodes: HashSet<String> = audit.grammar_nodes.keys().cloned().collect();
+
+        // Save the audit report
+        let report = audit.generate_report();
+        fs::write("contributing/parsers/swift/AUDIT_REPORT.md", &report)
+            .expect("Failed to write Swift audit report");
+
+        // 3. Generate comprehensive analysis comparing all three sources
+        let mut analysis = String::new();
+        analysis.push_str("# Swift Grammar Analysis\n\n");
+        analysis.push_str(&format!("*Generated: {}*\n\n", get_formatted_timestamp()));
+        analysis.push_str("## Statistics\n");
+        analysis.push_str(&format!(
+            "- Total nodes in grammar JSON: {}\n",
+            all_grammar_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes found in comprehensive.swift: {}\n",
+            example_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes handled by parser: {}\n",
+            audit.implemented_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            audit.extracted_symbol_kinds.len()
+        ));
+        analysis.push('\n');
+
+        // Categorize nodes
+        let mut in_grammar_only: Vec<_> = all_grammar_nodes.difference(&example_nodes).collect();
+        let mut in_example_not_handled: Vec<_> = example_nodes
+            .iter()
+            .filter(|n| !audit.implemented_nodes.contains(n.as_str()))
+            .collect();
+        let mut handled_well: Vec<_> = audit
+            .implemented_nodes
+            .iter()
+            .filter(|n| example_nodes.contains(n.as_str()))
+            .collect();
+
+        in_grammar_only.sort();
+        in_example_not_handled.sort();
+        handled_well.sort();
+
+        if !handled_well.is_empty() {
+            analysis.push_str("## Successfully Handled Nodes\n");
+            analysis.push_str("These nodes are in examples and handled by parser:\n");
+            for node in &handled_well {
+                analysis.push_str(&format!("- {node}\n"));
+                println!("handled: {node}");
+            }
+            analysis.push('\n');
+        }
+
+        if !in_example_not_handled.is_empty() {
+            analysis.push_str("## Implementation Gaps\n");
+            analysis.push_str("These nodes appear in comprehensive.swift but aren't handled:\n");
+            for node in &in_example_not_handled {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !in_grammar_only.is_empty() {
+            analysis.push_str("## Grammar-Only Nodes\n");
+            analysis.push_str("These nodes exist in grammar but not in comprehensive.swift:\n");
+            for node in &in_grammar_only {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        // Save comprehensive analysis
+        fs::write("contributing/parsers/swift/GRAMMAR_ANALYSIS.md", &analysis)
+            .expect("Failed to write Swift grammar analysis");
+
+        // Save node discovery
+        let node_discovery = generate_swift_node_discovery();
+        fs::write(
+            "contributing/parsers/swift/node_discovery.txt",
+            &node_discovery,
+        )
+        .expect("Failed to write Swift node discovery");
+
+        // Summary
+        println!("\n=== Summary ===");
+        println!(
+            "Grammar nodes: {} | Example nodes: {} | Handled: {}",
+            all_grammar_nodes.len(),
+            example_nodes.len(),
+            audit.implemented_nodes.len()
+        );
+        println!("Swift AUDIT_REPORT.md saved");
+        println!("Swift GRAMMAR_ANALYSIS.md saved");
+        println!("Swift node_discovery.txt saved");
+    }
+
+    fn generate_swift_node_discovery() -> String {
+        let mut parser = Parser::new();
+        let language: Language = tree_sitter_swift::LANGUAGE.into();
+        parser
+            .set_language(&language)
+            .expect("Failed to set Swift language");
+
+        let code = fs::read_to_string("examples/swift/comprehensive.swift")
+            .expect("Failed to read comprehensive.swift");
+
+        let tree = parser.parse(&code, None).expect("Failed to parse Swift");
+
+        let mut node_registry: HashMap<String, u16> = HashMap::new();
+        let mut found_in_file: HashSet<String> = HashSet::new();
+
+        fn collect_nodes(
+            node: Node,
+            registry: &mut HashMap<String, u16>,
+            found: &mut HashSet<String>,
+        ) {
+            let kind = node.kind();
+            registry.insert(kind.to_string(), node.kind_id());
+            found.insert(kind.to_string());
+
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                collect_nodes(child, registry, found);
+            }
+        }
+
+        collect_nodes(tree.root_node(), &mut node_registry, &mut found_in_file);
+
+        // Swift key nodes for symbol extraction
+        let node_categories = vec![
+            (
+                "Type Declarations",
+                vec![
+                    "class_declaration",
+                    "protocol_declaration",
+                    "struct_declaration",
+                    "enum_declaration",
+                    "actor_declaration",
+                    "extension_declaration",
+                ],
+            ),
+            (
+                "Member Declarations",
+                vec![
+                    "function_declaration",
+                    "init_declaration",
+                    "deinit_declaration",
+                    "property_declaration",
+                    "subscript_declaration",
+                    "typealias_declaration",
+                ],
+            ),
+            ("Enum Members", vec!["enum_entry"]),
+            ("Imports", vec!["import_declaration"]),
+            ("Modifiers", vec!["modifiers", "visibility_modifier"]),
+            (
+                "Inheritance",
+                vec!["inheritance_specifier", "type_constraint"],
+            ),
+        ];
+
+        let mut output = String::new();
+        output.push_str("=== Swift Node Discovery ===\n\n");
+        output.push_str(&format!(
+            "Total unique nodes found: {}\n\n",
+            found_in_file.len()
+        ));
+
+        for (category, nodes) in &node_categories {
+            output.push_str(&format!("=== {category} ===\n"));
+            for &node_name in nodes {
+                let status = if found_in_file.contains(node_name) {
+                    "found"
+                } else {
+                    "not found"
+                };
+                let id = node_registry
+                    .get(node_name)
+                    .map(|id| format!("{id}"))
+                    .unwrap_or_else(|| "-".to_string());
+                output.push_str(&format!("  {status:10} {node_name:35} -> ID: {id}\n"));
+            }
+            output.push('\n');
+        }
+
+        // List all found nodes
+        output.push_str("=== ALL NODES FOUND IN FILE ===\n");
+        let mut all_nodes: Vec<_> = found_in_file.iter().collect();
+        all_nodes.sort();
+        for node_name in all_nodes {
+            if let Some(node_id) = node_registry.get(node_name) {
+                output.push_str(&format!("  {node_name:35} -> ID: {node_id}\n"));
+            }
+        }
+
+        output.push_str(
+            "\nLegend: found = in example file, not found = in grammar but not in file\n",
         );
         output
     }
