@@ -1,6 +1,6 @@
 # C Parser Coverage Report
 
-*Generated: 2025-12-01 15:24:41 UTC*
+*Generated: 2025-12-12 17:18:50 UTC*
 
 ## Summary
 - Key nodes: 19/21 (90%)

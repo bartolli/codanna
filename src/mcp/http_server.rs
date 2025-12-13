@@ -1,6 +1,6 @@
 //! HTTP server implementation for MCP
 //!
-//! Provides a persistent HTTP server with WebSocket/SSE support
+//! Provides a persistent HTTP server with streamable HTTP transport
 //! for multiple concurrent clients and real-time updates.
 
 #[cfg(feature = "http-server")]
@@ -10,7 +10,9 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
     };
     use crate::{IndexPersistence, SimpleIndexer};
     use axum::Router;
-    use rmcp::transport::{SseServer, sse_server::SseServerConfig};
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -164,69 +166,62 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         }
     }
 
-    // Parse bind address for SseServer
-    let addr: std::net::SocketAddr = bind.parse()?;
-
-    // Create SSE server configuration
-    let sse_config = SseServerConfig {
-        bind: addr,
-        sse_path: "/mcp/sse".to_string(),      // SSE endpoint path
-        post_path: "/mcp/message".to_string(), // POST endpoint path
-        ct: ct.clone(),
-        sse_keep_alive: Some(Duration::from_secs(15)),
-    };
-
-    // Create SSE server
-    let (sse_server, sse_router) = SseServer::new(sse_config);
-
-    // Configure SSE server to create MCP service for each connection
+    // Create streamable HTTP service for MCP connections
     let indexer_for_service = indexer.clone();
     let config_for_service = Arc::new(config.clone());
     let broadcaster_for_service = broadcaster.clone();
     let ct_for_service = ct.clone();
 
-    sse_server.with_service(move || {
-        let mcp_debug = config_for_service.mcp.debug;
-        if mcp_debug {
-            eprintln!("DEBUG: Creating new MCP server instance for SSE connection");
-        }
-        let server = CodeIntelligenceServer::new_with_indexer(
-            indexer_for_service.clone(),
-            config_for_service.clone(),
-        );
-
-        // Start notification listener for this connection
-        // Note: We need to wait for initialize() to be called first
-        let server_clone = server.clone();
-        let receiver = broadcaster_for_service.subscribe();
-        let listener_ct = ct_for_service.clone();
-        if mcp_debug {
-            eprintln!("DEBUG: Subscribing to broadcaster for notifications");
-        }
-        tokio::spawn(async move {
-            // Wait a bit for the MCP handshake to complete
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    let mcp_service = StreamableHttpService::new(
+        move || {
+            let mcp_debug = config_for_service.mcp.debug;
             if mcp_debug {
-                eprintln!("DEBUG: Starting notification listener");
+                eprintln!("DEBUG: Creating new MCP server instance for HTTP connection");
             }
+            let server = CodeIntelligenceServer::new_with_indexer(
+                indexer_for_service.clone(),
+                config_for_service.clone(),
+            );
 
-            // Run listener until cancelled
-            tokio::select! {
-                _ = server_clone.start_notification_listener(receiver, mcp_debug) => {
-                    if mcp_debug {
-                        eprintln!("DEBUG: Notification listener ended");
+            // Start notification listener for this connection
+            // Note: We need to wait for initialize() to be called first
+            let server_clone = server.clone();
+            let receiver = broadcaster_for_service.subscribe();
+            let listener_ct = ct_for_service.clone();
+            if mcp_debug {
+                eprintln!("DEBUG: Subscribing to broadcaster for notifications");
+            }
+            tokio::spawn(async move {
+                // Wait a bit for the MCP handshake to complete
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                if mcp_debug {
+                    eprintln!("DEBUG: Starting notification listener");
+                }
+
+                // Run listener until cancelled
+                tokio::select! {
+                    _ = server_clone.start_notification_listener(receiver, mcp_debug) => {
+                        if mcp_debug {
+                            eprintln!("DEBUG: Notification listener ended");
+                        }
+                    }
+                    _ = listener_ct.cancelled() => {
+                        if mcp_debug {
+                            eprintln!("DEBUG: Notification listener stopped by cancellation token");
+                        }
                     }
                 }
-                _ = listener_ct.cancelled() => {
-                    if mcp_debug {
-                        eprintln!("DEBUG: Notification listener stopped by cancellation token");
-                    }
-                }
-            }
-        });
+            });
 
-        server
-    });
+            Ok(server)
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig {
+            cancellation_token: ct.child_token(),
+            sse_keep_alive: Some(Duration::from_secs(15)),
+            stateful_mode: true,
+        },
+    );
 
     // Helper function for health check endpoint
     async fn health_check() -> &'static str {
@@ -407,36 +402,30 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         req: axum::http::Request<axum::body::Body>,
         next: axum::middleware::Next,
     ) -> Result<axum::response::Response, axum::http::StatusCode> {
-        let path = req.uri().path();
-
-        // Only validate Bearer tokens for MCP endpoints
-        if path.starts_with("/mcp/") {
-            // Check for Bearer token in Authorization header
-            if let Some(auth_header) = req.headers().get("Authorization") {
-                if let Ok(auth_str) = auth_header.to_str() {
-                    // Accept our dummy token
-                    if auth_str == "Bearer mcp-access-token-dummy" {
-                        eprintln!("MCP request authorized with Bearer token");
-                        return Ok(next.run(req).await);
-                    }
+        // Check for Bearer token in Authorization header
+        if let Some(auth_header) = req.headers().get("Authorization") {
+            if let Ok(auth_str) = auth_header.to_str() {
+                // Accept our dummy token
+                if auth_str == "Bearer mcp-access-token-dummy" {
+                    eprintln!("MCP request authorized with Bearer token");
+                    return Ok(next.run(req).await);
                 }
             }
-
-            // For OPTIONS requests (CORS preflight), allow without auth
-            if req.method() == axum::http::Method::OPTIONS {
-                return Ok(next.run(req).await);
-            }
-
-            eprintln!("MCP request rejected - invalid or missing Bearer token");
-            return Err(axum::http::StatusCode::UNAUTHORIZED);
         }
 
-        // For non-MCP endpoints, pass through without auth check
-        Ok(next.run(req).await)
+        // For OPTIONS requests (CORS preflight), allow without auth
+        if req.method() == axum::http::Method::OPTIONS {
+            return Ok(next.run(req).await);
+        }
+
+        eprintln!("MCP request rejected - invalid or missing Bearer token");
+        Err(axum::http::StatusCode::UNAUTHORIZED)
     }
 
-    // Create protected SSE router with Bearer token validation
-    let protected_sse_router = sse_router.layer(axum::middleware::from_fn(validate_bearer_token));
+    // Create protected MCP router with Bearer token validation
+    let protected_mcp_router = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(axum::middleware::from_fn(validate_bearer_token));
 
     // Create main router - OAuth endpoints FIRST (no auth), then MCP endpoints (with auth)
     let router = Router::new()
@@ -450,14 +439,13 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         .route("/oauth/authorize", axum::routing::get(oauth_authorize))
         // Health check - NO authentication required
         .route("/health", axum::routing::get(health_check))
-        // MCP endpoints - Bearer token authentication required
-        .merge(protected_sse_router); // SSE endpoints at /mcp/sse and /mcp/message
+        // MCP endpoint - Bearer token authentication required
+        .merge(protected_mcp_router);
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!("HTTP MCP server listening on http://{bind}");
-    eprintln!("SSE endpoint: http://{bind}/mcp/sse");
-    eprintln!("POST endpoint: http://{bind}/mcp/message");
+    eprintln!("MCP endpoint: http://{bind}/mcp");
     eprintln!("Health check: http://{bind}/health");
     eprintln!("Press Ctrl+C to stop the server");
 

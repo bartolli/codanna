@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.4] - 2025-12-12
+
+### Changed
+
+- Migrated from rmcp 0.9.1 to 0.11.0
+- Replaced SSE transport with streamable HTTP transport
+- Updated MCP HTTP/HTTPS server to use StreamableHttpService
+- Updated tree-sitter from 0.25.10 to 0.26.2
+- Fixed tree-sitter Node API calls to use u32 instead of usize
+- Updated fastembed from 5.3.1 to 5.4.0
+- Updated axum-server from 0.7.3 to 0.8.0
+- Updated tower-http from 0.6.7 to 0.6.8
+- Updated git2 from 0.20.2 to 0.20.3
+- Updated criterion from 0.8.0 to 0.8.1
+- Updated testcontainers from 0.25.2 to 0.26.0
+- MCP endpoint changed from `/mcp/sse` to `/mcp`
+- MCP client config type changed from `"sse"` to `"http"`
+- Updated HTTP server documentation with new transport configuration
+
+### Removed
+
+- Removed `transport-sse-server` feature from rmcp
+- Removed SSE-specific transport code
+- Removed early address parsing in HTTPS server
+
+### Fixed
+
+- Fixed clippy unnecessary_unwrap warnings in Swift test files
+
 ## [0.8.3] - 2025-11-30
 
 ### Added

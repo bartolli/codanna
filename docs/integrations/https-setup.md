@@ -6,7 +6,7 @@ This guide explains how to use Codanna's HTTPS MCP server with self-signed certi
 
 The HTTPS MCP server provides:
 - **TLS/SSL encryption** for secure communication
-- **SSE (Server-Sent Events)** transport compatible with Claude Code
+- **Streamable HTTP** transport compatible with Claude Code
 - **OAuth2 authentication flow** for secure access control
 - **Self-signed certificate generation** with proper X.509 attributes
 - **Bearer token validation** for API security
@@ -62,8 +62,8 @@ Add to `.mcp.json` in your project root:
 {
   "mcpServers": {
     "codanna-https": {
-      "type": "sse",
-      "url": "https://127.0.0.1:8443/mcp/sse"
+      "type": "http",
+      "url": "https://127.0.0.1:8443/mcp"
     }
   }
 }
@@ -147,7 +147,7 @@ Then restart the server to generate new ones.
 
 **Solution**: The OAuth flow should handle authentication automatically. If you see 401 errors:
 1. Check server logs for Bearer token validation messages
-2. Ensure you're using the SSE transport type in `.mcp.json`
+2. Ensure you're using `"type": "http"` in `.mcp.json`
 3. Try reconnecting with `/mcp` command in Claude Code
 
 ### Browser Works But Claude Code Doesn't

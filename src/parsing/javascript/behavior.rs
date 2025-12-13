@@ -1,6 +1,5 @@
 //! JavaScript-specific language behavior implementation
 
-use crate::debug_print;
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};

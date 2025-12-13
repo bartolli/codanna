@@ -106,7 +106,7 @@ impl CppParser {
 
         // Recursively process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::extract_imports_from_node(child, code, file_id, imports);
             }
         }
@@ -135,13 +135,13 @@ impl CppParser {
                     let mut method_name = String::new();
 
                     for i in 0..declarator.child_count() {
-                        if let Some(child) = declarator.child(i) {
+                        if let Some(child) = declarator.child(i as u32) {
                             if child.kind() == "qualified_identifier" {
                                 // This is a method implementation (Class::method)
                                 is_method = true;
                                 // Extract method name from qualified_identifier
                                 for j in 0..child.child_count() {
-                                    if let Some(id_node) = child.child(j) {
+                                    if let Some(id_node) = child.child(j as u32) {
                                         if id_node.kind() == "identifier" {
                                             method_name = code[id_node.byte_range()].to_string();
                                             break;
@@ -232,7 +232,7 @@ impl CppParser {
 
                     // Process children to extract methods
                     for i in 0..node.child_count() {
-                        if let Some(child) = node.child(i) {
+                        if let Some(child) = node.child(i as u32) {
                             self.extract_symbols_from_node(
                                 child,
                                 code,
@@ -316,12 +316,12 @@ impl CppParser {
                 // Check if this is a method declaration (has function_declarator child)
                 if self.context.current_class().is_some() {
                     for i in 0..node.child_count() {
-                        if let Some(child) = node.child(i) {
+                        if let Some(child) = node.child(i as u32) {
                             if child.kind() == "function_declarator" {
                                 // This is a method declaration
                                 // Look for field_identifier child
                                 for j in 0..child.child_count() {
-                                    if let Some(name_node) = child.child(j) {
+                                    if let Some(name_node) = child.child(j as u32) {
                                         if name_node.kind() == "field_identifier" {
                                             let method_name = &code[name_node.byte_range()];
                                             let symbol_id = counter.next_id();
@@ -364,7 +364,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 self.extract_symbols_from_node(child, code, file_id, symbols, counter, depth + 1);
             }
         }
@@ -403,7 +403,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::extract_calls_from_node(child, code, calls);
             }
         }
@@ -440,7 +440,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::find_implementations_in_node(child, code, implementations);
             }
         }
@@ -459,7 +459,7 @@ impl CppParser {
 
                 // Look for base class specifiers
                 for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         if child.kind() == "base_class_clause" {
                             // Extract base class names
                             Self::extract_base_classes_in_node(child, code, derived_class, extends);
@@ -471,7 +471,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::find_extends_in_node(child, code, extends);
             }
         }
@@ -486,7 +486,7 @@ impl CppParser {
     ) {
         // Process children to find base class names
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "type_identifier" {
                     let base_class = &code[child.byte_range()];
                     let range = Range::new(
@@ -523,7 +523,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::find_uses_in_node(child, code, uses);
             }
         }
@@ -576,7 +576,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::find_defines_in_node(child, code, defines);
             }
         }
@@ -613,7 +613,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::find_variable_types_in_node(child, code, variable_types);
             }
         }
@@ -632,7 +632,7 @@ impl CppParser {
 
                 // Look for method definitions inside the class body
                 for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         if child.kind() == "field_declaration_list" {
                             Self::extract_methods_from_class_body(
                                 child,
@@ -648,7 +648,7 @@ impl CppParser {
 
         // Process children
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 Self::find_inherent_methods_in_node(child, code, inherent_methods);
             }
         }
@@ -662,7 +662,7 @@ impl CppParser {
         inherent_methods: &mut Vec<(String, String, Range)>,
     ) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "declaration" || child.kind() == "function_definition" {
                     // Look for method names
                     if let Some(declarator) = child.child_by_field_name("declarator") {

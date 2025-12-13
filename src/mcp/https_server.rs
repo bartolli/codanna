@@ -1,7 +1,7 @@
-//! HTTPS server implementation for MCP using SSE transport with TLS
+//! HTTPS server implementation for MCP using streamable HTTP transport with TLS
 //!
 //! Provides a secure HTTPS server with TLS support for MCP communication.
-//! Uses SSE (Server-Sent Events) transport which is compatible with Claude Code.
+//! Uses streamable HTTP transport which is compatible with Claude Code.
 
 #[cfg(feature = "https-server")]
 pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
@@ -12,7 +12,9 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     use anyhow::Context;
     use axum::Router;
     use axum_server::tls_rustls::RustlsConfig;
-    use rmcp::transport::{SseServer, sse_server::SseServerConfig};
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+    };
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -55,9 +57,6 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     } else if config.mcp.debug {
         eprintln!("No existing index found, starting fresh");
     }
-
-    // Parse bind address for SSE server early
-    let addr: SocketAddr = bind.parse().context("Failed to parse bind address")?;
 
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
@@ -180,36 +179,31 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         }
     }
 
-    // Create SSE server configuration
-    let sse_config = SseServerConfig {
-        bind: addr,
-        sse_path: "/mcp/sse".to_string(),      // SSE endpoint path
-        post_path: "/mcp/message".to_string(), // POST endpoint path
-        ct: ct.clone(),
-        sse_keep_alive: Some(Duration::from_secs(15)),
-    };
-
-    // Create SSE server
-    let (sse_server, sse_router) = SseServer::new(sse_config);
-
-    // Register the service with SSE server
-    // Important: We need to share the SAME indexer instance across all connections
+    // Create streamable HTTP service for MCP connections
+    // Important: We share the SAME indexer instance across all connections
     // to ensure hot reload works properly. The indexer is already Arc<RwLock<_>>
     // so it's safe to share across connections.
     let indexer_for_service = indexer.clone();
     let config_for_service = Arc::new(config.clone());
 
     // Create a shared service instance that all connections will use
-    // This is different from the examples which create new instances per connection
     let shared_service =
         CodeIntelligenceServer::new_with_indexer(indexer_for_service, config_for_service);
 
-    sse_server.with_service(move || {
-        // Return a clone of the shared service
-        // Since CodeIntelligenceServer derives Clone and the indexer is Arc<RwLock<_>>,
-        // all clones will share the same underlying indexer
-        shared_service.clone()
-    });
+    let mcp_service = StreamableHttpService::new(
+        move || {
+            // Return a clone of the shared service
+            // Since CodeIntelligenceServer derives Clone and the indexer is Arc<RwLock<_>>,
+            // all clones will share the same underlying indexer
+            Ok(shared_service.clone())
+        },
+        LocalSessionManager::default().into(),
+        StreamableHttpServerConfig {
+            cancellation_token: ct.child_token(),
+            sse_keep_alive: Some(Duration::from_secs(15)),
+            stateful_mode: true,
+        },
+    );
 
     // Create OAuth metadata handler with the bind address
     let bind_for_metadata = bind.clone();
@@ -248,8 +242,10 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         Ok(next.run(req).await)
     }
 
-    // Create SSE router with logging middleware
-    let sse_router_with_logging = sse_router.layer(axum::middleware::from_fn(log_requests));
+    // Create MCP router with logging middleware
+    let mcp_router_with_logging = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(axum::middleware::from_fn(log_requests));
 
     // Create main router - OAuth endpoints available but optional for HTTPS
     let router = Router::new()
@@ -263,8 +259,8 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         .route("/oauth/authorize", axum::routing::get(oauth_authorize))
         // Health check - NO authentication required
         .route("/health", axum::routing::get(health_check))
-        // MCP endpoints - No authentication required (TLS provides transport security)
-        .merge(sse_router_with_logging); // SSE endpoints at /mcp/sse and /mcp/message
+        // MCP endpoint - No authentication required (TLS provides transport security)
+        .merge(mcp_router_with_logging);
 
     // Get or create TLS certificates
     let (cert_pem, key_pem) = get_or_create_certificate(&bind)
@@ -279,13 +275,12 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     // Parse bind address
     let addr: SocketAddr = bind.parse().context("Failed to parse bind address")?;
 
-    eprintln!("🔒 HTTPS SSE MCP server listening on https://{bind}");
-    eprintln!("📍 SSE endpoint: https://{bind}/mcp/sse");
-    eprintln!("📍 POST endpoint: https://{bind}/mcp/message");
-    eprintln!("🏥 Health check: https://{bind}/health");
+    eprintln!("HTTPS MCP server listening on https://{bind}");
+    eprintln!("MCP endpoint: https://{bind}/mcp");
+    eprintln!("Health check: https://{bind}/health");
     eprintln!();
-    eprintln!("⚠️  Using self-signed certificate. Clients will show security warnings.");
-    eprintln!("📝 To trust the certificate, visit https://{bind} in your browser first");
+    eprintln!("Using self-signed certificate. Clients will show security warnings.");
+    eprintln!("To trust the certificate, visit https://{bind} in your browser first");
     eprintln!();
     eprintln!("Press Ctrl+C to stop the server");
 

@@ -12,7 +12,6 @@
 //! - Protected visibility
 //! - Abstract classes
 
-use crate::debug_print;
 use crate::parsing::resolution::ImportBinding;
 use crate::parsing::{InheritanceResolver, ResolutionScope, ScopeLevel, ScopeType};
 use crate::{FileId, SymbolId};

@@ -23,7 +23,6 @@
 //! - Full namespace resolution implementation
 //! - Type/value space population from parser
 
-use crate::debug_print;
 use crate::parsing::resolution::{ImportBinding, ProjectResolutionEnhancer};
 use crate::parsing::{InheritanceResolver, ResolutionScope, ScopeLevel, ScopeType};
 use crate::project_resolver::persist::ResolutionRules;

@@ -155,8 +155,8 @@ public struct ThreadSafeContainer: @unchecked Sendable {
         .find(|s| s.name.as_ref() == "ThreadSafeContainer");
     // Note: Current implementation focuses on class recovery
     // Struct recovery may or may not work - this test documents current behavior
-    if struct_sym.is_some() {
-        assert_eq!(struct_sym.unwrap().kind, SymbolKind::Struct);
+    if let Some(sym) = struct_sym {
+        assert_eq!(sym.kind, SymbolKind::Struct);
     }
 }
 
@@ -166,24 +166,21 @@ fn test_recovered_class_visibility() {
     // Public
     let code_public = "public class PublicCache: @unchecked Sendable { }";
     let symbols = parse_swift(code_public);
-    let sym = symbols.iter().find(|s| s.name.as_ref() == "PublicCache");
-    if sym.is_some() {
-        assert_eq!(sym.unwrap().visibility, Visibility::Public);
+    if let Some(sym) = symbols.iter().find(|s| s.name.as_ref() == "PublicCache") {
+        assert_eq!(sym.visibility, Visibility::Public);
     }
 
     // Open (maps to Public)
     let code_open = "open class OpenCache: @unchecked Sendable { }";
     let symbols = parse_swift(code_open);
-    let sym = symbols.iter().find(|s| s.name.as_ref() == "OpenCache");
-    if sym.is_some() {
-        assert_eq!(sym.unwrap().visibility, Visibility::Public);
+    if let Some(sym) = symbols.iter().find(|s| s.name.as_ref() == "OpenCache") {
+        assert_eq!(sym.visibility, Visibility::Public);
     }
 
     // Internal (default)
     let code_internal = "class InternalCache: @unchecked Sendable { }";
     let symbols = parse_swift(code_internal);
-    let sym = symbols.iter().find(|s| s.name.as_ref() == "InternalCache");
-    if sym.is_some() {
-        assert_eq!(sym.unwrap().visibility, Visibility::Module);
+    if let Some(sym) = symbols.iter().find(|s| s.name.as_ref() == "InternalCache") {
+        assert_eq!(sym.visibility, Visibility::Module);
     }
 }

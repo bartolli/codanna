@@ -28,9 +28,9 @@ Configure in `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "codanna-sse": {
-      "type": "sse",
-      "url": "http://127.0.0.1:8080/mcp/sse"
+    "codanna-http": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp"
     }
   }
 }
@@ -40,9 +40,9 @@ For HTTPS, use:
 ```json
 {
   "mcpServers": {
-    "codanna-sse": {
-      "type": "sse",
-      "url": "https://127.0.0.1:8080/mcp/sse"
+    "codanna-https": {
+      "type": "http",
+      "url": "https://127.0.0.1:8443/mcp"
     }
   }
 }
