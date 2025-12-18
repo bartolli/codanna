@@ -264,6 +264,8 @@ pub fn model_to_string(model: &EmbeddingModel) -> String {
         EmbeddingModel::ClipVitB32 => "ClipVitB32",
         EmbeddingModel::JinaEmbeddingsV2BaseCode => "JinaEmbeddingsV2BaseCode",
         EmbeddingModel::EmbeddingGemma300M => "EmbeddingGemma300M",
+        // Handle any new models added in future fastembed versions
+        other => return format!("{other:?}"),
     }
     .to_string()
 }

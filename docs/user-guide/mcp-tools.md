@@ -15,6 +15,9 @@ Available tools when using the MCP server. All tools support `--json` flag for s
 - **find_callers** - Functions that call a function
 - **analyze_impact** - Impact radius of symbol changes
 
+### Document Tools
+- **search_documents** - Search indexed markdown/text files
+
 ### Information Tools
 - **get_index_info** - Index statistics
 
@@ -146,6 +149,29 @@ codanna mcp analyze_impact SimpleIndexer --json
 - What RENDERS/COMPOSES this (JSX: `<Component>`, Rust: struct fields, etc.)
 - Full dependency graph across files
 - Each result includes `[symbol_id:123]` for unambiguous follow-up
+
+### `search_documents`
+
+Search indexed documents (markdown, text files) using natural language queries.
+
+**Parameters:**
+- `query` (required) - Natural language search query
+- `collection` - Filter by collection name (optional)
+- `limit` - Maximum number of results (default: 5)
+
+**Example:**
+```bash
+codanna mcp search_documents query:"authentication flow"
+codanna mcp search_documents query:"error handling" collection:docs limit:3
+codanna mcp search_documents query:"getting started" --json
+```
+
+**Returns:** Matching document chunks with:
+- Source file path and similarity score
+- Heading context (document structure)
+- KWIC preview centered on keywords with highlighting
+
+**Note:** Requires document collections to be indexed first. See [Document Search](documents.md).
 
 ### `get_index_info`
 

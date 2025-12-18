@@ -51,6 +51,18 @@ See [Profile Documentation](docs/profiles/) for details.
 
 **Also available: Plugins** - Claude Code manifest format for CC-specific workflows. See [Plugin Documentation](docs/plugins/).
 
+> [!TIP]
+> **Document Search**
+> Index markdown and text files for semantic search. Query project documentation with natural language.
+
+```bash
+codanna documents add-collection docs docs/
+codanna documents index
+codanna documents search "authentication flow"
+```
+
+See [Document Search](docs/user-guide/documents.md) for details.
+
 ## What It Solves
 
 Your AI assistant knows your code:
@@ -96,6 +108,7 @@ codanna mcp semantic_search_docs query:"where do we resolve symbol references" l
 
 - **Fast parsing** - Tree-sitter AST (same as GitHub code navigator)
 - **Semantic search** - Natural language queries that understand your code
+- **Document search** - Index markdown files for RAG workflows
 - **Relationship tracking** - Call graphs, implementations, dependencies
 - **Multi-language** - Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Swift, GDScript
 - **MCP protocol** - Native integration with Claude and other AI assistants

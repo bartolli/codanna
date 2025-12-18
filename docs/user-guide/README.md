@@ -12,6 +12,7 @@ Complete documentation for using Codanna effectively.
 - **[MCP Tools](mcp-tools.md)** - Available tools when using the MCP server
 - **[Configuration](configuration.md)** - Lives in `.codanna/settings.toml`
 - **[Search Guide](search-guide.md)** - Semantic search best practices
+- **[Document Search](documents.md)** - Index markdown files for RAG
 
 ## Core Commands
 

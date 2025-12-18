@@ -16,6 +16,7 @@ macro_rules! debug_print {
 
 pub mod config;
 pub mod display;
+pub mod documents;
 pub mod error;
 pub mod indexing;
 pub mod init;

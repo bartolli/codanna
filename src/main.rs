@@ -80,7 +80,9 @@ fn create_custom_help() -> String {
     help.push_str("  $ codanna add-dir tests            # Add tests directory to indexed paths\n");
     help.push_str("  $ codanna list-dirs                # List all indexed directories\n");
     help.push_str("  $ codanna serve --http --watch     # HTTP server with OAuth\n");
-    help.push_str("  $ codanna serve --https --watch    # HTTPS server with TLS\n\n");
+    help.push_str("  $ codanna serve --https --watch    # HTTPS server with TLS\n");
+    help.push_str("  $ codanna documents add-collection docs ./docs  # Add doc collection\n");
+    help.push_str("  $ codanna documents index          # Index all document collections\n\n");
 
     // About section
     help.push_str("Index code and query relationships, symbols, and dependencies.\n\n");
@@ -112,6 +114,7 @@ fn create_custom_help() -> String {
     help.push_str("  benchmark     Benchmark parser performance\n");
     help.push_str("  parse         Output AST nodes in JSONL format\n");
     help.push_str("  plugin        Manage Claude Code plugins\n");
+    help.push_str("  documents     Index and search document collections\n");
     help.push_str("  help          Print this message or the help of the given subcommand(s)\n\n");
 
     help.push_str("See 'codanna help <command>' for more information on a specific command.\n\n");
@@ -363,6 +366,17 @@ enum Commands {
         action: PluginAction,
     },
 
+    /// Index and search document collections for RAG
+    #[command(
+        about = "Index and search document collections",
+        long_about = "Index markdown and text documents for semantic search.\n\nDocuments are chunked, embedded, and stored separately from code symbols.",
+        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents search \"error handling\" --collection docs\n  codanna documents list\n  codanna documents stats docs"
+    )]
+    Documents {
+        #[command(subcommand)]
+        action: DocumentAction,
+    },
+
     /// Manage project profiles
     #[command(
         about = "Initialize and manage project profiles",
@@ -474,6 +488,107 @@ enum PluginAction {
         /// Show detailed verification results
         #[arg(short, long)]
         verbose: bool,
+    },
+}
+
+/// Document collection management actions
+#[derive(Subcommand)]
+enum DocumentAction {
+    /// Index documents from a collection
+    #[command(
+        about = "Index documents from a configured collection",
+        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents index --all\n  codanna documents index --progress"
+    )]
+    Index {
+        /// Collection name to index (from settings.toml)
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Index all configured collections
+        #[arg(long)]
+        all: bool,
+
+        /// Force re-indexing of all files
+        #[arg(short, long)]
+        force: bool,
+
+        /// Show progress bar during indexing
+        #[arg(short, long)]
+        progress: bool,
+    },
+
+    /// Search documents
+    #[command(
+        about = "Search indexed documents using natural language",
+        after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5"
+    )]
+    Search {
+        /// Search query text
+        query: String,
+
+        /// Filter by collection name
+        #[arg(short, long)]
+        collection: Option<String>,
+
+        /// Maximum results to return
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// List collections
+    #[command(
+        about = "List all document collections",
+        after_help = "Example:\n  codanna documents list"
+    )]
+    List {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show collection statistics
+    #[command(
+        about = "Show statistics for a collection",
+        after_help = "Example:\n  codanna documents stats docs"
+    )]
+    Stats {
+        /// Collection name
+        collection: String,
+
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Add a collection to settings.toml
+    #[command(
+        about = "Add a document collection to settings.toml",
+        after_help = "Examples:\n  codanna documents add-collection docs ./docs\n  codanna documents add-collection api-docs ./api --pattern \"**/*.md\""
+    )]
+    AddCollection {
+        /// Collection name
+        name: String,
+
+        /// Path to include in the collection
+        path: PathBuf,
+
+        /// Glob pattern for file matching (default: **/*.md)
+        #[arg(short, long)]
+        pattern: Option<String>,
+    },
+
+    /// Remove a collection from settings.toml
+    #[command(
+        about = "Remove a document collection from settings.toml",
+        after_help = "Examples:\n  codanna documents remove-collection docs\n\nNote: Run 'codanna documents index' after to clean the index."
+    )]
+    RemoveCollection {
+        /// Collection name to remove
+        name: String,
     },
 }
 
@@ -1066,6 +1181,7 @@ async fn main() {
             | Commands::Config
             | Commands::Benchmark { .. }
             | Commands::Plugin { .. }
+            | Commands::Documents { .. }
     );
 
     // Determine if we need full trait resolver initialization
@@ -1515,6 +1631,56 @@ async fn main() {
                             }
                             Err(e) => {
                                 eprintln!("Failed to start config watcher: {e}");
+                            }
+                        }
+                    }
+
+                    // Start document watcher if documents are enabled and file watching is on
+                    if config.file_watch.enabled && config.documents.enabled {
+                        use codanna::documents::{DocumentStore, DocumentWatcher};
+                        use codanna::vector::{EmbeddingGenerator, FastEmbedGenerator};
+                        use tokio::sync::RwLock;
+
+                        let doc_path = config.index_path.join("documents");
+                        if doc_path.exists() {
+                            // Create DocumentStore with embeddings
+                            if let Ok(generator) = FastEmbedGenerator::from_settings(
+                                &config.semantic_search.model,
+                                false,
+                            ) {
+                                let dimension = generator.dimension();
+                                if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
+                                    if let Ok(store_with_emb) =
+                                        store.with_embeddings(Box::new(generator))
+                                    {
+                                        let store_arc = Arc::new(RwLock::new(store_with_emb));
+
+                                        // Get chunking config
+                                        let chunking_config = config.documents.defaults.clone();
+
+                                        // Start document watcher
+                                        match DocumentWatcher::new(
+                                            store_arc,
+                                            chunking_config,
+                                            config.file_watch.debounce_ms,
+                                            config.mcp.debug,
+                                        ) {
+                                            Ok(doc_watcher) => {
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = doc_watcher.watch().await {
+                                                        eprintln!("Document watcher error: {e}");
+                                                    }
+                                                });
+                                                eprintln!(
+                                                    "Document watcher started - monitoring indexed documents"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                eprintln!("Failed to start document watcher: {e}");
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2176,7 +2342,9 @@ async fn main() {
                                     serde_json::Value::String(pos_arg.clone()),
                                 );
                             }
-                            "semantic_search_docs" | "semantic_search_with_context" => {
+                            "semantic_search_docs"
+                            | "semantic_search_with_context"
+                            | "search_documents" => {
                                 args_map.insert(
                                     "query".to_string(),
                                     serde_json::Value::String(pos_arg.clone()),
@@ -2741,7 +2909,34 @@ async fn main() {
             };
 
             // Embedded mode - use already loaded indexer directly
-            let server = codanna::mcp::CodeIntelligenceServer::new(indexer);
+            // Try to load DocumentStore for search_documents tool
+            let server = {
+                let mut server = codanna::mcp::CodeIntelligenceServer::new(indexer);
+
+                // Add DocumentStore if documents are enabled and indexed
+                if config.documents.enabled && config.semantic_search.enabled {
+                    let doc_path = config.index_path.join("documents");
+                    if doc_path.exists() {
+                        use codanna::documents::DocumentStore;
+                        use codanna::vector::{EmbeddingGenerator, FastEmbedGenerator};
+
+                        // Create generator first to get dimension from model
+                        if let Ok(generator) =
+                            FastEmbedGenerator::from_settings(&config.semantic_search.model, false)
+                        {
+                            let dimension = generator.dimension();
+                            if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
+                                if let Ok(store_with_emb) =
+                                    store.with_embeddings(Box::new(generator))
+                                {
+                                    server = server.with_document_store(store_with_emb);
+                                }
+                            }
+                        }
+                    }
+                }
+                server
+            };
 
             // Call the tool directly
             use codanna::mcp::*;
@@ -2975,6 +3170,35 @@ async fn main() {
                         ))
                         .await
                 }
+                "search_documents" => {
+                    use codanna::mcp::SearchDocumentsRequest;
+                    let query = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("query"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_else(|| {
+                            eprintln!("Error: search_documents requires 'query' parameter");
+                            std::process::exit(1);
+                        })
+                        .to_string();
+                    let collection = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("collection"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let limit = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("limit"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(5) as u32;
+                    server
+                        .search_documents(Parameters(SearchDocumentsRequest {
+                            query,
+                            collection,
+                            limit,
+                        }))
+                        .await
+                }
                 _ => {
                     if json {
                         use codanna::io::exit_code::ExitCode;
@@ -2983,14 +3207,14 @@ async fn main() {
                             ExitCode::GeneralError,
                             &format!("Unknown tool: {tool}"),
                             vec![
-                                "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context",
+                                "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents",
                             ],
                         );
                         println!("{}", serde_json::to_string_pretty(&response).unwrap());
                     } else {
                         eprintln!("Unknown tool: {tool}");
                         eprintln!(
-                            "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context"
+                            "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents"
                         );
                     }
                     std::process::exit(1);
@@ -3578,6 +3802,511 @@ async fn main() {
                 let code: codanna::io::exit_code::ExitCode = e.exit_code();
                 eprintln!("Plugin operation failed: {e}");
                 std::process::exit(i32::from(code));
+            }
+        }
+
+        Commands::Documents { action } => {
+            // Execute document management command
+            use codanna::documents::{DocumentStore, SearchQuery};
+            use codanna::vector::{FastEmbedGenerator, VectorDimension};
+
+            let doc_path = config.index_path.join("documents");
+            let dimension = VectorDimension::dimension_384();
+
+            // Helper to create store with optional embeddings
+            let create_store_with_embeddings = || -> Result<DocumentStore, String> {
+                let store = DocumentStore::new(&doc_path, dimension)
+                    .map_err(|e| format!("Failed to open document store: {e}"))?;
+
+                if config.semantic_search.enabled {
+                    let generator = FastEmbedGenerator::new()
+                        .map_err(|e| format!("Failed to create embedding generator: {e}"))?;
+                    store
+                        .with_embeddings(Box::new(generator))
+                        .map_err(|e| format!("Failed to enable embeddings: {e}"))
+                } else {
+                    Ok(store)
+                }
+            };
+
+            match action {
+                DocumentAction::Index {
+                    collection,
+                    all,
+                    force,
+                    progress,
+                } => {
+                    use codanna::io::status_line::StatusLine;
+                    use codanna::io::{ProgressBar, ProgressBarOptions, ProgressBarStyle};
+                    use std::sync::Arc;
+
+                    // Create or open document store with embeddings
+                    let mut store = match create_store_with_embeddings() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Force flag: clear file states to treat all files as new
+                    if force {
+                        eprintln!("Force re-indexing: clearing file state cache");
+                        store.clear_file_states();
+                    }
+
+                    // Determine which collections to index:
+                    // - --collection <name>: specific collection
+                    // - --all: all collections
+                    // - (no args): all collections if enabled=true
+                    let collections_to_index: Vec<(String, codanna::documents::CollectionConfig)> =
+                        if let Some(name) = collection {
+                            // Specific collection requested
+                            match config.documents.collections.get(&name) {
+                                Some(col_config) => vec![(name, col_config.clone())],
+                                None => {
+                                    eprintln!("Collection '{name}' not found in settings.toml");
+                                    eprintln!("\nConfigured collections:");
+                                    for name in config.documents.collections.keys() {
+                                        eprintln!("  - {name}");
+                                    }
+                                    std::process::exit(1);
+                                }
+                            }
+                        } else if all || config.documents.enabled {
+                            // Index all collections (--all flag OR enabled=true in config)
+                            if config.documents.collections.is_empty() {
+                                eprintln!("No collections configured in settings.toml");
+                                eprintln!("\nTo add a collection:");
+                                eprintln!("  codanna documents add-collection <name> <path>");
+                                std::process::exit(1);
+                            }
+                            config
+                                .documents
+                                .collections
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        } else {
+                            eprintln!("Document indexing is disabled. Enable with:");
+                            eprintln!("  [documents]");
+                            eprintln!("  enabled = true");
+                            eprintln!("\nOr specify a collection: --collection <name>");
+                            std::process::exit(1);
+                        };
+
+                    // Sync: remove collections that are indexed but not in config
+                    // (mirrors sync_with_config pattern from code indexing)
+                    let indexed_collections: std::collections::HashSet<String> =
+                        store.list_collections().into_iter().collect();
+                    let configured_collections: std::collections::HashSet<String> =
+                        config.documents.collections.keys().cloned().collect();
+
+                    let stale_collections: Vec<String> = indexed_collections
+                        .difference(&configured_collections)
+                        .cloned()
+                        .collect();
+
+                    if !stale_collections.is_empty() {
+                        eprintln!(
+                            "Sync: removing {} stale collections",
+                            stale_collections.len()
+                        );
+                        for name in &stale_collections {
+                            eprintln!("  - {name}");
+                            if let Err(e) = store.delete_collection(name) {
+                                eprintln!("    Failed to remove: {e}");
+                            }
+                        }
+                    }
+
+                    use codanna::documents::IndexProgress;
+                    use std::cell::RefCell;
+
+                    let mut total_files = 0usize;
+                    let mut total_chunks = 0usize;
+
+                    // Progress state for two-phase display
+                    type ProgressState = Option<(Arc<ProgressBar>, StatusLine<Arc<ProgressBar>>)>;
+                    let phase1_bar: RefCell<ProgressState> = RefCell::new(None);
+                    let phase2_bar: RefCell<ProgressState> = RefCell::new(None);
+
+                    for (name, col_config) in collections_to_index {
+                        let chunking = col_config.effective_chunking(&config.documents.defaults);
+
+                        if !progress {
+                            eprintln!("Indexing collection: {name}");
+                        }
+
+                        // Index with two-phase progress callback
+                        let result = store.index_collection_with_progress(
+                            &name,
+                            &col_config,
+                            &chunking,
+                            |prog| {
+                                if !progress {
+                                    return;
+                                }
+                                match prog {
+                                    IndexProgress::ProcessingFile { current, total, .. } => {
+                                        let mut p1 = phase1_bar.borrow_mut();
+                                        if p1.is_none() && total > 0 {
+                                            // Create Phase 1 progress bar
+                                            let options = ProgressBarOptions::default()
+                                                .with_style(ProgressBarStyle::VerticalSolid)
+                                                .with_width(28);
+                                            let bar = Arc::new(ProgressBar::with_options(
+                                                total as u64,
+                                                "files",
+                                                "chunked",
+                                                "failed",
+                                                options,
+                                            ));
+                                            let status = StatusLine::new(Arc::clone(&bar));
+                                            *p1 = Some((bar, status));
+                                        }
+                                        if let Some((bar, _)) = p1.as_ref() {
+                                            bar.set_progress(current as u64);
+                                        }
+                                    }
+                                    IndexProgress::GeneratingEmbeddings { current, total } => {
+                                        // Finish Phase 1 if active
+                                        let mut p1 = phase1_bar.borrow_mut();
+                                        if let Some((bar, status)) = p1.take() {
+                                            drop(status);
+                                            eprintln!("{bar}");
+                                        }
+
+                                        let mut p2 = phase2_bar.borrow_mut();
+                                        if p2.is_none() && total > 0 {
+                                            // Create Phase 2 progress bar
+                                            let options = ProgressBarOptions::default()
+                                                .with_style(ProgressBarStyle::VerticalSolid)
+                                                .with_width(28);
+                                            let bar = Arc::new(ProgressBar::with_options(
+                                                total as u64,
+                                                "chunks",
+                                                "embedded",
+                                                "failed",
+                                                options,
+                                            ));
+                                            let status = StatusLine::new(Arc::clone(&bar));
+                                            *p2 = Some((bar, status));
+                                        }
+                                        if let Some((bar, _)) = p2.as_ref() {
+                                            bar.set_progress(current as u64);
+                                        }
+                                    }
+                                }
+                            },
+                        );
+
+                        match result {
+                            Ok(stats) => {
+                                total_files += stats.files_processed;
+                                total_chunks += stats.chunks_created;
+                                if !progress {
+                                    eprintln!("  Files processed: {}", stats.files_processed);
+                                    eprintln!("  Files skipped: {}", stats.files_skipped);
+                                    eprintln!("  Chunks created: {}", stats.chunks_created);
+                                    eprintln!("  Chunks removed: {}", stats.chunks_removed);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to index collection '{name}': {e}");
+                            }
+                        };
+                    }
+
+                    // Print final progress bars and summary
+                    if let Some((bar, status)) = phase1_bar.borrow_mut().take() {
+                        drop(status);
+                        eprintln!("{bar}");
+                    }
+                    if let Some((bar, status)) = phase2_bar.borrow_mut().take() {
+                        drop(status);
+                        eprintln!("{bar}");
+                    }
+                    if progress {
+                        eprintln!("Total: {total_files} files, {total_chunks} chunks");
+                    }
+                }
+
+                DocumentAction::Search {
+                    query,
+                    collection,
+                    limit,
+                    json,
+                } => {
+                    let mut store = match create_store_with_embeddings() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let search_query = SearchQuery {
+                        text: query,
+                        collection,
+                        document: None,
+                        limit,
+                        preview_config: Some(config.documents.search.clone()),
+                    };
+
+                    match store.search(search_query) {
+                        Ok(results) => {
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&results).unwrap_or_default()
+                                );
+                            } else if results.is_empty() {
+                                eprintln!("No results found.");
+                            } else {
+                                for (i, result) in results.iter().enumerate() {
+                                    println!(
+                                        "\n{}. {} (score: {:.3})",
+                                        i + 1,
+                                        result.source_path.display(),
+                                        result.similarity
+                                    );
+                                    if !result.heading_context.is_empty() {
+                                        println!(
+                                            "   Context: {}",
+                                            result.heading_context.join(" > ")
+                                        );
+                                    }
+                                    println!("   Preview: {}", result.content_preview);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Search failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+
+                DocumentAction::List { json } => {
+                    let store = match create_store_with_embeddings() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let collections = store.list_collections();
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&collections).unwrap_or_default()
+                        );
+                    } else if collections.is_empty() {
+                        eprintln!("No collections indexed.");
+                        eprintln!("\nConfigured collections in settings.toml:");
+                        for name in config.documents.collections.keys() {
+                            eprintln!("  - {name}");
+                        }
+                    } else {
+                        println!("Indexed collections:");
+                        for name in collections {
+                            println!("  - {name}");
+                        }
+                    }
+                }
+
+                DocumentAction::Stats { collection, json } => {
+                    let store = match create_store_with_embeddings() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("{e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    match store.collection_stats(&collection) {
+                        Ok(stats) => {
+                            if json {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(&stats).unwrap_or_default()
+                                );
+                            } else {
+                                println!("Collection: {}", stats.name);
+                                println!("  Chunks: {}", stats.chunk_count);
+                                println!("  Files: {}", stats.file_count);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to get stats for '{collection}': {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+
+                DocumentAction::AddCollection {
+                    name,
+                    path,
+                    pattern,
+                } => {
+                    // Find config file (same logic as add-dir)
+                    let config_path = if let Some(custom_path) = &cli.config {
+                        custom_path.clone()
+                    } else {
+                        Settings::find_workspace_config().unwrap_or_else(|| {
+                            eprintln!(
+                                "Error: No configuration file found. Run 'codanna init' first."
+                            );
+                            std::process::exit(1);
+                        })
+                    };
+
+                    // Canonicalize the path
+                    let canonical_path = match path.canonicalize() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Error: Invalid path '{}': {e}", path.display());
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Check if path exists and is a directory
+                    if !canonical_path.exists() {
+                        eprintln!("Error: Path does not exist: {}", canonical_path.display());
+                        std::process::exit(1);
+                    }
+
+                    // Load current settings
+                    let mut settings = match Settings::load() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("Error loading settings: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Check if collection already exists
+                    if settings.documents.collections.contains_key(&name) {
+                        // Add path to existing collection
+                        let collection = settings.documents.collections.get_mut(&name).unwrap();
+                        if collection.paths.contains(&canonical_path) {
+                            eprintln!(
+                                "Path already in collection '{name}': {}",
+                                canonical_path.display()
+                            );
+                            std::process::exit(1);
+                        }
+                        collection.paths.push(canonical_path.clone());
+                        if let Some(pat) = pattern {
+                            if !collection.patterns.contains(&pat) {
+                                collection.patterns.push(pat);
+                            }
+                        }
+                        println!(
+                            "Added path to existing collection '{name}': {}",
+                            canonical_path.display()
+                        );
+                    } else {
+                        // Create new collection
+                        let patterns = pattern.map(|p| vec![p]).unwrap_or_default();
+                        let collection_config = codanna::documents::CollectionConfig {
+                            paths: vec![canonical_path.clone()],
+                            patterns,
+                            strategy: None,
+                            min_chunk_chars: None,
+                            max_chunk_chars: None,
+                            overlap_chars: None,
+                        };
+                        settings
+                            .documents
+                            .collections
+                            .insert(name.clone(), collection_config);
+                        println!(
+                            "Created collection '{name}' with path: {}",
+                            canonical_path.display()
+                        );
+                    }
+
+                    // Enable documents if not already
+                    if !settings.documents.enabled {
+                        settings.documents.enabled = true;
+                        println!("Enabled document indexing (documents.enabled = true)");
+                    }
+
+                    // Save settings
+                    if let Err(e) = settings.save(&config_path) {
+                        eprintln!("Error saving settings: {e}");
+                        std::process::exit(1);
+                    }
+
+                    println!("Configuration saved to: {}", config_path.display());
+                    println!("\nTo index this collection:");
+                    println!("  codanna documents index --collection {name}");
+                    println!("  codanna documents index  # indexes all collections");
+                }
+
+                DocumentAction::RemoveCollection { name } => {
+                    // Find config file (same logic as remove-dir)
+                    let config_path = if let Some(custom_path) = &cli.config {
+                        custom_path.clone()
+                    } else {
+                        Settings::find_workspace_config().unwrap_or_else(|| {
+                            eprintln!(
+                                "Error: No configuration file found. Run 'codanna init' first."
+                            );
+                            std::process::exit(1);
+                        })
+                    };
+
+                    // Load current settings
+                    let mut settings = match Settings::load() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("Error loading settings: {e}");
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Check if collection exists
+                    if !settings.documents.collections.contains_key(&name) {
+                        eprintln!("Collection '{name}' not found in settings.toml");
+                        if settings.documents.collections.is_empty() {
+                            eprintln!("\nNo collections configured.");
+                        } else {
+                            eprintln!("\nConfigured collections:");
+                            for coll_name in settings.documents.collections.keys() {
+                                eprintln!("  - {coll_name}");
+                            }
+                        }
+                        std::process::exit(1);
+                    }
+
+                    // Remove collection
+                    settings.documents.collections.remove(&name);
+                    println!("Removed collection '{name}' from settings.toml");
+
+                    // Save settings
+                    if let Err(e) = settings.save(&config_path) {
+                        eprintln!("Error saving settings: {e}");
+                        std::process::exit(1);
+                    }
+
+                    println!("Configuration saved to: {}", config_path.display());
+
+                    if settings.documents.collections.is_empty() {
+                        println!("\nNo collections remaining.");
+                    } else {
+                        println!("\nRemaining collections:");
+                        for coll_name in settings.documents.collections.keys() {
+                            println!("  - {coll_name}");
+                        }
+                    }
+
+                    println!("\nTo clean the index, run:");
+                    println!("  codanna documents index");
+                }
             }
         }
 

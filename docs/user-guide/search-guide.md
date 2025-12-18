@@ -166,8 +166,29 @@ codanna mcp analyze_impact symbol_id:567
 - Subsequent searches are typically <10ms
 - Use `--json` and `jq` for complex filtering instead of multiple searches
 
+## Document Search
+
+Beyond code symbols, Codanna can index markdown and text files for semantic search:
+
+```bash
+# Add and index documentation
+codanna documents add-collection docs docs/
+codanna documents index
+
+# Search documentation
+codanna documents search "authentication flow"
+```
+
+Document search supports:
+- **KWIC previews** - Results centered on keyword matches
+- **Keyword highlighting** - Matching terms wrapped with `**markers**`
+- **Collection filtering** - Search within specific document groups
+
+See [Document Search](documents.md) for complete documentation.
+
 ## See Also
 
 - [MCP Tools Reference](mcp-tools.md) - Complete tool documentation
+- [Document Search](documents.md) - Index markdown files for RAG
 - [Unix Piping](../advanced/unix-piping.md) - Advanced search workflows
 - [Configuration](configuration.md) - Semantic model configuration

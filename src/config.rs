@@ -72,6 +72,10 @@ pub struct Settings {
     /// AI guidance settings for multi-hop queries
     #[serde(default)]
     pub guidance: GuidanceConfig,
+
+    /// Document embedding settings for RAG
+    #[serde(default)]
+    pub documents: crate::documents::DocumentsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -282,6 +286,7 @@ impl Default for Settings {
             file_watch: FileWatchConfig::default(),
             server: ServerConfig::default(),
             guidance: GuidanceConfig::default(),
+            documents: crate::documents::DocumentsConfig::default(),
         }
     }
 }
@@ -841,6 +846,52 @@ impl Settings {
                 result.push_str("\n# HTTP server bind address (only used when mode = \"http\" or --http flag)\n");
             } else if line.starts_with("watch_interval = ") {
                 result.push_str("\n# Watch interval for stdio mode in seconds (how often to check for file changes)\n");
+            } else if line == "[documents]" {
+                result.push_str("\n[documents]\n");
+                result.push_str("# Document embedding for RAG (Retrieval-Augmented Generation)\n");
+                result.push_str("# Index markdown and text files for semantic search\n");
+                prev_line_was_section = true;
+                continue;
+            } else if line == "[documents.defaults]" {
+                result.push_str("\n[documents.defaults]\n");
+                result.push_str("# Default chunking settings for all collections\n");
+                prev_line_was_section = true;
+                continue;
+            } else if line.starts_with("strategy = ") {
+                result.push_str(
+                    "# Chunking strategy: \"hybrid\" (paragraph-based with size constraints)\n",
+                );
+            } else if line.starts_with("min_chunk_chars = ") {
+                result.push_str("\n# Minimum characters per chunk (small chunks merged)\n");
+            } else if line.starts_with("max_chunk_chars = ") {
+                result.push_str("\n# Maximum characters per chunk (large chunks split)\n");
+            } else if line.starts_with("overlap_chars = ") {
+                result.push_str("\n# Overlap between chunks when splitting\n");
+            } else if line == "[documents.search]" {
+                result.push_str("\n[documents.search]\n");
+                result.push_str("# Search result display settings\n");
+                prev_line_was_section = true;
+                continue;
+            } else if line.starts_with("preview_mode = ") {
+                result.push_str("# Preview mode: \"kwic\" (Keyword In Context) or \"full\"\n");
+                result.push_str("# kwic: Centers preview around keyword match (recommended)\n");
+                result.push_str("# full: Shows entire chunk content\n");
+            } else if line.starts_with("preview_chars = ") {
+                result.push_str("\n# Number of characters to show in preview (for kwic mode)\n");
+            } else if line.starts_with("highlight = ") {
+                result.push_str("\n# Highlight matching keywords with **markers**\n");
+            } else if line == "[documents.collections]" {
+                result.push_str("\n[documents.collections]\n");
+                result.push_str("# Add document collections to index. Example:\n");
+                result.push_str("# [documents.collections.my-docs]\n");
+                result.push_str("# paths = [\"docs/\"]\n");
+                result.push_str("# patterns = [\"**/*.md\"]\n");
+                prev_line_was_section = true;
+                continue;
+            } else if line.starts_with("[documents.collections.") {
+                result.push_str("\n# Collection configuration\n");
+                result.push_str("# paths: directories or files to include\n");
+                result.push_str("# patterns: glob patterns to match (default: [\"**/*.md\"])\n");
             } else if line.starts_with("[languages.") {
                 if !in_languages_section {
                     result.push_str("\n# Language-specific settings\n");
@@ -1454,5 +1505,67 @@ indexed_paths = ["{path1_str}", "{path2_str}"]
             .canonicalize()
             .unwrap();
         assert_eq!(canonical_loaded, canonical_test);
+    }
+
+    #[test]
+    fn test_documents_config_loading() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("settings.toml");
+
+        let toml_content = r#"
+[documents]
+enabled = true
+
+[documents.defaults]
+min_chunk_chars = 300
+max_chunk_chars = 2000
+overlap_chars = 150
+
+[documents.collections.project-docs]
+paths = ["docs/", "README.md"]
+patterns = ["**/*.md"]
+
+[documents.collections.external-books]
+paths = ["/path/to/books"]
+max_chunk_chars = 2500
+"#;
+
+        fs::write(&config_path, toml_content).unwrap();
+
+        let settings = Settings::load_from(&config_path).unwrap();
+
+        // Check enabled
+        assert!(settings.documents.enabled);
+
+        // Check defaults
+        assert_eq!(settings.documents.defaults.min_chunk_chars, 300);
+        assert_eq!(settings.documents.defaults.max_chunk_chars, 2000);
+        assert_eq!(settings.documents.defaults.overlap_chars, 150);
+
+        // Check collections
+        assert_eq!(settings.documents.collections.len(), 2);
+
+        let project_docs = settings.documents.collections.get("project-docs").unwrap();
+        assert_eq!(project_docs.paths.len(), 2);
+        assert_eq!(project_docs.patterns, vec!["**/*.md"]);
+
+        let external = settings
+            .documents
+            .collections
+            .get("external-books")
+            .unwrap();
+        assert_eq!(external.max_chunk_chars, Some(2500));
+    }
+
+    #[test]
+    fn test_documents_config_defaults() {
+        // When no [documents] section exists, defaults should apply
+        let settings = Settings::default();
+
+        assert!(!settings.documents.enabled);
+        assert_eq!(settings.documents.defaults.min_chunk_chars, 200);
+        assert_eq!(settings.documents.defaults.max_chunk_chars, 1500);
+        assert_eq!(settings.documents.defaults.overlap_chars, 100);
+        assert!(settings.documents.collections.is_empty());
     }
 }

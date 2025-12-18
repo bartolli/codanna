@@ -36,6 +36,7 @@ use serde_json;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
+use crate::documents::{DocumentStore, SearchQuery as DocSearchQuery};
 use crate::{Settings, SimpleIndexer, Symbol};
 
 /// Generate guidance for MCP tool responses
@@ -163,6 +164,18 @@ pub struct SemanticSearchWithContextRequest {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct GetIndexInfoRequest {}
 
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct SearchDocumentsRequest {
+    /// Natural language search query
+    pub query: String,
+    /// Filter by collection name (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    /// Maximum number of results (default: 5)
+    #[serde(default = "default_context_limit")]
+    pub limit: u32,
+}
+
 fn default_depth() -> u32 {
     3
 }
@@ -178,6 +191,7 @@ fn default_context_limit() -> u32 {
 #[derive(Clone)]
 pub struct CodeIntelligenceServer {
     pub indexer: Arc<RwLock<SimpleIndexer>>,
+    pub document_store: Option<Arc<RwLock<DocumentStore>>>,
     tool_router: ToolRouter<Self>,
     peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
 }
@@ -187,6 +201,7 @@ impl CodeIntelligenceServer {
     pub fn new(indexer: SimpleIndexer) -> Self {
         Self {
             indexer: Arc::new(RwLock::new(indexer)),
+            document_store: None,
             tool_router: Self::tool_router(),
             peer: Arc::new(Mutex::new(None)),
         }
@@ -196,6 +211,7 @@ impl CodeIntelligenceServer {
     pub fn from_indexer(indexer: Arc<RwLock<SimpleIndexer>>) -> Self {
         Self {
             indexer,
+            document_store: None,
             tool_router: Self::tool_router(),
             peer: Arc::new(Mutex::new(None)),
         }
@@ -203,12 +219,18 @@ impl CodeIntelligenceServer {
 
     /// Create server with existing indexer and settings (for HTTP server)
     pub fn new_with_indexer(indexer: Arc<RwLock<SimpleIndexer>>, _settings: Arc<Settings>) -> Self {
-        // For now, settings is unused but might be needed for future enhancements
         Self {
             indexer,
+            document_store: None,
             tool_router: Self::tool_router(),
             peer: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Add document store for document search capability
+    pub fn with_document_store(mut self, store: DocumentStore) -> Self {
+        self.document_store = Some(Arc::new(RwLock::new(store)));
+        self
     }
 
     /// Get a reference to the indexer Arc for external management (e.g., hot-reload)
@@ -1597,6 +1619,82 @@ impl CodeIntelligenceServer {
             ))])),
         }
     }
+
+    #[tool(
+        description = "Search indexed documents (markdown, text files) using natural language queries. Returns relevant chunks with context and highlighted keywords."
+    )]
+    pub async fn search_documents(
+        &self,
+        Parameters(SearchDocumentsRequest {
+            query,
+            collection,
+            limit,
+        }): Parameters<SearchDocumentsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let store = match &self.document_store {
+            Some(s) => s,
+            None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Document search not available. No document collections are indexed.\n\n\
+                    To enable:\n\
+                    1. Add a collection: codanna documents add-collection docs docs/\n\
+                    2. Index it: codanna documents index\n\
+                    3. Restart the MCP server",
+                )]));
+            }
+        };
+
+        let mut store = store.write().await;
+        let indexer = self.indexer.read().await;
+
+        let search_query = DocSearchQuery {
+            text: query.clone(),
+            collection,
+            document: None,
+            limit: limit as usize,
+            preview_config: Some(indexer.settings().documents.search.clone()),
+        };
+
+        match store.search(search_query) {
+            Ok(results) => {
+                if results.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No documents found for: {query}"
+                    ))]));
+                }
+
+                let mut output = format!(
+                    "Found {} document(s) matching '{}':\n\n",
+                    results.len(),
+                    query
+                );
+
+                for (i, result) in results.iter().enumerate() {
+                    output.push_str(&format!(
+                        "{}. {} (score: {:.3})\n",
+                        i + 1,
+                        result.source_path.display(),
+                        result.similarity
+                    ));
+
+                    if !result.heading_context.is_empty() {
+                        output.push_str(&format!(
+                            "   Context: {}\n",
+                            result.heading_context.join(" > ")
+                        ));
+                    }
+
+                    // Preview is already KWIC-processed with highlighting
+                    output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Document search failed: {e}"
+            ))])),
+        }
+    }
 }
 
 #[tool_handler]
@@ -1619,6 +1717,7 @@ impl ServerHandler for CodeIntelligenceServer {
                 WORKFLOW: Start with 'semantic_search_with_context' or 'semantic_search_docs' to anchor on the right files and APIs - they provide the highest-quality context. \
                 Then use 'find_symbol' and 'search_symbols' to lock onto exact files and kinds. \
                 Treat 'get_calls', 'find_callers', and 'analyze_impact' as hints; confirm with code reading or tighter queries (unique names, kind filters). \
+                Use 'search_documents' to find relevant project documentation (markdown files). \
                 Use 'get_index_info' to understand what's indexed."
                 .to_string()
             ),

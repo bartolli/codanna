@@ -164,6 +164,55 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
                 eprintln!("Failed to start config watcher: {e}");
             }
         }
+
+        // Start document watcher if documents are enabled
+        if config.documents.enabled {
+            use crate::documents::{DocumentStore, DocumentWatcher};
+            use crate::vector::{EmbeddingGenerator, FastEmbedGenerator};
+            use tokio::sync::RwLock;
+
+            let doc_path = config.index_path.join("documents");
+            if doc_path.exists() {
+                if let Ok(generator) =
+                    FastEmbedGenerator::from_settings(&config.semantic_search.model, false)
+                {
+                    let dimension = generator.dimension();
+                    if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
+                        if let Ok(store_with_emb) = store.with_embeddings(Box::new(generator)) {
+                            let store_arc = Arc::new(RwLock::new(store_with_emb));
+                            let chunking_config = config.documents.defaults.clone();
+                            let doc_watcher_ct = ct.clone();
+
+                            match DocumentWatcher::new(
+                                store_arc,
+                                chunking_config,
+                                config.file_watch.debounce_ms,
+                                config.mcp.debug,
+                            ) {
+                                Ok(doc_watcher) => {
+                                    tokio::spawn(async move {
+                                        tokio::select! {
+                                            result = doc_watcher.watch() => {
+                                                if let Err(e) = result {
+                                                    eprintln!("Document watcher error: {e}");
+                                                }
+                                            }
+                                            _ = doc_watcher_ct.cancelled() => {
+                                                eprintln!("Document watcher stopped");
+                                            }
+                                        }
+                                    });
+                                    eprintln!("Document watcher started");
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to start document watcher: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Create streamable HTTP service for MCP connections
