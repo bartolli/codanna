@@ -501,7 +501,7 @@ enum DocumentAction {
     )]
     Index {
         /// Collection name to index (from settings.toml)
-        #[arg(short, long)]
+        #[arg(long)]
         collection: Option<String>,
 
         /// Index all configured collections
@@ -527,7 +527,7 @@ enum DocumentAction {
         query: String,
 
         /// Filter by collection name
-        #[arg(short, long)]
+        #[arg(long)]
         collection: Option<String>,
 
         /// Maximum results to return
@@ -1182,6 +1182,9 @@ async fn main() {
             | Commands::Benchmark { .. }
             | Commands::Plugin { .. }
             | Commands::Documents { .. }
+            | Commands::AddDir { .. }
+            | Commands::RemoveDir { .. }
+            | Commands::ListDirs
     );
 
     // Determine if we need full trait resolver initialization
@@ -1281,7 +1284,7 @@ async fn main() {
         None
     };
 
-    if config.semantic_search.enabled && !indexer.has_semantic_search() {
+    if !skip_index_load && config.semantic_search.enabled && !indexer.has_semantic_search() {
         if let Err(e) = indexer.enable_semantic_search() {
             eprintln!("Warning: Failed to enable semantic search: {e}");
         } else {
@@ -1956,21 +1959,16 @@ async fn main() {
                 })
             };
 
-            // Use helper to add path and save (strict mode for add-dir)
-            match add_paths_to_settings(std::slice::from_ref(&path), &config_path, true) {
+            // Use helper to add path and save (non-strict to handle already-indexed gracefully)
+            match add_paths_to_settings(std::slice::from_ref(&path), &config_path, false) {
                 Ok((settings, added_paths, skipped_paths)) => {
-                    // In strict mode, we know exactly one path was added (or error)
-                    assert_eq!(
-                        added_paths.len(),
-                        1,
-                        "Expected exactly one path to be added"
-                    );
-                    debug_assert!(
-                        skipped_paths.is_empty(),
-                        "Strict mode should never produce skipped paths"
-                    );
-                    println!("Added directory to indexed paths: {}", path.display());
-                    println!("Configuration saved to: {}", config_path.display());
+                    if !added_paths.is_empty() {
+                        println!("Added directory to indexed paths: {}", path.display());
+                        println!("Configuration saved to: {}", config_path.display());
+                    } else if !skipped_paths.is_empty() {
+                        // Path was skipped (already in config)
+                        println!("Directory already in indexed paths: {}", path.display());
+                    }
                     println!("\nCurrent indexed paths:");
                     for indexed_path in &settings.indexing.indexed_paths {
                         println!("  - {}", indexed_path.display());
@@ -3875,12 +3873,7 @@ async fn main() {
                             }
                         } else if all || config.documents.enabled {
                             // Index all collections (--all flag OR enabled=true in config)
-                            if config.documents.collections.is_empty() {
-                                eprintln!("No collections configured in settings.toml");
-                                eprintln!("\nTo add a collection:");
-                                eprintln!("  codanna documents add-collection <name> <path>");
-                                std::process::exit(1);
-                            }
+                            // Note: empty check happens after sync below
                             config
                                 .documents
                                 .collections
@@ -3897,6 +3890,8 @@ async fn main() {
 
                     // Sync: remove collections that are indexed but not in config
                     // (mirrors sync_with_config pattern from code indexing)
+                    // This runs BEFORE checking if collections_to_index is empty,
+                    // so stale collections get cleaned even when all collections are removed.
                     let indexed_collections: std::collections::HashSet<String> =
                         store.list_collections().into_iter().collect();
                     let configured_collections: std::collections::HashSet<String> =
@@ -3918,6 +3913,18 @@ async fn main() {
                                 eprintln!("    Failed to remove: {e}");
                             }
                         }
+                    }
+
+                    // Now check if there's anything to index
+                    if collections_to_index.is_empty() {
+                        if stale_collections.is_empty() {
+                            eprintln!("No collections configured in settings.toml");
+                            eprintln!("\nTo add a collection:");
+                            eprintln!("  codanna documents add-collection <name> <path>");
+                        } else {
+                            eprintln!("Cleaned stale collections. No collections to index.");
+                        }
+                        return;
                     }
 
                     use codanna::documents::IndexProgress;

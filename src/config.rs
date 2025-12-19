@@ -644,7 +644,8 @@ impl Settings {
         std::fs::create_dir_all(parent)?;
 
         let toml_string = toml::to_string_pretty(self)?;
-        std::fs::write(path, toml_string)?;
+        let toml_with_comments = Self::add_config_comments(toml_string);
+        std::fs::write(path, toml_with_comments)?;
 
         Ok(())
     }

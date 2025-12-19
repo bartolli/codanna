@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5] - 2025-12-18
+
+### Added
+
+- Document embedding system for RAG (Retrieval-Augmented Generation)
+- Document chunking with hybrid strategy (paragraph-based sizing with merge/split)
+- DocumentStore with tantivy metadata index and mmap vector storage
+- Semantic search for documents filtered by collection and path
+- File watcher for automatic document re-indexing on changes
+- CLI commands: `documents add-collection`, `remove-collection`, `index`, `search`, `list`, `stats`
+- MCP tool `search_documents` for AI assistant integration
+- Settings section `[documents]` with chunking and search configuration
+- Documentation in `docs/user-guide/documents.md`
+- KWIC (Keyword In Context) preview mode with highlighting
+
+### Changed
+
+- Upgraded rmcp from 0.11.0 to 0.12.0
+- Upgraded fastembed from 5.4.0 to 5.5.0
+- Upgraded tree-sitter from 0.26.2 to 0.26.3
+- Upgraded console from 0.16.1 to 0.16.2
+- Upgraded rcgen from 0.14.5 to 0.14.6
+- Settings save now preserves inline comments via `add_config_comments`
+
+### Fixed
+
+- `add-dir` command now handles already-indexed paths gracefully (shows message instead of error)
+- `add-dir`/`remove-dir`/`list-dirs` skip index loading and semantic search initialization
+- `-c` short flag conflict resolved (removed from `--collection` in documents commands)
+- `documents index` now syncs stale collections even when no collections configured
+
 ## [0.8.4] - 2025-12-12
 
 ### Changed
