@@ -11,7 +11,6 @@ pub mod config;
 pub mod schema;
 pub mod store;
 pub mod types;
-pub mod watcher;
 
 pub use chunker::{Chunker, HybridChunker, RawChunk};
 pub use config::{
@@ -20,4 +19,3 @@ pub use config::{
 pub use schema::DocumentSchema;
 pub use store::{CollectionStats, DocumentStore, IndexProgress, SearchQuery, SearchResult};
 pub use types::{ChunkId, CollectionId, DocumentChunk, FileState};
-pub use watcher::DocumentWatcher;

@@ -123,8 +123,7 @@ impl ParserFactory {
 
         match language {
             Language::Rust => {
-                let parser =
-                    RustParser::with_debug(self.settings.debug).map_err(IndexError::General)?;
+                let parser = RustParser::new().map_err(IndexError::General)?;
                 Ok(Box::new(parser))
             }
             Language::Python => {
@@ -220,8 +219,7 @@ impl ParserFactory {
         // Create parser and behavior pair
         let result = match language {
             Language::Rust => {
-                let parser =
-                    RustParser::with_debug(self.settings.debug).map_err(IndexError::General)?;
+                let parser = RustParser::new().map_err(IndexError::General)?;
                 ParserWithBehavior {
                     parser: Box::new(parser),
                     behavior: Box::new(RustBehavior::new()),

@@ -40,15 +40,6 @@ use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind};
 use tree_sitter::{Node, Parser};
 
-/// Debug print macro that respects the debug setting
-macro_rules! debug_print {
-    ($self:expr, $($arg:tt)*) => {
-        if $self.debug {
-            eprintln!("DEBUG: {}", format!($($arg)*));
-        }
-    };
-}
-
 // Helper enum for doc comment type classification
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DocCommentType {
@@ -61,7 +52,6 @@ enum DocCommentType {
 
 pub struct RustParser {
     parser: Parser,
-    debug: bool,
     context: ParserContext,
     node_tracker: NodeTrackingState,
 }
@@ -76,10 +66,6 @@ impl std::fmt::Debug for RustParser {
 
 impl RustParser {
     pub fn new() -> Result<Self, String> {
-        Self::with_debug(false)
-    }
-
-    pub fn with_debug(debug: bool) -> Result<Self, String> {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
@@ -87,10 +73,18 @@ impl RustParser {
 
         Ok(Self {
             parser,
-            debug,
             context: ParserContext::new(),
             node_tracker: NodeTrackingState::new(),
         })
+    }
+
+    /// Deprecated: use new() instead. Debug output now uses tracing.
+    #[deprecated(
+        since = "0.9.0",
+        note = "Use new() instead. Debug output uses tracing."
+    )]
+    pub fn with_debug(_debug: bool) -> Result<Self, String> {
+        Self::new()
     }
 
     /// Extract import statements from the code
@@ -313,8 +307,8 @@ impl RustParser {
         }
 
         // Debug: print node types that contain "type" or "const"
-        if (node.kind().contains("type") || node.kind().contains("const")) && self.debug {
-            eprintln!("DEBUG: Found node kind: {}", node.kind());
+        if node.kind().contains("type") || node.kind().contains("const") {
+            tracing::trace!("[rust-parser] found node kind: {}", node.kind());
         }
 
         match node.kind() {
@@ -740,13 +734,8 @@ impl RustParser {
         self.find_calls_in_node(root_node, code, &mut calls);
 
         // Debug output commented out for cleaner benchmark display
-        // TODO: Enable via settings.debug flag in future enhancement
-        // if !calls.is_empty() {
-        //     eprintln!("DEBUG [find_calls]: Found {} calls", calls.len());
-        //     for (caller, target, range) in &calls {
-        //         eprintln!("  - '{}' calls '{}' at line {}", caller, target, range.start_line);
-        //     }
-        // }
+        // Enable via tracing::trace! when needed
+        // tracing::trace!("[parser] found {} calls", calls.len());
 
         calls
     }
@@ -763,13 +752,8 @@ impl RustParser {
         self.find_implementations_in_node(root_node, code, &mut implementations);
 
         // Debug output commented out for cleaner benchmark display
-        // TODO: Enable via settings.debug flag in future enhancement
-        // if !implementations.is_empty() {
-        //     eprintln!("DEBUG [find_implementations]: Found {} implementations", implementations.len());
-        //     for (type_name, trait_name, range) in &implementations {
-        //         eprintln!("  - '{}' implements '{}' at line {}", type_name, trait_name, range.start_line);
-        //     }
-        // }
+        // Enable via tracing::trace! when needed
+        // tracing::trace!("[parser] found {} implementations", implementations.len());
 
         implementations
     }
@@ -786,13 +770,8 @@ impl RustParser {
         self.find_uses_in_node(root_node, code, &mut uses);
 
         // Debug output commented out for cleaner benchmark display
-        // TODO: Enable via settings.debug flag in future enhancement
-        // if !uses.is_empty() {
-        //     eprintln!("DEBUG [find_uses]: Found {} type uses", uses.len());
-        //     for (context, used_type, range) in &uses {
-        //         eprintln!("  - '{}' uses type '{}' at line {}", context, used_type, range.start_line);
-        //     }
-        // }
+        // Enable via tracing::trace! when needed
+        // tracing::trace!("[parser] found {} type uses", uses.len());
 
         uses
     }
@@ -809,13 +788,8 @@ impl RustParser {
         self.find_defines_in_node(root_node, code, &mut defines);
 
         // Debug output commented out for cleaner benchmark display
-        // TODO: Enable via settings.debug flag in future enhancement
-        // if !defines.is_empty() {
-        //     eprintln!("DEBUG [find_defines]: Found {} method definitions", defines.len());
-        //     for (definer, method, range) in &defines {
-        //         eprintln!("  - '{}' defines method '{}' at line {}", definer, method, range.start_line);
-        //     }
-        // }
+        // Enable via tracing::trace! when needed
+        // tracing::trace!("[parser] found {} method definitions", defines.len());
 
         defines
     }
@@ -846,10 +820,8 @@ impl RustParser {
 
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
-                // Debug output commented out for cleaner benchmark display
-                // TODO: Enable via settings.debug flag in future enhancement
-                // eprintln!("DEBUG [find_calls_in_node]: Found call_expression, function node kind: {}",
-                //           function_node.kind());
+                // Enable via tracing::trace! when needed
+                // tracing::trace!("[parser] call_expression, function node kind: {}", function_node.kind());
                 let mut target_name = None;
 
                 // Handle direct function calls (e.g., `my_function()`)
@@ -877,16 +849,9 @@ impl RustParser {
                         node.end_position().row as u32,
                         node.end_position().column as u16,
                     );
-                    // Debug output commented out for cleaner benchmark display
-                    // TODO: Enable via settings.debug flag in future enhancement
-                    // eprintln!("DEBUG [find_calls_in_node]: Adding call '{}' -> '{}' (node kind: {})",
-                    //           caller, target, function_node.kind());
+                    // Enable via tracing::trace! when needed
+                    // tracing::trace!("[parser] adding call '{}' -> '{}'", caller, target);
                     calls.push((caller, target, range));
-                } else {
-                    // Debug output commented out for cleaner benchmark display
-                    // TODO: Enable via settings.debug flag in future enhancement
-                    // eprintln!("DEBUG [find_calls_in_node]: Skipped - target: {:?}, caller: {:?}",
-                    //           target_name, containing_function);
                 }
             }
         }
@@ -1066,9 +1031,8 @@ impl RustParser {
         bindings: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
         if node.kind() == "let_declaration" {
-            debug_print!(
-                self,
-                "[find_variable_types_in_node]: Found let_declaration at line {}",
+            tracing::debug!(
+                "[rust-parser] found let_declaration at line {}",
                 node.start_position().row
             );
 
@@ -1121,9 +1085,8 @@ impl RustParser {
     }
 
     fn extract_value_type<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
-        debug_print!(
-            self,
-            "    [extract_value_type] Node kind: '{}', text: '{}'",
+        tracing::debug!(
+            "[rust-parser] extract_value_type node kind: '{}', text: '{}'",
             node.kind(),
             &code[node.byte_range()]
         );
@@ -1575,14 +1538,11 @@ impl RustParser {
                 }
             }
 
-            // Debug: print if we're looking at a function
-            if self.debug && parent.kind() == "function_item" && name == "create_config" {
-                eprintln!(
-                    "DEBUG visibility check for create_config: found_visibility={found_visibility}"
-                );
-                eprintln!("  Parent kind: {}", parent.kind());
-                eprintln!(
-                    "  Children: {:?}",
+            // Debug visibility for specific function (trace level to reduce noise)
+            if parent.kind() == "function_item" && name == "create_config" {
+                tracing::trace!(
+                    "[rust-parser] visibility check for create_config: found_visibility={found_visibility}, parent_kind={}, children={:?}",
+                    parent.kind(),
                     parent
                         .children(&mut parent.walk())
                         .map(|c| c.kind())
@@ -1773,10 +1733,7 @@ impl LanguageParser for RustParser {
     }
 
     fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
-        debug_print!(
-            self,
-            "RustParser::find_method_calls override called with enhanced AST detection"
-        );
+        tracing::debug!("[rust-parser] find_method_calls called with enhanced AST detection");
 
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
@@ -1788,9 +1745,8 @@ impl LanguageParser for RustParser {
 
         self.find_method_calls_in_node(root_node, code, &mut method_calls);
 
-        debug_print!(
-            self,
-            "Enhanced method call detection found {} calls",
+        tracing::debug!(
+            "[rust-parser] enhanced method call detection found {} calls",
             method_calls.len()
         );
         method_calls

@@ -243,13 +243,11 @@ impl LanguageBehavior for KotlinBehavior {
             map.insert(expr.clone(), ty.clone());
         }
         self.expression_types.write().insert(file_id, map);
-        if crate::config::is_global_debug_enabled() {
-            eprintln!(
-                "[KOTLIN-RESOLVE] Registered {} expression types for file {:?}",
-                entries.len(),
-                file_id
-            );
-        }
+        tracing::debug!(
+            "[kotlin] registered {} expression types for file {:?}",
+            entries.len(),
+            file_id
+        );
     }
 
     fn initialize_resolution_context(&self, context: &mut dyn ResolutionScope, file_id: FileId) {

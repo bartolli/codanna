@@ -2,7 +2,6 @@
 //!
 //! Provides symbol extraction for Kotlin using tree-sitter.
 
-use crate::config;
 use crate::parsing::Import;
 use crate::parsing::parser::check_recursion_depth;
 use crate::parsing::{
@@ -663,9 +662,7 @@ impl KotlinParser {
             if let Some(Cow::Borrowed(result_type)) = self.apply_signature(signature, &arg_types) {
                 let range = self.node_to_range(node);
                 self.insert_var_type(var_types, call_text, result_type, range);
-                if config::is_global_debug_enabled() {
-                    eprintln!("[KOTLIN-VAR] Inferred type '{result_type}' for call '{call_text}'");
-                }
+                tracing::debug!("[kotlin] inferred type '{result_type}' for call '{call_text}'");
                 return Some(result_type);
             }
             // Complex substitution case - can't return borrowed, skip for zero-copy method

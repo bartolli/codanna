@@ -36,14 +36,12 @@ impl IndexPersistence {
 
         // Update indexed paths for sync detection on next load
         let indexed_paths: Vec<PathBuf> = indexer.get_indexed_paths().iter().cloned().collect();
-        if indexer.settings().debug {
-            eprintln!(
-                "DEBUG: Saving {} indexed paths to metadata",
-                indexed_paths.len()
-            );
-            for path in &indexed_paths {
-                eprintln!("  - {}", path.display());
-            }
+        tracing::debug!(
+            "[persistence] saving {} indexed paths to metadata",
+            indexed_paths.len()
+        );
+        for path in &indexed_paths {
+            tracing::trace!("[persistence] indexed path: {}", path.display());
         }
         metadata.update_indexed_paths(indexed_paths);
 
@@ -81,17 +79,13 @@ impl IndexPersistence {
     /// Load the indexer from disk
     #[must_use = "Load errors should be handled appropriately"]
     pub fn load(&self) -> IndexResult<SimpleIndexer> {
-        self.load_with_settings(Arc::new(Settings::default()), false)
+        self.load_with_settings(Arc::new(Settings::default()))
     }
 
     /// Load the indexer from disk with custom settings
     #[must_use = "Load errors should be handled appropriately"]
-    pub fn load_with_settings(
-        &self,
-        settings: Arc<Settings>,
-        info: bool,
-    ) -> IndexResult<SimpleIndexer> {
-        self.load_with_settings_lazy(settings, info, false)
+    pub fn load_with_settings(&self, settings: Arc<Settings>) -> IndexResult<SimpleIndexer> {
+        self.load_with_settings_lazy(settings, false)
     }
 
     /// Load the indexer from disk with custom settings and lazy initialization options
@@ -99,7 +93,6 @@ impl IndexPersistence {
     pub fn load_with_settings_lazy(
         &self,
         settings: Arc<Settings>,
-        info: bool,
         skip_trait_resolver: bool,
     ) -> IndexResult<SimpleIndexer> {
         // Load metadata to understand data sources
@@ -108,9 +101,6 @@ impl IndexPersistence {
         // Check if Tantivy index exists
         let tantivy_path = self.base_path.join("tantivy");
         if tantivy_path.join("meta.json").exists() {
-            // Extract debug flag before moving settings
-            let debug = settings.debug;
-
             // Create indexer that will load from Tantivy
             // Note: skip_trait_resolver no longer needed - behaviors handle resolution now
             let mut indexer = if skip_trait_resolver {
@@ -125,51 +115,45 @@ impl IndexPersistence {
                 let fresh_symbol_count = indexer.symbol_count();
                 let fresh_file_count = indexer.file_count();
 
-                // Display the metadata but with fresh counts
-                if info {
-                    match &meta.data_source {
-                        DataSource::Tantivy {
-                            path, doc_count, ..
-                        } => {
-                            eprintln!(
-                                "Loaded from Tantivy index: {} ({} documents)",
-                                path.display(),
-                                doc_count
-                            );
-                        }
-                        DataSource::Fresh => {
-                            eprintln!("Created fresh index");
-                        }
+                // Log the metadata with fresh counts
+                match &meta.data_source {
+                    DataSource::Tantivy {
+                        path, doc_count, ..
+                    } => {
+                        tracing::info!(
+                            "[persistence] loaded from Tantivy index: {} ({} documents)",
+                            path.display(),
+                            doc_count
+                        );
                     }
-                    eprintln!(
-                        "Index contains {fresh_symbol_count} symbols from {fresh_file_count} files"
-                    );
+                    DataSource::Fresh => {
+                        tracing::info!("[persistence] created fresh index");
+                    }
                 }
+                tracing::info!(
+                    "[persistence] index contains {fresh_symbol_count} symbols from {fresh_file_count} files"
+                );
             }
 
             // NEW: Always try to load semantic search - let the actual load determine if data exists
             // This is more robust than checking filesystem paths which can fail due to resolution issues
             let semantic_path = self.semantic_path();
-            if info || debug {
-                eprintln!("DEBUG: Persistence base_path: {}", self.base_path.display());
-                eprintln!(
-                    "DEBUG: Semantic path computed as: {}",
-                    semantic_path.display()
-                );
-            }
-            match indexer.load_semantic_search(&semantic_path, info) {
+            tracing::debug!("[persistence] base_path: {}", self.base_path.display());
+            tracing::debug!(
+                "[persistence] semantic path computed as: {}",
+                semantic_path.display()
+            );
+            match indexer.load_semantic_search(&semantic_path) {
                 Ok(true) => {
                     // Successfully loaded (message already printed by load_semantic_search)
                 }
                 Ok(false) => {
                     // No semantic data found - this is fine, semantic search is optional
-                    if info || debug {
-                        eprintln!("DEBUG: No semantic data found (this is optional)");
-                    }
+                    tracing::debug!("[persistence] no semantic data found (this is optional)");
                 }
                 Err(e) => {
                     // Log error but continue - semantic search is optional
-                    eprintln!("Warning: Failed to load semantic search: {e}");
+                    tracing::warn!("[persistence] failed to load semantic search: {e}");
                 }
             }
 
@@ -178,21 +162,17 @@ impl IndexPersistence {
                 if let Some(ref stored_paths) = meta.indexed_paths {
                     for path in stored_paths {
                         if let Err(e) = indexer.add_indexed_path(path) {
-                            if debug {
-                                eprintln!(
-                                    "DEBUG: Failed to restore indexed path {}: {}",
-                                    path.display(),
-                                    e
-                                );
-                            }
+                            tracing::debug!(
+                                "[persistence] failed to restore indexed path {}: {}",
+                                path.display(),
+                                e
+                            );
                         }
                     }
-                    if info || debug {
-                        eprintln!(
-                            "DEBUG: Restored {} indexed paths from metadata",
-                            stored_paths.len()
-                        );
-                    }
+                    tracing::debug!(
+                        "[persistence] restored {} indexed paths from metadata",
+                        stored_paths.len()
+                    );
                 }
             }
 

@@ -774,9 +774,7 @@ fn initialize_providers(
             continue; // Skip if no config files specified
         }
 
-        if settings.debug {
-            eprintln!("Initializing {lang_id} project resolver...");
-        }
+        tracing::debug!(target: "cli", "initializing {lang_id} project resolver...");
 
         // Validate config paths
         let mut invalid_paths = Vec::new();
@@ -796,20 +794,17 @@ fn initialize_providers(
         }
 
         // Build cache
-        if settings.debug {
-            eprintln!(
-                "  Building resolution cache from {} config file(s)...",
-                config_paths.len()
-            );
-        }
+        tracing::debug!(
+            target: "cli",
+            "building resolution cache from {} config file(s)...",
+            config_paths.len()
+        );
         if let Err(e) = provider.rebuild_cache(settings) {
             // Warning only - continue without failing
-            if settings.debug {
-                eprintln!("  Warning: Failed to build {lang_id} resolution cache: {e}");
-                eprintln!("  Continuing without alias resolution for {lang_id}");
-            }
-        } else if settings.debug {
-            eprintln!("  {lang_id} resolution cache built successfully");
+            tracing::warn!(target: "cli", "failed to build {lang_id} resolution cache: {e}");
+            tracing::warn!(target: "cli", "continuing without alias resolution for {lang_id}");
+        } else {
+            tracing::debug!(target: "cli", "{lang_id} resolution cache built successfully");
         }
     }
 
@@ -865,7 +860,6 @@ struct SeedReport {
 fn seed_indexer_with_config_paths(
     indexer: &mut SimpleIndexer,
     config_paths: &[PathBuf],
-    debug: bool,
 ) -> SeedReport {
     let mut report = SeedReport::default();
 
@@ -884,12 +878,11 @@ fn seed_indexer_with_config_paths(
         }
 
         if !path.is_dir() {
-            if debug {
-                eprintln!(
-                    "DEBUG: Skipping configured path (not a directory): {}",
-                    path.display()
-                );
-            }
+            tracing::debug!(
+                target: "cli",
+                "skipping configured path (not a directory): {}",
+                path.display()
+            );
             continue;
         }
 
@@ -905,12 +898,11 @@ fn seed_indexer_with_config_paths(
                 if existing.len() > len_before {
                     report.newly_seeded.push(path.clone());
                 }
-                if debug {
-                    eprintln!(
-                        "DEBUG: Seeded configured directory into tracked paths: {}",
-                        path.display()
-                    );
-                }
+                tracing::debug!(
+                    target: "cli",
+                    "seeded configured directory into tracked paths: {}",
+                    path.display()
+                );
             }
             Err(e) => {
                 eprintln!(
@@ -1040,6 +1032,9 @@ async fn main() {
             Settings::default()
         })
     };
+
+    // Initialize logging with config (supports RUST_LOG env var override)
+    codanna::logging::init_with_config(&config.logging);
 
     // Handle thin client commands early (before index loading)
     // These commands don't need the index and should not conflict with server processes
@@ -1206,27 +1201,16 @@ async fn main() {
         // Force flag always means fresh index, regardless of path source (CLI or settings.toml)
         let force_recreate_index = matches!(cli.command, Commands::Index { force: true, .. });
         if persistence.exists() && !force_recreate_index {
-            if config.debug {
-                eprintln!(
-                    "DEBUG: Found existing index at {}",
-                    config.index_path.display()
-                );
-            }
+            tracing::debug!(target: "cli", "found existing index at {}", config.index_path.display());
             // Use lazy loading for simple commands to improve startup time
             let skip_trait_resolver = !needs_trait_resolver;
-            if skip_trait_resolver && config.debug {
-                eprintln!("DEBUG: Using lazy initialization (skipping trait resolver)");
+            if skip_trait_resolver {
+                tracing::debug!(target: "cli", "using lazy initialization (skipping trait resolver)");
             }
 
-            match persistence.load_with_settings_lazy(
-                settings.clone(),
-                cli.info,
-                skip_trait_resolver,
-            ) {
+            match persistence.load_with_settings_lazy(settings.clone(), skip_trait_resolver) {
                 Ok(loaded) => {
-                    if config.debug {
-                        eprintln!("DEBUG: Successfully loaded index from disk");
-                    }
+                    tracing::debug!(target: "cli", "successfully loaded index from disk");
                     if cli.info {
                         eprintln!(
                             "Loaded existing index (total: {} symbols)",
@@ -1243,15 +1227,14 @@ async fn main() {
         } else {
             if force_recreate_index && persistence.exists() {
                 eprintln!("Force re-indexing requested, creating new index");
-            } else if !persistence.exists() && config.debug {
-                eprintln!(
-                    "DEBUG: No existing index found at {}",
+            } else if !persistence.exists() {
+                tracing::debug!(
+                    target: "cli",
+                    "no existing index found at {}",
                     config.index_path.display()
                 );
             }
-            if config.debug {
-                eprintln!("DEBUG: Creating new index");
-            }
+            tracing::debug!(target: "cli", "creating new index");
             // Clear Tantivy index if force re-indexing directory
             if force_recreate_index {
                 // Clear the persisted Tantivy files on disk BEFORE creating indexer
@@ -1278,7 +1261,6 @@ async fn main() {
         Some(seed_indexer_with_config_paths(
             &mut indexer,
             &config.indexing.indexed_paths,
-            config.debug,
         ))
     } else {
         None
@@ -1402,12 +1384,11 @@ async fn main() {
             }
             Err(e) => {
                 eprintln!("\nWarning: Could not load index metadata; skipping sync: {e}");
-                if config.debug {
-                    eprintln!(
-                        "  (Expected path: {})",
-                        config.index_path.join("metadata.json").display()
-                    );
-                }
+                tracing::debug!(
+                    target: "cli",
+                    "expected path: {}",
+                    config.index_path.join("metadata.json").display()
+                );
 
                 eprintln!("\nRecovery steps:");
                 let suggestions = e.recovery_suggestions();
@@ -1474,15 +1455,13 @@ async fn main() {
             match server_mode {
                 "https" => {
                     // HTTPS mode - secure server with TLS
-                    if config.mcp.debug {
-                        eprintln!("Starting MCP server in HTTPS mode with TLS");
-                        eprintln!("Bind address: {bind_address}");
-                        if watch || config.file_watch.enabled {
-                            eprintln!(
-                                "File watching: ENABLED (event-driven with {}ms debounce)",
-                                config.file_watch.debounce_ms
-                            );
-                        }
+                    tracing::info!(target: "mcp", "starting HTTPS server on {bind_address}");
+                    if watch || config.file_watch.enabled {
+                        tracing::debug!(
+                            target: "mcp",
+                            "file watching enabled with {}ms debounce",
+                            config.file_watch.debounce_ms
+                        );
                     }
 
                     // Use the HTTPS server implementation
@@ -1529,13 +1508,12 @@ async fn main() {
                     eprintln!("To test: npx @modelcontextprotocol/inspector cargo run -- serve");
 
                     // Create MCP server using the already-loaded indexer
-                    if config.mcp.debug {
-                        eprintln!(
-                            "MCP DEBUG: Creating server with indexer - symbols: {}, semantic: {}",
-                            indexer.symbol_count(),
-                            indexer.has_semantic_search()
-                        );
-                    }
+                    tracing::debug!(
+                        target: "mcp",
+                        "creating server with indexer - symbols: {}, semantic: {}",
+                        indexer.symbol_count(),
+                        indexer.has_semantic_search()
+                    );
                     let server = codanna::mcp::CodeIntelligenceServer::new(indexer);
 
                     // If watch mode is enabled, start the index watcher
@@ -1560,130 +1538,94 @@ async fn main() {
                         eprintln!("Index watcher started with notification support");
                     }
 
-                    // Create notification broadcaster for file/config watchers
-                    use codanna::mcp::notifications::NotificationBroadcaster;
-                    let broadcaster =
-                        Arc::new(NotificationBroadcaster::new(100).with_debug(config.mcp.debug));
+                    // Start unified file watcher if enabled
+                    if watch || config.file_watch.enabled {
+                        use codanna::documents::DocumentStore;
+                        use codanna::mcp::notifications::NotificationBroadcaster;
+                        use codanna::vector::{EmbeddingGenerator, FastEmbedGenerator};
+                        use codanna::watcher::UnifiedWatcher;
+                        use codanna::watcher::handlers::{
+                            CodeFileHandler, ConfigFileHandler, DocumentFileHandler,
+                        };
+                        use std::path::PathBuf;
+                        use tokio::sync::RwLock;
 
-                    // If file watching is enabled in config, start the file system watcher
-                    if config.file_watch.enabled {
-                        use codanna::indexing::FileSystemWatcher;
+                        let broadcaster = Arc::new(NotificationBroadcaster::new(100));
 
-                        eprintln!("Starting file system watcher for indexed files");
-                        eprintln!("  Debounce interval: {}ms", config.file_watch.debounce_ms);
-
-                        let watcher_indexer = server.get_indexer_arc();
-                        let watcher = FileSystemWatcher::new(
-                            watcher_indexer,
-                            config.file_watch.debounce_ms,
-                            config.mcp.debug,
-                            &index_path,
-                        )
-                        .map_err(|e| {
-                            eprintln!("Failed to create file system watcher: {e}");
-                            eprintln!("File watching disabled for this session");
-                            e
+                        let workspace_root = config.workspace_root.clone().unwrap_or_else(|| {
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                         });
 
-                        if let Ok(watcher) = watcher {
-                            let watcher = watcher.with_broadcaster(broadcaster.clone());
-                            // Spawn file watcher in background
-                            tokio::spawn(async move {
-                                if let Err(e) = watcher.watch().await {
-                                    eprintln!("File watcher error: {e}");
-                                }
-                            });
-                            eprintln!(
-                                "File system watcher started - monitoring indexed files for changes"
-                            );
+                        let settings_path = workspace_root.join(".codanna/settings.toml");
+                        let debounce_ms = config.file_watch.debounce_ms;
+                        let indexer_arc = server.get_indexer_arc();
+
+                        // Build unified watcher with handlers
+                        let mut builder = UnifiedWatcher::builder()
+                            .broadcaster(broadcaster.clone())
+                            .indexer(indexer_arc.clone())
+                            .index_path(index_path.clone())
+                            .workspace_root(workspace_root.clone())
+                            .debounce_ms(debounce_ms);
+
+                        // Add code file handler
+                        builder = builder.handler(CodeFileHandler::new(
+                            indexer_arc.clone(),
+                            workspace_root.clone(),
+                        ));
+
+                        // Add config file handler
+                        match ConfigFileHandler::new(settings_path.clone()) {
+                            Ok(config_handler) => {
+                                builder = builder.handler(config_handler);
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to create config handler: {e}");
+                            }
                         }
-                    }
 
-                    // Start config file watcher (watches settings.toml for indexed_paths changes)
-                    if watch || config.file_watch.enabled {
-                        use codanna::indexing::ConfigFileWatcher;
-                        use std::path::PathBuf;
+                        // Add document handler if documents are enabled
+                        if config.documents.enabled {
+                            let doc_path = config.index_path.join("documents");
+                            if doc_path.exists() {
+                                if let Ok(generator) = FastEmbedGenerator::from_settings(
+                                    &config.semantic_search.model,
+                                    false,
+                                ) {
+                                    let dimension = generator.dimension();
+                                    if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
+                                        if let Ok(store_with_emb) =
+                                            store.with_embeddings(Box::new(generator))
+                                        {
+                                            let store_arc = Arc::new(RwLock::new(store_with_emb));
+                                            builder = builder
+                                                .document_store(store_arc.clone())
+                                                .chunking_config(config.documents.defaults.clone())
+                                                .handler(DocumentFileHandler::new(
+                                                    store_arc,
+                                                    workspace_root.clone(),
+                                                ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
-                        let config_watcher_indexer = server.get_indexer_arc();
-                        let config_watcher_broadcaster = broadcaster.clone();
-                        let settings_path = config
-                            .workspace_root
-                            .clone()
-                            .unwrap_or_else(|| {
-                                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-                            })
-                            .join(".codanna/settings.toml");
-
-                        match ConfigFileWatcher::new(
-                            settings_path.clone(),
-                            config_watcher_indexer,
-                            config.mcp.debug,
-                        ) {
-                            Ok(config_watcher) => {
-                                let config_watcher =
-                                    config_watcher.with_broadcaster(config_watcher_broadcaster);
+                        // Build and start the unified watcher
+                        match builder.build() {
+                            Ok(unified_watcher) => {
                                 tokio::spawn(async move {
-                                    if let Err(e) = config_watcher.watch().await {
-                                        eprintln!("Config watcher error: {e}");
+                                    if let Err(e) = unified_watcher.watch().await {
+                                        eprintln!("Unified watcher error: {e}");
                                     }
                                 });
                                 eprintln!(
-                                    "Config watcher started - monitoring {}",
+                                    "Unified watcher started (debounce: {debounce_ms}ms, config: {})",
                                     settings_path.display()
                                 );
                             }
                             Err(e) => {
-                                eprintln!("Failed to start config watcher: {e}");
-                            }
-                        }
-                    }
-
-                    // Start document watcher if documents are enabled and file watching is on
-                    if config.file_watch.enabled && config.documents.enabled {
-                        use codanna::documents::{DocumentStore, DocumentWatcher};
-                        use codanna::vector::{EmbeddingGenerator, FastEmbedGenerator};
-                        use tokio::sync::RwLock;
-
-                        let doc_path = config.index_path.join("documents");
-                        if doc_path.exists() {
-                            // Create DocumentStore with embeddings
-                            if let Ok(generator) = FastEmbedGenerator::from_settings(
-                                &config.semantic_search.model,
-                                false,
-                            ) {
-                                let dimension = generator.dimension();
-                                if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
-                                    if let Ok(store_with_emb) =
-                                        store.with_embeddings(Box::new(generator))
-                                    {
-                                        let store_arc = Arc::new(RwLock::new(store_with_emb));
-
-                                        // Get chunking config
-                                        let chunking_config = config.documents.defaults.clone();
-
-                                        // Start document watcher
-                                        match DocumentWatcher::new(
-                                            store_arc,
-                                            chunking_config,
-                                            config.file_watch.debounce_ms,
-                                            config.mcp.debug,
-                                        ) {
-                                            Ok(doc_watcher) => {
-                                                tokio::spawn(async move {
-                                                    if let Err(e) = doc_watcher.watch().await {
-                                                        eprintln!("Document watcher error: {e}");
-                                                    }
-                                                });
-                                                eprintln!(
-                                                    "Document watcher started - monitoring indexed documents"
-                                                );
-                                            }
-                                            Err(e) => {
-                                                eprintln!("Failed to start document watcher: {e}");
-                                            }
-                                        }
-                                    }
-                                }
+                                eprintln!("Failed to start unified watcher: {e}");
                             }
                         }
                     }
@@ -4484,11 +4426,8 @@ mod add_paths_tests {
         assert!(indexer.get_indexed_paths().is_empty());
 
         let canonical_parent = parent.canonicalize().unwrap();
-        let report = seed_indexer_with_config_paths(
-            &mut indexer,
-            std::slice::from_ref(&canonical_parent),
-            false,
-        );
+        let report =
+            seed_indexer_with_config_paths(&mut indexer, std::slice::from_ref(&canonical_parent));
         assert_eq!(report.newly_seeded.len(), 1);
         assert_eq!(report.newly_seeded[0], canonical_parent);
         assert!(report.missing_paths.is_empty());
@@ -4499,11 +4438,8 @@ mod add_paths_tests {
 
         // Adding a child after the parent should be a no-op
         let canonical_child = child.canonicalize().unwrap();
-        let child_report = seed_indexer_with_config_paths(
-            &mut indexer,
-            std::slice::from_ref(&canonical_child),
-            false,
-        );
+        let child_report =
+            seed_indexer_with_config_paths(&mut indexer, std::slice::from_ref(&canonical_child));
         assert!(
             child_report.newly_seeded.is_empty(),
             "child seeding should not add new directories"
@@ -4524,8 +4460,7 @@ mod add_paths_tests {
         });
         let mut indexer = SimpleIndexer::with_settings(settings);
 
-        let report =
-            seed_indexer_with_config_paths(&mut indexer, std::slice::from_ref(&missing), false);
+        let report = seed_indexer_with_config_paths(&mut indexer, std::slice::from_ref(&missing));
         assert!(
             report.newly_seeded.is_empty(),
             "missing directory should not be seeded"

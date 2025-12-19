@@ -96,12 +96,10 @@ impl TypeScriptParser {
         // Update visibility for default exported symbols
         for symbol in &mut symbols {
             if self.default_exported_symbols.contains(symbol.name.as_ref()) {
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!(
-                        "DEBUG: Marking '{}' as Public (default export)",
-                        symbol.name
-                    );
-                }
+                tracing::debug!(
+                    "[typescript] marking '{}' as Public (default export)",
+                    symbol.name
+                );
                 symbol.visibility = Visibility::Public;
             }
         }
@@ -385,9 +383,9 @@ impl TypeScriptParser {
                                 let symbol_name = &code[next.byte_range()];
                                 self.default_exported_symbols
                                     .insert(symbol_name.to_string());
-                                if crate::config::is_global_debug_enabled() {
-                                    eprintln!("DEBUG: Found default export of '{symbol_name}'");
-                                }
+                                tracing::debug!(
+                                    "[typescript] found default export of '{symbol_name}'"
+                                );
                             }
                         }
                     }
@@ -471,18 +469,13 @@ impl TypeScriptParser {
                 // Track JSX component usage as Uses relationship
                 self.register_node_recursively(node);
 
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!(
-                        "DEBUG: Found JSX node: {} at {}:{}",
-                        node.kind(),
-                        node.start_position().row,
-                        node.start_position().column
-                    );
-                    eprintln!(
-                        "DEBUG: Current function: {:?}",
-                        self.context.current_function()
-                    );
-                }
+                tracing::debug!(
+                    "[typescript] found JSX node: {} at {}:{}, current function: {:?}",
+                    node.kind(),
+                    node.start_position().row,
+                    node.start_position().column,
+                    self.context.current_function()
+                );
 
                 self.track_jsx_component_usage(node, code);
 
@@ -1325,36 +1318,28 @@ impl TypeScriptParser {
         file_id: FileId,
         imports: &mut Vec<Import>,
     ) {
-        if crate::config::is_global_debug_enabled() {
-            eprintln!(
-                "ENTERING process_import_statement, code: {}",
-                &code[node.byte_range()]
-            );
-        }
+        tracing::debug!(
+            "[typescript] process_import_statement, code: {}",
+            &code[node.byte_range()]
+        );
 
         // Debug: print all children
         let mut cursor = node.walk();
-        if crate::config::is_global_debug_enabled() {
-            eprintln!("  Node has {} children:", node.child_count());
-        }
+        tracing::debug!("[typescript]   node has {} children", node.child_count());
 
         // Check if this is a type-only import (has 'type' keyword after 'import')
         let mut is_type_only = false;
         for (i, child) in node.children(&mut cursor).enumerate() {
-            if crate::config::is_global_debug_enabled() {
-                eprintln!(
-                    "    child[{}]: kind='{}', field_name={:?}",
-                    i,
-                    child.kind(),
-                    node.field_name_for_child(i as u32)
-                );
-            }
+            tracing::debug!(
+                "[typescript]     child[{}]: kind='{}', field_name={:?}",
+                i,
+                child.kind(),
+                node.field_name_for_child(i as u32)
+            );
             // Check for 'type' keyword (appears in type-only imports)
             if child.kind() == "type" && i == 1 {
                 is_type_only = true;
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!("    Detected type-only import!");
-                }
+                tracing::debug!("[typescript]     detected type-only import!");
             }
         }
 
@@ -1376,12 +1361,10 @@ impl TypeScriptParser {
         };
 
         if let Some(import_clause) = import_clause {
-            if crate::config::is_global_debug_enabled() {
-                eprintln!(
-                    "  Found import_clause: {}",
-                    &code[import_clause.byte_range()]
-                );
-            }
+            tracing::debug!(
+                "[typescript]   found import_clause: {}",
+                &code[import_clause.byte_range()]
+            );
 
             // Check for different import types
             let mut has_default = false;
@@ -1392,21 +1375,17 @@ impl TypeScriptParser {
 
             let mut cursor = import_clause.walk();
             for child in import_clause.children(&mut cursor) {
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!(
-                        "    Child kind: {}, text: {}",
-                        child.kind(),
-                        &code[child.byte_range()]
-                    );
-                }
+                tracing::debug!(
+                    "[typescript]     child kind: {}, text: {}",
+                    child.kind(),
+                    &code[child.byte_range()]
+                );
                 match child.kind() {
                     "identifier" => {
                         // Default import
                         has_default = true;
                         let name = code[child.byte_range()].to_string();
-                        if crate::config::is_global_debug_enabled() {
-                            eprintln!("      Setting default_name = {name}");
-                        }
+                        tracing::debug!("[typescript]       setting default_name = {name}");
                         default_name = Some(name);
                     }
                     "named_imports" => {
@@ -1451,12 +1430,9 @@ impl TypeScriptParser {
 
             // Add imports based on what we found
             // Following Rust pattern: one Import per module, with alias for default/namespace
-            if crate::config::is_global_debug_enabled() {
-                eprintln!(
-                    "  Summary: has_default={has_default}, has_named={has_named}, has_namespace={has_namespace}"
-                );
-                eprintln!("  default_name={default_name:?}, namespace_name={namespace_name:?}");
-            }
+            tracing::debug!(
+                "[typescript]   summary: has_default={has_default}, has_named={has_named}, has_namespace={has_namespace}, default_name={default_name:?}, namespace_name={namespace_name:?}"
+            );
 
             if has_namespace {
                 // Namespace import: import * as utils from './utils'
@@ -1479,11 +1455,9 @@ impl TypeScriptParser {
                 });
             } else if has_default {
                 // Default only: import React from 'react'
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!(
-                        "  Adding default import: path='{source_path}', alias={default_name:?}, type_only={is_type_only}"
-                    );
-                }
+                tracing::debug!(
+                    "[typescript]   adding default import: path='{source_path}', alias={default_name:?}, type_only={is_type_only}"
+                );
                 imports.push(Import {
                     path: source_path.to_string(),
                     alias: default_name,
@@ -1595,14 +1569,12 @@ impl TypeScriptParser {
                 node.children(&mut w).find(|n| n.kind() == "identifier")
             }) {
                 let name = &code[name_node.byte_range()];
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!(
-                        "DEBUG: Entering {} '{}' at line {}",
-                        node.kind(),
-                        name,
-                        node.start_position().row + 1
-                    );
-                }
+                tracing::debug!(
+                    "[typescript] entering {} '{}' at line {}",
+                    node.kind(),
+                    name,
+                    node.start_position().row + 1
+                );
                 Some(name)
             } else {
                 // Arrow functions might not have a name, check parent for variable declaration
@@ -1681,14 +1653,12 @@ impl TypeScriptParser {
             if let Some(function_node) = function_node {
                 // Extract function name for all types of calls (including member expressions like console.log)
                 if let Some(fn_name) = Self::extract_function_name(&function_node, code) {
-                    if crate::config::is_global_debug_enabled() {
-                        eprintln!(
-                            "DEBUG: Found call to {} at line {}, context = {:?}",
-                            fn_name,
-                            node.start_position().row + 1,
-                            function_context
-                        );
-                    }
+                    tracing::debug!(
+                        "[typescript] found call to {} at line {}, context = {:?}",
+                        fn_name,
+                        node.start_position().row + 1,
+                        function_context
+                    );
                     // If we don't have a function context yet, try to infer it from ancestors
                     let inferred_context = if function_context.is_none() {
                         let mut anc = node.parent();
@@ -2403,9 +2373,7 @@ impl TypeScriptParser {
             _ => None,
         };
 
-        if crate::config::is_global_debug_enabled() {
-            eprintln!("DEBUG: JSX component_name extracted: {component_name:?}");
-        }
+        tracing::debug!("[typescript] JSX component_name extracted: {component_name:?}");
 
         if let Some(component_name) = component_name {
             // Filter out HTML elements (lowercase) - only track React components (uppercase)
@@ -2416,14 +2384,14 @@ impl TypeScriptParser {
             {
                 // Track this as a component usage from current context
                 if let Some(current_fn) = self.context.current_function() {
-                    if crate::config::is_global_debug_enabled() {
-                        eprintln!("DEBUG: Tracking JSX usage: {current_fn} uses {component_name}");
-                    }
+                    tracing::debug!(
+                        "[typescript] tracking JSX usage: {current_fn} uses {component_name}"
+                    );
                     self.component_usages
                         .push((current_fn.to_string(), component_name.to_string()));
                 }
-            } else if crate::config::is_global_debug_enabled() {
-                eprintln!("DEBUG: Skipping lowercase JSX element: {component_name}");
+            } else {
+                tracing::debug!("[typescript] skipping lowercase JSX element: {component_name}");
             }
         }
     }

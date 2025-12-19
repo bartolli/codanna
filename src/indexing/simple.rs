@@ -21,15 +21,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Debug print macro that respects the debug setting
-macro_rules! debug_print {
-    ($self:expr, $($arg:tt)*) => {
-        if $self.settings.debug {
-            eprintln!("DEBUG: {}", format!($($arg)*));
-        }
-    };
-}
-
 /// Compatibility struct for transaction support
 #[derive(Debug)]
 pub struct TantivyTransaction;
@@ -124,9 +115,6 @@ impl SimpleIndexer {
         let document_index =
             DocumentIndex::new(tantivy_path, &settings).expect("Failed to create Tantivy index");
 
-        #[allow(unused_variables)]
-        let debug = settings.debug;
-
         // Try to load symbol cache if it exists
         let symbol_cache = None; // Will be loaded lazily when index is opened
 
@@ -150,7 +138,7 @@ impl SimpleIndexer {
 
         // Try to load symbol cache for fast lookups
         if let Err(e) = indexer.load_symbol_cache() {
-            debug_print!(indexer, "Could not load symbol cache: {e}");
+            tracing::debug!("[indexer] Could not load symbol cache: {e}");
         }
 
         indexer
@@ -170,9 +158,6 @@ impl SimpleIndexer {
 
         let document_index =
             DocumentIndex::new(tantivy_path, &settings).expect("Failed to create Tantivy index");
-
-        #[allow(unused_variables)]
-        let debug = settings.debug;
 
         let mut indexer = Self {
             parser_factory: ParserFactory::new(settings.clone()),
@@ -197,14 +182,11 @@ impl SimpleIndexer {
         // - Trait/interface resolution happens via behavior.create_inheritance_resolver()
         // - Import resolution happens via behavior.add_import() and ResolutionContext::resolve()
         // - No need to reconstruct state here as behaviors maintain their own state
-        debug_print!(
-            indexer,
-            "Using language-specific behaviors for resolution (no legacy reconstruction needed)"
-        );
+        tracing::debug!("[indexer] using language-specific behaviors for resolution");
 
         // Try to load symbol cache for fast lookups
         if let Err(e) = indexer.load_symbol_cache() {
-            debug_print!(indexer, "Could not load symbol cache: {e}");
+            tracing::debug!("[indexer] could not load symbol cache: {e}");
         }
 
         indexer
@@ -295,17 +277,20 @@ impl SimpleIndexer {
         &self,
         path: &Path,
     ) -> Result<(), crate::semantic::SemanticSearchError> {
-        debug_print!(self, "save_semantic_search called with path: {:?}", path);
+        tracing::debug!(
+            "[indexer] save_semantic_search called with path: {}",
+            path.display()
+        );
         if let Some(semantic) = &self.semantic_search {
-            debug_print!(self, "Semantic search exists, calling save()");
+            tracing::debug!("[indexer] semantic search exists, calling save()");
             let result = semantic.lock().unwrap().save(path);
             match &result {
-                Ok(_) => debug_print!(self, "Semantic save() succeeded"),
-                Err(e) => eprintln!("Semantic save() failed: {e}"),
+                Ok(_) => tracing::debug!("[indexer] semantic save() succeeded"),
+                Err(e) => tracing::warn!("[indexer] semantic save() failed: {e}"),
             }
             result
         } else {
-            debug_print!(self, "No semantic search to save");
+            tracing::debug!("[indexer] no semantic search to save");
             Ok(())
         }
     }
@@ -314,26 +299,24 @@ impl SimpleIndexer {
     ///
     /// This is used during index loading to restore semantic search state.
     /// Returns Ok(true) if loaded successfully, Ok(false) if no data exists.
-    pub fn load_semantic_search(&mut self, path: &Path, info: bool) -> IndexResult<bool> {
+    pub fn load_semantic_search(&mut self, path: &Path) -> IndexResult<bool> {
         use crate::semantic::{SemanticMetadata, SimpleSemanticSearch};
 
-        // Debug output to understand path resolution
-        if self.settings.debug || info {
-            eprintln!(
-                "DEBUG: Attempting to load semantic search from: {}",
-                path.display()
-            );
-        }
+        tracing::debug!(
+            "[indexer] attempting to load semantic search from: {}",
+            path.display()
+        );
 
         // Check if semantic data exists
         if !SemanticMetadata::exists(path) {
-            if self.settings.debug || info {
-                eprintln!("DEBUG: Semantic metadata not found at: {}", path.display());
-                eprintln!(
-                    "DEBUG: Looking for: {}",
-                    path.join("metadata.json").display()
-                );
-            }
+            tracing::debug!(
+                "[indexer] semantic metadata not found at: {}",
+                path.display()
+            );
+            tracing::debug!(
+                "[indexer] looking for: {}",
+                path.join("metadata.json").display()
+            );
             return Ok(false);
         }
 
@@ -342,14 +325,12 @@ impl SimpleIndexer {
             Ok(semantic) => {
                 let count = semantic.embedding_count();
                 self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
-                if info {
-                    eprintln!("Loaded semantic search with {count} embeddings");
-                }
+                tracing::info!("[indexer] loaded semantic search with {count} embeddings");
                 Ok(true)
             }
             Err(e) => {
                 // Don't fail the entire load, just warn
-                eprintln!("Warning: Could not load semantic search: {e}");
+                tracing::warn!("[indexer] could not load semantic search: {e}");
                 Ok(false)
             }
         }
@@ -563,17 +544,12 @@ impl SimpleIndexer {
     /// Remove a file and all its symbols from the index
     pub fn remove_file(&mut self, path: impl AsRef<Path>) -> IndexResult<()> {
         let path = path.as_ref();
-        let path_display = path.display();
-        if self.settings.debug {
-            eprintln!("  remove_file called with path: {path_display}");
-        }
+        tracing::debug!("[indexer] remove_file called with path: {}", path.display());
         let path_str = path.to_str().ok_or_else(|| IndexError::FileRead {
             path: path.to_path_buf(),
             source: std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid UTF-8 in path"),
         })?;
-        if self.settings.debug {
-            eprintln!("  Querying index for path: '{path_str}'");
-        }
+        tracing::debug!("[indexer] querying index for path: '{path_str}'");
 
         // Get the FileId for this file path
         let file_info =
@@ -584,9 +560,7 @@ impl SimpleIndexer {
                     cause: e.to_string(),
                 })?;
 
-        if self.settings.debug {
-            eprintln!("  get_file_info result: {file_info:?}");
-        }
+        tracing::debug!("[indexer] get_file_info result: {file_info:?}");
 
         let symbols_to_remove = if let Some(info) = file_info {
             let file_id = info.0;
@@ -620,9 +594,7 @@ impl SimpleIndexer {
             symbols
         } else {
             // File not in index, nothing to remove
-            if self.settings.debug {
-                eprintln!("  File not found in index: {path_str}");
-            }
+            tracing::debug!("[indexer] file not found in index: {path_str}");
             return Ok(());
         };
 
@@ -642,10 +614,10 @@ impl SimpleIndexer {
             }
         }
 
-        if self.settings.debug {
-            let symbol_count = symbols_to_remove.len();
-            eprintln!("  Removed {symbol_count} symbols from {path_str}");
-        }
+        tracing::debug!(
+            "[indexer] removed {} symbols from {path_str}",
+            symbols_to_remove.len()
+        );
 
         // Commit the changes to persist them
         self.document_index
@@ -654,13 +626,11 @@ impl SimpleIndexer {
                 operation: "commit after removal".to_string(),
                 cause: e.to_string(),
             })?;
-        if self.settings.debug {
-            eprintln!("  Changes committed to index");
-        }
+        tracing::debug!("[indexer] changes committed to index");
 
         // Rebuild symbol cache after file removal to remove stale entries
         if let Err(e) = self.build_symbol_cache() {
-            eprintln!("Warning: Failed to rebuild symbol cache after file removal: {e}");
+            tracing::warn!("[indexer] failed to rebuild symbol cache after file removal: {e}");
         }
 
         Ok(())
@@ -728,9 +698,8 @@ impl SimpleIndexer {
         file_id: FileId,
         content: &str,
     ) -> IndexResult<FileId> {
-        debug_print!(
-            self,
-            "reindex_file_content called with path: {:?} (absolute: {})",
+        tracing::debug!(
+            "[indexer] reindex_file_content called with path: {:?} (absolute: {})",
             path,
             path.is_absolute()
         );
@@ -745,18 +714,16 @@ impl SimpleIndexer {
 
         // Register the file with language behavior
         if let Some(ref mod_path) = module_path {
-            debug_print!(
-                self,
-                "Registering file {:?} with module path: {}",
-                path,
-                mod_path
+            tracing::debug!(
+                "[indexer] registering file {:?} with module path: {mod_path}",
+                path
             );
             // RESOLUTION SYSTEM: File registration now handled by LanguageBehavior
             // Each behavior tracks file->module mappings for import resolution
             // Register file with behavior for import tracking
             behavior.register_file(path.to_path_buf(), file_id, mod_path.clone());
         } else {
-            debug_print!(self, "No module path for file {:?}", path);
+            tracing::debug!("[indexer] no module path for file {:?}", path);
         }
 
         let mut symbol_counter = self.get_next_symbol_counter()?;
@@ -877,9 +844,8 @@ impl SimpleIndexer {
             .project_root
             .as_ref())?;
 
-        debug_print!(
-            self,
-            "Calculating module path for {:?} with root {:?}",
+        tracing::debug!(
+            "[indexer] calculating module path for {:?} with root {:?}",
             path,
             root
         );
@@ -903,7 +869,7 @@ impl SimpleIndexer {
                 .and_then(|relative_path| relative_path.to_str().map(|s| s.to_string()))
         });
 
-        debug_print!(self, "Module path for {:?}: {:?}", path, module_path);
+        tracing::debug!("[indexer] Module path for {:?}: {:?}", path, module_path);
         module_path
     }
 
@@ -980,16 +946,14 @@ impl SimpleIndexer {
         // Extract and register imports
         let imports = parser.find_imports(content, file_id);
         if !imports.is_empty() {
-            debug_print!(
-                self,
-                "Found {} imports in file {:?}",
+            tracing::debug!(
+                "[indexer] found {} imports in file {:?}",
                 imports.len(),
                 file_id
             );
             for import in &imports {
-                debug_print!(
-                    self,
-                    "  - Import: {} (alias: {:?}, glob: {})",
+                tracing::debug!(
+                    "[indexer]   - import: {} (alias: {:?}, glob: {})",
                     import.path,
                     import.alias,
                     import.is_glob
@@ -1007,7 +971,7 @@ impl SimpleIndexer {
             // This ensures imports are available after index reload, fixing the bug where
             // external symbols (e.g., indicatif::ProgressBar) incorrectly resolve to local symbols
             if let Err(e) = self.document_index.store_import(&import) {
-                debug_print!(self, "Warning: Failed to store import: {}", e);
+                tracing::debug!("[indexer] Warning: Failed to store import: {}", e);
             }
         }
 
@@ -1059,9 +1023,8 @@ impl SimpleIndexer {
         // apply custom module path rules.
         behavior.configure_symbol(symbol, module_path.as_deref());
 
-        debug_print!(
-            self,
-            "Configured symbol '{}' -> module={:?}, visibility={:?}",
+        tracing::debug!(
+            "[indexer] configured symbol '{}' -> module={:?}, visibility={:?}",
             symbol.name,
             symbol.module_path,
             symbol.visibility
@@ -1079,9 +1042,8 @@ impl SimpleIndexer {
                 .map(|lang_id| lang_id.as_str())
                 .unwrap_or("unknown");
 
-            debug_print!(
-                self,
-                "Indexing doc comment for '{}' with doc: '{}'",
+            tracing::debug!(
+                "[indexer] indexing doc comment for '{}' with doc: '{}'",
                 symbol.name,
                 doc.chars().take(50).collect::<String>()
             );
@@ -1091,14 +1053,14 @@ impl SimpleIndexer {
                 .unwrap()
                 .index_doc_comment_with_language(symbol.id, doc, language)
             {
-                eprintln!(
-                    "Failed to index doc comment for symbol {}: {}",
-                    symbol.name, e
+                tracing::warn!(
+                    "[indexer] failed to index doc comment for symbol {}: {}",
+                    symbol.name,
+                    e
                 );
             } else {
-                debug_print!(
-                    self,
-                    "Successfully stored embedding for symbol '{}'",
+                tracing::debug!(
+                    "[indexer] successfully stored embedding for symbol '{}'",
                     symbol.name
                 );
             }
@@ -1139,9 +1101,8 @@ impl SimpleIndexer {
             HashSet::new();
         // 1. Function/method calls
         let method_calls: Vec<MethodCall> = parser.find_method_calls(content);
-        debug_print!(
-            self,
-            "Found {} method calls in file {:?}",
+        tracing::debug!(
+            "[indexer] found {} method calls in file {:?}",
             method_calls.len(),
             file_id
         );
@@ -1150,33 +1111,29 @@ impl SimpleIndexer {
         for method_call in &method_calls {
             if let Some(receiver) = &method_call.receiver {
                 if method_call.is_static {
-                    debug_print!(
-                        self,
-                        "Static call: {}::{} in {}",
+                    tracing::debug!(
+                        "[indexer] static call: {}::{} in {}",
                         receiver,
                         method_call.method_name,
                         method_call.caller
                     );
                 } else if receiver == "self" {
-                    debug_print!(
-                        self,
-                        "Self call: self.{} in {}",
+                    tracing::debug!(
+                        "[indexer] self call: self.{} in {}",
                         method_call.method_name,
                         method_call.caller
                     );
                 } else {
-                    debug_print!(
-                        self,
-                        "Instance call: {}.{} in {} (receiver will be lost in current format)",
+                    tracing::debug!(
+                        "[indexer] instance call: {}.{} in {} (receiver will be lost in current format)",
                         receiver,
                         method_call.method_name,
                         method_call.caller
                     );
                 }
             } else {
-                debug_print!(
-                    self,
-                    "Plain call: {} in {}",
+                tracing::debug!(
+                    "[indexer] plain call: {} in {}",
                     method_call.method_name,
                     method_call.caller
                 );
@@ -1184,17 +1141,10 @@ impl SimpleIndexer {
         }
 
         // Process method calls using MethodCall objects for enhanced resolution
-        debug_print!(self, "Processing {} method calls", method_calls.len());
+        tracing::debug!("[indexer] processing {} method calls", method_calls.len());
         for method_call in &method_calls {
-            debug_print!(
-                self,
-                "Processing call: {} -> {}",
-                method_call.caller,
-                method_call.method_name
-            );
-            debug_print!(
-                self,
-                "Processing method call with enhanced data: {} -> {}",
+            tracing::debug!(
+                "[indexer] processing call: {} -> {}",
                 method_call.caller,
                 method_call.method_name
             );
@@ -1236,9 +1186,8 @@ impl SimpleIndexer {
                     metadata,
                 )?;
             } else {
-                debug_print!(
-                    self,
-                    "Skipping duplicate relationship: {} -> {} ({:?})",
+                tracing::debug!(
+                    "[indexer] skipping duplicate relationship: {} -> {} ({:?})",
                     method_call.caller,
                     method_call.method_name,
                     kind
@@ -1248,17 +1197,15 @@ impl SimpleIndexer {
 
         // Process plain function calls
         let function_calls = parser.find_calls(content);
-        debug_print!(
-            self,
-            "Found {} function calls in file {:?}",
+        tracing::debug!(
+            "[indexer] found {} function calls in file {:?}",
             function_calls.len(),
             file_id
         );
 
         for (caller, called_function, range) in function_calls {
-            debug_print!(
-                self,
-                "Processing function call: {} -> {}",
+            tracing::debug!(
+                "[indexer] processing function call: {} -> {}",
                 caller,
                 called_function
             );
@@ -1288,9 +1235,8 @@ impl SimpleIndexer {
                     metadata,
                 )?;
             } else {
-                debug_print!(
-                    self,
-                    "Skipping duplicate relationship: {} -> {} ({:?})",
+                tracing::debug!(
+                    "[indexer] skipping duplicate relationship: {} -> {} ({:?})",
                     caller,
                     called_function,
                     kind
@@ -1301,9 +1247,8 @@ impl SimpleIndexer {
         // 2. Trait implementations
         let implementations = parser.find_implementations(content);
         for (type_name, trait_name, _range) in implementations {
-            debug_print!(
-                self,
-                "Registering implementation: {} implements {}",
+            tracing::debug!(
+                "[indexer] registering implementation: {} implements {}",
                 type_name,
                 trait_name
             );
@@ -1322,9 +1267,8 @@ impl SimpleIndexer {
         // 2.3. Inheritance relationships (extends)
         let extends = parser.find_extends(content);
         for (derived_type, base_type, _range) in extends {
-            debug_print!(
-                self,
-                "Registering inheritance: {} extends {}",
+            tracing::debug!(
+                "[indexer] registering inheritance: {} extends {}",
                 derived_type,
                 base_type
             );
@@ -1350,9 +1294,8 @@ impl SimpleIndexer {
                 let mut methods_by_type: std::collections::HashMap<String, Vec<String>> =
                     std::collections::HashMap::new();
                 for (type_name, method_name, _range) in inherent_methods {
-                    debug_print!(
-                        self,
-                        "Found inherent method: {}::{}",
+                    tracing::debug!(
+                        "[indexer] found inherent method: {}::{}",
                         type_name,
                         method_name
                     );
@@ -1389,30 +1332,34 @@ impl SimpleIndexer {
 
         // 4. Method definitions (trait defines methods)
         let defines = parser.find_defines(content);
-        debug_print!(
-            self,
-            "Found {} defines for file {:?}",
+        tracing::debug!(
+            "[indexer] found {} defines for file {:?}",
             defines.len(),
             file_id
         );
         for (definer_name, method_name, range) in defines {
-            debug_print!(
-                self,
-                "Processing define: {} defines {} at {:?}",
+            tracing::debug!(
+                "[indexer] processing define: {} defines {} at {:?}",
                 definer_name,
                 method_name,
                 range
             );
             // Check if definer is a trait using our cached symbol kinds
             if let Some(symbol_kinds) = self.trait_symbols_by_file.get(&file_id) {
-                debug_print!(self, "Found {} symbol kinds for file", symbol_kinds.len());
+                tracing::debug!(
+                    "[indexer] Found {} symbol kinds for file",
+                    symbol_kinds.len()
+                );
                 // HashMap<String, _> can look up &str keys directly
                 if let Some(kind) = symbol_kinds.get(definer_name) {
-                    debug_print!(self, "Found kind {:?} for definer {}", kind, definer_name);
+                    tracing::debug!(
+                        "[indexer] found kind {:?} for definer {}",
+                        kind,
+                        definer_name
+                    );
                     if *kind == crate::types::SymbolKind::Trait {
-                        debug_print!(
-                            self,
-                            "Adding method '{}' to trait '{}'",
+                        tracing::debug!(
+                            "[indexer] adding method '{}' to trait '{}'",
                             method_name,
                             definer_name
                         );
@@ -1761,9 +1708,8 @@ impl SimpleIndexer {
         // This allows us to:
         // 1. Wait until all symbols in the batch are searchable
         // 2. Use import context for accurate resolution
-        debug_print!(
-            self,
-            "Adding unresolved relationship: {} -> {} (kind: {:?}, from_id: {:?}, range: {:?})",
+        tracing::debug!(
+            "[indexer] adding unresolved relationship: {} -> {} (kind: {:?}, from_id: {:?}, range: {:?})",
             from_name,
             to_name,
             kind,
@@ -1789,16 +1735,15 @@ impl SimpleIndexer {
         // Try cache first for O(1) lookup
         if let Some(ref cache) = self.symbol_cache {
             if let Some(id) = cache.lookup_by_name(name) {
-                debug_print!(self, "Symbol '{}' found in cache (fast path)", name);
+                tracing::debug!("[indexer] symbol '{}' found in cache (fast path)", name);
                 return Some(id);
             }
-            debug_print!(
-                self,
-                "Symbol '{}' not in cache, falling back to Tantivy",
+            tracing::debug!(
+                "[indexer] symbol '{}' not in cache, falling back to Tantivy",
                 name
             );
         } else {
-            debug_print!(self, "Symbol cache not loaded");
+            tracing::debug!("[indexer] symbol cache not loaded");
         }
 
         // Fallback to Tantivy
@@ -2314,20 +2259,16 @@ impl SimpleIndexer {
                     total_symbols += stats.symbols_found;
 
                     // Track this directory as indexed
-                    if self.settings.debug {
-                        eprintln!("DEBUG: Tracking indexed path: {}", path.display());
-                    }
+                    tracing::debug!("[indexer] tracking indexed path: {}", path.display());
                     match self.add_indexed_path(path) {
                         Ok(_) => {
-                            if self.settings.debug {
-                                eprintln!(
-                                    "DEBUG: Successfully tracked path (total: {})",
-                                    self.indexed_paths.len()
-                                );
-                            }
+                            tracing::debug!(
+                                "[indexer] successfully tracked path (total: {})",
+                                self.indexed_paths.len()
+                            );
                         }
                         Err(e) => {
-                            eprintln!("  ✗ Failed to track indexed path: {e}");
+                            tracing::warn!("[indexer] failed to track indexed path: {e}");
                         }
                     }
                 }
@@ -2722,9 +2663,8 @@ impl SimpleIndexer {
         method_call: &crate::parsing::MethodCall,
         file_id: FileId,
     ) {
-        debug_print!(
-            self,
-            "Storing method call for enhanced resolution: {} calls {} (static: {}, receiver: {:?})",
+        tracing::debug!(
+            "[indexer] storing method call for enhanced resolution: {} calls {} (static: {}, receiver: {:?})",
             method_call.caller,
             method_call.method_name,
             method_call.is_static,
@@ -2795,9 +2735,8 @@ impl SimpleIndexer {
             }
 
             if let Some(method_call) = candidates.first() {
-                debug_print!(
-                    self,
-                    "Found MethodCall object for {}->{}! Using enhanced resolution",
+                tracing::debug!(
+                    "[indexer] found MethodCall object for {}->{}! Using enhanced resolution",
                     caller_name,
                     call_target
                 );
@@ -2805,9 +2744,8 @@ impl SimpleIndexer {
             }
         }
 
-        debug_print!(
-            self,
-            "No MethodCall object found for {}->{}. Resolving as regular function",
+        tracing::debug!(
+            "[indexer] no MethodCall object found for {}->{}. Resolving as regular function",
             caller_name,
             call_target
         );
@@ -2851,20 +2789,18 @@ impl SimpleIndexer {
         let receiver = match &method_call.receiver {
             Some(recv) => recv,
             None => {
-                debug_print!(
-                    self,
-                    "No receiver found, resolving '{}' as regular function",
+                tracing::debug!(
+                    "[indexer] no receiver found, resolving '{}' as regular function",
                     method_call.method_name
                 );
                 let result = context.resolve(&method_call.method_name);
-                debug_print!(self, "Regular function resolution result: {:?}", result);
+                tracing::debug!("[indexer] regular function resolution result: {:?}", result);
                 return result;
             }
         };
 
-        debug_print!(
-            self,
-            "Resolving method call: receiver={}, method={}, is_static={}",
+        tracing::debug!(
+            "[indexer] resolving method call: receiver={}, method={}, is_static={}",
             receiver,
             method_call.method_name,
             method_call.is_static
@@ -2872,9 +2808,8 @@ impl SimpleIndexer {
 
         // Handle static methods differently - they don't need receiver type lookup
         if method_call.is_static {
-            debug_print!(
-                self,
-                "Static method call: {}::{}",
+            tracing::debug!(
+                "[indexer] static method call: {}::{}",
                 receiver,
                 method_call.method_name
             );
@@ -2884,9 +2819,8 @@ impl SimpleIndexer {
             // incorrectly resolve external symbols (e.g., indicatif::ProgressBar)
             // to local symbols with the same name
             if context.is_external_import(receiver) {
-                debug_print!(
-                    self,
-                    "Receiver '{}' is from external import, not resolving static method '{}'",
+                tracing::debug!(
+                    "[indexer] receiver '{}' is from external import, not resolving static method '{}'",
                     receiver,
                     method_call.method_name
                 );
@@ -2898,9 +2832,8 @@ impl SimpleIndexer {
 
             // Try qualified resolution
             if let Some(id) = context.resolve(&static_method) {
-                debug_print!(
-                    self,
-                    "Resolved static method {} to symbol_id: {:?}",
+                tracing::debug!(
+                    "[indexer] resolved static method {} to symbol_id: {:?}",
                     static_method,
                     id
                 );
@@ -2909,9 +2842,8 @@ impl SimpleIndexer {
 
             // Fall back to method name only (receiver was already checked as non-external above)
             let result = context.resolve(&method_call.method_name);
-            debug_print!(
-                self,
-                "Static method fallback resolution for {}: {:?}",
+            tracing::debug!(
+                "[indexer] static method fallback resolution for {}: {:?}",
                 method_call.method_name,
                 result
             );
@@ -2925,32 +2857,20 @@ impl SimpleIndexer {
             .get(&(file_id, receiver_key.clone()))
             .cloned()
             .or_else(|| {
-                if crate::config::is_global_debug_enabled() {
-                    eprintln!(
-                        "[EXT-RESOLVE] Missing direct type entry for receiver '{receiver}' (key '{receiver_key}') in file {file_id:?}"
-                    );
-                }
+                tracing::debug!("[ext-resolve] missing direct type entry for receiver '{receiver}' (key '{receiver_key}') in file {file_id:?}");
                 let resolved = context.resolve_expression_type(receiver);
                 if let Some(ref ty) = resolved {
-                    if crate::config::is_global_debug_enabled() {
-                        eprintln!(
-                            "[EXT-RESOLVE] Context provided type '{ty}' for receiver '{receiver}'"
-                        );
-                    }
+                    tracing::debug!("[ext-resolve] context provided type '{ty}' for receiver '{receiver}'");
                 }
                 resolved
             })?;
 
-        if crate::config::is_global_debug_enabled() {
-            eprintln!("[EXT-RESOLVE] Found type for receiver '{receiver}': {type_name}");
-        }
+        tracing::debug!("[ext-resolve] found type for receiver '{receiver}': {type_name}");
 
         // Qualify method name with receiver type for extension function resolution
         // E.g., receiver="42" type="Int" method="double" → "Int.double"
         let qualified_method = format!("{}.{}", type_name, method_call.method_name);
-        if crate::config::is_global_debug_enabled() {
-            eprintln!("[EXT-RESOLVE] Resolving qualified: {qualified_method}");
-        }
+        tracing::debug!("[ext-resolve] resolving qualified: {qualified_method}");
 
         context.resolve(&qualified_method)
     }
@@ -2975,18 +2895,13 @@ impl SimpleIndexer {
         // Process all unresolved relationships
         let unresolved = std::mem::take(&mut self.unresolved_relationships);
 
-        eprintln!(
-            "Resolving cross-file relationships: {} unresolved entries",
-            unresolved.len()
-        );
-        debug_print!(
-            self,
-            "resolve_cross_file_relationships: {} unresolved relationships",
+        tracing::debug!(
+            "[indexer] resolve_cross_file_relationships: {} unresolved relationships",
             unresolved.len()
         );
 
         if unresolved.is_empty() {
-            debug_print!(self, "No unresolved relationships to process");
+            tracing::debug!("[indexer] no unresolved relationships to process");
             return Ok(());
         }
 
@@ -3041,9 +2956,8 @@ impl SimpleIndexer {
                     bar.inc();
                 }
 
-                debug_print!(
-                    self,
-                    "Processing relationship: {} -> {} (kind: {:?}, file: {:?})",
+                tracing::debug!(
+                    "[indexer] processing relationship: {} -> {} (kind: {:?}, file: {:?})",
                     rel.from_name,
                     rel.to_name,
                     rel.kind,
@@ -3053,27 +2967,24 @@ impl SimpleIndexer {
                 // Find 'from' symbols - use from_id when available to skip lookup
                 let from_symbols: Vec<_> = if let Some(from_id) = rel.from_id {
                     // We already have the from_id, just fetch the symbol
-                    debug_print!(
-                        self,
-                        "Using cached from_id: {:?} for '{}'",
+                    tracing::debug!(
+                        "[indexer] using cached from_id: {:?} for '{}'",
                         from_id,
                         rel.from_name
                     );
                     match self.document_index.find_symbol_by_id(from_id) {
                         Ok(Some(symbol)) => vec![symbol],
                         Ok(None) => {
-                            debug_print!(
-                                self,
-                                "WARNING: from_id {:?} not found for '{}'",
+                            tracing::debug!(
+                                "[indexer] warning: from_id {:?} not found for '{}'",
                                 from_id,
                                 rel.from_name
                             );
                             Vec::new()
                         }
                         Err(e) => {
-                            debug_print!(
-                                self,
-                                "ERROR: Failed to fetch symbol {:?}: {}",
+                            tracing::debug!(
+                                "[indexer] error: failed to fetch symbol {:?}: {}",
                                 from_id,
                                 e
                             );
@@ -3082,9 +2993,8 @@ impl SimpleIndexer {
                     }
                 } else {
                     // Fallback to name-based lookup
-                    debug_print!(
-                        self,
-                        "No from_id available, falling back to name lookup for '{}'",
+                    tracing::debug!(
+                        "[indexer] no from_id available, falling back to name lookup for '{}'",
                         rel.from_name
                     );
                     let behavior_for_file = self.get_behavior_for_file(file_id)?;
@@ -3108,9 +3018,8 @@ impl SimpleIndexer {
                             symbols
                         };
 
-                    debug_print!(
-                        self,
-                        "Looking for '{}' symbols, found {} total",
+                    tracing::debug!(
+                        "[indexer] looking for '{}' symbols, found {} total",
                         from_query_name,
                         all_from_symbols.len()
                     );
@@ -3121,23 +3030,23 @@ impl SimpleIndexer {
                         .filter(|s| s.file_id == file_id)
                         .collect();
 
-                    debug_print!(
-                        self,
-                        "Found {} from_symbols in current file",
+                    tracing::debug!(
+                        "[indexer] found {} from_symbols in current file",
                         from_symbols.len()
                     );
 
                     if from_symbols.is_empty() && rel.kind == RelationKind::Extends {
-                        println!(
-                            "[SKIP-EMPTY-FROM] No '{}' symbol found in file {:?} for Extends -> '{}'",
-                            from_query_name, file_id, rel.to_name
+                        tracing::debug!(
+                            "[indexer] skip-empty-from: no '{}' symbol found in file {:?} for Extends -> '{}'",
+                            from_query_name,
+                            file_id,
+                            rel.to_name
                         );
                     }
 
                     if from_symbols.is_empty() && rel.kind == RelationKind::Calls {
-                        debug_print!(
-                            self,
-                            "WARNING: No '{}' symbol found in file {:?} for Calls relationship to '{}'",
+                        tracing::debug!(
+                            "[indexer] warning: no '{}' symbol found in file {:?} for Calls relationship to '{}'",
                             from_query_name,
                             file_id,
                             rel.to_name
@@ -3151,9 +3060,8 @@ impl SimpleIndexer {
                 let to_symbol_id = if rel.kind == RelationKind::Defines && rel.to_range.is_some() {
                     // Range-based resolution for Defines - disambiguates overloaded methods
                     let range = rel.to_range.as_ref().unwrap();
-                    debug_print!(
-                        self,
-                        "Resolving Defines by range: {} at {:?}",
+                    tracing::debug!(
+                        "[indexer] resolving Defines by range: {} at {:?}",
                         rel.to_name,
                         range
                     );
@@ -3163,31 +3071,29 @@ impl SimpleIndexer {
                         range,
                     ) {
                         Ok(Some(symbol)) => {
-                            debug_print!(
-                                self,
-                                "Found symbol by range: {} (id: {:?})",
+                            tracing::debug!(
+                                "[indexer] found symbol by range: {} (id: {:?})",
                                 symbol.name,
                                 symbol.id
                             );
                             Some(symbol.id)
                         }
                         Ok(None) => {
-                            debug_print!(
-                                self,
-                                "No symbol found at range {:?} for {}",
+                            tracing::debug!(
+                                "[indexer] no symbol found at range {:?} for {}",
                                 range,
                                 rel.to_name
                             );
                             None
                         }
                         Err(e) => {
-                            debug_print!(self, "Error finding symbol by range: {}", e);
+                            tracing::debug!("[indexer] error finding symbol by range: {}", e);
                             None
                         }
                     }
                 } else if rel.kind == RelationKind::Calls && from_symbols.len() == 1 {
                     // Special handling for method calls with enhanced resolution
-                    debug_print!(self, "Resolving as method call: '{}'", rel.to_name);
+                    tracing::debug!("[indexer] resolving as method call: '{}'", rel.to_name);
                     let res = self.resolve_method_call_enhanced(
                         &rel.to_name,
                         &rel.from_name,
@@ -3195,16 +3101,14 @@ impl SimpleIndexer {
                         context.as_ref(),
                         rel.metadata.as_ref(),
                     );
-                    debug_print!(
-                        self,
-                        "resolve_method_call_enhanced returned: {:?} for {}",
+                    tracing::debug!(
+                        "[indexer] resolve_method_call_enhanced returned: {:?} for {}",
                         res,
                         rel.to_name
                     );
                     if res.is_none() {
-                        debug_print!(
-                            self,
-                            "Resolution failed, trying external mapping for {}",
+                        tracing::debug!(
+                            "[indexer] resolution failed, trying external mapping for {}",
                             rel.to_name
                         );
                         // Try external mapping as a fallback
@@ -3231,9 +3135,8 @@ impl SimpleIndexer {
                                 rel.to_name.to_string()
                             };
 
-                            debug_print!(
-                                self,
-                                "Trying to resolve external call target: '{}' for file {:?}",
+                            tracing::debug!(
+                                "[indexer] trying to resolve external call target: '{}' for file {:?}",
                                 to_key,
                                 file_id
                             );
@@ -3241,9 +3144,8 @@ impl SimpleIndexer {
                                 behavior.resolve_external_call_target(&to_key, file_id)
                             {
                                 // Skip external symbol creation for resolved external calls
-                                debug_print!(
-                                    self,
-                                    "Skipping external symbol for resolved call: {} -> {}::{}",
+                                tracing::debug!(
+                                    "[indexer] skipping external symbol for resolved call: {} -> {}::{}",
                                     to_key,
                                     module_path,
                                     symbol_name
@@ -3261,9 +3163,8 @@ impl SimpleIndexer {
                 } else {
                     // Delegate all relationship resolution to the language-specific context
                     // This includes Defines, Implements, Extends, and other relationships
-                    debug_print!(
-                        self,
-                        "Resolving relationship: {} -> {} (kind: {:?})",
+                    tracing::debug!(
+                        "[indexer] resolving relationship: {} -> {} (kind: {:?})",
                         rel.from_name,
                         rel.to_name,
                         rel.kind
@@ -3274,7 +3175,7 @@ impl SimpleIndexer {
                         rel.kind,
                         file_id,
                     );
-                    debug_print!(self, "Resolution result: {:?}", result);
+                    tracing::debug!("[indexer] resolution result: {:?}", result);
                     // If unresolved call, try language behavior external mapping
                     if result.is_none() && rel.kind == RelationKind::Calls {
                         if let Some(behavior) = self.file_behaviors.get(&file_id) {
@@ -3282,9 +3183,8 @@ impl SimpleIndexer {
                                 behavior.resolve_external_call_target(&rel.to_name, file_id)
                             {
                                 // Skip external symbol creation for mapped external calls
-                                debug_print!(
-                                    self,
-                                    "Skipping external symbol for mapped call: {} -> {}::{}",
+                                tracing::debug!(
+                                    "[indexer] skipping external symbol for mapped call: {} -> {}::{}",
                                     rel.to_name,
                                     module_path,
                                     symbol_name
@@ -3303,18 +3203,16 @@ impl SimpleIndexer {
 
                 let to_symbol_id = match to_symbol_id {
                     Some(id) => {
-                        debug_print!(
-                            self,
-                            "Resolved target symbol '{}' to ID: {:?}",
+                        tracing::debug!(
+                            "[indexer] resolved target symbol '{}' to ID: {:?}",
                             rel.to_name,
                             id
                         );
                         id
                     }
                     None => {
-                        debug_print!(
-                            self,
-                            "[SKIP-RESOLUTION] Failed to resolve '{}' from '{}' in file {:?} (kind: {:?})",
+                        tracing::debug!(
+                            "[indexer] skip-resolution: failed to resolve '{}' from '{}' in file {:?} (kind: {:?})",
                             rel.to_name,
                             rel.from_name,
                             rel.file_id,
@@ -3330,7 +3228,7 @@ impl SimpleIndexer {
                 };
 
                 // Get the full symbol data
-                debug_print!(self, "Looking up symbol by ID: {:?}", to_symbol_id);
+                tracing::debug!("[indexer] looking up symbol by ID: {:?}", to_symbol_id);
                 let to_symbol = match self
                     .document_index
                     .find_symbol_by_id(to_symbol_id)
@@ -3339,13 +3237,12 @@ impl SimpleIndexer {
                         cause: e.to_string(),
                     })? {
                     Some(symbol) => {
-                        debug_print!(self, "Found target symbol: {}", symbol.name);
+                        tracing::debug!("[indexer] found target symbol: {}", symbol.name);
                         symbol
                     }
                     None => {
-                        debug_print!(
-                            self,
-                            "[SKIP-NOT-FOUND] Symbol ID {:?} not found in index for '{}'",
+                        tracing::debug!(
+                            "[indexer] skip-not-found: symbol ID {:?} not found in index for '{}'",
                             to_symbol_id,
                             rel.to_name
                         );
@@ -3358,11 +3255,10 @@ impl SimpleIndexer {
                 };
 
                 // Process with our filtering logic
-                debug_print!(self, "Processing {} from symbols", from_symbols.len());
+                tracing::debug!("[indexer] processing {} from symbols", from_symbols.len());
                 for from_symbol in &from_symbols {
-                    debug_print!(
-                        self,
-                        "Checking relationship from {} to {}",
+                    tracing::debug!(
+                        "[indexer] checking relationship from {} to {}",
                         from_symbol.name,
                         to_symbol.name
                     );
@@ -3370,19 +3266,8 @@ impl SimpleIndexer {
                     // Check symbol kind compatibility
                     if !Self::is_compatible_relationship(from_symbol.kind, to_symbol.kind, rel.kind)
                     {
-                        if rel.kind == RelationKind::Extends {
-                            println!(
-                                "[SKIP-INCOMPATIBLE] {} ({:?}) -> {} ({:?}) for {:?}",
-                                from_symbol.name,
-                                from_symbol.kind,
-                                to_symbol.name,
-                                to_symbol.kind,
-                                rel.kind
-                            );
-                        }
-                        debug_print!(
-                            self,
-                            "[SKIP-INCOMPATIBLE] {} ({:?}) -> {} ({:?}) for {:?}",
+                        tracing::debug!(
+                            "[indexer] skip-incompatible: {} ({:?}) -> {} ({:?}) for {:?}",
                             from_symbol.name,
                             from_symbol.kind,
                             to_symbol.name,
@@ -3398,9 +3283,8 @@ impl SimpleIndexer {
 
                     // Check visibility (skip for Defines - a type can always see its own methods)
                     if rel.kind != RelationKind::Defines {
-                        debug_print!(
-                            self,
-                            "Checking visibility: {} (vis: {:?}, module: {:?}) from {} (module: {:?})",
+                        tracing::debug!(
+                            "[indexer] checking visibility: {} (vis: {:?}, module: {:?}) from {} (module: {:?})",
                             to_symbol.name,
                             to_symbol.visibility,
                             to_symbol.module_path,
@@ -3408,9 +3292,8 @@ impl SimpleIndexer {
                             from_symbol.module_path
                         );
                         if !Self::is_symbol_visible_from(&to_symbol, from_symbol) {
-                            debug_print!(
-                                self,
-                                "[SKIP-VISIBILITY] {} not visible from {} (to_vis: {:?}, to_module: {:?}, from_module: {:?})",
+                            tracing::debug!(
+                                "[indexer] skip-visibility: {} not visible from {} (to_vis: {:?}, to_module: {:?}, from_module: {:?})",
                                 to_symbol.name,
                                 from_symbol.name,
                                 to_symbol.visibility,
@@ -3426,9 +3309,8 @@ impl SimpleIndexer {
                     }
 
                     // Add the relationship with preserved metadata
-                    debug_print!(
-                        self,
-                        "[SUCCESS] Adding relationship: {} ({:?}) -> {} ({:?}) kind: {:?}",
+                    tracing::debug!(
+                        "[indexer] success: adding relationship: {} ({:?}) -> {} ({:?}) kind: {:?}",
                         from_symbol.name,
                         from_symbol.id,
                         to_symbol.name,
@@ -3456,9 +3338,8 @@ impl SimpleIndexer {
             eprintln!("{bar}");
         }
 
-        debug_print!(
-            self,
-            "Relationship resolution complete - resolved: {}, skipped: {}, total: {}",
+        tracing::debug!(
+            "[indexer] relationship resolution complete - resolved: {}, skipped: {}, total: {}",
             resolved_count,
             skipped_count,
             total_unresolved
@@ -3531,9 +3412,8 @@ impl SimpleIndexer {
 
         // Get all symbols from the index (use the existing public method)
         let all_symbols = self.get_all_symbols();
-        debug_print!(
-            self,
-            "Building symbol cache with {} symbols at {}",
+        tracing::debug!(
+            "[indexer] building symbol cache with {} symbols at {}",
             all_symbols.len(),
             cache_path.display()
         );
@@ -3566,9 +3446,8 @@ impl SimpleIndexer {
         // Load the cache for immediate use
         self.load_symbol_cache()?;
 
-        debug_print!(
-            self,
-            "Built symbol cache with {} symbols",
+        tracing::debug!(
+            "[indexer] built symbol cache with {} symbols",
             all_symbols.len()
         );
         Ok(())
@@ -3585,7 +3464,10 @@ impl SimpleIndexer {
                 std::fs::remove_file(&cache_path).map_err(|e| {
                     IndexError::General(format!("Failed to delete symbol cache file: {e}"))
                 })?;
-                debug_print!(self, "Deleted symbol cache file: {}", cache_path.display());
+                tracing::debug!(
+                    "[indexer] Deleted symbol cache file: {}",
+                    cache_path.display()
+                );
             }
         }
 
@@ -3602,7 +3484,10 @@ impl SimpleIndexer {
                     self.symbol_cache = Some(Arc::new(
                         crate::storage::symbol_cache::ConcurrentSymbolCache::new(cache),
                     ));
-                    debug_print!(self, "Loaded symbol cache from {}", cache_path.display());
+                    tracing::debug!(
+                        "[indexer] Loaded symbol cache from {}",
+                        cache_path.display()
+                    );
                     Ok(())
                 }
                 Err(e) => {
@@ -3612,7 +3497,10 @@ impl SimpleIndexer {
                 }
             }
         } else {
-            debug_print!(self, "No symbol cache found at {}", cache_path.display());
+            tracing::debug!(
+                "[indexer] No symbol cache found at {}",
+                cache_path.display()
+            );
             Ok(())
         }
     }
@@ -3697,7 +3585,6 @@ mod tests {
         let index_path = temp_dir.path().join("test_index");
 
         let settings = Settings {
-            debug: true,
             index_path,
             ..Default::default()
         };
@@ -3790,17 +3677,14 @@ mod tests {
 
         // Resolve relationships - THIS IS WHERE THE BUG HAPPENS
         // First, let's see what symbols are in the index
-        if indexer.settings.debug {
-            let all_symbols = indexer.document_index.get_all_symbols(100).unwrap();
-            for sym in &all_symbols {
-                debug_print!(
-                    indexer,
-                    "Symbol in index - ID {:?}: name='{}', kind={:?}",
-                    sym.id,
-                    sym.name,
-                    sym.kind
-                );
-            }
+        let all_symbols = indexer.document_index.get_all_symbols(100).unwrap();
+        for sym in &all_symbols {
+            tracing::debug!(
+                "[indexer] symbol in index - ID {:?}: name='{}', kind={:?}",
+                sym.id,
+                sym.name,
+                sym.kind
+            );
         }
 
         indexer.resolve_cross_file_relationships().unwrap();
@@ -4083,7 +3967,6 @@ pub struct Another {
         let settings = Arc::new(Settings {
             workspace_root: Some(project_root.to_path_buf()),
             index_path: PathBuf::from(".test_import_resolution"),
-            debug: true,
             ..Settings::default()
         });
 
@@ -5021,7 +4904,6 @@ fn main() {
         // Create indexer with temp directory as root
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
-            debug: true, // Enable debug output to see what's happening
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));
@@ -5232,7 +5114,6 @@ def main():
         // Create indexer with temp directory as root
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
-            debug: true, // Enable debug output to see what's happening
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));
@@ -5454,7 +5335,6 @@ function main(): void {
         // Create indexer with temp directory as root
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
-            debug: true, // Enable debug output
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));
@@ -5704,7 +5584,6 @@ function main(): void {
         // Create indexer with temp directory as root
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
-            debug: true, // Enable debug output
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));
@@ -5964,7 +5843,6 @@ fn main() {
         // Create indexer with temp directory as root
         let settings = Settings {
             workspace_root: Some(temp_dir.path().to_path_buf()),
-            debug: true, // Enable debug output
             ..Default::default()
         };
         let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));

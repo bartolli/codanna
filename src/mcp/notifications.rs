@@ -18,38 +18,24 @@ pub enum FileChangeEvent {
 #[derive(Clone)]
 pub struct NotificationBroadcaster {
     sender: broadcast::Sender<FileChangeEvent>,
-    debug: bool,
 }
 
 impl NotificationBroadcaster {
     /// Create a new broadcaster with specified channel capacity
     pub fn new(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
-        Self {
-            sender,
-            debug: false,
-        }
-    }
-
-    /// Enable debug output
-    pub fn with_debug(mut self, debug: bool) -> Self {
-        self.debug = debug;
-        self
+        Self { sender }
     }
 
     /// Send a file change event to all subscribers
     pub fn send(&self, event: FileChangeEvent) {
         match self.sender.send(event.clone()) {
             Ok(count) => {
-                if self.debug {
-                    eprintln!("DEBUG: Broadcast notification to {count} subscribers: {event:?}");
-                }
+                crate::debug_event!("broadcast", "sent", "{event:?} to {count} subscribers");
             }
             Err(_) => {
                 // No receivers, this is fine
-                if self.debug {
-                    eprintln!("DEBUG: No subscribers for notification: {event:?}");
-                }
+                crate::debug_event!("broadcast", "dropped", "no subscribers for {event:?}");
             }
         }
     }
@@ -66,32 +52,23 @@ impl super::CodeIntelligenceServer {
     pub async fn start_notification_listener(
         &self,
         mut receiver: broadcast::Receiver<FileChangeEvent>,
-        mcp_debug: bool,
     ) {
         use rmcp::model::{
             LoggingLevel, LoggingMessageNotificationParam, ResourceUpdatedNotificationParam,
         };
 
-        if mcp_debug {
-            eprintln!("DEBUG: MCP server started listening for file change notifications");
-        }
+        crate::debug_event!("mcp-notify", "listening");
 
         loop {
             match receiver.recv().await {
                 Ok(event) => {
-                    if mcp_debug {
-                        eprintln!("DEBUG: Received broadcast event: {event:?}");
-                    }
+                    crate::debug_event!("mcp-notify", "received", "{event:?}");
 
                     let peer_guard = self.peer.lock().await;
                     if let Some(peer) = peer_guard.as_ref() {
                         match event {
                             FileChangeEvent::FileReindexed { path } => {
                                 let path_str = path.display().to_string();
-
-                                if mcp_debug {
-                                    eprintln!("DEBUG: Sending MCP notifications for: {path_str}");
-                                }
 
                                 // Send resource updated notification
                                 let _ = peer
@@ -112,46 +89,44 @@ impl super::CodeIntelligenceServer {
                                     })
                                     .await;
 
-                                if mcp_debug {
-                                    eprintln!("DEBUG: MCP notifications sent for: {path_str}");
-                                }
+                                crate::debug_event!(
+                                    "mcp-notify",
+                                    "sent",
+                                    "FileReindexed {path_str}"
+                                );
                             }
                             FileChangeEvent::FileCreated { path } => {
                                 let _ = peer.notify_resource_list_changed().await;
-                                if mcp_debug {
-                                    eprintln!(
-                                        "DEBUG: Sent resource list changed for new file: {path:?}"
-                                    );
-                                }
+                                crate::debug_event!(
+                                    "mcp-notify",
+                                    "sent",
+                                    "FileCreated {}",
+                                    path.display()
+                                );
                             }
                             FileChangeEvent::FileDeleted { path } => {
                                 let _ = peer.notify_resource_list_changed().await;
-                                if mcp_debug {
-                                    eprintln!(
-                                        "DEBUG: Sent resource list changed for deleted file: {path:?}"
-                                    );
-                                }
+                                crate::debug_event!(
+                                    "mcp-notify",
+                                    "sent",
+                                    "FileDeleted {}",
+                                    path.display()
+                                );
                             }
                             FileChangeEvent::IndexReloaded => {
                                 let _ = peer.notify_resource_list_changed().await;
-                                if mcp_debug {
-                                    eprintln!("DEBUG: Sent resource list changed for index reload");
-                                }
+                                crate::debug_event!("mcp-notify", "sent", "IndexReloaded");
                             }
                         }
-                    } else if mcp_debug {
-                        eprintln!("DEBUG: No peer available yet - notification dropped");
+                    } else {
+                        crate::debug_event!("mcp-notify", "dropped", "no peer");
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    if mcp_debug {
-                        eprintln!("WARNING: Notification receiver lagged by {n} messages");
-                    }
+                    tracing::warn!("[mcp-notify] lagged by {n} messages");
                 }
                 Err(broadcast::error::RecvError::Closed) => {
-                    if mcp_debug {
-                        eprintln!("DEBUG: Notification channel closed, stopping listener");
-                    }
+                    crate::debug_event!("mcp-notify", "channel closed");
                     break;
                 }
             }

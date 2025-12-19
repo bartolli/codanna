@@ -24,7 +24,6 @@ fn load_workspace_settings(workspace: &Path) -> Settings {
 
     let mut settings = Settings::load_from(&settings_path).expect("load workspace settings");
     settings.workspace_root = Some(workspace.to_path_buf());
-    settings.debug = true;
     settings
 }
 

@@ -67,15 +67,6 @@ use crate::{FileId, IndexError, IndexResult, Symbol, SymbolId, Visibility};
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
 
-/// Debug macro honoring global settings debug flag
-macro_rules! debug_global {
-    ($($arg:tt)*) => {
-        if crate::config::is_global_debug_enabled() {
-            eprintln!($($arg)*);
-        }
-    };
-}
-
 /// Trait for language-specific behavior and configuration
 ///
 /// This trait extracts all language-specific logic from the indexer,
@@ -551,25 +542,22 @@ pub trait LanguageBehavior: Send + Sync {
                 .last()
                 .unwrap_or(&import.path)
                 .to_string();
-            debug_global!(
-                "DEBUG: Looking up '{}' (from import path '{}')",
-                symbol_name,
+            tracing::debug!(
+                "[resolution] looking up '{symbol_name}' (from import path '{}')",
                 import.path
             );
 
             // Try multiple cache candidates to disambiguate by module path before DB fallback
             let candidates = cache.lookup_candidates(&symbol_name, 16);
-            debug_global!(
-                "DEBUG: Cache candidates for '{}' (import '{}'): {}",
-                symbol_name,
+            tracing::debug!(
+                "[resolution] cache candidates for '{symbol_name}' (import '{}'): {}",
                 import.path,
                 candidates.len()
             );
             let resolved_symbol = if candidates.is_empty() {
                 // Not in cache, use full resolution
-                debug_global!(
-                    "DEBUG: CACHE MISS for '{}' (import path: '{}') - using database",
-                    symbol_name,
+                tracing::debug!(
+                    "[resolution] cache miss for '{symbol_name}' (import path: '{}') - using database",
                     import.path
                 );
                 self.resolve_import(&import, document_index)
@@ -577,7 +565,9 @@ pub trait LanguageBehavior: Send + Sync {
                 // Iterate candidates, verify with module_path and language rules
                 let mut matched: Option<SymbolId> = None;
                 for id in candidates.into_iter() {
-                    debug_global!("DEBUG: CACHE HIT for '{symbol_name}' -> SymbolId({id:?})");
+                    tracing::debug!(
+                        "[resolution] cache hit for '{symbol_name}' -> SymbolId({id:?})"
+                    );
                     if let Ok(Some(symbol)) = document_index.find_symbol_by_id(id) {
                         if let Some(module_path) = &symbol.module_path {
                             if self.import_matches_symbol(
@@ -585,23 +575,24 @@ pub trait LanguageBehavior: Send + Sync {
                                 module_path.as_ref(),
                                 importing_module.as_deref(),
                             ) {
-                                debug_global!("DEBUG: Cache hit VERIFIED - using cached symbol");
+                                tracing::debug!(
+                                    "[resolution] cache hit verified - using cached symbol"
+                                );
                                 matched = Some(id);
                                 break;
                             }
-                            debug_global!(
-                                "DEBUG: Candidate mismatch, trying next: symbol_module='{}', import='{}'",
-                                module_path,
+                            tracing::debug!(
+                                "[resolution] candidate mismatch, trying next: symbol_module='{module_path}', import='{}'",
                                 import.path
                             );
                         } else {
-                            debug_global!(
-                                "DEBUG: Cache hit but no module path - trying next candidate"
+                            tracing::debug!(
+                                "[resolution] cache hit but no module path - trying next candidate"
                             );
                         }
                     } else {
-                        debug_global!(
-                            "DEBUG: Cache hit but symbol not found by ID - trying next candidate"
+                        tracing::debug!(
+                            "[resolution] cache hit but symbol not found by ID - trying next candidate"
                         );
                     }
                 }
@@ -609,7 +600,9 @@ pub trait LanguageBehavior: Send + Sync {
                 if matched.is_some() {
                     matched
                 } else {
-                    debug_global!("DEBUG: Cache hit but WRONG symbol - falling back to database");
+                    tracing::debug!(
+                        "[resolution] cache hit but wrong symbol - falling back to database"
+                    );
                     self.resolve_import(&import, document_index)
                 }
             };
@@ -717,8 +710,8 @@ pub trait LanguageBehavior: Send + Sync {
                 .unwrap_or(&import.path);
             if let Some(symbol_id) = cache.lookup_by_name(symbol_name) {
                 if let Ok(Some(symbol)) = document_index.find_symbol_by_id(symbol_id) {
-                    debug_global!(
-                        "DEBUG: Found import source file via cache: {:?} for '{}'",
+                    tracing::debug!(
+                        "[resolution] found import source file via cache: {:?} for '{}'",
                         symbol.file_id,
                         import.path
                     );
@@ -726,8 +719,8 @@ pub trait LanguageBehavior: Send + Sync {
                 }
             }
         }
-        debug_global!(
-            "DEBUG: Total imported files to load symbols from: {}",
+        tracing::debug!(
+            "[resolution] total imported files to load symbols from: {}",
             imported_files.len()
         );
 
@@ -761,8 +754,8 @@ pub trait LanguageBehavior: Send + Sync {
         // If we have no imports, we might still need some standard library symbols
         // Load a VERY small set of commonly used symbols (like String, Vec, etc.)
         if imported_files.is_empty() {
-            debug_global!(
-                "DEBUG: No imports found - loading minimal fallback symbols (100 instead of 10000!)"
+            tracing::debug!(
+                "[resolution] no imports found - loading minimal fallback symbols (100 instead of 10000)"
             );
             // Only load 100 most common symbols as a fallback
             let minimal_symbols = document_index
@@ -783,8 +776,8 @@ pub trait LanguageBehavior: Send + Sync {
                 }
             }
         } else {
-            debug_global!(
-                "DEBUG: SKIPPING get_all_symbols! Using only symbols from {} imported files",
+            tracing::debug!(
+                "[resolution] skipping get_all_symbols, using only symbols from {} imported files",
                 imported_files.len()
             );
         }

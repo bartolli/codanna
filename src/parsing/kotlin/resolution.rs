@@ -51,13 +51,11 @@ impl KotlinResolutionContext {
 
     /// Inject expression type mappings produced by the parser
     pub fn set_expression_types(&mut self, entries: HashMap<String, String>) {
-        if crate::config::is_global_debug_enabled() {
-            eprintln!(
-                "[KOTLIN-RESOLVE] Loaded {} expression types into resolution context for file {:?}",
-                entries.len(),
-                self.file_id
-            );
-        }
+        tracing::debug!(
+            "[kotlin] loaded {} expression types into resolution context for file {:?}",
+            entries.len(),
+            self.file_id
+        );
         self.expression_types = entries;
     }
 

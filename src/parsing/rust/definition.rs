@@ -31,8 +31,8 @@ impl LanguageDefinition for RustLanguage {
         &["rs"]
     }
 
-    fn create_parser(&self, settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
-        let parser = RustParser::with_debug(settings.debug).map_err(crate::IndexError::General)?;
+    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
+        let parser = RustParser::new().map_err(crate::IndexError::General)?;
         Ok(Box::new(parser))
     }
 

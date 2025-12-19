@@ -11,8 +11,10 @@
 //! Environment variables must be prefixed with `CI_` and use double underscores
 //! to separate nested levels:
 //! - `CI_INDEXING__PARALLEL_THREADS=8` sets `indexing.parallel_threads`
-//! - `CI_MCP__DEBUG=true` sets `mcp.debug`
+//! - `CI_LOGGING__DEFAULT=debug` sets `logging.default`
 //! - `CI_INDEXING__INCLUDE_TESTS=false` sets `indexing.include_tests`
+//!
+//! For logging, use `RUST_LOG` environment variable directly (standard Rust pattern).
 
 use figment::{
     Figment,
@@ -21,7 +23,6 @@ use figment::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Settings {
@@ -36,10 +37,6 @@ pub struct Settings {
     /// Workspace root directory (where .codanna is located)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_root: Option<PathBuf>,
-
-    /// Global debug mode
-    #[serde(default = "default_false")]
-    pub debug: bool,
 
     /// Indexing configuration
     #[serde(default)]
@@ -68,6 +65,10 @@ pub struct Settings {
     /// Server settings (stdio/http mode)
     #[serde(default)]
     pub server: ServerConfig,
+
+    /// Logging configuration
+    #[serde(default)]
+    pub logging: LoggingConfig,
 
     /// AI guidance settings for multi-hop queries
     #[serde(default)]
@@ -134,10 +135,6 @@ pub struct McpConfig {
     /// Maximum context size in bytes
     #[serde(default = "default_max_context_size")]
     pub max_context_size: usize,
-
-    /// Enable debug logging
-    #[serde(default = "default_false")]
-    pub debug: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -179,6 +176,39 @@ pub struct ServerConfig {
     /// Watch interval for stdio mode (seconds)
     #[serde(default = "default_watch_interval")]
     pub watch_interval: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct LoggingConfig {
+    /// Default log level for all modules
+    /// Valid values: "error", "warn", "info", "debug", "trace"
+    #[serde(default = "default_log_level")]
+    pub default: String,
+
+    /// Per-module log level overrides
+    /// Example: { "tantivy" = "warn", "watcher" = "debug" }
+    #[serde(default)]
+    pub modules: HashMap<String, String>,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            default: default_log_level(),
+            modules: default_logging_modules(),
+        }
+    }
+}
+
+fn default_log_level() -> String {
+    "warn".to_string() // Quiet by default, use RUST_LOG=info for normal output
+}
+
+fn default_logging_modules() -> HashMap<String, String> {
+    let mut modules = HashMap::new();
+    // Suppress verbose Tantivy internal logs by default
+    modules.insert("tantivy".to_string(), "warn".to_string());
+    modules
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -277,7 +307,6 @@ impl Default for Settings {
             version: default_version(),
             index_path: default_index_path(),
             workspace_root: None,
-            debug: false,
             indexing: IndexingConfig::default(),
             indexed_paths_cache: Vec::new(),
             languages: generate_language_defaults(), // Now uses registry
@@ -285,6 +314,7 @@ impl Default for Settings {
             semantic_search: SemanticSearchConfig::default(),
             file_watch: FileWatchConfig::default(),
             server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
             guidance: GuidanceConfig::default(),
             documents: crate::documents::DocumentsConfig::default(),
         }
@@ -313,7 +343,6 @@ impl Default for McpConfig {
     fn default() -> Self {
         Self {
             max_context_size: default_max_context_size(),
-            debug: false,
         }
     }
 }
@@ -757,8 +786,6 @@ impl Settings {
                 result.push_str("\n# Path to the index directory (relative to workspace root)\n");
             } else if line.starts_with("workspace_root = ") {
                 result.push_str("\n# Workspace root directory (automatically detected)\n");
-            } else if line.starts_with("debug = ") && !in_languages_section {
-                result.push_str("\n# Global debug mode\n");
             } else if line == "[indexing]" {
                 result.push_str("\n[indexing]\n");
                 prev_line_was_section = true;
@@ -789,13 +816,6 @@ impl Settings {
                 continue;
             } else if line.starts_with("max_context_size = ") {
                 result.push_str("# Maximum context size in bytes for MCP server\n");
-            } else if line.starts_with("debug = ")
-                && !line.contains("false")
-                && in_languages_section
-            {
-                // Skip MCP debug comment if in languages section
-            } else if line.starts_with("debug = ") && line.contains("false") {
-                result.push_str("\n# Enable debug logging for MCP server\n");
             } else if line == "[semantic_search]" {
                 result.push_str("\n[semantic_search]\n");
                 result.push_str("# Semantic search for natural language code queries\n");
@@ -847,6 +867,25 @@ impl Settings {
                 result.push_str("\n# HTTP server bind address (only used when mode = \"http\" or --http flag)\n");
             } else if line.starts_with("watch_interval = ") {
                 result.push_str("\n# Watch interval for stdio mode in seconds (how often to check for file changes)\n");
+            } else if line == "[logging]" {
+                result.push_str("\n[logging]\n");
+                result.push_str("# Logging configuration\n");
+                result.push_str("# Levels: \"error\", \"warn\" (default/quiet), \"info\", \"debug\", \"trace\"\n");
+                result.push_str("# Override with RUST_LOG env var: RUST_LOG=debug codanna index\n");
+                prev_line_was_section = true;
+                continue;
+            } else if line.starts_with("default = ") && !in_languages_section {
+                result.push_str("# Default log level (\"warn\" = quiet, \"info\" = normal, \"debug\" = verbose)\n");
+            } else if line == "[logging.modules]" {
+                result.push_str("\n[logging.modules]\n");
+                result.push_str("# Per-module log level overrides\n");
+                result.push_str(
+                    "# Modules: cli, indexer, persistence, watcher, mcp, broadcast, tantivy\n",
+                );
+                result.push_str("# Example: cli = \"debug\"     # CLI startup logs\n");
+                result.push_str("# Example: tantivy = \"error\" # Suppress Tantivy logs\n");
+                prev_line_was_section = true;
+                continue;
             } else if line == "[documents]" {
                 result.push_str("\n[documents]\n");
                 result.push_str("# Document embedding for RAG (Retrieval-Augmented Generation)\n");
@@ -1074,13 +1113,6 @@ __pycache__/
     }
 }
 
-/// Global check for whether debug logging is enabled.
-/// Uses settings from .codanna/settings.toml and caches the result.
-pub fn is_global_debug_enabled() -> bool {
-    static DEBUG_FLAG: OnceLock<bool> = OnceLock::new();
-    *DEBUG_FLAG.get_or_init(|| Settings::load().map(|s| s.debug).unwrap_or(false))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1112,7 +1144,7 @@ ignore_patterns = ["custom/**"]
 include_tests = false
 
 [mcp]
-debug = true
+max_context_size = 200000
 
 [languages.rust]
 enabled = false
@@ -1126,7 +1158,7 @@ enabled = false
         assert_eq!(settings.indexing.ignore_patterns, vec!["custom/**"]);
         // Default ignore patterns should be replaced by custom ones
         assert_eq!(settings.indexing.ignore_patterns.len(), 1);
-        assert!(settings.mcp.debug);
+        assert_eq!(settings.mcp.max_context_size, 200000);
         assert!(!settings.languages["rust"].enabled);
     }
 
@@ -1137,13 +1169,13 @@ enabled = false
 
         let mut settings = Settings::default();
         settings.indexing.parallel_threads = 2;
-        settings.mcp.debug = true;
+        settings.mcp.max_context_size = 50000;
 
         settings.save(&config_path).unwrap();
 
         let loaded = Settings::load_from(&config_path).unwrap();
         assert_eq!(loaded.indexing.parallel_threads, 2);
-        assert!(loaded.mcp.debug);
+        assert_eq!(loaded.mcp.max_context_size, 50000);
     }
 
     #[test]
@@ -1193,13 +1225,16 @@ include_tests = true
 
 [mcp]
 max_context_size = 50000
+
+[logging]
+default = "info"
 "#;
         fs::write(config_dir.join("settings.toml"), toml_content).unwrap();
 
         // Set environment variables that should override config file
         unsafe {
             std::env::set_var("CI_INDEXING__PARALLEL_THREADS", "16");
-            std::env::set_var("CI_MCP__DEBUG", "true");
+            std::env::set_var("CI_LOGGING__DEFAULT", "debug");
         }
 
         let settings = Settings::load().unwrap();
@@ -1208,16 +1243,15 @@ max_context_size = 50000
         assert_eq!(settings.indexing.parallel_threads, 16);
         // Config file value should be used when no env var
         assert_eq!(settings.mcp.max_context_size, 50000);
-        // Env var adds new value not in config
-        assert!(settings.mcp.debug);
-        // Config file value remains
+        // Env var overrides logging default
+        assert_eq!(settings.logging.default, "debug");
         // Default ignore patterns should be present
         assert!(!settings.indexing.ignore_patterns.is_empty());
 
         // Clean up
         unsafe {
             std::env::remove_var("CI_INDEXING__PARALLEL_THREADS");
-            std::env::remove_var("CI_MCP__DEBUG");
+            std::env::remove_var("CI_LOGGING__DEFAULT");
         }
         std::env::set_current_dir(original_dir).unwrap();
     }

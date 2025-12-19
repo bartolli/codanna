@@ -254,14 +254,11 @@ pub const MAX_AST_DEPTH: usize = 500;
 #[inline]
 pub fn check_recursion_depth(depth: usize, node: Node) -> bool {
     if depth > MAX_AST_DEPTH {
-        if crate::config::is_global_debug_enabled() {
-            eprintln!(
-                "WARNING: Maximum AST depth ({}) exceeded at line {}:{}. Skipping subtree to prevent stack overflow.",
-                MAX_AST_DEPTH,
-                node.start_position().row + 1,
-                node.start_position().column + 1
-            );
-        }
+        tracing::warn!(
+            "[parser] maximum AST depth ({MAX_AST_DEPTH}) exceeded at line {}:{}. Skipping subtree to prevent stack overflow.",
+            node.start_position().row + 1,
+            node.start_position().column + 1
+        );
         return false;
     }
     true

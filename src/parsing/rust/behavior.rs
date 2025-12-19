@@ -9,14 +9,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use tree_sitter::Language;
 
-/// Debug macro honoring global settings debug flag
-macro_rules! debug_global {
-    ($($arg:tt)*) => {
-        if crate::config::is_global_debug_enabled() {
-            eprintln!($($arg)*);
-        }
-    };
-}
 /// Rust language behavior implementation
 #[derive(Clone)]
 pub struct RustBehavior {
@@ -292,10 +284,8 @@ impl LanguageBehavior for RustBehavior {
             if symbol_module_path.ends_with(&format!("::{import_name}")) {
                 // Direct prefix check
                 if symbol_module_path.starts_with(&format!("{import_prefix}::")) {
-                    debug_global!(
-                        "DEBUG: Rust re-export heuristic matched (direct): import='{}', symbol='{}'",
-                        import_path,
-                        symbol_module_path
+                    tracing::debug!(
+                        "[rust] re-export heuristic matched (direct): import='{import_path}', symbol='{symbol_module_path}'"
                     );
                     return true;
                 }
@@ -303,10 +293,8 @@ impl LanguageBehavior for RustBehavior {
                 // crate:: prefix normalization (import has crate::, symbol doesn't)
                 if let Some(without_crate) = import_prefix.strip_prefix("crate::") {
                     if symbol_module_path.starts_with(&format!("{without_crate}::")) {
-                        debug_global!(
-                            "DEBUG: Rust re-export heuristic matched (import had crate::): import='{}', symbol='{}'",
-                            import_path,
-                            symbol_module_path
+                        tracing::debug!(
+                            "[rust] re-export heuristic matched (import had crate::): import='{import_path}', symbol='{symbol_module_path}'"
                         );
                         return true;
                     }
@@ -318,10 +306,8 @@ impl LanguageBehavior for RustBehavior {
                 {
                     let symbol_without_crate = &symbol_module_path[7..];
                     if symbol_without_crate.starts_with(&format!("{import_prefix}::")) {
-                        debug_global!(
-                            "DEBUG: Rust re-export heuristic matched (symbol had crate::): import='{}', symbol='{}'",
-                            import_path,
-                            symbol_module_path
+                        tracing::debug!(
+                            "[rust] re-export heuristic matched (symbol had crate::): import='{import_path}', symbol='{symbol_module_path}'"
                         );
                         return true;
                     }
@@ -349,10 +335,8 @@ impl LanguageBehavior for RustBehavior {
                         && (symbol_module_path.starts_with(&format!("{}::", parent.0))
                             || symbol_module_path == parent.0)
                     {
-                        debug_global!(
-                            "DEBUG: Rust re-export heuristic matched (super): import='{}', symbol='{}'",
-                            import_path,
-                            symbol_module_path
+                        tracing::debug!(
+                            "[rust] re-export heuristic matched (super): import='{import_path}', symbol='{symbol_module_path}'"
                         );
                         return true;
                     }
@@ -382,10 +366,8 @@ impl LanguageBehavior for RustBehavior {
                         && (symbol_module_path.starts_with(&format!("{base}::"))
                             || symbol_module_path == base)
                     {
-                        debug_global!(
-                            "DEBUG: Rust re-export heuristic matched (relative): import='{}', symbol='{}'",
-                            import_path,
-                            symbol_module_path
+                        tracing::debug!(
+                            "[rust] re-export heuristic matched (relative): import='{import_path}', symbol='{symbol_module_path}'"
                         );
                         return true;
                     }
@@ -405,10 +387,8 @@ impl LanguageBehavior for RustBehavior {
                             && (symbol_module_path.starts_with(&format!("{base}::"))
                                 || symbol_module_path == base)
                         {
-                            debug_global!(
-                                "DEBUG: Rust re-export heuristic matched (sibling): import='{}', symbol='{}'",
-                                import_path,
-                                symbol_module_path
+                            tracing::debug!(
+                                "[rust] re-export heuristic matched (sibling): import='{import_path}', symbol='{symbol_module_path}'"
                             );
                             return true;
                         }

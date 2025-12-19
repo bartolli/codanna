@@ -23,6 +23,8 @@ pub struct IndexWatcher {
     settings: Arc<Settings>,
     persistence: IndexPersistence,
     last_modified: Option<SystemTime>,
+    /// Last modification time of document store state.json
+    last_doc_modified: Option<SystemTime>,
     check_interval: Duration,
     mcp_server: Option<Arc<CodeIntelligenceServer>>,
     broadcaster: Option<Arc<NotificationBroadcaster>>,
@@ -44,12 +46,19 @@ impl IndexWatcher {
             .ok()
             .and_then(|meta| meta.modified().ok());
 
+        // Get initial modification time of document store state.json
+        let doc_state_path = index_path.join("documents").join("state.json");
+        let last_doc_modified = std::fs::metadata(&doc_state_path)
+            .ok()
+            .and_then(|meta| meta.modified().ok());
+
         Self {
             index_path,
             indexer,
             settings,
             persistence,
             last_modified,
+            last_doc_modified,
             check_interval,
             mcp_server: None,
             broadcaster: None,
@@ -73,10 +82,7 @@ impl IndexWatcher {
         let mut ticker = interval(self.check_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        info!(
-            "Starting index watcher with {} second interval",
-            self.check_interval.as_secs()
-        );
+        // Started message is logged by the server, just begin polling
 
         loop {
             ticker.tick().await;
@@ -94,6 +100,9 @@ impl IndexWatcher {
         if self.settings.file_watch.enabled {
             self.check_and_reindex_source_files().await?;
         }
+
+        // Check for document store changes (state.json modified externally)
+        self.check_document_changes();
 
         // Check if file exists
         if !self.persistence.exists() {
@@ -117,16 +126,15 @@ impl IndexWatcher {
             return Ok(());
         }
 
-        info!("Index file changed, reloading from {:?}", self.index_path);
-        if self.settings.mcp.debug {
-            eprintln!("DEBUG: IndexWatcher is reloading the index!");
-        }
+        crate::log_event!(
+            "index-watcher",
+            "reloading",
+            "{}",
+            self.index_path.display()
+        );
 
         // Load the new index
-        match self
-            .persistence
-            .load_with_settings(self.settings.clone(), false)
-        {
+        match self.persistence.load_with_settings(self.settings.clone()) {
             Ok(new_indexer) => {
                 // Get write lock and replace the indexer
                 let mut indexer_guard = self.indexer.write().await;
@@ -141,18 +149,15 @@ impl IndexWatcher {
                     let semantic_path = self.index_path.join("semantic");
                     let metadata_exists = semantic_path.join("metadata.json").exists();
                     if metadata_exists {
-                        match indexer_guard
-                            .load_semantic_search(&semantic_path, self.settings.debug)
-                        {
+                        match indexer_guard.load_semantic_search(&semantic_path) {
                             Ok(true) => {
                                 restored_semantic = true;
                             }
                             Ok(false) => {
-                                if self.settings.debug {
-                                    eprintln!(
-                                        "DEBUG: Semantic metadata present but reload returned false"
-                                    );
-                                }
+                                crate::debug_event!(
+                                    "index-watcher",
+                                    "semantic metadata present but reload returned false"
+                                );
                             }
                             Err(e) => {
                                 warn!(
@@ -161,9 +166,11 @@ impl IndexWatcher {
                                 );
                             }
                         }
-                    } else if self.settings.debug {
-                        eprintln!(
-                            "DEBUG: Semantic metadata missing when attempting reload at {}",
+                    } else {
+                        crate::debug_event!(
+                            "index-watcher",
+                            "semantic metadata missing",
+                            "{}",
                             semantic_path.display()
                         );
                     }
@@ -171,27 +178,31 @@ impl IndexWatcher {
 
                 let symbol_count = indexer_guard.symbol_count();
                 let has_semantic = indexer_guard.has_semantic_search();
-                if restored_semantic && self.settings.debug {
+                if restored_semantic {
                     match indexer_guard.semantic_search_embedding_count() {
                         Ok(count) => {
-                            eprintln!("DEBUG: Restored semantic search with {count} embeddings");
+                            crate::debug_event!(
+                                "index-watcher",
+                                "restored semantic",
+                                "{count} embeddings"
+                            );
                         }
                         Err(e) => {
-                            eprintln!(
-                                "DEBUG: Restored semantic search but failed to count embeddings: {e}"
+                            crate::debug_event!(
+                                "index-watcher",
+                                "restored semantic",
+                                "failed to count: {e}"
                             );
                         }
                     }
                 }
-                info!("Index successfully reloaded with {symbol_count} symbols");
-                if self.settings.mcp.debug {
-                    eprintln!("DEBUG: After reload, has_semantic_search: {has_semantic}");
-                }
+                crate::log_event!("index-watcher", "reloaded", "{symbol_count} symbols");
+                crate::debug_event!("index-watcher", "semantic search", "{has_semantic}");
 
                 // Send notification that index was reloaded
                 if let Some(ref broadcaster) = self.broadcaster {
                     broadcaster.send(FileChangeEvent::IndexReloaded);
-                    info!("Sent IndexReloaded notification to all listeners");
+                    crate::debug_event!("index-watcher", "broadcast", "IndexReloaded");
                 }
 
                 Ok(())
@@ -201,6 +212,36 @@ impl IndexWatcher {
                 Err(Box::new(std::io::Error::other(format!(
                     "Failed to reload index: {e}"
                 ))))
+            }
+        }
+    }
+
+    /// Check if document store state.json has changed (documents indexed externally)
+    fn check_document_changes(&mut self) {
+        let doc_state_path = self.index_path.join("documents").join("state.json");
+
+        // Get current modification time
+        let current_modified = match std::fs::metadata(&doc_state_path) {
+            Ok(meta) => match meta.modified() {
+                Ok(time) => time,
+                Err(_) => return,
+            },
+            Err(_) => return, // File doesn't exist
+        };
+
+        // Check if changed
+        let changed = match self.last_doc_modified {
+            Some(last) => current_modified > last,
+            None => true, // First check
+        };
+
+        if changed {
+            self.last_doc_modified = Some(current_modified);
+            info!("Document store changed, notifying watchers");
+
+            // Send IndexReloaded to refresh document handler's watched files
+            if let Some(ref broadcaster) = self.broadcaster {
+                broadcaster.send(FileChangeEvent::IndexReloaded);
             }
         }
     }

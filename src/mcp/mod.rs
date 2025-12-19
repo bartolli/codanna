@@ -936,15 +936,12 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.indexer.read().await;
 
-        // Use MCP debug flag for cleaner output
-        if indexer.settings().mcp.debug {
-            eprintln!("MCP DEBUG: semantic_search_docs called");
-            eprintln!(
-                "MCP DEBUG: Indexer symbol count: {}",
-                indexer.symbol_count()
-            );
-            eprintln!("MCP DEBUG: Has semantic: {}", indexer.has_semantic_search());
-        }
+        tracing::debug!(
+            target: "mcp",
+            "semantic_search_docs called - symbols: {}, semantic: {}",
+            indexer.symbol_count(),
+            indexer.has_semantic_search()
+        );
 
         if !indexer.has_semantic_search() {
             // Check if semantic files exist
@@ -1066,17 +1063,12 @@ impl CodeIntelligenceServer {
         let indexer = self.indexer.read().await;
 
         if !indexer.has_semantic_search() {
-            if indexer.settings().mcp.debug {
-                eprintln!("DEBUG: Semantic search check failed in semantic_search_with_context");
-                eprintln!(
-                    "DEBUG: Indexer settings index_path: {}",
-                    indexer.settings().index_path.display()
-                );
-                eprintln!(
-                    "DEBUG: Indexer has_semantic_search: {}",
-                    indexer.has_semantic_search()
-                );
-            }
+            tracing::debug!(
+                target: "mcp",
+                "semantic search not available - index_path: {}, has_semantic: {}",
+                indexer.settings().index_path.display(),
+                indexer.has_semantic_search()
+            );
             // Check if semantic files exist
             let semantic_path = indexer.settings().index_path.join("semantic");
             let metadata_exists = semantic_path.join("metadata.json").exists();

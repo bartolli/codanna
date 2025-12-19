@@ -178,23 +178,23 @@ impl ResolutionScope for JavaScriptResolutionContext {
         // 4. Module symbols
         // 5. Global/ambient
 
-        debug_print!(self, "[resolve] Looking up name='{}'", name);
+        tracing::debug!("[javascript] resolve looking up name='{name}'");
 
         // 1. Check local block scope
         if let Some(&id) = self.local_scope.get(name) {
-            debug_print!(self, "[resolve] Found in local_scope: {:?}", id);
+            tracing::debug!("[javascript] found in local_scope: {id:?}");
             return Some(id);
         }
 
         // 2. Check hoisted scope
         if let Some(&id) = self.hoisted_scope.get(name) {
-            debug_print!(self, "[resolve] Found in hoisted_scope: {:?}", id);
+            tracing::debug!("[javascript] found in hoisted_scope: {id:?}");
             return Some(id);
         }
 
         // 3. Check imported symbols
         if let Some(&id) = self.imported_symbols.get(name) {
-            debug_print!(self, "[resolve] Found in imported_symbols: {:?}", id);
+            tracing::debug!("[javascript] found in imported_symbols: {id:?}");
             return Some(id);
         }
 
@@ -251,7 +251,7 @@ impl ResolutionScope for JavaScriptResolutionContext {
             }
         }
 
-        debug_print!(self, "[resolve] NOT FOUND: '{}'", name);
+        tracing::debug!("[javascript] resolve not found: '{name}'");
         None
     }
 

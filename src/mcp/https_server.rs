@@ -22,12 +22,13 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     use tokio::sync::RwLock;
     use tokio_util::sync::CancellationToken;
 
-    if config.mcp.debug {
-        eprintln!("Starting HTTPS MCP server on {bind}");
-    }
+    // Initialize logging with config
+    crate::logging::init_with_config(&config.logging);
+
+    crate::log_event!("https", "starting", "MCP server on {bind}");
 
     // Create notification broadcaster for file change events
-    let broadcaster = Arc::new(NotificationBroadcaster::new(100).with_debug(config.mcp.debug));
+    let broadcaster = Arc::new(NotificationBroadcaster::new(100));
 
     // Create shared indexer
     let indexer = Arc::new(RwLock::new(SimpleIndexer::with_settings(Arc::new(
@@ -37,118 +38,67 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     // Load existing index if available
     let persistence = IndexPersistence::new(config.index_path.clone());
     if persistence.exists() {
-        match persistence.load_with_settings(Arc::new(config.clone()), false) {
+        match persistence.load_with_settings(Arc::new(config.clone())) {
             Ok(loaded_indexer) => {
                 let mut indexer_guard = indexer.write().await;
                 *indexer_guard = loaded_indexer;
                 let symbol_count = indexer_guard.symbol_count();
                 drop(indexer_guard);
-                if config.mcp.debug {
-                    eprintln!("Loaded index with {symbol_count} symbols");
-                }
+                crate::log_event!("https", "loaded", "{symbol_count} symbols");
             }
             Err(e) => {
-                if config.mcp.debug {
-                    eprintln!("Failed to load existing index: {e}");
-                    eprintln!("Starting with empty index");
-                }
+                tracing::warn!("[https] failed to load index: {e}");
+                crate::log_event!("https", "starting", "empty index");
             }
         }
-    } else if config.mcp.debug {
-        eprintln!("No existing index found, starting fresh");
+    } else {
+        crate::log_event!("https", "starting", "no existing index");
     }
 
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
 
-    // Start file watcher if enabled
+    // Start unified file watcher if enabled
     if watch || config.file_watch.enabled {
-        use crate::indexing::FileSystemWatcher;
+        use crate::documents::DocumentStore;
+        use crate::vector::{EmbeddingGenerator, FastEmbedGenerator};
+        use crate::watcher::UnifiedWatcher;
+        use crate::watcher::handlers::{CodeFileHandler, ConfigFileHandler, DocumentFileHandler};
 
-        let watcher_indexer = indexer.clone();
-        let watcher_broadcaster = broadcaster.clone();
-        let debounce_ms = config.file_watch.debounce_ms;
-        let watcher_ct = ct.clone();
-
-        match FileSystemWatcher::new(
-            watcher_indexer,
-            debounce_ms,
-            config.mcp.debug,
-            &config.index_path,
-        ) {
-            Ok(watcher) => {
-                let watcher = watcher.with_broadcaster(watcher_broadcaster);
-                tokio::spawn(async move {
-                    tokio::select! {
-                        result = watcher.watch() => {
-                            if let Err(e) = result {
-                                eprintln!("File watcher error: {e}");
-                            }
-                        }
-                        _ = watcher_ct.cancelled() => {
-                            eprintln!("File watcher stopped by cancellation token");
-                        }
-                    }
-                });
-                if config.mcp.debug {
-                    eprintln!(
-                        "File system watcher started (event-driven with {debounce_ms}ms debounce)"
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!("Failed to start file watcher: {e}");
-                eprintln!("Continuing without file watching");
-            }
-        }
-
-        // Start config file watcher (watches settings.toml for indexed_paths changes)
-        use crate::indexing::ConfigFileWatcher;
-
-        let config_watcher_indexer = indexer.clone();
-        let config_watcher_broadcaster = broadcaster.clone();
-        let settings_path = config
+        let workspace_root = config
             .workspace_root
             .clone()
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-            .join(".codanna/settings.toml");
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-        match ConfigFileWatcher::new(
-            settings_path.clone(),
-            config_watcher_indexer,
-            config.mcp.debug,
-        ) {
-            Ok(config_watcher) => {
-                let config_watcher = config_watcher.with_broadcaster(config_watcher_broadcaster);
-                let config_watcher_ct = ct.clone();
-                tokio::spawn(async move {
-                    tokio::select! {
-                        result = config_watcher.watch() => {
-                            if let Err(e) = result {
-                                eprintln!("Config watcher error: {e}");
-                            }
-                        }
-                        _ = config_watcher_ct.cancelled() => {
-                            eprintln!("Config watcher stopped by cancellation token");
-                        }
-                    }
-                });
-                eprintln!(
-                    "Config watcher started - monitoring {}",
-                    settings_path.display()
-                );
+        let settings_path = workspace_root.join(".codanna/settings.toml");
+        let debounce_ms = config.file_watch.debounce_ms;
+
+        // Build unified watcher with handlers
+        let mut builder = UnifiedWatcher::builder()
+            .broadcaster(broadcaster.clone())
+            .indexer(indexer.clone())
+            .index_path(config.index_path.clone())
+            .workspace_root(workspace_root.clone())
+            .debounce_ms(debounce_ms);
+
+        // Add code file handler
+        builder = builder.handler(CodeFileHandler::new(
+            indexer.clone(),
+            workspace_root.clone(),
+        ));
+
+        // Add config file handler
+        match ConfigFileHandler::new(settings_path.clone()) {
+            Ok(config_handler) => {
+                builder = builder.handler(config_handler);
             }
             Err(e) => {
-                eprintln!("Failed to start config watcher: {e}");
+                tracing::warn!("[config] failed to create handler: {e}");
             }
         }
 
-        // Start document watcher if documents are enabled
+        // Add document handler if documents are enabled
         if config.documents.enabled {
-            use crate::documents::{DocumentStore, DocumentWatcher};
-            use crate::vector::{EmbeddingGenerator, FastEmbedGenerator};
-            use tokio::sync::RwLock;
-
             let doc_path = config.index_path.join("documents");
             if doc_path.exists() {
                 if let Ok(generator) =
@@ -158,37 +108,45 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
                     if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
                         if let Ok(store_with_emb) = store.with_embeddings(Box::new(generator)) {
                             let store_arc = Arc::new(RwLock::new(store_with_emb));
-                            let chunking_config = config.documents.defaults.clone();
-                            let doc_watcher_ct = ct.clone();
-
-                            match DocumentWatcher::new(
-                                store_arc,
-                                chunking_config,
-                                config.file_watch.debounce_ms,
-                                config.mcp.debug,
-                            ) {
-                                Ok(doc_watcher) => {
-                                    tokio::spawn(async move {
-                                        tokio::select! {
-                                            result = doc_watcher.watch() => {
-                                                if let Err(e) = result {
-                                                    eprintln!("Document watcher error: {e}");
-                                                }
-                                            }
-                                            _ = doc_watcher_ct.cancelled() => {
-                                                eprintln!("Document watcher stopped");
-                                            }
-                                        }
-                                    });
-                                    eprintln!("Document watcher started");
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to start document watcher: {e}");
-                                }
-                            }
+                            builder = builder
+                                .document_store(store_arc.clone())
+                                .chunking_config(config.documents.defaults.clone())
+                                .handler(DocumentFileHandler::new(
+                                    store_arc,
+                                    workspace_root.clone(),
+                                ));
                         }
                     }
                 }
+            }
+        }
+
+        // Build and start the unified watcher
+        match builder.build() {
+            Ok(unified_watcher) => {
+                let watcher_ct = ct.clone();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        result = unified_watcher.watch() => {
+                            if let Err(e) = result {
+                                tracing::error!("[watcher] error: {e}");
+                            }
+                        }
+                        _ = watcher_ct.cancelled() => {
+                            crate::log_event!("watcher", "stopped");
+                        }
+                    }
+                });
+                crate::log_event!(
+                    "watcher",
+                    "started",
+                    "debounce: {debounce_ms}ms, config: {}",
+                    settings_path.display()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("[watcher] failed to start: {e}");
+                tracing::warn!("[watcher] continuing without file watching");
             }
         }
     }
@@ -213,19 +171,19 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         tokio::spawn(async move {
             tokio::select! {
                 _ = index_watcher.watch() => {
-                    eprintln!("Index watcher ended");
+                    crate::log_event!("index-watcher", "ended");
                 }
                 _ = index_watcher_ct.cancelled() => {
-                    eprintln!("Index watcher stopped by cancellation token");
+                    crate::log_event!("index-watcher", "stopped");
                 }
             }
         });
 
-        if config.mcp.debug {
-            eprintln!(
-                "Index watcher started (checks every {watch_interval} seconds for index changes)"
-            );
-        }
+        crate::log_event!(
+            "index-watcher",
+            "started",
+            "polling every {watch_interval}s"
+        );
     }
 
     // Create streamable HTTP service for MCP connections

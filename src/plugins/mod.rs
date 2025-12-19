@@ -133,7 +133,6 @@ pub fn add_plugin(
         plugin_name,
         marketplace_url,
         force,
-        settings.debug,
         None,
         plan,
     )?;
@@ -230,11 +229,9 @@ pub fn update_plugin(
                         return Ok(());
                     }
                     Err(err) => {
-                        if settings.debug {
-                            eprintln!(
-                                "DEBUG: existing install failed verification, reinstalling: {err}"
-                            );
-                        }
+                        tracing::debug!(
+                            "[plugins] existing install failed verification, reinstalling: {err}"
+                        );
                     }
                 }
             }
@@ -274,9 +271,9 @@ pub fn update_plugin(
                 return Ok(());
             }
             Err(err) => {
-                if settings.debug {
-                    eprintln!("DEBUG: existing install failed verification, reinstalling: {err}");
-                }
+                tracing::debug!(
+                    "[plugins] existing install failed verification, reinstalling: {err}"
+                );
             }
         }
     }
@@ -289,7 +286,6 @@ pub fn update_plugin(
         plugin_name,
         &existing.marketplace_url,
         force,
-        settings.debug,
         Some(existing.clone()),
         plan,
     )?;
@@ -974,16 +970,14 @@ fn execute_install_with_plan(
     plugin_name: &str,
     marketplace_url: &str,
     force: bool,
-    debug: bool,
     previous_entry: Option<PluginLockEntry>,
     plan: PreparedPlugin,
 ) -> Result<PluginLockEntry, PluginError> {
-    if debug {
-        eprintln!(
-            "DEBUG: component files for plugin '{}': {:?}",
-            plugin_name, plan.component_files
-        );
-    }
+    tracing::debug!(
+        "[plugins] component files for plugin '{}': {:?}",
+        plugin_name,
+        plan.component_files
+    );
 
     let mut copied_files: Vec<String> = Vec::new();
     let mut mcp_backup: Option<merger::McpMergeOutcome> = None;
