@@ -305,7 +305,7 @@ enum Commands {
     #[command(
         about = "Execute MCP tools directly",
         long_about = "Execute MCP tools directly without spawning a server.\n\nSupports positional arguments, key=value pairs, and JSON arguments.",
-        after_help = "Examples:\n  codanna mcp find_symbol main\n  codanna mcp get_calls process_file\n  codanna mcp semantic_search_docs query:\"error handling\" limit:5\n  codanna mcp search_symbols query:parse kind:function\n  codanna mcp find_symbol Parser --json | jq '.data[].symbol.name'\n  codanna mcp search_symbols query:Parser --json | jq '.data[].name'\n\nTools:\n  find_symbol                  Find symbol by exact name\n  search_symbols               Full-text search with fuzzy matching\n  semantic_search_docs         Natural language search\n  semantic_search_with_context Natural language search with relationships\n  get_calls                    Functions called by a function\n  find_callers                 Functions that call a function\n  analyze_impact               Impact radius of symbol changes\n  get_index_info               Index statistics"
+        after_help = "Tools:\n  find_symbol       <name>              Exact name lookup\n  search_symbols    query:<text>        Fuzzy text search (kind:<type> limit:<n>)\n  get_calls         <name|symbol_id:N>  What this symbol calls\n  find_callers      <name|symbol_id:N>  What calls this symbol\n  analyze_impact    <name|symbol_id:N>  Full dependency graph\n  semantic_search_docs query:<text>     Code search by meaning\n  semantic_search_with_context query:<text>  Search with relationships\n  search_documents  query:<text>        Search markdown/text docs\n  get_index_info                        Index stats\n\nExamples:\n  codanna mcp find_symbol <name>\n  codanna mcp search_symbols query:<text> kind:function\n  codanna mcp get_calls <name>\n  codanna mcp get_calls symbol_id:<N>\n  codanna mcp semantic_search_docs query:\"<text>\" limit:5\n  codanna mcp search_symbols query:<text> --json | jq '.data[].symbol_id'"
     )]
     Mcp {
         /// Tool to call
@@ -1034,7 +1034,20 @@ async fn main() {
     };
 
     // Initialize logging with config (supports RUST_LOG env var override)
-    codanna::logging::init_with_config(&config.logging);
+    // Use stderr for: MCP stdio mode (JSON-RPC protocol) and mcp --json (clean JSON output)
+    let use_stderr_logging = matches!(
+        &cli.command,
+        Commands::Serve {
+            http: false,
+            https: false,
+            ..
+        } | Commands::Mcp { json: true, .. }
+    );
+    if use_stderr_logging {
+        codanna::logging::init_with_config_stderr(&config.logging);
+    } else {
+        codanna::logging::init_with_config(&config.logging);
+    }
 
     // Handle thin client commands early (before index loading)
     // These commands don't need the index and should not conflict with server processes

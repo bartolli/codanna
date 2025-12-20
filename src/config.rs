@@ -880,10 +880,12 @@ impl Settings {
                 result.push_str("\n[logging.modules]\n");
                 result.push_str("# Per-module log level overrides\n");
                 result.push_str(
-                    "# Modules: cli, indexer, persistence, watcher, mcp, broadcast, tantivy\n",
+                    "# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage, semantic\n",
                 );
+                result.push_str("# External targets (used as-is): cli, tantivy\n");
                 result.push_str("# Example: cli = \"debug\"     # CLI startup logs\n");
                 result.push_str("# Example: tantivy = \"error\" # Suppress Tantivy logs\n");
+                result.push_str("# Example: watcher = \"debug\" # File watcher events\n");
                 prev_line_was_section = true;
                 continue;
             } else if line == "[documents]" {

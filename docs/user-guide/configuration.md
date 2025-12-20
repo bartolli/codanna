@@ -210,6 +210,47 @@ codanna remove-dir /path/to/project
 
 **Dynamic workflows** - Add and remove folders as your project structure changes
 
+## Logging Configuration
+
+Control debug output with per-module granularity.
+
+### Configuration
+
+```toml
+[logging]
+default = "warn"  # Default level: error, warn, info, debug, trace
+
+[logging.modules]
+cli = "debug"           # Enable CLI debug logs
+watcher = "info"        # Watch file system events
+indexing = "trace"      # Detailed indexing information
+```
+
+### Log Levels
+
+| Level | Description |
+|-------|-------------|
+| `error` | Errors only (quietest) |
+| `warn` | Errors + warnings (default) |
+| `info` | Normal operation logs |
+| `debug` | Detailed debugging |
+| `trace` | Everything |
+
+### Environment Variable
+
+`RUST_LOG` takes precedence over configuration:
+
+```bash
+# Enable all debug output
+RUST_LOG=debug codanna index
+
+# Per-module control
+RUST_LOG=cli=debug,indexer=trace codanna serve
+
+# Quiet except errors
+RUST_LOG=error codanna mcp semantic_search_with_context query:"test"
+```
+
 ## Ignore Patterns
 
 Codanna respects `.gitignore` and adds its own `.codannaignore`:

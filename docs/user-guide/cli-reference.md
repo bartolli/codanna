@@ -27,6 +27,7 @@ Available for all commands:
 | `codanna benchmark` | Benchmark parser performance |
 | `codanna parse` | Output AST nodes in JSONL format |
 | `codanna plugin` | Manage Claude Code plugins |
+| `codanna documents` | Index and search document collections |
 | `codanna profile` | Manage workspace profiles and providers |
 
 ## Command Details
@@ -221,6 +222,62 @@ Parse file and output AST as JSON Lines
 - `-o, --output <OUTPUT>` - Output file (defaults to stdout)
 - `-d, --max-depth <MAX_DEPTH>` - Maximum depth to traverse
 - `-a, --all-nodes` - Include all nodes (by default only named nodes are shown)
+
+`codanna documents <SUBCOMMAND>`
+Index markdown and text documents for semantic search
+
+> **Full Documentation:** See [Document Search](documents.md) for detailed usage, chunking strategies, and configuration.
+
+**Subcommands:**
+| Subcommand | Description |
+|------------|-------------|
+| `documents add-collection` | Add a document collection to settings.toml |
+| `documents remove-collection` | Remove a document collection from settings.toml |
+| `documents index` | Index documents from configured collections |
+| `documents search` | Search indexed documents using natural language |
+| `documents list` | List all document collections |
+| `documents stats` | Show statistics for a collection |
+
+`documents add-collection <NAME> <PATH>`
+Add a document collection to settings.toml
+
+**Arguments:**
+- `<NAME>` - Collection name
+- `<PATH>` - Path to directory containing documents
+
+`documents remove-collection <NAME>`
+Remove a document collection from settings.toml
+
+**Arguments:**
+- `<NAME>` - Collection name to remove
+
+`documents index`
+Index documents from all configured collections
+
+**Options:**
+- `--collection <NAME>` - Index only this collection
+- `-p, --progress` - Show progress during indexing
+- `-f, --force` - Force re-indexing even if documents haven't changed
+
+`documents search <QUERY>`
+Search indexed documents using natural language
+
+**Arguments:**
+- `<QUERY>` - Natural language search query
+
+**Options:**
+- `--collection <NAME>` - Search only within this collection
+- `-l, --limit <LIMIT>` - Maximum number of results (default: 5)
+- `--json` - Output in JSON format
+
+`documents list`
+List all configured document collections
+
+`documents stats <NAME>`
+Show statistics for a collection
+
+**Arguments:**
+- `<NAME>` - Collection name
 
 `codanna plugin <SUBCOMMAND>`
 Manage Claude Code plugins by installing from Git-based marketplaces

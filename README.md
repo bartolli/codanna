@@ -1,4 +1,3 @@
-
 <div align="center">
 
 <h1 align="center">Codanna</h1>
@@ -26,120 +25,57 @@ Give your code assistant the ability to see through your codebase—understandin
 
 <h3 align="left"></h3>
 
-> [!NOTE]
-> **New Feature: Profiles!**
-> Package hooks, commands, skills, and agents for different project types and custom workflows. More control than plugins, not tied to Claude Code manifest.
->
-> The `claude` profile includes Research-Agent (renamed from codanna-navigator), `/codanna:x-ray` and `/codanna:symbol` commands, and hooks for read size limits and skill suggestions.
-
-**Quick Profile Install (0.6.8+):**
-```bash
-# Initialize with latest settings
-codanna init --force
-
-# Add provider and install profile
-codanna profile provider add bartolli/codanna-profiles
-codanna profile install claude@codanna-profiles
-
-# Install hook system
-npm --prefix .claude/hooks/codanna install
-```
-
-**Local customization**: Clone [codanna-profiles](https://github.com/bartolli/codanna-profiles) and create profiles for your project types.
-
-See [Profile Documentation](docs/profiles/) for details.
-
-**Also available: Plugins** - Claude Code manifest format for CC-specific workflows. See [Plugin Documentation](docs/plugins/).
-
-> [!TIP]
-> **Document Search**
-> Index markdown and text files for semantic search. Query project documentation with natural language.
-
-```bash
-codanna documents add-collection docs docs/
-codanna documents index
-codanna documents search "authentication flow"
-```
-
-See [Document Search](docs/user-guide/documents.md) for details.
-
-## What It Solves
-
-Your AI assistant knows your code:
-
-- "Where's this function called?" → instant call graph
-- "Show me all authentication functions" → finds functions with auth-related doc comments
-- "Find config file parsers" → matches functions that parse configuration
-- "What breaks if I change this interface?" → full-project impact analysis
-
-## Why Bother
-
-**Context is everything.**
-
-Codanna cuts the noise:
-
-- Less grep-and-hope loops.
-- Less explaining the same thing twice.
-- Less blind code generation.
-
-**Instead**: tight context, smarter engineering, flow that doesn't stall.
-
 ## Quick Start
 
 ```bash
 # Install
 cargo install codanna --all-features
 
-# Setup
+# Initialize and index
 codanna init
+codanna index src --progress
 
-# Index your code
-codanna index . --progress                  # Index current directory
-codanna index src tests --progress          # Index specific directories
-codanna add-dir src --progress              # Add directory to settings for indexing
+# Ask questions
+codanna mcp semantic_search_with_context query:"where do we handle errors" limit:3
 
-# Ask real questions
-codanna mcp semantic_search_docs query:"where do we resolve symbol references" limit:3
+# Index documentation for RAG
+codanna documents add-collection docs ./docs
+codanna documents index
+codanna mcp search_documents query:"authentication flow"
 ```
 
-**Result**: 3 relevant functions in 0.16s with exact file locations and signatures.
+## What It Does
+
+Your AI assistant gains structured knowledge of your code:
+
+- **"Where's this function called?"** - Instant call graph, not grep results
+- **"Find authentication logic"** - Semantic search matches intent, not just keywords
+- **"What breaks if I change this?"** - Full dependency analysis across files
+
+The difference: Codanna understands code structure. It knows `parseConfig` is a function that calls `validateSchema`, not just a string match.
 
 ## Features
 
-- **Fast parsing** - Tree-sitter AST (same as GitHub code navigator)
-- **Semantic search** - Natural language queries that understand your code
-- **Document search** - Index markdown files for RAG workflows
-- **Relationship tracking** - Call graphs, implementations, dependencies
-- **Multi-language** - Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Swift, GDScript
-- **MCP protocol** - Native integration with Claude and other AI assistants
-- **Profiles** - Package configs for different project types and custom workflows
-- **Plugins** - Claude Code manifest format for project-scoped commands and agents
-- **<10ms lookups** - Memory-mapped caches for instant responses
+| Feature | Description |
+|---------|-------------|
+| **[Semantic Search](docs/user-guide/search-guide.md)** | Natural language queries against code and documentation. Finds functions by what they do, not just their names. |
+| **[Relationship Tracking](docs/user-guide/mcp-tools.md)** | Call graphs, implementations, and dependencies. Trace how code connects across files. |
+| **[Document Search](docs/user-guide/documents.md)** | Index markdown and text files for RAG workflows. Query project docs alongside code. |
+| **[MCP Protocol](docs/integrations/)** | Native integration with Claude, Gemini, Codex, and other AI assistants. |
+| **[Profiles](docs/profiles/)** | Package hooks, commands, and agents for different project types. |
+| **[Plugins](docs/plugins/)** | Claude Code manifest format for project-scoped workflows. |
 
+**Performance:** Sub-10ms symbol lookups with memory-mapped caches.
 
-## Documentation
+**Languages:** Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Swift, GDScript.
 
-### Learn
-- **[Getting Started](docs/getting-started/)** - Installation and first steps
-- **[User Guide](docs/user-guide/)** - CLI commands, tools, configuration
-- **[Integrations](docs/integrations/)** - Claude, Codex, HTTP/HTTPS servers
-- **[Profiles](docs/profiles/)** - Package hooks, commands, skills, and agents
+## Integration
 
-### Master
-- **[Advanced](docs/advanced/)** - Unix piping, slash commands, performance
-- **[Architecture](docs/architecture/)** - How it works under the hood
-- **[Contributing](docs/contributing/)** - Development setup and guidelines
-
-### Reference
-- **[CLI Reference](docs/user-guide/cli-reference.md)** - All commands and options
-- **[MCP Tools](docs/user-guide/mcp-tools.md)** - Available MCP tools
-- **[Configuration](docs/user-guide/configuration.md)** - Settings and customization
-
-[View all documentation →](docs/)
-
-## Integration Examples
+Standard CLI and MCP protocol. Works with Claude, Codex, and any MCP-compatible client.
+HTTP/HTTPS servers available for network access.
 
 ### Claude Code
+
 ```json
 {
   "mcpServers": {
@@ -151,52 +87,90 @@ codanna mcp semantic_search_docs query:"where do we resolve symbol references" l
 }
 ```
 
-### Agent Workflow
-```markdown
-1. semantic_search_with_context - Find relevant code
-2. analyze_impact - Map dependencies
-3. find_symbol, get_calls - Get specifics
+### HTTP Server
+
+```bash
+codanna serve --http --watch
+codanna serve --https --watch  # With TLS
 ```
 
-### Unix Native
+### Unix Pipes
+
 ```bash
-# Build call graphs with pipes
 codanna mcp find_callers index_file --json | \
 jq -r '.data[]?[0] | "\(.name) - \(.file_path)"'
 ```
 
+See [Integrations](docs/integrations/) for detailed setup guides.
+
+## Documentation
+
+- **[Getting Started](docs/getting-started/)** - Installation and first steps
+- **[User Guide](docs/user-guide/)** - CLI commands, tools, configuration
+- **[CLI Reference](docs/user-guide/cli-reference.md)** - All commands and options
+- **[MCP Tools](docs/user-guide/mcp-tools.md)** - Available tools for AI assistants
+- **[Architecture](docs/architecture/)** - How it works under the hood
+
+[View all documentation](docs/)
+
+## Advanced Features
+
+<details>
+<summary><strong>Profiles</strong> - Package reusable configurations</summary>
+
+```bash
+codanna init --force
+codanna profile provider add bartolli/codanna-profiles
+codanna profile install claude@codanna-profiles
+npm --prefix .claude/hooks/codanna install
+```
+
+The `claude` profile includes Research-Agent, `/codanna:x-ray` and `/codanna:symbol` commands, and hooks for skill suggestions.
+
+See [Profile Documentation](docs/profiles/).
+
+</details>
+
+<details>
+<summary><strong>Document Collections</strong> - RAG-ready documentation search</summary>
+
+```bash
+codanna documents add-collection docs docs/
+codanna documents add-collection guides examples/
+codanna documents index --progress
+codanna documents search "error handling" --collection docs
+```
+
+Chunks documents, generates embeddings, and provides semantic search over your markdown files.
+
+See [Document Search](docs/user-guide/documents.md).
+
+</details>
+
 ## Requirements
 
-- Rust 1.75+ (for development)
-- ~150MB for model storage (downloaded on first use)
-- A few MB for index storage
+- Rust 1.85+ (for building from source)
+- ~150MB for embedding model (downloaded on first use)
 
-### System Dependencies
+**Linux:** `sudo apt install pkg-config libssl-dev`
+**macOS:** No additional dependencies
 
-**Linux**: `sudo apt install pkg-config libssl-dev`
-**macOS**: No additional dependencies
+## Status
 
-## Current Status
-
-- 12 supported languages with tree-sitter parsing
-- 75,000+ symbols/second parsing speed
-- <10ms symbol lookups
+- Sub-10ms symbol lookups
+- 75,000+ symbols/second parsing
 - Windows support is experimental
-
-## Releases
-
-See [CHANGELOG.md](CHANGELOG.md) for detailed release notes.
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Licensed under the Apache License, Version 2.0 - See [LICENSE](LICENSE) file.
+Apache License 2.0 - See [LICENSE](LICENSE).
 
-Attribution required when using Codanna in your project. See [NOTICE](NOTICE) file.
+Attribution required. See [NOTICE](NOTICE).
 
 ---
 
-Built with 🦀 by devs throttled by tools that "understand" code only in theory.
+Built with Rust.

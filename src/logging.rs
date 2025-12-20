@@ -40,6 +40,10 @@ impl FormatTime for CompactTime {
     }
 }
 
+/// Modules that use explicit `target: "name"` or are external crates.
+/// These don't need the `codanna::` prefix in filter strings.
+const EXTERNAL_TARGETS: &[&str] = &["cli", "tantivy"];
+
 /// Initialize logging with configuration.
 ///
 /// Call once at startup. Safe to call multiple times (only first call takes effect).
@@ -64,13 +68,51 @@ pub fn init_with_config(config: &LoggingConfig) {
             // Build filter string from config
             let mut filter_str = config.default.clone();
             for (module, level) in &config.modules {
-                filter_str.push_str(&format!(",{module}={level}"));
+                // Internal modules need codanna:: prefix to match module paths
+                let target = if EXTERNAL_TARGETS.contains(&module.as_str()) {
+                    module.clone()
+                } else {
+                    format!("codanna::{module}")
+                };
+                filter_str.push_str(&format!(",{target}={level}"));
             }
             EnvFilter::new(&filter_str)
         };
 
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_target(true) // Show target for filtering visibility
+            .with_timer(CompactTime)
+            .with_level(true)
+            .with_filter(filter);
+
+        tracing_subscriber::registry().with(fmt_layer).init();
+    });
+}
+
+/// Initialize logging to stderr (for MCP stdio mode).
+///
+/// MCP stdio protocol requires stdout for JSON-RPC only.
+/// All logging must go to stderr to avoid breaking the protocol.
+pub fn init_with_config_stderr(config: &LoggingConfig) {
+    INIT.call_once(|| {
+        let filter = if std::env::var("RUST_LOG").is_ok() {
+            EnvFilter::from_default_env()
+        } else {
+            let mut filter_str = config.default.clone();
+            for (module, level) in &config.modules {
+                let target = if EXTERNAL_TARGETS.contains(&module.as_str()) {
+                    module.clone()
+                } else {
+                    format!("codanna::{module}")
+                };
+                filter_str.push_str(&format!(",{target}={level}"));
+            }
+            EnvFilter::new(&filter_str)
+        };
+
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_target(true)
             .with_timer(CompactTime)
             .with_level(true)
             .with_filter(filter);
