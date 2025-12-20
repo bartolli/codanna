@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.6] - 2025-12-20
+
+### Added
+
+- Unified watcher module replacing three separate implementations
+- Path registry for tracking monitored files across multiple watchers
+- Debouncer module to prevent duplicate event processing
+- Handler trait with code, config, and document implementations
+- Logging module with tracing-subscriber and per-module level support
+- RUST_LOG environment variable support for runtime log level control
+- Documents command documentation in CLI reference
+- Logging configuration section in configuration guide
+
+### Changed
+
+- Replaced debug_print macros with tracing calls across indexer and parsers
+- MCP servers now use unified watcher and structured logging
+- Language parsers updated to use tracing
+- README restructured with Quick Start moved to top
+- Features presented as table with documentation links
+- Advanced features (Profiles, Documents) moved to collapsible sections
+
+### Removed
+
+- documents/watcher.rs (replaced by unified watcher)
+- indexing/fs_watcher.rs (replaced by unified watcher)
+- indexing/config_watcher.rs (replaced by unified watcher)
+
 ## [0.8.5] - 2025-12-18
 
 ### Added
