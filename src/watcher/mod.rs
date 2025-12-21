@@ -21,11 +21,13 @@ mod debouncer;
 mod error;
 mod handler;
 pub mod handlers;
+mod hot_reload;
 mod path_registry;
 mod unified;
 
 pub use debouncer::Debouncer;
 pub use error::WatchError;
 pub use handler::{WatchAction, WatchHandler};
+pub use hot_reload::{HotReloadWatcher, IndexStats};
 pub use path_registry::PathRegistry;
 pub use unified::{UnifiedWatcher, UnifiedWatcherBuilder};

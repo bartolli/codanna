@@ -5,9 +5,8 @@
 
 #[cfg(feature = "http-server")]
 pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
-    use crate::mcp::{
-        CodeIntelligenceServer, notifications::NotificationBroadcaster, watcher::IndexWatcher,
-    };
+    use crate::mcp::{CodeIntelligenceServer, notifications::NotificationBroadcaster};
+    use crate::watcher::HotReloadWatcher;
     use crate::{IndexPersistence, SimpleIndexer};
     use axum::Router;
     use rmcp::transport::streamable_http_server::{
@@ -65,7 +64,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         // Default to 5 second interval
         let watch_interval = 5u64;
 
-        let index_watcher = IndexWatcher::new(
+        let hot_reload_watcher = HotReloadWatcher::new(
             index_watcher_indexer,
             index_watcher_settings,
             Duration::from_secs(watch_interval),
@@ -74,20 +73,16 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
 
         tokio::spawn(async move {
             tokio::select! {
-                _ = index_watcher.watch() => {
-                    crate::log_event!("index-watcher", "ended");
+                _ = hot_reload_watcher.watch() => {
+                    crate::log_event!("hot-reload", "ended");
                 }
                 _ = index_watcher_ct.cancelled() => {
-                    crate::log_event!("index-watcher", "stopped");
+                    crate::log_event!("hot-reload", "stopped");
                 }
             }
         });
 
-        crate::log_event!(
-            "index-watcher",
-            "started",
-            "polling every {watch_interval}s"
-        );
+        crate::log_event!("hot-reload", "started", "polling every {watch_interval}s");
     }
 
     // Start unified file watcher if enabled

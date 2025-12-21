@@ -5,9 +5,8 @@
 
 #[cfg(feature = "https-server")]
 pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
-    use crate::mcp::{
-        CodeIntelligenceServer, notifications::NotificationBroadcaster, watcher::IndexWatcher,
-    };
+    use crate::mcp::{CodeIntelligenceServer, notifications::NotificationBroadcaster};
+    use crate::watcher::HotReloadWatcher;
     use crate::{IndexPersistence, SimpleIndexer};
     use anyhow::Context;
     use axum::Router;
@@ -153,37 +152,33 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
 
     // Start index watcher if watch mode is enabled
     if watch {
-        let index_watcher_indexer = indexer.clone();
-        let index_watcher_settings = Arc::new(config.clone());
-        let index_watcher_broadcaster = broadcaster.clone();
-        let index_watcher_ct = ct.clone();
+        let hot_reload_indexer = indexer.clone();
+        let hot_reload_settings = Arc::new(config.clone());
+        let hot_reload_broadcaster = broadcaster.clone();
+        let hot_reload_ct = ct.clone();
 
         // Default to 5 second interval
         let watch_interval = 5u64;
 
-        let index_watcher = IndexWatcher::new(
-            index_watcher_indexer,
-            index_watcher_settings,
+        let hot_reload_watcher = HotReloadWatcher::new(
+            hot_reload_indexer,
+            hot_reload_settings,
             Duration::from_secs(watch_interval),
         )
-        .with_broadcaster(index_watcher_broadcaster);
+        .with_broadcaster(hot_reload_broadcaster);
 
         tokio::spawn(async move {
             tokio::select! {
-                _ = index_watcher.watch() => {
-                    crate::log_event!("index-watcher", "ended");
+                _ = hot_reload_watcher.watch() => {
+                    crate::log_event!("hot-reload", "ended");
                 }
-                _ = index_watcher_ct.cancelled() => {
-                    crate::log_event!("index-watcher", "stopped");
+                _ = hot_reload_ct.cancelled() => {
+                    crate::log_event!("hot-reload", "stopped");
                 }
             }
         });
 
-        crate::log_event!(
-            "index-watcher",
-            "started",
-            "polling every {watch_interval}s"
-        );
+        crate::log_event!("hot-reload", "started", "polling every {watch_interval}s");
     }
 
     // Create streamable HTTP service for MCP connections
@@ -196,6 +191,15 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     // Create a shared service instance that all connections will use
     let shared_service =
         CodeIntelligenceServer::new_with_indexer(indexer_for_service, config_for_service);
+
+    // Start notification listener to forward file change events to MCP clients
+    let notification_receiver = broadcaster.subscribe();
+    let notification_server = shared_service.clone();
+    tokio::spawn(async move {
+        notification_server
+            .start_notification_listener(notification_receiver)
+            .await;
+    });
 
     let mcp_service = StreamableHttpService::new(
         move || {

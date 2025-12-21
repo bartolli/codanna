@@ -21,14 +21,13 @@ pub mod client;
 pub mod http_server;
 pub mod https_server;
 pub mod notifications;
-pub mod watcher;
 
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ErrorData as McpError, *},
+    model::{CustomNotification, CustomRequest, CustomResult, ErrorCode, ErrorData as McpError, *},
     schemars,
-    service::{Peer, RequestContext, RoleServer},
+    service::{Peer, RequestContext, RoleServer, ServiceError},
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
@@ -1732,5 +1731,130 @@ impl ServerHandler for CodeIntelligenceServer {
 
         // Return the server info
         Ok(self.get_info())
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, McpError> {
+        match request.method.as_str() {
+            "requests/codanna/force-reindex" => self.handle_force_reindex(request).await,
+            "requests/codanna/index-stats" => self.handle_index_stats().await,
+            _ => Err(McpError::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                format!("Unknown method: {}", request.method),
+                None,
+            )),
+        }
+    }
+}
+
+// Custom request handlers
+impl CodeIntelligenceServer {
+    /// Handle force-reindex request
+    async fn handle_force_reindex(&self, request: CustomRequest) -> Result<CustomResult, McpError> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+
+        // Parse optional paths parameter
+        let paths: Option<Vec<String>> = request
+            .params
+            .as_ref()
+            .and_then(|p| p.get("paths"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+        let mut indexer = self.indexer.write().await;
+
+        let (reindexed, symbols) = if let Some(paths) = paths {
+            // Reindex specific paths
+            let mut total_reindexed = 0;
+            for path in &paths {
+                let path = std::path::Path::new(path);
+                if path.is_file() {
+                    match indexer.index_file(path) {
+                        Ok(crate::IndexingResult::Indexed(_)) => total_reindexed += 1,
+                        Ok(crate::IndexingResult::Cached(_)) => {}
+                        Err(e) => {
+                            tracing::warn!("Failed to reindex {}: {e}", path.display());
+                        }
+                    }
+                } else if path.is_dir() {
+                    match indexer.index_directory(path, false, false) {
+                        Ok(stats) => total_reindexed += stats.files_indexed,
+                        Err(e) => {
+                            tracing::warn!("Failed to reindex {}: {e}", path.display());
+                        }
+                    }
+                }
+            }
+            (total_reindexed, indexer.symbol_count())
+        } else {
+            // Full reindex using indexed_paths from settings
+            let indexed_paths = indexer.settings().indexing.indexed_paths.clone();
+            let mut total_reindexed = 0;
+
+            for path in &indexed_paths {
+                if path.is_dir() {
+                    match indexer.index_directory(path, false, false) {
+                        Ok(stats) => total_reindexed += stats.files_indexed,
+                        Err(e) => {
+                            tracing::warn!("Failed to reindex {}: {e}", path.display());
+                        }
+                    }
+                }
+            }
+            (total_reindexed, indexer.symbol_count())
+        };
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        Ok(CustomResult(serde_json::json!({
+            "reindexed": reindexed,
+            "symbols": symbols,
+            "duration_ms": duration_ms
+        })))
+    }
+
+    /// Handle index-stats request
+    async fn handle_index_stats(&self) -> Result<CustomResult, McpError> {
+        let indexer = self.indexer.read().await;
+
+        let semantic = if let Some(metadata) = indexer.get_semantic_metadata() {
+            serde_json::json!({
+                "enabled": true,
+                "model": metadata.model_name,
+                "embeddings": metadata.embedding_count,
+                "dimensions": metadata.dimension
+            })
+        } else {
+            serde_json::json!({
+                "enabled": false
+            })
+        };
+
+        Ok(CustomResult(serde_json::json!({
+            "symbols": indexer.symbol_count(),
+            "files": indexer.file_count(),
+            "relationships": indexer.relationship_count(),
+            "semantic": semantic
+        })))
+    }
+
+    /// Send a custom notification to the connected client
+    pub async fn notify_custom(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), ServiceError> {
+        let peer_guard = self.peer.lock().await;
+        if let Some(peer) = peer_guard.as_ref() {
+            peer.send_notification(ServerNotification::CustomNotification(
+                CustomNotification::new(method, Some(params)),
+            ))
+            .await?;
+        }
+        Ok(())
     }
 }
