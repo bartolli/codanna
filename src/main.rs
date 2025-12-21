@@ -1529,26 +1529,24 @@ async fn main() {
                     );
                     let server = codanna::mcp::CodeIntelligenceServer::new(indexer);
 
-                    // If watch mode is enabled, start the index watcher
+                    // If watch mode is enabled, start the hot-reload watcher
                     if watch {
-                        use codanna::mcp::watcher::IndexWatcher;
+                        use codanna::watcher::HotReloadWatcher;
                         use std::time::Duration;
 
                         let indexer_arc = server.get_indexer_arc();
-                        let server_arc = Arc::new(server.clone());
-                        let watcher = IndexWatcher::new(
+                        let watcher = HotReloadWatcher::new(
                             indexer_arc,
                             settings.clone(),
                             Duration::from_secs(actual_watch_interval),
-                        )
-                        .with_mcp_server(server_arc);
+                        );
 
                         // Spawn watcher in background
                         tokio::spawn(async move {
                             watcher.watch().await;
                         });
 
-                        eprintln!("Index watcher started with notification support");
+                        eprintln!("Hot-reload watcher started");
                     }
 
                     // Start unified file watcher if enabled
@@ -1624,6 +1622,10 @@ async fn main() {
                             }
                         }
 
+                        // Subscribe to broadcaster for MCP notifications
+                        let notification_receiver = broadcaster.subscribe();
+                        let notification_server = server.clone();
+
                         // Build and start the unified watcher
                         match builder.build() {
                             Ok(unified_watcher) => {
@@ -1636,6 +1638,13 @@ async fn main() {
                                     "Unified watcher started (debounce: {debounce_ms}ms, config: {})",
                                     settings_path.display()
                                 );
+
+                                // Start notification listener to forward events to MCP client
+                                tokio::spawn(async move {
+                                    notification_server
+                                        .start_notification_listener(notification_receiver)
+                                        .await;
+                                });
                             }
                             Err(e) => {
                                 eprintln!("Failed to start unified watcher: {e}");

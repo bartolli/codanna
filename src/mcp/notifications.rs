@@ -54,7 +54,8 @@ impl super::CodeIntelligenceServer {
         mut receiver: broadcast::Receiver<FileChangeEvent>,
     ) {
         use rmcp::model::{
-            LoggingLevel, LoggingMessageNotificationParam, ResourceUpdatedNotificationParam,
+            CustomNotification, LoggingLevel, LoggingMessageNotificationParam,
+            ResourceUpdatedNotificationParam, ServerNotification,
         };
 
         crate::debug_event!("mcp-notify", "listening");
@@ -70,14 +71,14 @@ impl super::CodeIntelligenceServer {
                             FileChangeEvent::FileReindexed { path } => {
                                 let path_str = path.display().to_string();
 
-                                // Send resource updated notification
+                                // Send standard MCP resource updated notification (backwards compatible)
                                 let _ = peer
                                     .notify_resource_updated(ResourceUpdatedNotificationParam {
                                         uri: format!("file://{path_str}"),
                                     })
                                     .await;
 
-                                // Send logging message
+                                // Send logging message (backwards compatible)
                                 let _ = peer
                                     .notify_logging_message(LoggingMessageNotificationParam {
                                         level: LoggingLevel::Info,
@@ -89,6 +90,18 @@ impl super::CodeIntelligenceServer {
                                     })
                                     .await;
 
+                                // Send custom notification (new)
+                                let _ = peer
+                                    .send_notification(ServerNotification::CustomNotification(
+                                        CustomNotification::new(
+                                            "notifications/codanna/file-reindexed",
+                                            Some(serde_json::json!({
+                                                "path": path_str
+                                            })),
+                                        ),
+                                    ))
+                                    .await;
+
                                 crate::debug_event!(
                                     "mcp-notify",
                                     "sent",
@@ -96,7 +109,21 @@ impl super::CodeIntelligenceServer {
                                 );
                             }
                             FileChangeEvent::FileCreated { path } => {
+                                let path_str = path.display().to_string();
                                 let _ = peer.notify_resource_list_changed().await;
+
+                                // Send custom notification
+                                let _ = peer
+                                    .send_notification(ServerNotification::CustomNotification(
+                                        CustomNotification::new(
+                                            "notifications/codanna/file-created",
+                                            Some(serde_json::json!({
+                                                "path": path_str
+                                            })),
+                                        ),
+                                    ))
+                                    .await;
+
                                 crate::debug_event!(
                                     "mcp-notify",
                                     "sent",
@@ -105,7 +132,21 @@ impl super::CodeIntelligenceServer {
                                 );
                             }
                             FileChangeEvent::FileDeleted { path } => {
+                                let path_str = path.display().to_string();
                                 let _ = peer.notify_resource_list_changed().await;
+
+                                // Send custom notification
+                                let _ = peer
+                                    .send_notification(ServerNotification::CustomNotification(
+                                        CustomNotification::new(
+                                            "notifications/codanna/file-deleted",
+                                            Some(serde_json::json!({
+                                                "path": path_str
+                                            })),
+                                        ),
+                                    ))
+                                    .await;
+
                                 crate::debug_event!(
                                     "mcp-notify",
                                     "sent",
@@ -115,6 +156,17 @@ impl super::CodeIntelligenceServer {
                             }
                             FileChangeEvent::IndexReloaded => {
                                 let _ = peer.notify_resource_list_changed().await;
+
+                                // Send custom notification
+                                let _ = peer
+                                    .send_notification(ServerNotification::CustomNotification(
+                                        CustomNotification::new(
+                                            "notifications/codanna/index-reloaded",
+                                            Some(serde_json::json!({})),
+                                        ),
+                                    ))
+                                    .await;
+
                                 crate::debug_event!("mcp-notify", "sent", "IndexReloaded");
                             }
                         }

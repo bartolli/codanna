@@ -16,7 +16,7 @@ impl CodeIntelligenceClient {
         delay_before_tool_secs: Option<u64>,
     ) -> Result<()> {
         use rmcp::{
-            model::{CallToolRequestParam, JsonObject},
+            model::{CallToolRequestParam, ClientRequest, CustomRequest, JsonObject},
             service::ServiceExt,
             transport::{ConfigureCommandExt, TokioChildProcess},
         };
@@ -99,6 +99,37 @@ impl CodeIntelligenceClient {
                 .await?;
             Self::print_tool_output(&tool_result);
         }
+
+        // Test custom requests
+        println!("\n--- Testing Custom Requests ---");
+
+        // Test index-stats custom request
+        println!("\nSending custom request: requests/codanna/index-stats");
+        let stats_request =
+            ClientRequest::CustomRequest(CustomRequest::new("requests/codanna/index-stats", None));
+        match client.peer().send_request(stats_request).await {
+            Ok(rmcp::model::ServerResult::CustomResult(custom)) => {
+                println!("Response: {}", serde_json::to_string_pretty(&custom.0)?);
+            }
+            Ok(other) => println!("Unexpected response type: {other:?}"),
+            Err(e) => println!("Request failed: {e}"),
+        }
+
+        // Test force-reindex custom request (with a small path)
+        println!("\nSending custom request: requests/codanna/force-reindex");
+        let reindex_request = ClientRequest::CustomRequest(CustomRequest::new(
+            "requests/codanna/force-reindex",
+            Some(serde_json::json!({"paths": ["src/mcp/client.rs"]})),
+        ));
+        match client.peer().send_request(reindex_request).await {
+            Ok(rmcp::model::ServerResult::CustomResult(custom)) => {
+                println!("Response: {}", serde_json::to_string_pretty(&custom.0)?);
+            }
+            Ok(other) => println!("Unexpected response type: {other:?}"),
+            Err(e) => println!("Request failed: {e}"),
+        }
+
+        println!("\n--- Custom Request Tests Complete ---");
 
         // Shutdown
         println!("\nShutting down...");

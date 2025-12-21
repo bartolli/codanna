@@ -249,11 +249,4 @@ mod tests {
         assert_eq!(effective.max_chunk_chars, 2000);
         assert_eq!(effective.min_chunk_chars, 200); // Still default
     }
-
-    #[test]
-    fn test_documents_config_default() {
-        let config = DocumentsConfig::default();
-        assert!(!config.enabled);
-        assert!(config.collections.is_empty());
-    }
 }

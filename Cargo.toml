@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.8.6"
+version = "0.8.7"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -9,7 +9,7 @@ homepage = "https://github.com/bartolli/codanna"
 repository = "https://github.com/bartolli/codanna"
 license = "Apache-2.0"
 readme = "README.md"
-keywords = ["mcp-server", "context-engineering", "agentic-coding", "code-embedding", "ai-ide"]
+keywords = ["mcp-server", "context-engineering", "agentic-coding", "code-embedding", "ai-ide", "semantic-search", "code-search", "code-intelligence", "llm-tooling", "RAG", "retrieval-augmented-generation"]
 categories = ["development-tools", "command-line-utilities", "parsing", "text-processing", "compilers"]
 autoexamples = false
 
@@ -58,7 +58,7 @@ indicatif = "0.18.3"
 comfy-table = "7.2.1"
 console = "0.16.2"
 owo-colors = "4.2.3"
-axum = { version = "0.8.7", optional = true }
+axum = { version = "0.8.8", optional = true }
 tower = { version = "0.5.2", optional = true }
 tower-http = { version = "0.6.8", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
@@ -81,7 +81,7 @@ async-trait = "0.1.89"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-testcontainers = "0.26.0"
+testcontainers = "0.26.2"
 
 [features]
 default = []

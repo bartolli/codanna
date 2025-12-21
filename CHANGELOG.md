@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7] - 2025-12-20
+
+### Added
+
+- Custom MCP requests: `requests/codanna/index-stats`, `requests/codanna/force-reindex`
+- Custom MCP notifications: `file-reindexed`, `file-deleted`, `index-reloaded`
+- HotReloadWatcher for external index changes (CI/CD, other processes)
+- Debug logging for unmatched file watcher events
+
+### Changed
+
+- Renamed IndexWatcher to HotReloadWatcher with clearer purpose
+- Moved hot reload watcher from `mcp/watcher.rs` to `watcher/hot_reload.rs`
+- Removed source file polling from HotReloadWatcher (UnifiedWatcher handles this)
+- Notification listener now spawned in HTTPS server for client notifications
+- Simplified async fn signature for `on_custom_request`
+
+### Removed
+
+- `check_and_reindex_source_files()` from hot reload watcher (redundant with UnifiedWatcher)
+- `with_mcp_server()` method (notifications now use broadcaster pattern)
+
 ## [0.8.6] - 2025-12-20
 
 ### Added
