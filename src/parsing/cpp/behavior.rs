@@ -38,6 +38,10 @@ impl Default for CppBehavior {
 }
 
 impl LanguageBehavior for CppBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("cpp")
+    }
+
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         format!("{base_path}::{symbol_name}")
     }

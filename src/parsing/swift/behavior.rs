@@ -37,6 +37,10 @@ impl StatefulBehavior for SwiftBehavior {
 }
 
 impl LanguageBehavior for SwiftBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("swift")
+    }
+
     fn configure_symbol(&self, symbol: &mut Symbol, module_path: Option<&str>) {
         // Set module path
         if let Some(path) = module_path {

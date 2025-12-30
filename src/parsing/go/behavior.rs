@@ -39,6 +39,10 @@ impl StatefulBehavior for GoBehavior {
 }
 
 impl LanguageBehavior for GoBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("go")
+    }
+
     fn format_module_path(&self, base_path: &str, _symbol_name: &str) -> String {
         // Go uses file paths as module paths, not including the symbol name
         // All symbols in the same file share the same module path for visibility

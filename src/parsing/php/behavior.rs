@@ -37,6 +37,10 @@ impl Default for PhpBehavior {
 }
 
 impl LanguageBehavior for PhpBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("php")
+    }
+
     fn create_resolution_context(
         &self,
         file_id: FileId,

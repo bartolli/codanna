@@ -79,6 +79,10 @@ impl Default for PythonBehavior {
 }
 
 impl LanguageBehavior for PythonBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("python")
+    }
+
     fn configure_symbol(&self, symbol: &mut crate::Symbol, module_path: Option<&str>) {
         // Apply default behavior: set module_path and parse visibility
         if let Some(path) = module_path {

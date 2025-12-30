@@ -120,6 +120,10 @@ impl Default for GdscriptBehavior {
 }
 
 impl LanguageBehavior for GdscriptBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("gdscript")
+    }
+
     fn configure_symbol(&self, symbol: &mut Symbol, module_path: Option<&str>) {
         if let Some(path) = module_path {
             let full_path = self.format_module_path(path, &symbol.name);

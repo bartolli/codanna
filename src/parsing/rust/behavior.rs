@@ -41,6 +41,10 @@ impl Default for RustBehavior {
 }
 
 impl LanguageBehavior for RustBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("rust")
+    }
+
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         format!("{base_path}::{symbol_name}")
     }
@@ -398,6 +402,39 @@ impl LanguageBehavior for RustBehavior {
         }
 
         false
+    }
+
+    fn disambiguate_symbol(
+        &self,
+        _name: &str,
+        candidates: &[(crate::SymbolId, crate::SymbolKind)],
+        rel_kind: crate::relationship::RelationKind,
+        role: crate::parsing::RelationRole,
+    ) -> Option<crate::SymbolId> {
+        use crate::SymbolKind::*;
+        use crate::parsing::RelationRole::*;
+        use crate::relationship::RelationKind::*;
+
+        // For Rust, determine preferred kinds based on relationship and role
+        let preferred_kinds: &[crate::SymbolKind] = match (rel_kind, role) {
+            // For Implements, the "from" should be Struct/Enum (implementors)
+            (Implements, From) => &[Struct, Enum],
+            // For Implements, the "to" should be Trait
+            (Implements, To) => &[Trait],
+            // For Calls, prefer Function/Method
+            (Calls, From) | (Calls, To) => &[Function, Method],
+            // For Extends (supertraits), prefer Trait
+            (Extends, From) | (Extends, To) => &[Trait],
+            // Default: accept first candidate
+            _ => return candidates.first().map(|(id, _)| *id),
+        };
+
+        // Find first candidate matching preferred kinds, fall back to first
+        candidates
+            .iter()
+            .find(|(_, kind)| preferred_kinds.contains(kind))
+            .or_else(|| candidates.first())
+            .map(|(id, _)| *id)
     }
 }
 

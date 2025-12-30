@@ -38,6 +38,10 @@ impl Default for CBehavior {
 }
 
 impl LanguageBehavior for CBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("c")
+    }
+
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         format!("{base_path}::{symbol_name}")
     }

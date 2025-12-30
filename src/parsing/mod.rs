@@ -34,8 +34,10 @@ pub use java::{JavaBehavior, JavaParser};
 pub use javascript::{JavaScriptBehavior, JavaScriptParser};
 pub use kotlin::{KotlinBehavior, KotlinParser};
 pub use language::Language;
-pub use language_behavior::{LanguageBehavior, LanguageMetadata};
-pub use method_call::MethodCall;
+pub use language_behavior::{
+    LanguageBehavior, LanguageMetadata, RelationRole, default_relationship_compatibility,
+};
+pub use method_call::{MethodCall, MethodCallResolver};
 pub use parser::{
     HandledNode, LanguageParser, NodeTracker, NodeTrackingState, safe_substring_window,
     safe_truncate_str, truncate_for_display,

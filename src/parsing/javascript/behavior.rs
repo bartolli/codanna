@@ -152,6 +152,10 @@ impl StatefulBehavior for JavaScriptBehavior {
 }
 
 impl LanguageBehavior for JavaScriptBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("javascript")
+    }
+
     fn configure_symbol(&self, symbol: &mut crate::Symbol, module_path: Option<&str>) {
         // Preserve parser-derived visibility (export detection), only set module path.
         if let Some(path) = module_path {

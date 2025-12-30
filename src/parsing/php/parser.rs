@@ -936,7 +936,7 @@ impl LanguageParser for PhpParser {
     fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
         self.find_calls(code)
             .into_iter()
-            .map(|(caller, target, range)| MethodCall::from_legacy_format(caller, target, range))
+            .map(|(caller, target, range)| MethodCall::new(caller, target, range))
             .collect()
     }
 

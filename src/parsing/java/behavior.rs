@@ -39,6 +39,10 @@ impl StatefulBehavior for JavaBehavior {
 }
 
 impl LanguageBehavior for JavaBehavior {
+    fn language_id(&self) -> crate::parsing::registry::LanguageId {
+        crate::parsing::registry::LanguageId::new("java")
+    }
+
     /// Format module path for Java packages using dot notation
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         if base_path.is_empty() {

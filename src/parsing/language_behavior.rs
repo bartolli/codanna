@@ -57,15 +57,30 @@
 //! 3. Register both in `ParserFactory`
 //! 4. (Future) Register in the language registry for auto-discovery
 
+use crate::parsing::MethodCall;
 use crate::parsing::resolution::{
     GenericInheritanceResolver, GenericResolutionContext, ImportBinding, ImportOrigin,
     InheritanceResolver, ResolutionScope, ScopeLevel,
 };
 use crate::relationship::RelationKind;
 use crate::storage::DocumentIndex;
-use crate::{FileId, IndexError, IndexResult, Symbol, SymbolId, Visibility};
+use crate::{FileId, IndexError, IndexResult, Symbol, SymbolId, SymbolKind, Visibility};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
+
+/// Role in a relationship (source or target)
+///
+/// Used during symbol disambiguation to indicate whether we're looking
+/// for the "from" symbol (e.g., struct implementing) or the "to" symbol
+/// (e.g., trait being implemented).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationRole {
+    /// The source symbol in a relationship
+    From,
+    /// The target symbol in a relationship
+    To,
+}
 
 /// Trait for language-specific behavior and configuration
 ///
@@ -83,6 +98,11 @@ use tree_sitter::Language;
 /// 3. **Extensible**: New languages can be added without modifying existing code
 /// 4. **Type safe**: Use tree-sitter's ABI-15 for compile-time validation
 pub trait LanguageBehavior: Send + Sync {
+    /// Get the language ID for this behavior
+    ///
+    /// Used for filtering symbols to prevent cross-language resolution.
+    fn language_id(&self) -> crate::parsing::registry::LanguageId;
+
     /// Format a module path according to language conventions
     ///
     /// # Examples
@@ -295,6 +315,158 @@ pub trait LanguageBehavior: Send + Sync {
     /// Default uses the module separator (e.g., Type::method for Rust, Type.method for others)
     fn format_method_call(&self, receiver: &str, method: &str) -> String {
         format!("{}{}{}", receiver, self.module_separator(), method)
+    }
+
+    /// Resolve an instance method call to its symbol ID
+    ///
+    /// Given a type name and method name, find the symbol ID for the method.
+    /// Uses the resolution context for import-aware type lookup, then queries
+    /// the Defines relationship to find the method.
+    ///
+    /// # Arguments
+    /// * `type_name` - The resolved type name (e.g., "Calculator")
+    /// * `method_name` - The method being called (e.g., "add")
+    /// * `context` - Resolution context with import information
+    /// * `document_index` - For querying relationships
+    ///
+    /// # Returns
+    /// The SymbolId of the method if found, None otherwise
+    fn resolve_instance_method(
+        &self,
+        type_name: &str,
+        method_name: &str,
+        context: &dyn ResolutionScope,
+        document_index: &DocumentIndex,
+    ) -> Option<SymbolId> {
+        // Step 1: Resolve type using context (import-aware)
+        let type_id = match context.resolve(type_name) {
+            Some(id) => {
+                tracing::debug!("[resolve_instance_method] resolved type '{type_name}' to {id:?}");
+                id
+            }
+            None => {
+                tracing::debug!("[resolve_instance_method] failed to resolve type '{type_name}'");
+                return None;
+            }
+        };
+
+        // Step 2: Find method via Defines relationship from that specific type
+        let defined_symbols =
+            match document_index.get_relationships_from(type_id, RelationKind::Defines) {
+                Ok(rels) => {
+                    tracing::debug!(
+                        "[resolve_instance_method] found {} Defines relationships from {type_id:?}",
+                        rels.len()
+                    );
+                    rels
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "[resolve_instance_method] error getting Defines from {type_id:?}: {e}"
+                    );
+                    return None;
+                }
+            };
+
+        // Step 3: Find the method with matching name
+        for (_, to_id, _) in defined_symbols {
+            if let Ok(Some(symbol)) = document_index.find_symbol_by_id(to_id) {
+                tracing::debug!(
+                    "[resolve_instance_method] checking defined symbol: '{}' vs '{method_name}'",
+                    symbol.name.as_ref()
+                );
+                if symbol.name.as_ref() == method_name {
+                    tracing::debug!(
+                        "[resolve_instance_method] found method '{method_name}' at {to_id:?}"
+                    );
+                    return Some(to_id);
+                }
+            }
+        }
+
+        tracing::debug!(
+            "[resolve_instance_method] method '{method_name}' not found in type '{type_name}'"
+        );
+        None
+    }
+
+    /// Resolve a method call to its symbol ID
+    ///
+    /// This is the unified API for resolving all types of method calls:
+    /// - Static calls: `Type::method()` - resolved via context with qualified name
+    /// - Instance calls: `receiver.method()` - type looked up, then Defines relationship queried
+    /// - Self calls: `self.method()` - resolved via current type context
+    ///
+    /// # Arguments
+    /// * `method_call` - The structured method call information
+    /// * `receiver_types` - Map of variable names to their types (e.g., "calc" -> "Calculator")
+    /// * `context` - Resolution context with import information
+    /// * `document_index` - For querying symbols and relationships
+    ///
+    /// # Returns
+    /// The SymbolId of the resolved method, or None if unresolved
+    fn resolve_method_call(
+        &self,
+        method_call: &MethodCall,
+        receiver_types: &HashMap<String, String>,
+        context: &dyn ResolutionScope,
+        document_index: &DocumentIndex,
+    ) -> Option<SymbolId> {
+        let method_name = &method_call.method_name;
+
+        match (&method_call.receiver, method_call.is_static) {
+            // Static call: Type::method()
+            // Use module_separator for resolution (:: for Rust, . for most others)
+            (Some(type_name), true) => {
+                let qualified = format!("{type_name}{}{method_name}", self.module_separator());
+                tracing::debug!("[resolve_method_call] static call: {qualified}");
+                context.resolve(&qualified)
+            }
+
+            // Instance call: receiver.method()
+            (Some(receiver), false) if receiver != "self" => {
+                // Look up the receiver's type
+                let type_name = match receiver_types.get(receiver) {
+                    Some(t) => t,
+                    None => {
+                        tracing::debug!(
+                            "[resolve_method_call] no type found for receiver '{receiver}'"
+                        );
+                        return None;
+                    }
+                };
+
+                tracing::debug!(
+                    "[resolve_method_call] instance call: {receiver}.{method_name} (type: {type_name})"
+                );
+
+                // Use resolve_instance_method to find via Defines relationship
+                self.resolve_instance_method(type_name, method_name, context, document_index)
+            }
+
+            // Self call: self.method()
+            (Some(receiver), false) if receiver == "self" => {
+                // For self calls, try to resolve via context which should have current type info
+                let self_method = format!("self.{method_name}");
+                tracing::debug!("[resolve_method_call] self call: {self_method}");
+                context.resolve(&self_method).or_else(|| {
+                    // Fallback: just try the method name
+                    context.resolve(method_name)
+                })
+            }
+
+            // Plain function call (no receiver)
+            (None, _) => {
+                tracing::debug!("[resolve_method_call] plain function call: {method_name}");
+                context.resolve(method_name)
+            }
+
+            // Catch-all (shouldn't happen)
+            _ => {
+                tracing::debug!("[resolve_method_call] unhandled case: {:?}", method_call);
+                None
+            }
+        }
     }
 
     /// Get the inheritance relationship name for this language
@@ -564,11 +736,22 @@ pub trait LanguageBehavior: Send + Sync {
             } else {
                 // Iterate candidates, verify with module_path and language rules
                 let mut matched: Option<SymbolId> = None;
+                let our_language = self.language_id();
                 for id in candidates.into_iter() {
                     tracing::debug!(
                         "[resolution] cache hit for '{symbol_name}' -> SymbolId({id:?})"
                     );
                     if let Ok(Some(symbol)) = document_index.find_symbol_by_id(id) {
+                        // Filter by language to prevent cross-language resolution
+                        if let Some(symbol_lang) = &symbol.language_id {
+                            if *symbol_lang != our_language {
+                                tracing::debug!(
+                                    "[resolution] skipping cross-language candidate: symbol={symbol_lang:?}, behavior={our_language:?}"
+                                );
+                                continue;
+                            }
+                        }
+
                         if let Some(module_path) = &symbol.module_path {
                             if self.import_matches_symbol(
                                 &import.path,
@@ -1030,6 +1213,122 @@ pub trait LanguageBehavior: Send + Sync {
 
         None
     }
+
+    // ========== Relationship Resolution Methods ==========
+
+    /// Disambiguate when multiple symbols share the same name
+    ///
+    /// Called when symbol lookup returns multiple candidates during relationship
+    /// resolution. Each language can define how to pick the right candidate based
+    /// on the relationship type and role.
+    ///
+    /// # Arguments
+    /// * `name` - The symbol name being looked up
+    /// * `candidates` - All symbols with this name: (id, kind)
+    /// * `rel_kind` - The relationship type being resolved
+    /// * `role` - Whether this is the From or To symbol in the relationship
+    ///
+    /// # Default Implementation
+    /// Returns the first candidate. Languages should override for smarter selection.
+    fn disambiguate_symbol(
+        &self,
+        _name: &str,
+        candidates: &[(SymbolId, SymbolKind)],
+        _rel_kind: RelationKind,
+        _role: RelationRole,
+    ) -> Option<SymbolId> {
+        candidates.first().map(|(id, _)| *id)
+    }
+
+    /// Check if a relationship is valid for this language
+    ///
+    /// Called during relationship resolution to validate that the source and
+    /// target symbol kinds are compatible for the given relationship type.
+    /// Each language can define its own rules.
+    ///
+    /// # Arguments
+    /// * `from_kind` - The source symbol's kind
+    /// * `to_kind` - The target symbol's kind
+    /// * `rel_kind` - The relationship type
+    ///
+    /// # Default Implementation
+    /// Uses universal rules that work for most languages. Languages with
+    /// different semantics should override.
+    fn is_valid_relationship(
+        &self,
+        from_kind: SymbolKind,
+        to_kind: SymbolKind,
+        rel_kind: RelationKind,
+    ) -> bool {
+        default_relationship_compatibility(from_kind, to_kind, rel_kind)
+    }
+}
+
+/// Default relationship compatibility rules (universal)
+///
+/// Provides reasonable defaults that work for most languages.
+/// Called by the default `is_valid_relationship()` implementation.
+/// Languages can call this from their override if they want to extend
+/// rather than replace the default behavior.
+pub fn default_relationship_compatibility(
+    from_kind: SymbolKind,
+    to_kind: SymbolKind,
+    rel_kind: RelationKind,
+) -> bool {
+    use RelationKind::*;
+    use SymbolKind::*;
+
+    match rel_kind {
+        Calls | CalledBy => {
+            let caller = matches!(
+                from_kind,
+                Function | Method | Macro | Module | Constant | Variable
+            );
+            let callee = matches!(
+                to_kind,
+                Function | Method | Macro | Class | Constant | Variable
+            );
+            match rel_kind {
+                Calls => caller && callee,
+                CalledBy => callee && caller,
+                _ => unreachable!(),
+            }
+        }
+        Implements | ImplementedBy => {
+            let implementor = matches!(from_kind, Struct | Enum | Class);
+            let interface = matches!(to_kind, Trait | Interface);
+            match rel_kind {
+                Implements => implementor && interface,
+                ImplementedBy => interface && implementor,
+                _ => unreachable!(),
+            }
+        }
+        Extends | ExtendedBy => {
+            let extendable = matches!(from_kind, Class | Interface | Trait | Struct | Enum);
+            let base = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
+            extendable && base
+        }
+        Uses | UsedBy => {
+            // Most symbols can use/reference types and values
+            true
+        }
+        Defines | DefinedIn => {
+            let container = matches!(
+                from_kind,
+                Class | Struct | Enum | Trait | Interface | Module
+            );
+            let member = matches!(to_kind, Function | Method | Field | Constant | Variable);
+            match rel_kind {
+                Defines => container && member,
+                DefinedIn => member && container,
+                _ => unreachable!(),
+            }
+        }
+        References | ReferencedBy => {
+            // Very permissive - almost anything can reference anything
+            true
+        }
+    }
 }
 
 /// Language metadata from ABI-15
@@ -1060,6 +1359,10 @@ mod tests {
     struct TestBehavior;
 
     impl LanguageBehavior for TestBehavior {
+        fn language_id(&self) -> crate::parsing::registry::LanguageId {
+            crate::parsing::registry::LanguageId::new("test")
+        }
+
         fn format_module_path(&self, base_path: &str, _symbol_name: &str) -> String {
             base_path.to_string()
         }

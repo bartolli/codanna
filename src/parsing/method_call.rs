@@ -1,31 +1,30 @@
-//! Method call representation for enhanced type-aware resolution
+//! Method call representation and resolution
 //!
-//! This module provides a structured representation of method calls that captures
-//! receiver information, enabling more accurate cross-reference resolution than
-//! the current string-based approach.
+//! This module provides:
+//! - `MethodCall` - Structured representation of method calls with receiver information
+//! - `MethodCallResolver` - Per-file storage for method calls and variable types
 //!
-//! # Design Goals
+//! # Architecture
 //!
-//! - **Type Safety**: Structured data instead of string patterns
-//! - **Zero-Cost Abstractions**: Accept borrowed types in APIs
-//! - **Memory Efficiency**: Minimal overhead compared to tuple representation
-//! - **Future Extensibility**: Foundation for type-aware resolution
+//! ```text
+//! Parser
+//!   ├─ find_variable_types() ──┐
+//!   └─ find_method_calls() ────┼─→ MethodCallResolver (per file)
+//!                              │      - variable_types: HashMap<String, String>
+//!                              │      - method_calls: Vec<MethodCall>
+//!                              │
+//!                              ↓
+//!                       LanguageBehavior::resolve_method_call()
+//! ```
 //!
-//! # Current Integration Status
+//! # Separation of Concerns
 //!
-//! This struct is not yet integrated into the indexing pipeline. The current
-//! system uses `(String, String, Range)` tuples with patterns like:
-//! - `"self.method"` for self calls
-//! - `"receiver@method"` for instance calls
-//! - `"method"` for plain function calls
-//!
-//! # Future Enhancements
-//!
-//! - Add `receiver_type: Option<String>` for resolved type information
-//! - Support method chains with `intermediate_types: Vec<String>`
-//! - Generic type parameter tracking
+//! - `MethodCallResolver` - owns DATA (variable types, method calls)
+//! - `LanguageBehavior` - owns LOGIC (language-specific resolution)
+//! - Indexer - orchestrates WHEN to call what
 
 use crate::Range;
+use std::collections::HashMap;
 
 /// Represents a method call with rich receiver information
 ///
@@ -115,17 +114,6 @@ impl MethodCall {
     /// # Arguments
     ///
     /// * `receiver` - The receiver expression (e.g., "self", "vec", "String")
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use codanna::parsing::MethodCall;
-    /// use codanna::Range;
-    ///
-    /// let range = Range::new(1, 0, 1, 10);
-    /// let call = MethodCall::new("main", "clone", range)
-    ///     .with_receiver("data");
-    /// ```
     pub fn with_receiver(mut self, receiver: &str) -> Self {
         self.receiver = Some(receiver.to_string());
         self
@@ -134,59 +122,9 @@ impl MethodCall {
     /// Marks this as a static method call
     ///
     /// Should be used when the receiver is a type name rather than an instance.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use codanna::parsing::MethodCall;
-    /// use codanna::Range;
-    ///
-    /// let range = Range::new(1, 0, 1, 10);
-    /// let call = MethodCall::new("main", "new", range)
-    ///     .with_receiver("Vec")
-    ///     .static_method();
-    /// ```
     pub fn static_method(mut self) -> Self {
         self.is_static = true;
         self
-    }
-
-    /// Convert to the simplified format used by existing code
-    ///
-    /// This provides backward compatibility with the current indexing system
-    /// that expects `(caller, target, range)` tuples.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of `(caller, target, range)` where target is:
-    /// - `"self.method"` for self calls
-    /// - `"Type::method"` for static calls
-    /// - `"method"` for plain function calls or instance calls
-    ///
-    /// # Note
-    ///
-    /// The current format loses receiver information for instance calls.
-    /// This is a limitation we aim to address with full MethodCall integration.
-    #[must_use = "The converted tuple should be used"]
-    pub fn to_simple_call(&self) -> (String, String, Range) {
-        let target = if let Some(receiver) = &self.receiver {
-            if receiver == "self" {
-                // Preserve self calls with special format
-                format!("self.{}", self.method_name)
-            } else if self.is_static {
-                // Static method calls use :: separator
-                format!("{}::{}", receiver, self.method_name)
-            } else {
-                // Instance method calls lose receiver info in current format
-                // TODO: This is where we lose type information!
-                self.method_name.clone()
-            }
-        } else {
-            // Plain function call
-            self.method_name.clone()
-        };
-
-        (self.caller.clone(), target, self.range)
     }
 
     /// Checks if this is a self method call
@@ -211,66 +149,127 @@ impl MethodCall {
     #[must_use = "The formatted name should be used"]
     pub fn qualified_name(&self) -> String {
         match (&self.receiver, self.is_static) {
-            (Some(receiver), true) => format!("{}::{}", receiver, self.method_name),
-            (Some(receiver), false) => format!("{}.{}", receiver, self.method_name),
+            (Some(receiver), true) => format!("{receiver}::{}", self.method_name),
+            (Some(receiver), false) => format!("{receiver}.{}", self.method_name),
             (None, _) => self.method_name.clone(),
         }
     }
+}
 
-    /// Parse legacy string patterns into MethodCall
-    ///
-    /// Handles the legacy tuple format used by the current parser system.
-    /// Converts patterns like:
-    /// - `"self.method"` → self method call
-    /// - `"Type::method"` → static method call
-    /// - `"receiver@method"` → instance call with receiver hint
-    /// - `"method"` → plain function call
+/// Owns method call resolution data for a single file
+///
+/// Collects variable types and method calls during parsing,
+/// provides them for resolution in Pass 2.
+///
+/// # Example
+///
+/// ```rust
+/// use codanna::parsing::{MethodCall, MethodCallResolver};
+/// use codanna::Range;
+///
+/// let mut resolver = MethodCallResolver::new();
+///
+/// // Register variable types from let bindings
+/// resolver.register_variable_type("calc", "Calculator");
+///
+/// // Add method calls from parsing
+/// let call = MethodCall::new("process", "add", Range::new(5, 4, 5, 14))
+///     .with_receiver("calc");
+/// resolver.add_method_call(call);
+///
+/// // Later, during resolution:
+/// if let Some(mc) = resolver.find_method_call("process", "add") {
+///     let receiver_type = resolver.variable_types().get("calc");
+///     // Use receiver_type for resolution...
+/// }
+/// ```
+#[derive(Debug, Default)]
+pub struct MethodCallResolver {
+    /// Variable name to type mappings (e.g., "calc" -> "Calculator")
+    variable_types: HashMap<String, String>,
+    /// Method calls collected from parsing
+    method_calls: Vec<MethodCall>,
+}
+
+impl MethodCallResolver {
+    /// Creates a new empty resolver
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a variable's type from let binding, parameter, etc.
     ///
     /// # Arguments
     ///
-    /// * `caller` - The function containing this method call
-    /// * `target` - The legacy target string with embedded patterns
-    /// * `range` - The source location of the call
+    /// * `var` - The variable name (normalized)
+    /// * `type_name` - The type name
+    pub fn register_variable_type(&mut self, var: &str, type_name: &str) {
+        self.variable_types
+            .insert(var.to_string(), type_name.to_string());
+    }
+
+    /// Add a method call from parsing
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use codanna::parsing::MethodCall;
-    /// use codanna::Range;
-    ///
-    /// let range = Range::new(1, 0, 1, 10);
-    /// let call = MethodCall::from_legacy_format("main", "self.validate", range);
-    /// assert!(call.is_self_call());
-    ///
-    /// let call = MethodCall::from_legacy_format("init", "HashMap::new", range);
-    /// assert!(call.is_static);
-    /// ```
-    pub fn from_legacy_format(caller: &str, target: &str, range: Range) -> Self {
-        if let Some(method) = target.strip_prefix("self.") {
-            // Self method call: "self.validate" -> receiver="self", method="validate"
-            Self::new(caller, method, range).with_receiver("self")
-        } else if target.contains("::") {
-            // Static method call: "HashMap::new" -> receiver="HashMap", method="new", static=true
-            let parts: Vec<&str> = target.split("::").collect();
-            if parts.len() == 2 {
-                Self::new(caller, parts[1], range)
-                    .with_receiver(parts[0])
-                    .static_method()
-            } else {
-                Self::new(caller, target, range)
-            }
-        } else if target.contains('@') {
-            // Instance method with receiver hint: "file@write" -> receiver="file", method="write"
-            let parts: Vec<&str> = target.split('@').collect();
-            if parts.len() == 2 {
-                Self::new(caller, parts[1], range).with_receiver(parts[0])
-            } else {
-                Self::new(caller, target, range)
-            }
-        } else {
-            // Plain function call or instance method (receiver information lost in legacy format)
-            Self::new(caller, target, range)
+    /// Returns `true` if added, `false` if duplicate (same caller, method, line, column)
+    pub fn add_method_call(&mut self, call: MethodCall) -> bool {
+        // Deduplication: check if already exists by (caller, method, line, col)
+        let exists = self.method_calls.iter().any(|mc| {
+            mc.caller == call.caller
+                && mc.method_name == call.method_name
+                && mc.range.start_line == call.range.start_line
+                && mc.range.start_column == call.range.start_column
+        });
+        if exists {
+            return false;
         }
+        self.method_calls.push(call);
+        true
+    }
+
+    /// Get the variable types map for resolution
+    pub fn variable_types(&self) -> &HashMap<String, String> {
+        &self.variable_types
+    }
+
+    /// Find a method call by caller and method name
+    pub fn find_method_call(&self, caller: &str, method_name: &str) -> Option<&MethodCall> {
+        self.method_calls
+            .iter()
+            .find(|mc| mc.caller == caller && mc.method_name == method_name)
+    }
+
+    /// Get all method calls
+    pub fn method_calls(&self) -> &[MethodCall] {
+        &self.method_calls
+    }
+
+    /// Check if a method call exists at a specific position
+    ///
+    /// Used to determine if a function_call is already tracked as a method_call.
+    pub fn has_method_call_at(
+        &self,
+        caller: &str,
+        method_name: &str,
+        line: u32,
+        column: u16,
+    ) -> bool {
+        self.method_calls.iter().any(|mc| {
+            mc.caller == caller
+                && mc.method_name == method_name
+                && mc.range.start_line == line
+                && mc.range.start_column == column
+        })
+    }
+
+    /// Check if resolver has any data
+    pub fn is_empty(&self) -> bool {
+        self.method_calls.is_empty() && self.variable_types.is_empty()
+    }
+
+    /// Clear all data (for reuse)
+    pub fn clear(&mut self) {
+        self.variable_types.clear();
+        self.method_calls.clear();
     }
 }
 
@@ -282,386 +281,7 @@ mod tests {
         Range::new(10, 5, 10, 20)
     }
 
-    // Integration test demonstrating how MethodCall would work with real parser output
-    #[test]
-    fn test_integration_with_parser_output() {
-        let debug = true; // Enable debug output for tests
-
-        // Simulating what the parser currently returns for method calls
-        let parser_output = vec![
-            ("process_data", "self.validate", Range::new(5, 10, 5, 25)),
-            ("main", "HashMap::new", Range::new(10, 15, 10, 30)),
-            ("handler", "clone", Range::new(15, 20, 15, 28)), // Lost receiver info!
-            ("save", "file@write", Range::new(20, 10, 20, 22)), // Current workaround
-        ];
-
-        if debug {
-            eprintln!("\nDEBUG: Current parser output (legacy format):");
-            for (caller, target, _) in &parser_output {
-                eprintln!("  {caller} -> {target}");
-            }
-        }
-
-        // Converting current output to MethodCall structures
-        let method_calls: Vec<MethodCall> = parser_output.iter().map(|(caller, target, range)| {
-            let result = if let Some(method) = target.strip_prefix("self.") {
-                // Self method call
-                if debug {
-                    eprintln!("DEBUG: Parsing self call '{target}' -> method: '{method}'");
-                }
-                MethodCall::new(caller, method, *range)
-                    .with_receiver("self")
-            } else if target.contains("::") {
-                // Static method call
-                let parts: Vec<&str> = target.split("::").collect();
-                if parts.len() == 2 {
-                    if debug {
-                        eprintln!("DEBUG: Parsing static call '{}' -> type: '{}', method: '{}'",
-                                 target, parts[0], parts[1]);
-                    }
-                    MethodCall::new(caller, parts[1], *range)
-                        .with_receiver(parts[0])
-                        .static_method()
-                } else {
-                    MethodCall::new(caller, target, *range)
-                }
-            } else if target.contains('@') {
-                // Instance method with receiver hint
-                let parts: Vec<&str> = target.split('@').collect();
-                if parts.len() == 2 {
-                    if debug {
-                        eprintln!("DEBUG: Parsing receiver hint '{}' -> receiver: '{}', method: '{}'",
-                                 target, parts[0], parts[1]);
-                    }
-                    MethodCall::new(caller, parts[1], *range)
-                        .with_receiver(parts[0])
-                } else {
-                    MethodCall::new(caller, target, *range)
-                }
-            } else {
-                // Plain function call or instance method (receiver lost)
-                if debug {
-                    eprintln!("DEBUG: Parsing plain call '{target}' -> NO RECEIVER INFO!");
-                }
-                MethodCall::new(caller, target, *range)
-            };
-
-            if debug {
-                eprintln!("  -> MethodCall {{ caller: '{}', method: '{}', receiver: {:?}, is_static: {} }}",
-                         result.caller, result.method_name, result.receiver, result.is_static);
-            }
-
-            result
-        }).collect();
-
-        // Verify conversions
-        assert_eq!(method_calls.len(), 4);
-
-        // Self call preserved
-        assert_eq!(method_calls[0].qualified_name(), "self.validate");
-        assert!(method_calls[0].is_self_call());
-
-        // Static call preserved
-        assert_eq!(method_calls[1].qualified_name(), "HashMap::new");
-        assert!(method_calls[1].is_static);
-
-        // Instance method - receiver lost in current format
-        assert_eq!(method_calls[2].qualified_name(), "clone");
-        assert!(method_calls[2].receiver.is_none()); // This is the problem!
-
-        // Workaround pattern parsed
-        assert_eq!(method_calls[3].qualified_name(), "file.write");
-        assert_eq!(method_calls[3].receiver, Some("file".to_string()));
-    }
-
-    // Test demonstrating enhanced parser output with MethodCall
-    #[test]
-    fn test_enhanced_parser_with_method_call() {
-        let debug = true; // Enable debug output
-
-        // What the enhanced parser would return
-        let enhanced_calls = vec![
-            MethodCall::new("process_data", "validate", Range::new(5, 10, 5, 25))
-                .with_receiver("self"),
-            MethodCall::new("main", "new", Range::new(10, 15, 10, 30))
-                .with_receiver("HashMap")
-                .static_method(),
-            MethodCall::new("handler", "clone", Range::new(15, 20, 15, 28)).with_receiver("data"), // Receiver preserved!
-            MethodCall::new("save", "write", Range::new(20, 10, 20, 22)).with_receiver("file"),
-        ];
-
-        if debug {
-            eprintln!("\nDEBUG: Enhanced parser output (MethodCall format):");
-            for call in &enhanced_calls {
-                eprintln!("  MethodCall {{");
-                eprintln!("    caller: '{}'", call.caller);
-                eprintln!("    method: '{}'", call.method_name);
-                eprintln!("    receiver: {:?}", call.receiver);
-                eprintln!("    is_static: {}", call.is_static);
-                eprintln!("    qualified: '{}'", call.qualified_name());
-                eprintln!("  }}");
-            }
-        }
-
-        // All calls have complete information
-        for call in &enhanced_calls {
-            // Can always determine the full calling context
-            match (&call.receiver, call.is_static) {
-                (Some(_receiver), true) => {
-                    // Static method: Type::method
-                    assert!(call.qualified_name().contains("::"));
-                }
-                (Some(_receiver), false) => {
-                    // Instance method: receiver.method
-                    assert!(call.qualified_name().contains("."));
-                }
-                (None, _) => {
-                    // Plain function call
-                    assert!(!call.qualified_name().contains("."));
-                    assert!(!call.qualified_name().contains("::"));
-                }
-            }
-        }
-
-        // Converting back for compatibility
-        let legacy_format: Vec<(String, String, Range)> = enhanced_calls
-            .iter()
-            .map(|call| call.to_simple_call())
-            .collect();
-
-        if debug {
-            eprintln!("\nDEBUG: Converting back to legacy format:");
-            for (i, (caller, target, _)) in legacy_format.iter().enumerate() {
-                let original = &enhanced_calls[i];
-                eprintln!(
-                    "  {} -> {} (was: {:?})",
-                    caller,
-                    target,
-                    original.qualified_name()
-                );
-                if original.receiver.is_some() && !target.contains('.') && !target.contains("::") {
-                    eprintln!(
-                        "    WARNING: Lost receiver information for '{}'!",
-                        original.receiver.as_ref().unwrap()
-                    );
-                }
-            }
-        }
-
-        // Verify backward compatibility
-        assert_eq!(legacy_format[0].1, "self.validate");
-        assert_eq!(legacy_format[1].1, "HashMap::new");
-        assert_eq!(legacy_format[2].1, "clone"); // Still loses info in legacy format
-        assert_eq!(legacy_format[3].1, "write"); // Still loses info in legacy format
-    }
-
-    // Priority Test Case 1: Basic method calls
-    #[test]
-    fn test_priority_1_basic_method_calls() {
-        let debug = true;
-
-        // Simulating enhanced parser output for basic method calls
-        let basic_calls = vec![
-            // self.method()
-            MethodCall::new("save", "validate", Range::new(10, 8, 10, 23)).with_receiver("self"),
-            // instance.method()
-            MethodCall::new("process", "push", Range::new(15, 12, 15, 28)).with_receiver("items"),
-            // Type::static_method()
-            MethodCall::new("main", "from_str", Range::new(20, 16, 20, 40))
-                .with_receiver("IpAddr")
-                .static_method(),
-        ];
-
-        if debug {
-            eprintln!("\nDEBUG: Priority 1 - Basic method calls:");
-            for call in &basic_calls {
-                eprintln!(
-                    "  {} => {}",
-                    call.qualified_name(),
-                    match (&call.receiver, call.is_static) {
-                        (Some(_), true) => "Static method call",
-                        (Some(r), false) if r == "self" => "Self method call",
-                        (Some(_), false) => "Instance method call",
-                        (None, _) => "Function call",
-                    }
-                );
-            }
-        }
-
-        // Verify each type is correctly identified
-        assert!(basic_calls[0].is_self_call());
-        assert!(!basic_calls[1].is_self_call() && basic_calls[1].receiver.is_some());
-        assert!(basic_calls[2].is_static);
-
-        // Show how current system loses information
-        let legacy_conversions: Vec<_> = basic_calls.iter().map(|c| c.to_simple_call()).collect();
-
-        if debug {
-            eprintln!("\nDEBUG: Legacy format comparison:");
-            for (i, (_, target, _)) in legacy_conversions.iter().enumerate() {
-                let original = &basic_calls[i];
-                eprintln!(
-                    "  {} -> {} {}",
-                    original.qualified_name(),
-                    target,
-                    if original.receiver.is_some()
-                        && !target.contains('.')
-                        && !target.contains("::")
-                    {
-                        "(LOST RECEIVER!)"
-                    } else {
-                        "(preserved)"
-                    }
-                );
-            }
-        }
-    }
-
-    // Priority Test Case 2: Method chains
-    #[test]
-    fn test_priority_2_method_chains() {
-        let debug = true;
-
-        // Method chains require tracking intermediate types
-        // This demonstrates the foundation for chain support
-        let chain_components = [
-            // foo().bar().baz() - broken into components
-            ("main", "foo", None, Range::new(10, 12, 10, 17)),
-            (
-                "main",
-                "bar",
-                Some("foo_result"),
-                Range::new(10, 18, 10, 23),
-            ),
-            (
-                "main",
-                "baz",
-                Some("bar_result"),
-                Range::new(10, 24, 10, 29),
-            ),
-            // self.field.method()
-            ("process", "field", Some("self"), Range::new(15, 8, 15, 18)),
-            (
-                "process",
-                "method",
-                Some("field"),
-                Range::new(15, 19, 15, 27),
-            ),
-        ];
-
-        let chain_calls: Vec<MethodCall> = chain_components
-            .iter()
-            .map(|(caller, method, receiver, range)| {
-                let mut call = MethodCall::new(caller, method, *range);
-                if let Some(recv) = receiver {
-                    call = call.with_receiver(recv);
-                }
-                call
-            })
-            .collect();
-
-        if debug {
-            eprintln!("\nDEBUG: Priority 2 - Method chains:");
-            eprintln!("  Chain: foo().bar().baz()");
-            for (i, call) in chain_calls[0..3].iter().enumerate() {
-                eprintln!(
-                    "    Step {}: {} (receiver: {:?})",
-                    i + 1,
-                    call.method_name,
-                    call.receiver
-                );
-            }
-
-            eprintln!("\n  Chain: self.field.method()");
-            for (i, call) in chain_calls[3..5].iter().enumerate() {
-                eprintln!(
-                    "    Step {}: {} (receiver: {:?})",
-                    i + 1,
-                    call.method_name,
-                    call.receiver
-                );
-            }
-        }
-
-        // Verify chain relationships
-        assert_eq!(chain_calls[0].receiver, None); // foo() has no receiver
-        assert_eq!(chain_calls[1].receiver, Some("foo_result".to_string()));
-        assert_eq!(chain_calls[2].receiver, Some("bar_result".to_string()));
-
-        assert_eq!(chain_calls[3].receiver, Some("self".to_string()));
-        assert_eq!(chain_calls[4].receiver, Some("field".to_string()));
-    }
-
-    // Priority Test Case 3: Type inference scenarios
-    #[test]
-    fn test_priority_3_type_inference() {
-        let debug = true;
-
-        // Scenarios where type information helps resolution
-        struct TypedCall {
-            call: MethodCall,
-            inferred_type: Option<&'static str>, // Would come from type analysis
-            source: &'static str,
-        }
-
-        let typed_scenarios = vec![
-            // let x = MyType::new()
-            TypedCall {
-                call: MethodCall::new("main", "new", Range::new(10, 20, 10, 35))
-                    .with_receiver("HashMap")
-                    .static_method(),
-                inferred_type: Some("HashMap<String, i32>"),
-                source: "Constructor",
-            },
-            // let x: MyType = Default::default()
-            TypedCall {
-                call: MethodCall::new("init", "default", Range::new(15, 25, 15, 42))
-                    .with_receiver("Default")
-                    .static_method(),
-                inferred_type: Some("MyStruct"), // From type annotation
-                source: "Type annotation",
-            },
-            // let x = vec.clone()
-            TypedCall {
-                call: MethodCall::new("process", "clone", Range::new(20, 15, 20, 27))
-                    .with_receiver("items"),
-                inferred_type: Some("Vec<Item>"), // From variable type
-                source: "Method return",
-            },
-        ];
-
-        if debug {
-            eprintln!("\nDEBUG: Priority 3 - Type inference scenarios:");
-            for scenario in &typed_scenarios {
-                eprintln!(
-                    "  {} call: {}",
-                    scenario.source,
-                    scenario.call.qualified_name()
-                );
-                if let Some(typ) = scenario.inferred_type {
-                    eprintln!("    -> Inferred type: {typ}");
-                    eprintln!(
-                        "    -> Enables accurate resolution of '{}'",
-                        scenario.call.method_name
-                    );
-                }
-            }
-
-            eprintln!("\nDEBUG: Why type inference matters:");
-            eprintln!("  - 'clone' on Vec<T> vs HashMap<K,V> resolves to different methods");
-            eprintln!("  - 'default' needs type context to know which impl to use");
-            eprintln!("  - Method chains need intermediate types for correct resolution");
-        }
-
-        // Verify the calls are structured correctly for type resolution
-        assert!(typed_scenarios[0].call.is_static);
-        assert!(typed_scenarios[1].call.is_static);
-        assert!(!typed_scenarios[2].call.is_static);
-
-        // In current system, the last case loses receiver info
-        let (_, target, _) = typed_scenarios[2].call.to_simple_call();
-        assert_eq!(target, "clone"); // Lost "items" receiver!
-    }
+    // === MethodCall tests ===
 
     #[test]
     fn test_basic_construction() {
@@ -688,36 +308,6 @@ mod tests {
 
         assert_eq!(call.receiver, Some("HashMap".to_string()));
         assert!(call.is_static);
-    }
-
-    #[test]
-    fn test_to_simple_call_self() {
-        let call = MethodCall::new("save", "validate", test_range()).with_receiver("self");
-
-        let (caller, target, _) = call.to_simple_call();
-        assert_eq!(caller, "save");
-        assert_eq!(target, "self.validate");
-    }
-
-    #[test]
-    fn test_to_simple_call_static() {
-        let call = MethodCall::new("main", "from_str", test_range())
-            .with_receiver("IpAddr")
-            .static_method();
-
-        let (caller, target, _) = call.to_simple_call();
-        assert_eq!(caller, "main");
-        assert_eq!(target, "IpAddr::from_str");
-    }
-
-    #[test]
-    fn test_to_simple_call_instance() {
-        let call = MethodCall::new("process", "len", test_range()).with_receiver("vec");
-
-        let (caller, target, _) = call.to_simple_call();
-        assert_eq!(caller, "process");
-        // Note: receiver information is lost in current format
-        assert_eq!(target, "len");
     }
 
     #[test]
@@ -758,58 +348,122 @@ mod tests {
         assert_ne!(call1, call3);
     }
 
+    // === MethodCallResolver tests ===
+
     #[test]
-    fn test_from_legacy_format() {
-        let range = test_range();
+    fn test_resolver_new() {
+        let resolver = MethodCallResolver::new();
+        assert!(resolver.is_empty());
+        assert!(resolver.variable_types().is_empty());
+        assert!(resolver.method_calls().is_empty());
+    }
 
-        // Test self method calls
-        let self_call = MethodCall::from_legacy_format("save", "self.validate", range);
-        assert_eq!(self_call.caller, "save");
-        assert_eq!(self_call.method_name, "validate");
-        assert_eq!(self_call.receiver, Some("self".to_string()));
-        assert!(!self_call.is_static);
-        assert!(self_call.is_self_call());
+    #[test]
+    fn test_resolver_variable_types() {
+        let mut resolver = MethodCallResolver::new();
 
-        // Test static method calls
-        let static_call = MethodCall::from_legacy_format("main", "HashMap::new", range);
-        assert_eq!(static_call.caller, "main");
-        assert_eq!(static_call.method_name, "new");
-        assert_eq!(static_call.receiver, Some("HashMap".to_string()));
-        assert!(static_call.is_static);
-        assert!(!static_call.is_self_call());
+        resolver.register_variable_type("calc", "Calculator");
+        resolver.register_variable_type("items", "Vec<Item>");
 
-        // Test receiver hint pattern
-        let receiver_call = MethodCall::from_legacy_format("handler", "file@write", range);
-        assert_eq!(receiver_call.caller, "handler");
-        assert_eq!(receiver_call.method_name, "write");
-        assert_eq!(receiver_call.receiver, Some("file".to_string()));
-        assert!(!receiver_call.is_static);
-        assert!(!receiver_call.is_self_call());
-
-        // Test plain function call
-        let plain_call = MethodCall::from_legacy_format("process", "clone", range);
-        assert_eq!(plain_call.caller, "process");
-        assert_eq!(plain_call.method_name, "clone");
-        assert_eq!(plain_call.receiver, None);
-        assert!(!plain_call.is_static);
-        assert!(plain_call.is_function_call());
-
-        // Test malformed static call (more than 2 parts)
-        let malformed_static =
-            MethodCall::from_legacy_format("test", "std::collections::HashMap::new", range);
-        assert_eq!(malformed_static.caller, "test");
         assert_eq!(
-            malformed_static.method_name,
-            "std::collections::HashMap::new"
+            resolver.variable_types().get("calc"),
+            Some(&"Calculator".to_string())
         );
-        assert_eq!(malformed_static.receiver, None);
-        assert!(!malformed_static.is_static);
+        assert_eq!(
+            resolver.variable_types().get("items"),
+            Some(&"Vec<Item>".to_string())
+        );
+        assert_eq!(resolver.variable_types().get("unknown"), None);
+    }
 
-        // Test malformed receiver hint (more than 2 parts)
-        let malformed_receiver = MethodCall::from_legacy_format("test", "a@b@c", range);
-        assert_eq!(malformed_receiver.caller, "test");
-        assert_eq!(malformed_receiver.method_name, "a@b@c");
-        assert_eq!(malformed_receiver.receiver, None);
-        assert!(!malformed_receiver.is_static);
+    #[test]
+    fn test_resolver_add_method_call() {
+        let mut resolver = MethodCallResolver::new();
+
+        let call1 =
+            MethodCall::new("process", "add", Range::new(5, 4, 5, 14)).with_receiver("calc");
+        let call2 =
+            MethodCall::new("process", "multiply", Range::new(6, 4, 6, 18)).with_receiver("calc");
+
+        assert!(resolver.add_method_call(call1));
+        assert!(resolver.add_method_call(call2));
+
+        assert_eq!(resolver.method_calls().len(), 2);
+    }
+
+    #[test]
+    fn test_resolver_deduplication() {
+        let mut resolver = MethodCallResolver::new();
+
+        let call1 =
+            MethodCall::new("process", "add", Range::new(5, 4, 5, 14)).with_receiver("calc");
+        let call2 =
+            MethodCall::new("process", "add", Range::new(5, 4, 5, 14)).with_receiver("calc");
+        // Different call with same position
+        let call3 =
+            MethodCall::new("process", "add", Range::new(5, 4, 5, 14)).with_receiver("other");
+
+        assert!(resolver.add_method_call(call1)); // First add succeeds
+        assert!(!resolver.add_method_call(call2)); // Exact duplicate rejected
+        assert!(!resolver.add_method_call(call3)); // Same position rejected
+
+        assert_eq!(resolver.method_calls().len(), 1);
+    }
+
+    #[test]
+    fn test_resolver_find_method_call() {
+        let mut resolver = MethodCallResolver::new();
+
+        let call = MethodCall::new("process", "add", test_range()).with_receiver("calc");
+        resolver.add_method_call(call);
+
+        assert!(resolver.find_method_call("process", "add").is_some());
+        assert!(resolver.find_method_call("process", "subtract").is_none());
+        assert!(resolver.find_method_call("other", "add").is_none());
+    }
+
+    #[test]
+    fn test_resolver_clear() {
+        let mut resolver = MethodCallResolver::new();
+
+        resolver.register_variable_type("calc", "Calculator");
+        resolver.add_method_call(MethodCall::new("process", "add", test_range()));
+
+        assert!(!resolver.is_empty());
+
+        resolver.clear();
+
+        assert!(resolver.is_empty());
+        assert!(resolver.variable_types().is_empty());
+        assert!(resolver.method_calls().is_empty());
+    }
+
+    #[test]
+    fn test_resolver_integration() {
+        // Simulates the full flow: parsing → storage → lookup
+        let mut resolver = MethodCallResolver::new();
+
+        // 1. During parsing, register variable types
+        resolver.register_variable_type("calc", "Calculator");
+        resolver.register_variable_type("items", "Vec<i32>");
+
+        // 2. During parsing, add method calls
+        let call1 = MethodCall::new("process_numbers", "add", Range::new(7, 4, 7, 14))
+            .with_receiver("calc");
+        let call2 = MethodCall::new("process_numbers", "multiply", Range::new(8, 4, 8, 18))
+            .with_receiver("calc");
+        let call3 = MethodCall::new("compute_total", "add", Range::new(16, 8, 16, 18))
+            .with_receiver("calc");
+
+        resolver.add_method_call(call1);
+        resolver.add_method_call(call2);
+        resolver.add_method_call(call3);
+
+        // 3. During resolution, lookup
+        let mc = resolver.find_method_call("process_numbers", "add").unwrap();
+        assert_eq!(mc.receiver.as_deref(), Some("calc"));
+
+        let receiver_type = resolver.variable_types().get(mc.receiver.as_ref().unwrap());
+        assert_eq!(receiver_type, Some(&"Calculator".to_string()));
     }
 }

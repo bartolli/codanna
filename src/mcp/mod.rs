@@ -270,7 +270,22 @@ impl CodeIntelligenceServer {
         use crate::symbol::context::ContextIncludes;
 
         let indexer = self.indexer.read().await;
-        let symbols = indexer.find_symbols_by_name(&name, lang.as_deref());
+
+        // Support symbol_id:XXX format for direct lookup (from semantic search results)
+        let symbols = if let Some(id_str) = name.strip_prefix("symbol_id:") {
+            if let Ok(id) = id_str.parse::<u32>() {
+                indexer
+                    .get_symbol(crate::SymbolId(id))
+                    .map(|s| vec![s])
+                    .unwrap_or_default()
+            } else {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Invalid symbol_id format: {id_str}"
+                ))]));
+            }
+        } else {
+            indexer.find_symbols_by_name(&name, lang.as_deref())
+        };
 
         if symbols.is_empty() {
             let mut output = format!("No symbols found with name: {name}");
@@ -290,12 +305,14 @@ impl CodeIntelligenceServer {
                 result.push_str("\n---\n\n");
             }
 
-            // Try to get full context
+            // Try to get full context with all relationship types
             if let Some(ctx) = indexer.get_symbol_context(
                 symbol.id,
                 ContextIncludes::IMPLEMENTATIONS
                     | ContextIncludes::DEFINITIONS
-                    | ContextIncludes::CALLERS,
+                    | ContextIncludes::CALLERS
+                    | ContextIncludes::EXTENDS
+                    | ContextIncludes::USES,
             ) {
                 // Use formatted output from context
                 result.push_str(&ctx.format_location_with_type());
@@ -325,9 +342,38 @@ impl CodeIntelligenceServer {
                 // Add relationship summary
                 let mut has_relationships = false;
 
+                // What traits this type implements
+                if let Some(impls) = &ctx.relationships.implements {
+                    if !impls.is_empty() {
+                        result.push_str(&format!("Implements: {} trait(s)\n", impls.len()));
+                        for trait_sym in impls.iter().take(5) {
+                            result.push_str(&format!(
+                                "  -> {} at {}\n",
+                                trait_sym.name,
+                                crate::symbol::context::SymbolContext::symbol_location(trait_sym)
+                            ));
+                        }
+                        if impls.len() > 5 {
+                            result.push_str(&format!("  ... and {} more\n", impls.len() - 5));
+                        }
+                        has_relationships = true;
+                    }
+                }
+
+                // What types implement this trait
                 if let Some(impls) = &ctx.relationships.implemented_by {
                     if !impls.is_empty() {
                         result.push_str(&format!("Implemented by: {} type(s)\n", impls.len()));
+                        for impl_sym in impls.iter().take(5) {
+                            result.push_str(&format!(
+                                "  <- {} at {}\n",
+                                impl_sym.name,
+                                crate::symbol::context::SymbolContext::symbol_location(impl_sym)
+                            ));
+                        }
+                        if impls.len() > 5 {
+                            result.push_str(&format!("  ... and {} more\n", impls.len() - 5));
+                        }
                         has_relationships = true;
                     }
                 }
@@ -348,6 +394,68 @@ impl CodeIntelligenceServer {
                 if let Some(callers) = &ctx.relationships.called_by {
                     if !callers.is_empty() {
                         result.push_str(&format!("Called by: {} function(s)\n", callers.len()));
+                        has_relationships = true;
+                    }
+                }
+
+                // What base class(es) this extends
+                if let Some(extends) = &ctx.relationships.extends {
+                    if !extends.is_empty() {
+                        result.push_str(&format!("Extends: {} class(es)\n", extends.len()));
+                        for base in extends.iter().take(3) {
+                            result.push_str(&format!(
+                                "  -> {} at {}\n",
+                                base.name,
+                                crate::symbol::context::SymbolContext::symbol_location(base)
+                            ));
+                        }
+                        if extends.len() > 3 {
+                            result.push_str(&format!("  ... and {} more\n", extends.len() - 3));
+                        }
+                        has_relationships = true;
+                    }
+                }
+
+                // What classes extend this
+                if let Some(extended_by) = &ctx.relationships.extended_by {
+                    if !extended_by.is_empty() {
+                        result.push_str(&format!("Extended by: {} class(es)\n", extended_by.len()));
+                        for derived in extended_by.iter().take(3) {
+                            result.push_str(&format!(
+                                "  <- {} at {}\n",
+                                derived.name,
+                                crate::symbol::context::SymbolContext::symbol_location(derived)
+                            ));
+                        }
+                        if extended_by.len() > 3 {
+                            result.push_str(&format!("  ... and {} more\n", extended_by.len() - 3));
+                        }
+                        has_relationships = true;
+                    }
+                }
+
+                // What types this symbol uses
+                if let Some(uses) = &ctx.relationships.uses {
+                    if !uses.is_empty() {
+                        result.push_str(&format!("Uses: {} type(s)\n", uses.len()));
+                        for used in uses.iter().take(3) {
+                            result.push_str(&format!(
+                                "  -> {} at {}\n",
+                                used.name,
+                                crate::symbol::context::SymbolContext::symbol_location(used)
+                            ));
+                        }
+                        if uses.len() > 3 {
+                            result.push_str(&format!("  ... and {} more\n", uses.len() - 3));
+                        }
+                        has_relationships = true;
+                    }
+                }
+
+                // What symbols use this type
+                if let Some(used_by) = &ctx.relationships.used_by {
+                    if !used_by.is_empty() {
+                        result.push_str(&format!("Used by: {} symbol(s)\n", used_by.len()));
                         has_relationships = true;
                     }
                 }
@@ -1381,10 +1489,12 @@ impl CodeIntelligenceServer {
                         }
                     }
 
-                    // Show inheritance relationships for classes
+                    // Show inheritance relationships for classes/structs/enums
                     if matches!(
                         symbol.kind,
-                        crate::SymbolKind::Class | crate::SymbolKind::Struct
+                        crate::SymbolKind::Class
+                            | crate::SymbolKind::Struct
+                            | crate::SymbolKind::Enum
                     ) {
                         // What does this class extend?
                         let extends = indexer.get_extends(symbol.id);
@@ -1435,6 +1545,65 @@ impl CodeIntelligenceServer {
                                     output.push_str(&format!(
                                         "     ... and {} more\n",
                                         extended_by.len() - 5
+                                    ));
+                                }
+                            }
+                        }
+
+                        // What traits does this type implement?
+                        let implements = indexer.get_implemented_traits(symbol.id);
+                        if !implements.is_empty() {
+                            output.push_str(&format!(
+                                "\n   {} implements {} trait(s):\n",
+                                symbol.name,
+                                implements.len()
+                            ));
+                            for (i, trait_sym) in implements.iter().take(5).enumerate() {
+                                output.push_str(&format!(
+                                    "     -> {:?} {} at {} [symbol_id:{}]\n",
+                                    trait_sym.kind,
+                                    trait_sym.name,
+                                    crate::symbol::context::SymbolContext::symbol_location(
+                                        trait_sym
+                                    ),
+                                    trait_sym.id.value()
+                                ));
+                                if i == 4 && implements.len() > 5 {
+                                    output.push_str(&format!(
+                                        "     ... and {} more\n",
+                                        implements.len() - 5
+                                    ));
+                                }
+                            }
+                        }
+                    }
+
+                    // Show what implements this trait/interface
+                    if matches!(
+                        symbol.kind,
+                        crate::SymbolKind::Trait | crate::SymbolKind::Interface
+                    ) {
+                        let implementations = indexer.get_implementations(symbol.id);
+                        if !implementations.is_empty() {
+                            output.push_str(&format!(
+                                "\n   {} type(s) implement {}:\n",
+                                implementations.len(),
+                                symbol.name
+                            ));
+                            for (i, impl_sym) in implementations.iter().take(5).enumerate() {
+                                output.push_str(&format!(
+                                    "     <- {:?} {} at {} [symbol_id:{}]\n",
+                                    impl_sym.kind,
+                                    impl_sym.name,
+                                    crate::symbol::context::SymbolContext::symbol_location(
+                                        impl_sym
+                                    ),
+                                    impl_sym.id.value()
+                                ));
+                                if i == 4 && implementations.len() > 5 {
+                                    output.push_str(&format!(
+                                        "     ... and {} more\n",
+                                        implementations.len() - 5
                                     ));
                                 }
                             }

@@ -709,13 +709,20 @@ pub fn retrieve_describe(
         context.relationships.defines = Some(defines.clone());
     }
 
-    // Load implementations (for traits/interfaces)
+    // Load implementations (for traits/interfaces) and implements (for types)
     use crate::SymbolKind;
     match symbol.kind {
         SymbolKind::Trait | SymbolKind::Interface => {
             let implementations = indexer.get_implementations(symbol.id);
             if !implementations.is_empty() {
                 context.relationships.implemented_by = Some(implementations);
+            }
+        }
+        SymbolKind::Struct | SymbolKind::Enum | SymbolKind::Class => {
+            // What traits does this type implement?
+            let impls = indexer.get_implemented_traits(symbol.id);
+            if !impls.is_empty() {
+                context.relationships.implements = Some(impls);
             }
         }
         _ => {}

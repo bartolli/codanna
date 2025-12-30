@@ -2326,6 +2326,17 @@ async fn main() {
                         }
                     }
 
+                    // Special handling: find_symbol supports symbol_id:XXX as positional
+                    // If symbol_id is in params but name wasn't set, use it as the name
+                    if tool == "find_symbol" && !args_map.contains_key("name") {
+                        if let Some(id) = params.get("symbol_id") {
+                            args_map.insert(
+                                "name".to_string(),
+                                serde_json::Value::String(format!("symbol_id:{id}")),
+                            );
+                        }
+                    }
+
                     // Add all key:value pairs from params
                     for (key, value) in params {
                         // Try to parse as number first, then boolean, fallback to string

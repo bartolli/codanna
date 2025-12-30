@@ -46,9 +46,10 @@ pub trait LanguageParser: Send + Sync {
     ///
     /// A vector of MethodCall structs with structured receiver information
     fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
+        // Default: convert from find_calls tuples (parsers should override for richer info)
         self.find_calls(code)
             .into_iter()
-            .map(|(caller, target, range)| MethodCall::from_legacy_format(caller, target, range))
+            .map(|(caller, target, range)| MethodCall::new(caller, target, range))
             .collect()
     }
 
