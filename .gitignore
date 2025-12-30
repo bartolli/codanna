@@ -69,3 +69,7 @@ Icon?
 *.swo
 *.bak
 *.tmp
+# Generated index files
+index.db
+index.db-*
+index.scip

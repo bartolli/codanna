@@ -4,6 +4,7 @@
 // extern crate tree_sitter_kotlin;
 extern crate tree_sitter_kotlin_codanna as tree_sitter_kotlin;
 
+pub mod cli;
 pub mod config;
 pub mod display;
 pub mod documents;
