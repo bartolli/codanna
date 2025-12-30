@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.8] - 2025-12-30
+
+### Added
+
+- `language_id()` method to LanguageBehavior trait for cross-language resolution filtering
+- `RelationRole` enum for relationship disambiguation (From/To)
+- `resolve_instance_method()` and `resolve_method_call()` methods to LanguageBehavior
+- `MethodCallResolver` struct for per-file variable types and method call storage
+- `CapturedIncomingRelationship` for relationship preservation during file reindex
+- `get_implemented_traits()` query for symmetric trait display
+- Bidirectional relationship display in MCP (implements/implemented_by, extends/extended_by)
+- `symbol_id:XXX` format support in find_symbol for direct lookup
+- Calculator example files for method call resolution testing
+
+### Changed
+
+- Replaced `variable_types` + `method_calls_by_file` with unified `method_call_resolvers`
+- Simplified `resolve_symbol_for_relationship()` - kind filtering moved to behavior layer
+- Language filtering added to `build_resolution_context_with_cache` candidate verification
+- `find_symbol` MCP tool includes all ContextIncludes flags
+- Upgraded serde_json from 1.0.145 to 1.0.148
+- Upgraded tempfile from 3.23.0 to 3.24.0
+- Upgraded testcontainers from 0.26.2 to 0.26.3
+
+### Removed
+
+- Legacy conversion methods from MethodCall (`to_simple_call`, `from_legacy_format`)
+
 ## [0.8.7] - 2025-12-20
 
 ### Added
