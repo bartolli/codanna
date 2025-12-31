@@ -33,7 +33,7 @@ impl IndexingResult {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Range {
     pub start_line: u32,
     pub start_column: u16,

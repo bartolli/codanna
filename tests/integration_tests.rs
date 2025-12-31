@@ -54,3 +54,6 @@ mod test_gdscript_mcp;
 
 #[path = "integration/test_kotlin_semantic_search.rs"]
 mod test_kotlin_semantic_search;
+
+#[path = "integration/test_pipeline_parse_stage.rs"]
+mod test_pipeline_parse_stage;

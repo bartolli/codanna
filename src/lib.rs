@@ -24,6 +24,7 @@ pub mod semantic;
 pub mod storage;
 pub mod symbol;
 pub mod types;
+pub mod utils;
 pub mod vector;
 pub mod watcher;
 

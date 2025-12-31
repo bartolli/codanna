@@ -2304,6 +2304,46 @@ impl DocumentIndex {
         Ok(())
     }
 
+    /// Store file registration from parallel pipeline.
+    ///
+    /// [PIPELINE API] This method is part of the new parallel indexing pipeline.
+    /// It takes FileRegistration directly and handles all field conversions.
+    /// Old methods like store_file_info will be retired once pipeline is complete.
+    pub fn store_file_registration(
+        &self,
+        registration: &crate::indexing::pipeline::FileRegistration,
+    ) -> StorageResult<()> {
+        let mut writer_lock = match self.writer.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!(
+                    "Warning: Recovering from poisoned writer mutex in store_file_registration"
+                );
+                poisoned.into_inner()
+            }
+        };
+        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+
+        let mut doc = Document::new();
+        doc.add_text(self.schema.doc_type, "file_info");
+        doc.add_u64(self.schema.file_id, registration.file_id.value() as u64);
+        doc.add_text(
+            self.schema.file_path,
+            registration.path.to_string_lossy().as_ref(),
+        );
+        // Format hash as hex for consistency with existing code
+        doc.add_text(
+            self.schema.file_hash,
+            format!("{:x}", registration.content_hash),
+        );
+        doc.add_u64(self.schema.file_timestamp, registration.timestamp);
+        // Store language for incremental indexing (parser selection)
+        doc.add_text(self.schema.language, registration.language_id.as_str());
+
+        writer.add_document(doc)?;
+        Ok(())
+    }
+
     /// Store an import document in the index
     ///
     /// This is a pure storage operation storing raw import metadata.

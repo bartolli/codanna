@@ -81,7 +81,7 @@ pub struct Settings {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct IndexingConfig {
-    /// Number of parallel threads for indexing
+    /// Number of parallel threads for indexing (parse stage)
     #[serde(default = "default_parallel_threads")]
     pub parallel_threads: usize,
 
@@ -108,6 +108,19 @@ pub struct IndexingConfig {
     /// This list is managed by the add-dir and remove-dir commands
     #[serde(default)]
     pub indexed_paths: Vec<PathBuf>,
+
+    // Pipeline settings (parallel indexer)
+    /// Symbols per batch before flushing to Tantivy
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+
+    /// Number of I/O threads for file reading
+    #[serde(default = "default_read_threads")]
+    pub read_threads: usize,
+
+    /// Batches to accumulate before Tantivy commit
+    #[serde(default = "default_batches_per_commit")]
+    pub batches_per_commit: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -273,6 +286,15 @@ fn default_tantivy_heap_mb() -> usize {
 fn default_max_retry_attempts() -> u32 {
     3 // Exponential backoff: 100ms, 200ms, 400ms
 }
+fn default_batch_size() -> usize {
+    5000 // Symbols per batch before Tantivy flush
+}
+fn default_read_threads() -> usize {
+    2 // I/O threads for file reading (saturates NVMe)
+}
+fn default_batches_per_commit() -> usize {
+    10 // Commit every 10 batches (~50K symbols)
+}
 fn default_true() -> bool {
     true
 }
@@ -335,6 +357,9 @@ impl Default for IndexingConfig {
                 "*.generated.*".to_string(),
             ],
             indexed_paths: Vec::new(),
+            batch_size: default_batch_size(),
+            read_threads: default_read_threads(),
+            batches_per_commit: default_batches_per_commit(),
         }
     }
 }

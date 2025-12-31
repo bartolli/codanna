@@ -85,8 +85,14 @@ pub struct MethodCall {
     /// - `String::new()` (static method, is_static = true)
     pub is_static: bool,
 
-    /// Location of the call in the source file
+    /// Location of the call in the source file (call site)
     pub range: Range,
+
+    /// Definition range of the calling function/method
+    ///
+    /// Used for precise symbol lookup during relationship resolution.
+    /// When provided, enables exact matching instead of name-only fallback.
+    pub caller_range: Option<Range>,
 }
 
 impl MethodCall {
@@ -106,6 +112,7 @@ impl MethodCall {
             receiver: None,
             is_static: false,
             range,
+            caller_range: None,
         }
     }
 
@@ -124,6 +131,14 @@ impl MethodCall {
     /// Should be used when the receiver is a type name rather than an instance.
     pub fn static_method(mut self) -> Self {
         self.is_static = true;
+        self
+    }
+
+    /// Sets the definition range of the calling function
+    ///
+    /// Used for precise symbol lookup during relationship resolution.
+    pub fn with_caller_range(mut self, range: Range) -> Self {
+        self.caller_range = Some(range);
         self
     }
 
