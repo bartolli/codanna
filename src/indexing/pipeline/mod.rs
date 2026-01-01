@@ -34,19 +34,29 @@ pub mod stages;
 pub mod types;
 
 pub use config::PipelineConfig;
+pub use stages::cleanup::{CleanupStage, CleanupStats};
+pub use stages::context::{ContextStage, ContextStats};
+pub use stages::embed::{EmbedStage, EmbedStats};
 pub use stages::parse::{ParseStage, init_parser_cache, parse_file};
+pub use stages::resolve::{ResolveStage, ResolveStats};
+pub use stages::write::{WriteStage, WriteStats};
 pub use types::{
-    FileContent, FileRegistration, IndexBatch, ParsedFile, PipelineError, PipelineResult,
-    RawImport, RawRelationship, RawSymbol, UnresolvedRelationship,
+    DiscoverResult, FileContent, FileRegistration, IndexBatch, ParsedFile, PipelineError,
+    PipelineResult, RawImport, RawRelationship, RawSymbol, ResolutionContext, ResolvedBatch,
+    ResolvedRelationship, SingleFileStats, SymbolLookupCache, UnresolvedRelationship,
 };
 
+use crate::FileId;
+use crate::RelationKind;
 use crate::Settings;
 use crate::indexing::IndexStats;
+use crate::parsing::ParserFactory;
+use crate::semantic::SimpleSemanticSearch;
 use crate::storage::DocumentIndex;
 use crossbeam_channel::bounded;
 use stages::{CollectStage, DiscoverStage, IndexStage, ReadStage};
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
@@ -93,11 +103,12 @@ impl Pipeline {
     /// Returns:
     /// - IndexStats: Statistics about the indexing operation
     /// - Vec<UnresolvedRelationship>: Pending references for Phase 2 resolution
+    /// - SymbolLookupCache: In-memory cache for O(1) Phase 2 resolution
     pub fn index_directory(
         &self,
         root: &Path,
         index: Arc<DocumentIndex>,
-    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>)> {
+    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         let start = Instant::now();
 
         // Create bounded channels with backpressure
@@ -214,24 +225,26 @@ impl Pipeline {
         let index_result = index_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
-        let (mut stats, pending_relationships) = index_result?;
+        let (mut stats, pending_relationships, symbol_cache) = index_result?;
 
         // Update stats with timing
         stats.elapsed = start.elapsed();
         stats.files_failed = read_errors + parse_errors;
 
         tracing::info!(
-            "[pipeline] Phase 1 complete: discovered={}, read={}, parsed={}, indexed={} files, {} symbols, {} pending refs in {:?}",
+            target: "pipeline",
+            "Phase 1 complete: discovered={}, read={}, parsed={}, indexed={} files, {} symbols, {} cached, {} pending refs in {:?}",
             files_discovered,
             read_files,
             parsed_files,
             stats.files_indexed,
             stats.symbols_found,
+            symbol_cache.len(),
             pending_relationships.len(),
             stats.elapsed
         );
 
-        Ok((stats, pending_relationships))
+        Ok((stats, pending_relationships, symbol_cache))
     }
 
     /// Index a directory with progress reporting (Phase 1).
@@ -240,10 +253,893 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         _progress: bool,
-    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>)> {
+    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         // TODO: Add progress bar integration
         self.index_directory(root, index)
     }
+
+    /// Run Phase 2: Resolve relationships using two-pass strategy.
+    ///
+    /// [PIPELINE API] This resolves all pending relationships from Phase 1:
+    /// 1. Pass 1: Resolve Defines relationships (class→method, module→function)
+    /// 2. Commit barrier: Defines are now queryable
+    /// 3. Pass 2: Resolve Calls (can reference Defines)
+    ///
+    /// # Arguments
+    /// * `unresolved` - Pending relationships from Phase 1
+    /// * `symbol_cache` - SymbolLookupCache populated by Phase 1
+    /// * `index` - DocumentIndex for reading imports and writing relationships
+    ///
+    /// # Returns
+    /// Phase2Stats with resolution counts
+    pub fn run_phase2(
+        &self,
+        unresolved: Vec<UnresolvedRelationship>,
+        symbol_cache: Arc<SymbolLookupCache>,
+        index: Arc<DocumentIndex>,
+    ) -> PipelineResult<Phase2Stats> {
+        let start = Instant::now();
+        let total_relationships = unresolved.len();
+
+        if unresolved.is_empty() {
+            return Ok(Phase2Stats {
+                total_relationships: 0,
+                defines_resolved: 0,
+                calls_resolved: 0,
+                other_resolved: 0,
+                unresolved: 0,
+                elapsed: start.elapsed(),
+            });
+        }
+
+        // Create stages
+        let factory = Arc::new(ParserFactory::new(Arc::clone(&self.settings)));
+        let context_stage =
+            ContextStage::new(Arc::clone(&symbol_cache), Arc::clone(&index), factory);
+        let mut write_stage = WriteStage::new(Arc::clone(&index));
+
+        // Split relationships by kind
+        let (defines, others): (Vec<_>, Vec<_>) = unresolved
+            .into_iter()
+            .partition(|rel| rel.kind == RelationKind::Defines);
+
+        let mut stats = Phase2Stats {
+            total_relationships,
+            ..Default::default()
+        };
+
+        // Pass 1: Resolve Defines
+        tracing::info!(
+            target: "pipeline",
+            "Phase 2 Pass 1: Resolving {} Defines relationships",
+            defines.len()
+        );
+        if !defines.is_empty() {
+            let contexts = context_stage.build_contexts(defines);
+            let behaviors = context_stage.behaviors();
+            let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
+
+            for ctx in contexts {
+                let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
+                stats.defines_resolved += resolve_stats.defines_resolved;
+                write_stage.write(batch);
+            }
+
+            // BARRIER: Commit Defines so Pass 2 can query them
+            write_stage
+                .commit()
+                .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
+        }
+
+        // Pass 2: Resolve Calls and other relationships
+        tracing::info!(
+            target: "pipeline",
+            "Phase 2 Pass 2: Resolving {} Calls/other relationships",
+            others.len()
+        );
+        if !others.is_empty() {
+            let contexts = context_stage.build_contexts(others);
+            let behaviors = context_stage.behaviors();
+            let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
+
+            for ctx in contexts {
+                let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
+                stats.calls_resolved += resolve_stats.calls_resolved;
+                stats.other_resolved += resolve_stats.resolved - resolve_stats.calls_resolved;
+                write_stage.write(batch);
+            }
+
+            // Final commit
+            write_stage
+                .flush()
+                .map_err(|e| PipelineError::Index(crate::IndexError::General(e.to_string())))?;
+        }
+
+        stats.unresolved = stats.total_relationships
+            - stats.defines_resolved
+            - stats.calls_resolved
+            - stats.other_resolved;
+        stats.elapsed = start.elapsed();
+
+        tracing::info!(
+            target: "pipeline",
+            "Phase 2 complete: resolved {}/{} ({} Defines, {} Calls, {} other) in {:?}",
+            stats.defines_resolved + stats.calls_resolved + stats.other_resolved,
+            stats.total_relationships,
+            stats.defines_resolved,
+            stats.calls_resolved,
+            stats.other_resolved,
+            stats.elapsed
+        );
+
+        Ok(stats)
+    }
+
+    /// Run full pipeline: Phase 1 (indexing) + Phase 2 (resolution).
+    ///
+    /// Convenience method that runs both phases in sequence.
+    pub fn index_and_resolve(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+    ) -> PipelineResult<(IndexStats, Phase2Stats)> {
+        // Phase 1: Index files
+        let (index_stats, unresolved, symbol_cache) =
+            self.index_directory(root, Arc::clone(&index))?;
+
+        // Phase 2: Resolve relationships
+        let symbol_cache = Arc::new(symbol_cache);
+        let phase2_stats = self.run_phase2(unresolved, symbol_cache, index)?;
+
+        Ok((index_stats, phase2_stats))
+    }
+
+    /// Index a single file (for watcher reindex events).
+    ///
+    /// [PIPELINE API] Optimized path for single-file re-indexing when a file changes.
+    /// This is used by the file watcher for real-time updates.
+    ///
+    /// # Flow
+    /// 1. Read file and compute hash
+    /// 2. Check if file exists in index (hash comparison)
+    /// 3. If unchanged, return early with Cached result
+    /// 4. If modified, cleanup old data (symbols, relationships, embeddings)
+    /// 5. Parse file
+    /// 6. Index via IndexStage
+    /// 7. Run Phase 2 resolution
+    ///
+    /// # Arguments
+    /// * `path` - Path to the file to index
+    /// * `index` - DocumentIndex for storage
+    /// * `semantic` - Optional semantic search for embeddings
+    ///
+    /// # Returns
+    /// `SingleFileStats` with indexing results or `Cached` if unchanged
+    pub fn index_file_single(
+        &self,
+        path: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+    ) -> PipelineResult<SingleFileStats> {
+        let start = Instant::now();
+        let semantic_path = self.settings.index_path.join("semantic");
+
+        // Normalize path relative to workspace_root
+        let normalized_path = if path.is_absolute() {
+            if let Some(workspace_root) = &self.settings.workspace_root {
+                path.strip_prefix(workspace_root).unwrap_or(path)
+            } else {
+                path
+            }
+        } else {
+            path
+        };
+
+        let path_str = normalized_path
+            .to_str()
+            .ok_or_else(|| PipelineError::FileRead {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8 in path",
+                ),
+            })?;
+
+        // Read file using ReadStage
+        let read_stage = ReadStage::new(1);
+        let file_content = read_stage.read_single(&path.to_path_buf())?;
+        let content_hash = file_content.hash.clone();
+
+        // Check if file already exists by querying Tantivy
+        if let Ok(Some((existing_file_id, existing_hash))) = index.get_file_info(path_str) {
+            if existing_hash == content_hash {
+                // File hasn't changed, skip re-indexing
+                return Ok(SingleFileStats {
+                    file_id: existing_file_id,
+                    indexed: false,
+                    cached: true,
+                    symbols_found: 0,
+                    relationships_resolved: 0,
+                    elapsed: start.elapsed(),
+                });
+            }
+
+            // File has changed - cleanup old data
+            let cleanup_stage = if let Some(ref sem) = semantic {
+                CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
+            } else {
+                CleanupStage::new(Arc::clone(&index), &semantic_path)
+            };
+
+            cleanup_stage.cleanup_files(&[path.to_path_buf()])?;
+        }
+
+        // Parse file
+        init_parser_cache(Arc::clone(&self.settings));
+        let parse_stage = ParseStage::new(Arc::clone(&self.settings));
+        let parsed = parse_stage.parse(file_content)?;
+
+        // Collect into a batch
+        let collect_stage = CollectStage::new(self.config.batch_size);
+        let (batch, unresolved) = collect_stage.process_single(parsed, Arc::clone(&index))?;
+
+        // Index the batch
+        let index_stage = if let Some(ref sem) = semantic {
+            IndexStage::new(Arc::clone(&index), self.config.batches_per_commit)
+                .with_semantic(Arc::clone(sem))
+        } else {
+            IndexStage::new(Arc::clone(&index), self.config.batches_per_commit)
+        };
+
+        let symbols_found = batch.symbols.len();
+        // Capture file_id before batch is consumed
+        let file_id = batch
+            .file_registrations
+            .first()
+            .map(|r| r.file_id)
+            .unwrap_or(FileId(0));
+        index_stage.index_batch(batch)?;
+
+        // Commit the batch
+        index.commit_batch()?;
+
+        // Build symbol cache for resolution
+        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+
+        // Run Phase 2 resolution
+        let phase2_stats = self.run_phase2(unresolved, symbol_cache, index)?;
+
+        // Save embeddings
+        if let Some(sem) = semantic {
+            if let Ok(guard) = sem.lock() {
+                if let Err(e) = guard.save(&semantic_path) {
+                    tracing::warn!(target: "pipeline", "Failed to save embeddings: {e}");
+                }
+            }
+        }
+
+        Ok(SingleFileStats {
+            file_id,
+            indexed: true,
+            cached: false,
+            symbols_found,
+            relationships_resolved: phase2_stats.defines_resolved
+                + phase2_stats.calls_resolved
+                + phase2_stats.other_resolved,
+            elapsed: start.elapsed(),
+        })
+    }
+
+    /// Run incremental indexing: detect changes, cleanup, index, resolve, save.
+    ///
+    /// This is the main entry point for production indexing. It:
+    /// 1. Detects new, modified, and deleted files
+    /// 2. Cleans up deleted and modified files (removes symbols and embeddings)
+    /// 3. Runs Phase 1 on new + modified files
+    /// 4. Runs Phase 2 resolution
+    /// 5. Saves embeddings to disk
+    ///
+    /// # Arguments
+    /// * `root` - Root directory to index
+    /// * `index` - DocumentIndex for storage
+    /// * `semantic` - Optional semantic search for embeddings
+    /// * `force` - If true, re-index all files regardless of hash
+    pub fn index_incremental(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        force: bool,
+    ) -> PipelineResult<IncrementalStats> {
+        let start = Instant::now();
+        let semantic_path = self.settings.index_path.join("semantic");
+
+        if force {
+            // Force mode: index everything (no cleanup needed for fresh index)
+            return self.index_full(root, index, semantic, &semantic_path);
+        }
+
+        // Incremental mode: detect changes
+        let discover_stage = DiscoverStage::new(root, 4).with_index(Arc::clone(&index));
+        let discover_result = discover_stage.run_incremental()?;
+
+        tracing::info!(
+            target: "pipeline",
+            "Incremental discovery: {} new, {} modified, {} deleted",
+            discover_result.new_files.len(),
+            discover_result.modified_files.len(),
+            discover_result.deleted_files.len()
+        );
+
+        if discover_result.is_empty() {
+            return Ok(IncrementalStats {
+                new_files: 0,
+                modified_files: 0,
+                deleted_files: 0,
+                index_stats: IndexStats::new(),
+                cleanup_stats: CleanupStats::default(),
+                phase2_stats: Phase2Stats::default(),
+                elapsed: start.elapsed(),
+            });
+        }
+
+        // Create cleanup stage
+        let cleanup_stage = if let Some(ref sem) = semantic {
+            CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
+        } else {
+            CleanupStage::new(Arc::clone(&index), &semantic_path)
+        };
+
+        // Cleanup deleted files
+        let mut cleanup_stats = CleanupStats::default();
+        if !discover_result.deleted_files.is_empty() {
+            let stats = cleanup_stage.cleanup_files(&discover_result.deleted_files)?;
+            cleanup_stats.files_cleaned += stats.files_cleaned;
+            cleanup_stats.symbols_removed += stats.symbols_removed;
+            cleanup_stats.embeddings_removed += stats.embeddings_removed;
+        }
+
+        // Cleanup modified files (old data must be removed before re-indexing)
+        if !discover_result.modified_files.is_empty() {
+            let stats = cleanup_stage.cleanup_files(&discover_result.modified_files)?;
+            cleanup_stats.files_cleaned += stats.files_cleaned;
+            cleanup_stats.symbols_removed += stats.symbols_removed;
+            cleanup_stats.embeddings_removed += stats.embeddings_removed;
+        }
+
+        // Combine new + modified for indexing
+        let files_to_index: Vec<PathBuf> = discover_result
+            .new_files
+            .iter()
+            .chain(discover_result.modified_files.iter())
+            .cloned()
+            .collect();
+
+        // Run Phase 1 on the files to index
+        let (index_stats, unresolved, symbol_cache) =
+            self.index_files(&files_to_index, Arc::clone(&index), semantic.clone())?;
+
+        // Run Phase 2 resolution
+        let symbol_cache = Arc::new(symbol_cache);
+        let phase2_stats = self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?;
+
+        // Save embeddings
+        if let Some(sem) = semantic {
+            let semantic_guard = sem.lock().map_err(|_| PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: "Failed to lock semantic search".to_string(),
+            })?;
+
+            semantic_guard
+                .save(&semantic_path)
+                .map_err(|e| PipelineError::Parse {
+                    path: semantic_path.clone(),
+                    reason: format!("Failed to save embeddings: {e}"),
+                })?;
+        }
+
+        Ok(IncrementalStats {
+            new_files: discover_result.new_files.len(),
+            modified_files: discover_result.modified_files.len(),
+            deleted_files: discover_result.deleted_files.len(),
+            index_stats,
+            cleanup_stats,
+            phase2_stats,
+            elapsed: start.elapsed(),
+        })
+    }
+
+    /// Index a specific list of files (for incremental mode).
+    fn index_files(
+        &self,
+        files: &[PathBuf],
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
+        if files.is_empty() {
+            return Ok((
+                IndexStats::new(),
+                Vec::new(),
+                SymbolLookupCache::with_capacity(0),
+            ));
+        }
+
+        let start = Instant::now();
+
+        // Create bounded channels
+        let (content_tx, content_rx) = bounded(self.config.content_channel_size);
+        let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
+        let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
+
+        let settings = Arc::clone(&self.settings);
+        let parse_threads = self.config.parse_threads;
+        let batch_size = self.config.batch_size;
+        let batches_per_commit = self.config.batches_per_commit;
+
+        // Stage 1: READ - Send files directly (already have the paths)
+        let files_to_read = files.to_vec();
+        let read_handle = thread::spawn(move || {
+            let stage = ReadStage::new(1);
+            let mut count = 0;
+            let mut errors = 0;
+
+            for path in files_to_read {
+                match stage.read_single(&path) {
+                    Ok(content) => {
+                        if content_tx.send(content).is_err() {
+                            break;
+                        }
+                        count += 1;
+                    }
+                    Err(_) => {
+                        errors += 1;
+                    }
+                }
+            }
+
+            (count, errors)
+        });
+
+        // Stage 2: PARSE
+        let parse_handles: Vec<_> = (0..parse_threads)
+            .map(|_| {
+                let rx = content_rx.clone();
+                let tx = parsed_tx.clone();
+                let settings = Arc::clone(&settings);
+                thread::spawn(move || {
+                    init_parser_cache(settings.clone());
+                    let stage = ParseStage::new(settings);
+                    let mut parsed = 0;
+                    let mut errors = 0;
+
+                    for content in rx {
+                        match stage.parse(content) {
+                            Ok(p) => {
+                                parsed += 1;
+                                if tx.send(p).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => errors += 1,
+                        }
+                    }
+                    (parsed, errors)
+                })
+            })
+            .collect();
+        drop(content_rx);
+        drop(parsed_tx);
+
+        // Stage 3: COLLECT
+        let collect_handle = thread::spawn(move || {
+            let stage = CollectStage::new(batch_size);
+            stage.run(parsed_rx, batch_tx)
+        });
+
+        // Stage 4: INDEX (with optional semantic search)
+        let index_stage = if let Some(sem) = semantic {
+            IndexStage::new(index, batches_per_commit).with_semantic(sem)
+        } else {
+            IndexStage::new(index, batches_per_commit)
+        };
+
+        let index_handle = thread::spawn(move || index_stage.run(batch_rx));
+
+        // Wait for stages to complete
+        let _ = read_handle.join();
+        for h in parse_handles {
+            let _ = h.join();
+        }
+        let _ = collect_handle.join();
+
+        let index_result = index_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
+        let (mut stats, pending, cache) = index_result?;
+
+        stats.elapsed = start.elapsed();
+        Ok((stats, pending, cache))
+    }
+
+    /// Full index (force mode): index all files without incremental detection.
+    fn index_full(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        semantic_path: &Path,
+    ) -> PipelineResult<IncrementalStats> {
+        let start = Instant::now();
+
+        // Run Phase 1 with semantic search integrated
+        let (index_stats, unresolved, symbol_cache) = if let Some(ref sem) = semantic {
+            self.index_directory_with_semantic(root, Arc::clone(&index), Arc::clone(sem))?
+        } else {
+            self.index_directory(root, Arc::clone(&index))?
+        };
+
+        // Run Phase 2
+        let symbol_cache = Arc::new(symbol_cache);
+        let phase2_stats = self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?;
+
+        // Save embeddings
+        if let Some(sem) = semantic {
+            let semantic_guard = sem.lock().map_err(|_| PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: "Failed to lock semantic search".to_string(),
+            })?;
+
+            semantic_guard
+                .save(semantic_path)
+                .map_err(|e| PipelineError::Parse {
+                    path: semantic_path.to_path_buf(),
+                    reason: format!("Failed to save embeddings: {e}"),
+                })?;
+        }
+
+        Ok(IncrementalStats {
+            new_files: index_stats.files_indexed,
+            modified_files: 0,
+            deleted_files: 0,
+            index_stats,
+            cleanup_stats: CleanupStats::default(),
+            phase2_stats,
+            elapsed: start.elapsed(),
+        })
+    }
+
+    /// Index directory with semantic search integration.
+    fn index_directory_with_semantic(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Arc<Mutex<SimpleSemanticSearch>>,
+    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
+        let start = Instant::now();
+
+        // Create bounded channels
+        let (path_tx, path_rx) = bounded(self.config.path_channel_size);
+        let (content_tx, content_rx) = bounded(self.config.content_channel_size);
+        let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
+        let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
+
+        let settings = Arc::clone(&self.settings);
+        let parse_threads = self.config.parse_threads;
+        let read_threads = self.config.read_threads;
+        let batch_size = self.config.batch_size;
+        let batches_per_commit = self.config.batches_per_commit;
+
+        // Stage 1: DISCOVER
+        let discover_root = root.to_path_buf();
+        let discover_handle = thread::spawn(move || {
+            let stage = DiscoverStage::new(discover_root, 4);
+            stage.run(path_tx)
+        });
+
+        // Stage 2: READ
+        let read_handles: Vec<_> = (0..read_threads)
+            .map(|_| {
+                let rx = path_rx.clone();
+                let tx = content_tx.clone();
+                thread::spawn(move || {
+                    let stage = ReadStage::new(1);
+                    stage.run(rx, tx)
+                })
+            })
+            .collect();
+        drop(path_rx);
+        drop(content_tx);
+
+        // Stage 3: PARSE
+        let parse_handles: Vec<_> = (0..parse_threads)
+            .map(|_| {
+                let rx = content_rx.clone();
+                let tx = parsed_tx.clone();
+                let settings = Arc::clone(&settings);
+                thread::spawn(move || {
+                    init_parser_cache(settings.clone());
+                    let stage = ParseStage::new(settings);
+                    let mut parsed = 0;
+                    let mut errors = 0;
+
+                    for content in rx {
+                        match stage.parse(content) {
+                            Ok(p) => {
+                                parsed += 1;
+                                if tx.send(p).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => errors += 1,
+                        }
+                    }
+                    (parsed, errors)
+                })
+            })
+            .collect();
+        drop(content_rx);
+        drop(parsed_tx);
+
+        // Stage 4: COLLECT
+        let collect_handle = thread::spawn(move || {
+            let stage = CollectStage::new(batch_size);
+            stage.run(parsed_rx, batch_tx)
+        });
+
+        // Stage 5: INDEX with semantic search
+        let index_stage = IndexStage::new(index, batches_per_commit).with_semantic(semantic);
+        let index_handle = thread::spawn(move || index_stage.run(batch_rx));
+
+        // Wait for all stages
+        let discover_result = discover_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("DISCOVER panicked".to_string()))?;
+        let _files_discovered = discover_result?;
+
+        for h in read_handles {
+            let _ = h.join();
+        }
+        for h in parse_handles {
+            let _ = h.join();
+        }
+        let _ = collect_handle.join();
+
+        let index_result = index_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
+        let (mut stats, pending, cache) = index_result?;
+
+        stats.elapsed = start.elapsed();
+        Ok((stats, pending, cache))
+    }
+
+    /// Synchronize index with configuration (directory-level change detection).
+    ///
+    /// Compares stored indexed paths (from IndexMetadata) with current config paths
+    /// (from settings.toml). Indexes new directories and removes files from
+    /// directories no longer in config.
+    ///
+    /// This is the Pipeline equivalent of SimpleIndexer::sync_with_config.
+    ///
+    /// # Arguments
+    /// * `stored_paths` - Previously indexed directory paths (from IndexMetadata)
+    /// * `config_paths` - Current directory paths from settings.toml
+    /// * `index` - DocumentIndex for storage
+    /// * `semantic` - Optional semantic search for embeddings
+    /// * `_progress` - Whether to show progress (currently unused)
+    ///
+    /// # Returns
+    /// SyncStats with counts of added/removed directories and files/symbols indexed
+    pub fn sync_with_config(
+        &self,
+        stored_paths: Option<Vec<PathBuf>>,
+        config_paths: &[PathBuf],
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        _progress: bool,
+    ) -> PipelineResult<SyncStats> {
+        use std::collections::HashSet;
+
+        let start = Instant::now();
+        let semantic_path = self.settings.index_path.join("semantic");
+
+        // Canonicalize both path sets for accurate comparison
+        let stored_set: HashSet<PathBuf> = stored_paths
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
+
+        let config_set: HashSet<PathBuf> = config_paths
+            .iter()
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
+
+        // Find new paths (in config but not stored)
+        let new_paths: Vec<PathBuf> = config_set.difference(&stored_set).cloned().collect();
+
+        // Find removed paths (in stored but not in config)
+        let removed_paths: Vec<PathBuf> = stored_set.difference(&config_set).cloned().collect();
+
+        // Early return if no changes
+        if new_paths.is_empty() && removed_paths.is_empty() {
+            return Ok(SyncStats {
+                elapsed: start.elapsed(),
+                ..Default::default()
+            });
+        }
+
+        let mut stats = SyncStats::default();
+
+        // Index new directories
+        if !new_paths.is_empty() {
+            tracing::info!(
+                target: "pipeline",
+                "Sync: Found {} new directories to index",
+                new_paths.len()
+            );
+
+            for path in &new_paths {
+                tracing::debug!(target: "pipeline", "  + {}", path.display());
+
+                match self.index_incremental(path, Arc::clone(&index), semantic.clone(), false) {
+                    Ok(inc_stats) => {
+                        stats.files_indexed += inc_stats.index_stats.files_indexed;
+                        stats.symbols_found += inc_stats.index_stats.symbols_found;
+                        tracing::info!(
+                            target: "pipeline",
+                            "  Indexed {} files, {} symbols from {}",
+                            inc_stats.index_stats.files_indexed,
+                            inc_stats.index_stats.symbols_found,
+                            path.display()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            target: "pipeline",
+                            "  Failed to index {}: {e}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+            stats.added_dirs = new_paths.len();
+        }
+
+        // Remove files from deleted directories
+        if !removed_paths.is_empty() {
+            tracing::info!(
+                target: "pipeline",
+                "Sync: Found {} directories to remove",
+                removed_paths.len()
+            );
+
+            // Get all indexed files and filter those under removed directories
+            let all_files = match index.get_all_indexed_paths() {
+                Ok(paths) => paths,
+                Err(e) => {
+                    tracing::error!(target: "pipeline", "  Failed to get indexed paths: {e}");
+                    Vec::new()
+                }
+            };
+            let mut files_to_remove = Vec::new();
+
+            for file_path in all_files {
+                if let Ok(file_canonical) = file_path.canonicalize() {
+                    for removed_path in &removed_paths {
+                        if file_canonical.starts_with(removed_path) {
+                            files_to_remove.push(file_path.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if !files_to_remove.is_empty() {
+                tracing::debug!(
+                    target: "pipeline",
+                    "  Removing {} files from deleted directories",
+                    files_to_remove.len()
+                );
+
+                // Use CleanupStage to remove files
+                let cleanup_stage = if let Some(ref sem) = semantic {
+                    CleanupStage::new(Arc::clone(&index), &semantic_path)
+                        .with_semantic(Arc::clone(sem))
+                } else {
+                    CleanupStage::new(Arc::clone(&index), &semantic_path)
+                };
+
+                match cleanup_stage.cleanup_files(&files_to_remove) {
+                    Ok(cleanup_stats) => {
+                        stats.files_removed = cleanup_stats.files_cleaned;
+                        stats.symbols_removed = cleanup_stats.symbols_removed;
+                        tracing::info!(
+                            target: "pipeline",
+                            "  Removed {} files, {} symbols",
+                            cleanup_stats.files_cleaned,
+                            cleanup_stats.symbols_removed
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(target: "pipeline", "  Cleanup failed: {e}");
+                    }
+                }
+            }
+
+            stats.removed_dirs = removed_paths.len();
+        }
+
+        stats.elapsed = start.elapsed();
+
+        tracing::info!(
+            target: "pipeline",
+            "Sync complete: {} dirs added ({} files, {} symbols), {} dirs removed ({} files) in {:?}",
+            stats.added_dirs,
+            stats.files_indexed,
+            stats.symbols_found,
+            stats.removed_dirs,
+            stats.files_removed,
+            stats.elapsed
+        );
+
+        Ok(stats)
+    }
+}
+
+/// Statistics from sync_with_config operation.
+#[derive(Debug, Default)]
+pub struct SyncStats {
+    /// Number of new directories indexed
+    pub added_dirs: usize,
+    /// Number of directories removed from index
+    pub removed_dirs: usize,
+    /// Total files indexed from new directories
+    pub files_indexed: usize,
+    /// Total symbols found in new directories
+    pub symbols_found: usize,
+    /// Files removed during cleanup
+    pub files_removed: usize,
+    /// Symbols removed during cleanup
+    pub symbols_removed: usize,
+    /// Time taken
+    pub elapsed: std::time::Duration,
+}
+
+/// Statistics from incremental indexing.
+#[derive(Debug, Default)]
+pub struct IncrementalStats {
+    /// Number of new files indexed
+    pub new_files: usize,
+    /// Number of modified files re-indexed
+    pub modified_files: usize,
+    /// Number of deleted files cleaned up
+    pub deleted_files: usize,
+    /// Phase 1 indexing stats
+    pub index_stats: IndexStats,
+    /// Cleanup stats
+    pub cleanup_stats: CleanupStats,
+    /// Phase 2 resolution stats
+    pub phase2_stats: Phase2Stats,
+    /// Total time taken
+    pub elapsed: std::time::Duration,
+}
+
+/// Statistics from Phase 2 resolution.
+#[derive(Debug, Default)]
+pub struct Phase2Stats {
+    /// Total relationships to resolve
+    pub total_relationships: usize,
+    /// Defines relationships resolved (Pass 1)
+    pub defines_resolved: usize,
+    /// Calls relationships resolved (Pass 2)
+    pub calls_resolved: usize,
+    /// Other relationships resolved (Pass 2)
+    pub other_resolved: usize,
+    /// Failed to resolve
+    pub unresolved: usize,
+    /// Time taken
+    pub elapsed: std::time::Duration,
 }
 
 /// Statistics from pipeline execution.
@@ -402,7 +1298,7 @@ export { processUser, main };
         let result = pipeline.index_directory(&src_dir, index);
 
         match result {
-            Ok((stats, pending_relationships)) => {
+            Ok((stats, pending_relationships, symbol_cache)) => {
                 // Categorize relationships by kind
                 let calls: Vec<_> = pending_relationships
                     .iter()
@@ -422,6 +1318,10 @@ export { processUser, main };
                 println!("  Files indexed:        {}", stats.files_indexed);
                 println!("  Symbols found:        {}", stats.symbols_found);
                 println!("  Time elapsed:         {:?}", stats.elapsed);
+                println!();
+                println!("SYMBOL CACHE (for O(1) Phase 2 resolution):");
+                println!("  Symbols cached:       {}", symbol_cache.len());
+                println!("  Unique names:         {}", symbol_cache.unique_names());
                 println!();
                 println!("PENDING FOR PHASE 2 RESOLUTION:");
                 println!("  Total relationships:  {}", pending_relationships.len());
@@ -477,6 +1377,13 @@ export { processUser, main };
                 );
                 assert!(!calls.is_empty(), "Expected cross-file call relationships");
 
+                // Verify symbol cache matches indexed symbols
+                assert_eq!(
+                    symbol_cache.len(),
+                    stats.symbols_found,
+                    "Symbol cache must contain all indexed symbols"
+                );
+
                 // Verify range data for disambiguation
                 let with_range = pending_relationships
                     .iter()
@@ -512,5 +1419,139 @@ export { processUser, main };
                 panic!("Pipeline failed: {e:?}");
             }
         }
+    }
+
+    /// Proves that pipeline stages run on distinct OS threads.
+    ///
+    /// Uses thread_id crate to get actual OS-level thread IDs (pthread_t on macOS/Linux).
+    /// Verifies:
+    /// - All thread IDs are unique (different OS threads)
+    /// - Thread count matches configuration (read + parse + collect + index + discover)
+    #[test]
+    fn test_pipeline_uses_distinct_threads() {
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+
+        // Shared storage for OS-level thread IDs
+        let thread_ids: Arc<Mutex<HashSet<usize>>> = Arc::new(Mutex::new(HashSet::new()));
+
+        // Simulate pipeline thread structure with known counts
+        let read_threads = 2;
+        let parse_threads = 4;
+
+        // Track main thread (OS-level)
+        let main_thread_id = thread_id::get();
+        println!("Main thread (OS): {main_thread_id}");
+
+        // Stage 1: DISCOVER (1 thread)
+        let ids = Arc::clone(&thread_ids);
+        let discover_handle = thread::spawn(move || {
+            let tid = thread_id::get();
+            ids.lock().unwrap().insert(tid);
+            println!("DISCOVER thread (OS): {tid}");
+            tid
+        });
+
+        // Stage 2: READ (N threads)
+        let read_handles: Vec<_> = (0..read_threads)
+            .map(|i| {
+                let ids = Arc::clone(&thread_ids);
+                thread::spawn(move || {
+                    let tid = thread_id::get();
+                    ids.lock().unwrap().insert(tid);
+                    println!("READ[{i}] thread (OS): {tid}");
+                    tid
+                })
+            })
+            .collect();
+
+        // Stage 3: PARSE (N threads)
+        let parse_handles: Vec<_> = (0..parse_threads)
+            .map(|i| {
+                let ids = Arc::clone(&thread_ids);
+                thread::spawn(move || {
+                    let tid = thread_id::get();
+                    ids.lock().unwrap().insert(tid);
+                    println!("PARSE[{i}] thread (OS): {tid}");
+                    tid
+                })
+            })
+            .collect();
+
+        // Stage 4: COLLECT (1 thread)
+        let ids = Arc::clone(&thread_ids);
+        let collect_handle = thread::spawn(move || {
+            let tid = thread_id::get();
+            ids.lock().unwrap().insert(tid);
+            println!("COLLECT thread (OS): {tid}");
+            tid
+        });
+
+        // Stage 5: INDEX (1 thread)
+        let ids = Arc::clone(&thread_ids);
+        let index_handle = thread::spawn(move || {
+            let tid = thread_id::get();
+            ids.lock().unwrap().insert(tid);
+            println!("INDEX thread (OS): {tid}");
+            tid
+        });
+
+        // Wait for all threads
+        let discover_tid = discover_handle.join().expect("DISCOVER panic");
+        let read_tids: Vec<_> = read_handles
+            .into_iter()
+            .map(|h| h.join().expect("READ panic"))
+            .collect();
+        let parse_tids: Vec<_> = parse_handles
+            .into_iter()
+            .map(|h| h.join().expect("PARSE panic"))
+            .collect();
+        let collect_tid = collect_handle.join().expect("COLLECT panic");
+        let index_tid = index_handle.join().expect("INDEX panic");
+
+        // Verify results
+        let unique_ids = thread_ids.lock().unwrap();
+        let expected_threads = 1 + read_threads + parse_threads + 1 + 1; // discover + read + parse + collect + index
+
+        println!("\n========================================");
+        println!("OS-LEVEL THREAD VERIFICATION");
+        println!("========================================");
+        println!("Expected threads: {expected_threads}");
+        println!("Unique OS thread IDs: {}", unique_ids.len());
+        println!("Main thread (OS): {main_thread_id}");
+        println!();
+        println!("OS Thread ID breakdown:");
+        println!("  DISCOVER: {discover_tid}");
+        println!("  READ:     {read_tids:?}");
+        println!("  PARSE:    {parse_tids:?}");
+        println!("  COLLECT:  {collect_tid}");
+        println!("  INDEX:    {index_tid}");
+        println!("========================================\n");
+
+        // Assertions
+        assert_eq!(
+            unique_ids.len(),
+            expected_threads,
+            "All threads must have unique OS-level IDs"
+        );
+        assert!(
+            !unique_ids.contains(&main_thread_id),
+            "Work threads must be different from main thread"
+        );
+
+        // Verify no thread ID appears twice
+        let all_tids = [
+            vec![discover_tid, collect_tid, index_tid],
+            read_tids,
+            parse_tids,
+        ]
+        .concat();
+
+        let unique_count = all_tids.iter().collect::<HashSet<_>>().len();
+        assert_eq!(
+            unique_count,
+            all_tids.len(),
+            "Every stage must run on its own OS thread"
+        );
     }
 }

@@ -2331,11 +2331,8 @@ impl DocumentIndex {
             self.schema.file_path,
             registration.path.to_string_lossy().as_ref(),
         );
-        // Format hash as hex for consistency with existing code
-        doc.add_text(
-            self.schema.file_hash,
-            format!("{:x}", registration.content_hash),
-        );
+        // Hash is already a SHA256 hex string
+        doc.add_text(self.schema.file_hash, &registration.content_hash);
         doc.add_u64(self.schema.file_timestamp, registration.timestamp);
         // Store language for incremental indexing (parser selection)
         doc.add_text(self.schema.language, registration.language_id.as_str());

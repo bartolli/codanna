@@ -1,8 +1,8 @@
 //! MCP direct tool invocation command.
 
-use crate::SimpleIndexer;
 use crate::Symbol;
 use crate::config::Settings;
+use crate::indexing::facade::IndexFacade;
 use crate::io::args::parse_positional_args;
 use serde::Serialize;
 
@@ -40,7 +40,7 @@ pub async fn run(
     positional: Vec<String>,
     args: Option<String>,
     json: bool,
-    indexer: SimpleIndexer,
+    facade: IndexFacade,
     config: &Settings,
 ) {
     // Build arguments from both positional and --args
@@ -155,14 +155,14 @@ pub async fn run(
             .and_then(|v| v.as_str());
 
         if let Some(symbol_name) = name {
-            let symbols = indexer.find_symbols_by_name(symbol_name, language);
+            let symbols = facade.find_symbols_by_name(symbol_name, language);
             if !symbols.is_empty() {
                 use crate::symbol::context::ContextIncludes;
                 let mut results = Vec::new();
 
                 for symbol in symbols {
                     // Get full context with callers using the same approach as MCP
-                    let context = indexer.get_symbol_context(
+                    let context = facade.get_symbol_context(
                         symbol.id,
                         ContextIncludes::CALLERS
                             | ContextIncludes::IMPLEMENTATIONS
@@ -174,7 +174,7 @@ pub async fn run(
                         results.push(ctx);
                     } else {
                         // Fallback: create minimal context
-                        let file_path = indexer
+                        let file_path = facade
                             .get_file_path(symbol.file_id)
                             .unwrap_or_else(|| "unknown".to_string());
 
@@ -216,10 +216,10 @@ pub async fn run(
             use crate::symbol::context::ContextIncludes;
 
             // Direct lookup by symbol ID
-            if let Some(symbol) = indexer.get_symbol(crate::SymbolId(id)) {
+            if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
                 let mut all_calls = Vec::new();
 
-                let context = indexer.get_symbol_context(symbol.id, ContextIncludes::CALLS);
+                let context = facade.get_symbol_context(symbol.id, ContextIncludes::CALLS);
                 if let Some(ctx) = context {
                     if let Some(calls) = ctx.relationships.calls {
                         for (called, metadata) in calls {
@@ -237,7 +237,7 @@ pub async fn run(
             use std::collections::HashSet;
 
             // Find ALL symbols with this name
-            let symbols = indexer.find_symbols_by_name(func_name, language);
+            let symbols = facade.find_symbols_by_name(func_name, language);
             let function_symbols: Vec<_> = symbols
                 .into_iter()
                 .filter(|s| {
@@ -256,7 +256,7 @@ pub async fn run(
                 let mut seen_ids = HashSet::new();
 
                 for symbol in function_symbols {
-                    let context = indexer.get_symbol_context(symbol.id, ContextIncludes::CALLS);
+                    let context = facade.get_symbol_context(symbol.id, ContextIncludes::CALLS);
                     if let Some(ctx) = context {
                         if let Some(calls) = ctx.relationships.calls {
                             for (called, metadata) in calls {
@@ -296,8 +296,8 @@ pub async fn run(
 
         if let Some(id) = symbol_id {
             // Direct lookup by symbol ID
-            if let Some(symbol) = indexer.get_symbol(crate::SymbolId(id)) {
-                let callers = indexer.get_calling_functions_with_metadata(symbol.id);
+            if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
+                let callers = facade.get_calling_functions_with_metadata(symbol.id);
                 let all_callers: Vec<_> = callers.into_iter().collect();
                 Some(all_callers)
             } else {
@@ -307,14 +307,14 @@ pub async fn run(
             use std::collections::HashSet;
 
             // Find all functions with this name
-            let symbols = indexer.find_symbols_by_name(func_name, language);
+            let symbols = facade.find_symbols_by_name(func_name, language);
             if !symbols.is_empty() {
                 let mut all_callers = Vec::new();
                 let mut seen_ids = HashSet::new();
 
                 // Check all symbols with this name and deduplicate (same as MCP handler)
                 for symbol in &symbols {
-                    let callers = indexer.get_calling_functions_with_metadata(symbol.id);
+                    let callers = facade.get_calling_functions_with_metadata(symbol.id);
                     for (caller, metadata) in callers {
                         // Deduplicate by symbol ID
                         if seen_ids.insert(caller.id) {
@@ -352,19 +352,19 @@ pub async fn run(
 
         if let Some(id) = symbol_id {
             // Direct lookup by symbol ID
-            if let Some(symbol) = indexer.get_symbol(crate::SymbolId(id)) {
+            if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
                 let max_depth = arguments
                     .as_ref()
                     .and_then(|m| m.get("max_depth"))
                     .and_then(|v| v.as_u64())
                     .unwrap_or(3) as usize;
 
-                let impacted_ids = indexer.get_impact_radius(symbol.id, Some(max_depth));
+                let impacted_ids = facade.get_impact_radius(symbol.id, Some(max_depth));
 
                 // Convert SymbolIds to full Symbols
                 let mut impacted_symbols = Vec::new();
                 for impact_id in impacted_ids {
-                    if let Some(sym) = indexer.get_symbol(impact_id) {
+                    if let Some(sym) = facade.get_symbol(impact_id) {
                         impacted_symbols.push(sym);
                     }
                 }
@@ -377,7 +377,7 @@ pub async fn run(
             use std::collections::HashSet;
 
             // Find ALL symbols with this name (same as MCP handler)
-            let symbols = indexer.find_symbols_by_name(sym_name, language);
+            let symbols = facade.find_symbols_by_name(sym_name, language);
 
             if symbols.is_empty() {
                 None // Symbol not found
@@ -391,14 +391,14 @@ pub async fn run(
                 // Aggregate impact from ALL symbols with this name (same as MCP handler)
                 let mut all_impacted_ids = HashSet::new();
                 for symbol in &symbols {
-                    let impacted_ids = indexer.get_impact_radius(symbol.id, Some(max_depth));
+                    let impacted_ids = facade.get_impact_radius(symbol.id, Some(max_depth));
                     all_impacted_ids.extend(impacted_ids);
                 }
 
                 // Convert SymbolIds to full Symbols
                 let mut impacted_symbols = Vec::new();
                 for id in all_impacted_ids {
-                    if let Some(sym) = indexer.get_symbol(id) {
+                    if let Some(sym) = facade.get_symbol(id) {
                         impacted_symbols.push(sym);
                     }
                 }
@@ -451,7 +451,7 @@ pub async fn run(
                 _ => None,
             });
 
-            match indexer.search(q, limit as usize, kind_filter, module, language) {
+            match facade.search(q, limit as usize, kind_filter, module, language) {
                 Ok(results) => Some(results),
                 Err(_) => Some(Vec::new()),
             }
@@ -477,10 +477,10 @@ pub async fn run(
     }
 
     // Get guidance config before moving indexer
-    let guidance_config = indexer.settings().guidance.clone();
+    let guidance_config = facade.settings().guidance.clone();
 
     let semantic_search_docs_data = if json && tool == "semantic_search_docs" {
-        if !indexer.has_semantic_search() {
+        if !facade.has_semantic_search() {
             None // Semantic search not enabled
         } else {
             let query = arguments
@@ -505,9 +505,9 @@ pub async fn run(
                     .and_then(|v| v.as_str());
 
                 let results = match threshold {
-                    Some(t) => indexer
+                    Some(t) => facade
                         .semantic_search_docs_with_threshold_and_language(q, limit, t, language),
-                    None => indexer.semantic_search_docs_with_language(q, limit, language),
+                    None => facade.semantic_search_docs_with_language(q, limit, language),
                 };
 
                 match results {
@@ -530,7 +530,7 @@ pub async fn run(
 
     // Collect data for semantic_search_with_context if JSON output is requested
     let semantic_search_with_context_data = if json && tool == "semantic_search_with_context" {
-        if !indexer.has_semantic_search() {
+        if !facade.has_semantic_search() {
             None // Semantic search not enabled
         } else {
             let query = arguments
@@ -555,13 +555,13 @@ pub async fn run(
                     .and_then(|v| v.as_str());
 
                 let search_results = match threshold {
-                    Some(t) => indexer.semantic_search_docs_with_threshold_and_language(
+                    Some(t) => facade.semantic_search_docs_with_threshold_and_language(
                         q,
                         limit as usize,
                         t,
                         language,
                     ),
-                    None => indexer.semantic_search_docs_with_language(q, limit as usize, language),
+                    None => facade.semantic_search_docs_with_language(q, limit as usize, language),
                 };
 
                 match search_results {
@@ -571,7 +571,7 @@ pub async fn run(
                             .into_iter()
                             .filter_map(|(symbol, score)| {
                                 // Get full context for each symbol
-                                let context = indexer.get_symbol_context(
+                                let context = facade.get_symbol_context(
                                     symbol.id,
                                     ContextIncludes::CALLERS
                                         | ContextIncludes::CALLS
@@ -599,17 +599,17 @@ pub async fn run(
     };
 
     // Check semantic search status before moving indexer
-    let has_semantic_search = indexer.has_semantic_search();
+    let has_semantic_search = facade.has_semantic_search();
 
     // If we need JSON output for get_index_info, collect data before moving indexer
     let index_info_data = if json && tool == "get_index_info" {
-        let symbol_count = indexer.symbol_count();
-        let file_count = indexer.file_count();
-        let relationship_count = indexer.relationship_count();
+        let symbol_count = facade.symbol_count();
+        let file_count = facade.file_count();
+        let relationship_count = facade.relationship_count();
 
         // Count symbols by kind
         let mut kind_counts = std::collections::HashMap::new();
-        for symbol in indexer.get_all_symbols() {
+        for symbol in facade.get_all_symbols() {
             *kind_counts.entry(symbol.kind).or_insert(0) += 1;
         }
 
@@ -619,7 +619,7 @@ pub async fn run(
         let traits = *kind_counts.get(&crate::SymbolKind::Trait).unwrap_or(&0);
 
         // Get semantic search info
-        let semantic_search = if let Some(metadata) = indexer.get_semantic_metadata() {
+        let semantic_search = if let Some(metadata) = facade.get_semantic_metadata() {
             SemanticSearchInfo {
                 enabled: true,
                 model_name: Some(metadata.model_name),
@@ -655,10 +655,10 @@ pub async fn run(
         None
     };
 
-    // Embedded mode - use already loaded indexer directly
+    // Embedded mode - use already loaded facade directly
     // Try to load DocumentStore for search_documents tool
     let server = {
-        let mut server = crate::mcp::CodeIntelligenceServer::new(indexer);
+        let mut server = crate::mcp::CodeIntelligenceServer::new(facade);
 
         // Add DocumentStore if documents are enabled and indexed
         if config.documents.enabled && config.semantic_search.enabled {

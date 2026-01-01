@@ -221,6 +221,8 @@ fn default_logging_modules() -> HashMap<String, String> {
     let mut modules = HashMap::new();
     // Suppress verbose Tantivy internal logs by default
     modules.insert("tantivy".to_string(), "warn".to_string());
+    // Pipeline logs at warn by default (use "info" to see progress)
+    modules.insert("pipeline".to_string(), "warn".to_string());
     modules
 }
 
@@ -907,10 +909,10 @@ impl Settings {
                 result.push_str(
                     "# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage, semantic\n",
                 );
-                result.push_str("# External targets (used as-is): cli, tantivy\n");
-                result.push_str("# Example: cli = \"debug\"     # CLI startup logs\n");
-                result.push_str("# Example: tantivy = \"error\" # Suppress Tantivy logs\n");
-                result.push_str("# Example: watcher = \"debug\" # File watcher events\n");
+                result.push_str("# External targets (used as-is): cli, tantivy, pipeline\n");
+                result.push_str("# Example: cli = \"debug\"      # CLI startup logs\n");
+                result.push_str("# Example: tantivy = \"error\"  # Suppress Tantivy logs\n");
+                result.push_str("# Example: pipeline = \"info\"  # Pipeline progress logs\n");
                 prev_line_was_section = true;
                 continue;
             } else if line == "[documents]" {

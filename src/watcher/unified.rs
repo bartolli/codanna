@@ -8,9 +8,9 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::sync::{RwLock, mpsc};
 use tokio::time::{Duration, sleep};
 
-use crate::SimpleIndexer;
 use crate::documents::DocumentStore;
 use crate::documents::config::ChunkingConfig;
+use crate::indexing::facade::IndexFacade;
 use crate::mcp::notifications::{FileChangeEvent, NotificationBroadcaster};
 
 use super::debouncer::Debouncer;
@@ -35,8 +35,8 @@ pub struct UnifiedWatcher {
     _watcher: notify::RecommendedWatcher,
     /// Notification broadcaster for MCP integration.
     broadcaster: Arc<NotificationBroadcaster>,
-    /// Shared indexer for executing code actions.
-    indexer: Arc<RwLock<SimpleIndexer>>,
+    /// Shared facade for executing code actions.
+    facade: Arc<RwLock<IndexFacade>>,
     /// Document store for executing document actions (optional).
     document_store: Option<Arc<RwLock<DocumentStore>>>,
     /// Chunking config for document re-indexing.
@@ -251,7 +251,7 @@ impl UnifiedWatcher {
     ) -> Result<(), WatchError> {
         match action {
             WatchAction::ReindexCode { path } => {
-                let mut indexer = self.indexer.write().await;
+                let mut indexer = self.facade.write().await;
                 match indexer.index_file(&path) {
                     Ok(result) => {
                         use crate::IndexingResult;
@@ -285,7 +285,7 @@ impl UnifiedWatcher {
             }
 
             WatchAction::RemoveCode { path } => {
-                let mut indexer = self.indexer.write().await;
+                let mut indexer = self.facade.write().await;
                 if let Err(e) = indexer.remove_file(&path) {
                     tracing::error!("[{handler_name}] failed to remove: {e}");
                 } else {
@@ -340,10 +340,10 @@ impl UnifiedWatcher {
                         tracing::info!("  + {}", path.display());
                     }
 
-                    let mut indexer = self.indexer.write().await;
+                    let mut indexer = self.facade.write().await;
                     for path in &added {
                         crate::log_event!("config", "indexing", "{}", path.display());
-                        match indexer.index_directory(path, false, false) {
+                        match indexer.index_directory(path, false) {
                             Ok(stats) => {
                                 tracing::info!(
                                     "  indexed {} files, {} symbols",
@@ -430,7 +430,7 @@ impl UnifiedWatcher {
 pub struct UnifiedWatcherBuilder {
     handlers: Vec<Box<dyn WatchHandler>>,
     broadcaster: Option<Arc<NotificationBroadcaster>>,
-    indexer: Option<Arc<RwLock<SimpleIndexer>>>,
+    facade: Option<Arc<RwLock<IndexFacade>>>,
     document_store: Option<Arc<RwLock<DocumentStore>>>,
     chunking_config: ChunkingConfig,
     index_path: Option<PathBuf>,
@@ -444,7 +444,7 @@ impl UnifiedWatcherBuilder {
         Self {
             handlers: Vec::new(),
             broadcaster: None,
-            indexer: None,
+            facade: None,
             document_store: None,
             chunking_config: ChunkingConfig::default(),
             index_path: None,
@@ -465,9 +465,9 @@ impl UnifiedWatcherBuilder {
         self
     }
 
-    /// Set the indexer.
-    pub fn indexer(mut self, indexer: Arc<RwLock<SimpleIndexer>>) -> Self {
-        self.indexer = Some(indexer);
+    /// Set the facade (renamed from indexer).
+    pub fn indexer(mut self, facade: Arc<RwLock<IndexFacade>>) -> Self {
+        self.facade = Some(facade);
         self
     }
 
@@ -507,8 +507,8 @@ impl UnifiedWatcherBuilder {
             reason: "Broadcaster is required".to_string(),
         })?;
 
-        let indexer = self.indexer.ok_or_else(|| WatchError::InitFailed {
-            reason: "Indexer is required".to_string(),
+        let facade = self.facade.ok_or_else(|| WatchError::InitFailed {
+            reason: "Facade is required".to_string(),
         })?;
 
         let workspace_root = self
@@ -534,7 +534,7 @@ impl UnifiedWatcherBuilder {
             event_rx: rx,
             _watcher: watcher,
             broadcaster,
-            indexer,
+            facade,
             document_store: self.document_store,
             chunking_config: self.chunking_config,
             index_path,

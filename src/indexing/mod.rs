@@ -1,3 +1,4 @@
+pub mod facade;
 pub mod file_info;
 pub mod progress;
 pub mod simple;
@@ -20,3 +21,6 @@ pub use walker::FileWalker;
 
 // Re-exports for pipeline (experimental path) - intentionally separate namespace
 pub use pipeline::{Pipeline, PipelineConfig};
+
+// Re-export facade (bridge between SimpleIndexer API and Pipeline implementation)
+pub use facade::{FacadeResult, IndexFacade, IndexingStats, SyncStats};

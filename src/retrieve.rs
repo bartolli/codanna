@@ -1,16 +1,17 @@
 //! Retrieve command implementations using UnifiedOutput schema
 
+use crate::Symbol;
+use crate::indexing::facade::IndexFacade;
 use crate::io::{
     EntityType, ExitCode, OutputFormat, OutputManager, OutputStatus,
     schema::{OutputData, OutputMetadata, UnifiedOutput, UnifiedOutputBuilder},
 };
 use crate::symbol::context::SymbolContext;
-use crate::{SimpleIndexer, Symbol};
 use std::borrow::Cow;
 
 /// Execute retrieve symbol command
 pub fn retrieve_symbol(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     name: &str,
     language: Option<&str>,
     format: OutputFormat,
@@ -97,7 +98,7 @@ pub fn retrieve_symbol(
 
 /// Execute retrieve callers command
 pub fn retrieve_callers(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     function: &str,
     language: Option<&str>,
     format: OutputFormat,
@@ -239,7 +240,7 @@ pub fn retrieve_callers(
 
 /// Execute retrieve calls command
 pub fn retrieve_calls(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     function: &str,
     language: Option<&str>,
     format: OutputFormat,
@@ -381,7 +382,7 @@ pub fn retrieve_calls(
 
 /// Execute retrieve implementations command
 pub fn retrieve_implementations(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     trait_name: &str,
     language: Option<&str>,
     format: OutputFormat,
@@ -431,7 +432,7 @@ pub fn retrieve_implementations(
 
 /// Execute retrieve search command
 pub fn retrieve_search(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     query: &str,
     limit: usize,
     kind: Option<&str>,
@@ -509,7 +510,7 @@ pub fn retrieve_search(
 // - Conceptually wrong (not all symbols have "impact")
 #[allow(dead_code)]
 pub fn retrieve_impact(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     symbol_name: &str,
     max_depth: usize,
     format: OutputFormat,
@@ -582,7 +583,7 @@ pub fn retrieve_impact(
 
 /// Execute retrieve describe command
 pub fn retrieve_describe(
-    indexer: &SimpleIndexer,
+    indexer: &IndexFacade,
     symbol_name: &str,
     language: Option<&str>,
     format: OutputFormat,

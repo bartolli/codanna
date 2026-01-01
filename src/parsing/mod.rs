@@ -46,8 +46,8 @@ pub use php::{PhpBehavior, PhpParser};
 pub use python::{PythonBehavior, PythonParser};
 pub use registry::{LanguageDefinition, LanguageId, LanguageRegistry, RegistryError, get_registry};
 pub use resolution::{
-    GenericInheritanceResolver, GenericResolutionContext, InheritanceResolver, ResolutionScope,
-    ScopeLevel,
+    CallerContext, GenericInheritanceResolver, GenericResolutionContext, InheritanceResolver,
+    PipelineSymbolCache, ResolutionScope, ResolveResult, ScopeLevel,
 };
 pub use rust::{RustBehavior, RustParser};
 pub use swift::{SwiftBehavior, SwiftParser};

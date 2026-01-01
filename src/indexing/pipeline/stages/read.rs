@@ -3,7 +3,7 @@
 //! Reads file contents and computes content hashes.
 //! Runs with multiple threads to saturate I/O.
 
-use crate::indexing::pipeline::stages::parse::compute_hash;
+use crate::indexing::file_info::calculate_hash;
 use crate::indexing::pipeline::types::{FileContent, PipelineError, PipelineResult};
 use crossbeam_channel::{Receiver, Sender};
 use std::fs;
@@ -23,6 +23,11 @@ impl ReadStage {
         Self {
             threads: threads.max(1),
         }
+    }
+
+    /// Read a single file directly (for incremental mode).
+    pub fn read_single(&self, path: &PathBuf) -> PipelineResult<FileContent> {
+        read_file(path)
     }
 
     /// Run the read stage, reading from path channel and sending to content channel.
@@ -75,14 +80,14 @@ impl ReadStage {
     }
 }
 
-/// Read a single file and compute its hash.
+/// Read a single file and compute its SHA256 hash.
 fn read_file(path: &PathBuf) -> PipelineResult<FileContent> {
     let content = fs::read_to_string(path).map_err(|e| PipelineError::FileRead {
         path: path.clone(),
         source: e,
     })?;
 
-    let hash = compute_hash(content.as_bytes());
+    let hash = calculate_hash(&content);
 
     Ok(FileContent::new(path.clone(), content, hash))
 }
@@ -108,12 +113,12 @@ mod tests {
         assert_eq!(file_content.content, content);
         assert_eq!(file_content.path, file_path);
 
-        // Hash should be consistent
-        let expected_hash = compute_hash(content.as_bytes());
+        // Hash should be consistent (SHA256)
+        let expected_hash = calculate_hash(content);
         assert_eq!(file_content.hash, expected_hash);
 
         println!(
-            "Read file: {} ({} bytes, hash: {:016x})",
+            "Read file: {} ({} bytes, hash: {})",
             file_path.display(),
             content.len(),
             file_content.hash
@@ -155,7 +160,7 @@ mod tests {
         println!("Read {read} files, {failed} failed:");
         for fc in &contents {
             println!(
-                "  - {} ({} bytes, hash: {:016x})",
+                "  - {} ({} bytes, hash: {})",
                 fc.path.display(),
                 fc.content.len(),
                 fc.hash
@@ -202,13 +207,13 @@ mod tests {
         let content2 = "fn hello() {}";
         let content3 = "fn world() {}";
 
-        let hash1 = compute_hash(content1.as_bytes());
-        let hash2 = compute_hash(content2.as_bytes());
-        let hash3 = compute_hash(content3.as_bytes());
+        let hash1 = calculate_hash(content1);
+        let hash2 = calculate_hash(content2);
+        let hash3 = calculate_hash(content3);
 
-        println!("hash1: {hash1:016x}");
-        println!("hash2: {hash2:016x}");
-        println!("hash3: {hash3:016x}");
+        println!("hash1: {hash1}");
+        println!("hash2: {hash2}");
+        println!("hash3: {hash3}");
 
         assert_eq!(hash1, hash2, "Same content should have same hash");
         assert_ne!(hash1, hash3, "Different content should have different hash");

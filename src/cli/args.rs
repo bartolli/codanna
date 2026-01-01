@@ -331,6 +331,27 @@ pub enum Commands {
         action: DocumentAction,
     },
 
+    /// Index with parallel pipeline (experimental)
+    #[command(
+        name = "index-parallel",
+        about = "Index using parallel pipeline with two-phase resolution",
+        long_about = "Index source code using the parallel pipeline architecture.\n\nPhase 1: Parallel file discovery, reading, parsing, and indexing.\nPhase 2: Two-pass cross-file relationship resolution.",
+        after_help = "Examples:\n  codanna index-parallel src\n  codanna index-parallel --progress\n  codanna index-parallel src lib --force"
+    )]
+    IndexParallel {
+        /// Paths to directories to index (uses settings.toml indexed_paths if empty)
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+
+        /// Force re-indexing (clears existing index)
+        #[arg(short, long)]
+        force: bool,
+
+        /// Show progress during indexing
+        #[arg(short, long)]
+        progress: bool,
+    },
+
     /// Manage project profiles
     #[command(
         about = "Initialize and manage project profiles",

@@ -94,6 +94,9 @@ mod test_swift_error_recovery;
 #[path = "parsers/typescript/test_error_recovery.rs"]
 mod test_typescript_error_recovery;
 
+#[path = "parsers/typescript/test_pipeline_resolution.rs"]
+mod test_typescript_pipeline_resolution;
+
 #[path = "parsers/kotlin/test_value_class.rs"]
 mod test_kotlin_value_class;
 

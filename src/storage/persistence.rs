@@ -3,6 +3,7 @@
 //! This module manages metadata and ensures Tantivy index exists.
 //! All actual data is stored in Tantivy.
 
+use crate::indexing::facade::IndexFacade;
 use crate::storage::{DataSource, IndexMetadata};
 use crate::{IndexError, IndexResult, Settings, SimpleIndexer};
 use std::path::PathBuf;
@@ -186,6 +187,141 @@ impl IndexPersistence {
                 ),
             })
         }
+    }
+
+    // =========================================================================
+    // IndexFacade Persistence Methods
+    // =========================================================================
+
+    /// Load an IndexFacade from disk
+    #[must_use = "Load errors should be handled appropriately"]
+    pub fn load_facade(&self, settings: Arc<Settings>) -> IndexResult<IndexFacade> {
+        // Load metadata to understand data sources
+        let metadata = IndexMetadata::load(&self.base_path).ok();
+
+        // Check if Tantivy index exists
+        let tantivy_path = self.base_path.join("tantivy");
+        if !tantivy_path.join("meta.json").exists() {
+            return Err(IndexError::FileRead {
+                path: tantivy_path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Tantivy index not found",
+                ),
+            });
+        }
+
+        // Create IndexFacade - it will open the existing Tantivy index
+        let mut facade = IndexFacade::new(settings)?;
+
+        // Display source info with fresh counts
+        if let Some(ref meta) = metadata {
+            let fresh_symbol_count = facade.symbol_count();
+            let fresh_file_count = facade.file_count();
+
+            match &meta.data_source {
+                DataSource::Tantivy {
+                    path, doc_count, ..
+                } => {
+                    tracing::info!(
+                        "[persistence] loaded facade from Tantivy index: {} ({} documents)",
+                        path.display(),
+                        doc_count
+                    );
+                }
+                DataSource::Fresh => {
+                    tracing::info!("[persistence] created fresh facade");
+                }
+            }
+            tracing::info!(
+                "[persistence] facade contains {fresh_symbol_count} symbols from {fresh_file_count} files"
+            );
+        }
+
+        // Load semantic search if available
+        let semantic_path = self.semantic_path();
+        tracing::debug!(
+            "[persistence] semantic path computed as: {}",
+            semantic_path.display()
+        );
+        match facade.load_semantic_search(&semantic_path) {
+            Ok(true) => {
+                tracing::debug!("[persistence] loaded semantic search for facade");
+            }
+            Ok(false) => {
+                tracing::debug!("[persistence] no semantic data found (this is optional)");
+            }
+            Err(e) => {
+                tracing::warn!("[persistence] failed to load semantic search: {e}");
+            }
+        }
+
+        // Restore indexed_paths from metadata
+        if let Some(ref meta) = metadata {
+            if let Some(ref stored_paths) = meta.indexed_paths {
+                facade.set_indexed_paths(stored_paths.clone());
+                tracing::debug!(
+                    "[persistence] restored {} indexed paths from metadata",
+                    stored_paths.len()
+                );
+            }
+        }
+
+        // Load symbol cache if available
+        if let Err(e) = facade.load_symbol_cache() {
+            tracing::debug!("[persistence] no symbol cache loaded: {e}");
+        }
+
+        Ok(facade)
+    }
+
+    /// Save metadata for an IndexFacade
+    #[must_use = "Save errors should be handled to ensure data is persisted"]
+    pub fn save_facade(&self, facade: &IndexFacade) -> IndexResult<()> {
+        // Update metadata
+        let mut metadata =
+            IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
+
+        metadata.update_counts(facade.symbol_count() as u32, facade.file_count());
+
+        // Update indexed paths for sync detection on next load
+        let indexed_paths: Vec<PathBuf> = facade.get_indexed_paths().iter().cloned().collect();
+        tracing::debug!(
+            "[persistence] saving {} indexed paths to metadata",
+            indexed_paths.len()
+        );
+        metadata.update_indexed_paths(indexed_paths);
+
+        // Update metadata to reflect Tantivy
+        metadata.data_source = DataSource::Tantivy {
+            path: self.base_path.join("tantivy"),
+            doc_count: facade.document_count().unwrap_or(0),
+            timestamp: crate::indexing::get_utc_timestamp(),
+        };
+
+        metadata.save(&self.base_path)?;
+
+        // Update project registry with latest metadata
+        if let Err(err) = self.update_project_registry(&metadata) {
+            tracing::debug!(
+                target: "persistence",
+                "Skipped project registry update: {err}"
+            );
+        }
+
+        // Save semantic search if enabled
+        if facade.has_semantic_search() {
+            let semantic_path = self.semantic_path();
+            std::fs::create_dir_all(&semantic_path).map_err(|e| {
+                IndexError::General(format!("Failed to create semantic directory: {e}"))
+            })?;
+
+            facade
+                .save_semantic_search(&semantic_path)
+                .map_err(|e| IndexError::General(format!("Failed to save semantic search: {e}")))?;
+        }
+
+        Ok(())
     }
 
     /// Check if an index exists

@@ -134,6 +134,35 @@ impl CollectStage {
         Self::new(5000)
     }
 
+    /// Process a single parsed file (for single-file indexing).
+    ///
+    /// [PIPELINE API] Used by `Pipeline::index_file_single()` for watcher reindex.
+    /// Assigns FileId and SymbolIds using the next available IDs from DocumentIndex.
+    ///
+    /// Returns (IndexBatch, Vec<UnresolvedRelationship>) for indexing.
+    pub fn process_single(
+        &self,
+        parsed: ParsedFile,
+        index: Arc<crate::storage::DocumentIndex>,
+    ) -> PipelineResult<(IndexBatch, Vec<UnresolvedRelationship>)> {
+        // Get next available IDs from the index
+        let next_file_id = index.get_next_file_id()?;
+        let next_symbol_id = index.get_next_symbol_id()?;
+
+        let mut state = CollectorState::new(self.batch_size);
+        // Set counters to continue from existing index
+        state.file_counter = next_file_id.saturating_sub(1);
+        state.symbol_counter = next_symbol_id.saturating_sub(1);
+
+        // Process the file
+        self.process_file(&mut state, parsed);
+
+        // Extract relationships from batch
+        let unresolved = std::mem::take(&mut state.current_batch.unresolved_relationships);
+
+        Ok((state.current_batch, unresolved))
+    }
+
     /// Run the collect stage.
     ///
     /// Returns (total_files, total_symbols).
@@ -295,7 +324,7 @@ mod tests {
     fn make_parsed_file(name: &str, symbols: Vec<RawSymbol>) -> ParsedFile {
         ParsedFile {
             path: PathBuf::from(name),
-            content_hash: 12345,
+            content_hash: "abc123def456".to_string(),
             language_id: LanguageId::new("rust"),
             module_path: None,
             raw_symbols: symbols,
@@ -548,6 +577,90 @@ mod tests {
         // Verify timestamps are set (after 2020-01-01)
         for reg in registrations {
             assert!(reg.timestamp > 1577836800, "Timestamp should be after 2020");
+        }
+    }
+
+    #[test]
+    fn test_collect_preserves_doc_comment() {
+        let (parsed_tx, parsed_rx) = bounded(100);
+        let (batch_tx, batch_rx) = bounded(100);
+
+        // Create symbols with doc_comments
+        let sym_with_doc = RawSymbol::new(
+            "documented_fn",
+            SymbolKind::Function,
+            Range::new(1, 0, 5, 1),
+        )
+        .with_signature("fn documented_fn() -> Result<()>")
+        .with_doc_comment("This function does important work.\n\nIt handles the core logic.");
+
+        let sym_without_doc =
+            RawSymbol::new("plain_fn", SymbolKind::Function, Range::new(10, 0, 12, 1))
+                .with_signature("fn plain_fn()");
+
+        let sym_with_short_doc =
+            RawSymbol::new("helper", SymbolKind::Function, Range::new(20, 0, 22, 1))
+                .with_doc_comment("Helper utility");
+
+        let parsed = ParsedFile {
+            path: PathBuf::from("src/lib.rs"),
+            content_hash: "abc123def456".to_string(),
+            language_id: LanguageId::new("rust"),
+            module_path: Some("mylib".to_string()),
+            raw_symbols: vec![sym_with_doc, sym_without_doc, sym_with_short_doc],
+            raw_imports: Vec::new(),
+            raw_relationships: Vec::new(),
+        };
+
+        parsed_tx.send(parsed).unwrap();
+        drop(parsed_tx);
+
+        let stage = CollectStage::new(100);
+        let result = stage.run(parsed_rx, batch_tx);
+        assert!(result.is_ok());
+
+        let batches: Vec<_> = batch_rx.iter().collect();
+        assert_eq!(batches.len(), 1);
+
+        let symbols = &batches[0].symbols;
+        assert_eq!(symbols.len(), 3);
+
+        // Verify doc_comment is preserved on Symbol
+        let (sym1, _) = &symbols[0];
+        assert_eq!(sym1.name.as_ref(), "documented_fn");
+        assert!(
+            sym1.doc_comment.is_some(),
+            "doc_comment should be preserved"
+        );
+        assert_eq!(
+            sym1.doc_comment.as_deref(),
+            Some("This function does important work.\n\nIt handles the core logic.")
+        );
+
+        let (sym2, _) = &symbols[1];
+        assert_eq!(sym2.name.as_ref(), "plain_fn");
+        assert!(
+            sym2.doc_comment.is_none(),
+            "Symbol without doc should have None"
+        );
+
+        let (sym3, _) = &symbols[2];
+        assert_eq!(sym3.name.as_ref(), "helper");
+        assert_eq!(sym3.doc_comment.as_deref(), Some("Helper utility"));
+
+        println!("doc_comment preservation verified:");
+        for (sym, path) in symbols {
+            println!(
+                "  {} (id={}) in {} doc={:?}",
+                sym.name,
+                sym.id.value(),
+                path.display(),
+                sym.doc_comment.as_ref().map(|d| if d.len() > 30 {
+                    format!("{}...", &d[..30])
+                } else {
+                    d.to_string()
+                })
+            );
         }
     }
 }

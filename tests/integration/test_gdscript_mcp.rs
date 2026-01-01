@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use codanna::SimpleIndexer;
 use codanna::config::{SemanticSearchConfig, Settings};
+use codanna::indexing::facade::IndexFacade;
 use codanna::mcp::{
     AnalyzeImpactRequest, CodeIntelligenceServer, SemanticSearchWithContextRequest,
 };
@@ -47,7 +47,7 @@ async fn test_gdscript_semantic_search_and_analyze_impact() {
     };
 
     let settings = Arc::new(settings);
-    let mut indexer = SimpleIndexer::with_settings(settings.clone());
+    let mut indexer = IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade");
     indexer
         .enable_semantic_search()
         .expect("enable semantic search");

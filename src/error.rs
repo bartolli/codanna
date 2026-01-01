@@ -89,6 +89,45 @@ pub enum IndexError {
     /// General errors for cases where we need to preserve existing behavior
     #[error("{0}")]
     General(String),
+
+    /// Mutex lock acquisition failed
+    #[error("Failed to acquire lock: {0}")]
+    LockError(String),
+
+    /// Semantic search is not enabled
+    #[error("Semantic search is not enabled. Enable it in settings.toml or with --semantic flag")]
+    SemanticSearchNotEnabled,
+
+    /// Storage layer error
+    #[error("Storage error: {0}")]
+    Storage(#[from] crate::storage::StorageError),
+
+    /// Semantic search error
+    #[error("Semantic search error: {0}")]
+    SemanticSearch(#[from] crate::semantic::SemanticSearchError),
+
+    /// Pipeline error (boxed to break recursive type cycle)
+    #[error("Pipeline error: {0}")]
+    Pipeline(Box<crate::indexing::pipeline::PipelineError>),
+}
+
+impl IndexError {
+    /// Create a lock error
+    pub fn lock_error() -> Self {
+        Self::LockError("mutex poisoned".to_string())
+    }
+}
+
+impl From<std::io::Error> for IndexError {
+    fn from(err: std::io::Error) -> Self {
+        IndexError::General(err.to_string())
+    }
+}
+
+impl From<crate::indexing::pipeline::PipelineError> for IndexError {
+    fn from(err: crate::indexing::pipeline::PipelineError) -> Self {
+        IndexError::Pipeline(Box::new(err))
+    }
 }
 
 impl IndexError {
@@ -114,6 +153,11 @@ impl IndexError {
             Self::MutexPoisoned => "MUTEX_POISONED",
             Self::IndexCorrupted { .. } => "INDEX_CORRUPTED",
             Self::General(_) => "GENERAL_ERROR",
+            Self::LockError(_) => "LOCK_ERROR",
+            Self::SemanticSearchNotEnabled => "SEMANTIC_SEARCH_NOT_ENABLED",
+            Self::Storage(_) => "STORAGE_ERROR",
+            Self::SemanticSearch(_) => "SEMANTIC_SEARCH_ERROR",
+            Self::Pipeline(_) => "PIPELINE_ERROR",
         }
         .to_string()
     }

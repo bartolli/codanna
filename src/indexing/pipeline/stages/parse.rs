@@ -362,7 +362,7 @@ pub struct Foo {
 }
 "#
             .to_string(),
-            12345,
+            "abc123def456".to_string(),
         );
 
         let result = parse_file(content, &settings);

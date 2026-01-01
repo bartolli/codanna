@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use crate::SimpleIndexer;
 use crate::cli::commands::directories::{SkipReason, add_paths_to_settings};
 use crate::config::Settings;
+use crate::indexing::facade::IndexFacade;
 use crate::storage::IndexPersistence;
 use crate::types::SymbolKind;
 
@@ -25,7 +25,7 @@ pub struct IndexArgs {
 pub fn run(
     args: IndexArgs,
     config: &mut Settings,
-    indexer: &mut SimpleIndexer,
+    indexer: &mut IndexFacade,
     persistence: &IndexPersistence,
     sync_made_changes: Option<bool>,
 ) {
@@ -98,7 +98,7 @@ pub fn run(
             match sync_made_changes {
                 Some(false) => {
                     println!("Index already up to date (no changes detected).");
-                    if let Err(e) = persistence.save(indexer) {
+                    if let Err(e) = persistence.save_facade(indexer) {
                         eprintln!("Error saving index: {e}");
                         std::process::exit(1);
                     }
@@ -137,7 +137,7 @@ pub fn run(
     }
 }
 
-fn index_single_file(indexer: &mut SimpleIndexer, path: &PathBuf, force: bool) {
+fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) {
     match indexer.index_file_with_force(path, force) {
         Ok(result) => {
             let language_name = path
@@ -212,7 +212,7 @@ fn index_single_file(indexer: &mut SimpleIndexer, path: &PathBuf, force: bool) {
 }
 
 fn index_directory(
-    indexer: &mut SimpleIndexer,
+    indexer: &mut IndexFacade,
     path: &PathBuf,
     progress: bool,
     dry_run: bool,
@@ -230,9 +230,7 @@ fn index_directory(
     }
 
     // Track this directory as indexed
-    if let Err(e) = indexer.add_indexed_path(path) {
-        eprintln!("Warning: Failed to track indexed directory: {e}");
-    }
+    indexer.add_indexed_path(path);
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
         Ok(stats) => {
@@ -254,7 +252,7 @@ fn index_directory(
     }
 }
 
-fn save_index(indexer: &mut SimpleIndexer, persistence: &IndexPersistence, config: &Settings) {
+fn save_index(indexer: &mut IndexFacade, persistence: &IndexPersistence, config: &Settings) {
     // Build symbol cache before saving
     if let Err(e) = indexer.build_symbol_cache() {
         eprintln!("Warning: Failed to build symbol cache: {e}");
@@ -266,7 +264,7 @@ fn save_index(indexer: &mut SimpleIndexer, persistence: &IndexPersistence, confi
         indexer.symbol_count(),
         indexer.relationship_count()
     );
-    match persistence.save(indexer) {
+    match persistence.save_facade(indexer) {
         Ok(_) => {
             println!("Index saved to: {}", config.index_path.display());
         }

@@ -905,6 +905,148 @@ impl LanguageBehavior for TypeScriptBehavior {
         Ok(Box::new(context))
     }
 
+    /// Build resolution context for parallel pipeline (no Tantivy).
+    ///
+    /// Uses tsconfig path aliases via TypeScriptProjectEnhancer.
+    /// Returns (scope, enhanced_imports) where enhanced_imports have path aliases resolved.
+    fn build_resolution_context_with_pipeline_cache(
+        &self,
+        file_id: FileId,
+        imports: &[crate::parsing::Import],
+        cache: &dyn crate::parsing::PipelineSymbolCache,
+    ) -> (
+        Box<dyn crate::parsing::ResolutionScope>,
+        Vec<crate::parsing::Import>,
+    ) {
+        use crate::parsing::ScopeLevel;
+        use crate::parsing::resolution::{ImportBinding, ImportOrigin, ProjectResolutionEnhancer};
+
+        // Helper to normalize relative imports
+        fn normalize_import(import_path: &str, importing_mod: &str) -> String {
+            if import_path.starts_with("./") {
+                let rel = import_path.trim_start_matches("./").replace('/', ".");
+                if importing_mod.is_empty() {
+                    rel
+                } else {
+                    // Get parent of importing module
+                    let parts: Vec<&str> = importing_mod.split('.').collect();
+                    let parent = parts[..parts.len().saturating_sub(1)].join(".");
+                    if parent.is_empty() {
+                        rel
+                    } else {
+                        format!("{parent}.{rel}")
+                    }
+                }
+            } else if import_path.starts_with("../") {
+                // Just use the path as-is for now
+                import_path.replace('/', ".")
+            } else {
+                // External or absolute
+                import_path.replace('/', ".")
+            }
+        }
+
+        let mut context = TypeScriptResolutionContext::new(file_id);
+
+        let importing_module = self.get_module_path_for_file(file_id);
+
+        // Load project rules for path alias enhancement
+        let maybe_enhancer = self
+            .load_project_rules_for_file(file_id)
+            .map(super::resolution::TypeScriptProjectEnhancer::new);
+
+        // Build enhanced imports with path aliases resolved
+        let mut enhanced_imports = Vec::with_capacity(imports.len());
+
+        for import in imports {
+            // Get the local name to bind (alias or last path segment)
+            let local_name = import.alias.clone().unwrap_or_else(|| {
+                import
+                    .path
+                    .split('/')
+                    .next_back()
+                    .or_else(|| import.path.split('.').next_back())
+                    .unwrap_or(&import.path)
+                    .to_string()
+            });
+
+            // Enhance import path if we have tsconfig rules
+            let target_module = if let Some(ref enhancer) = maybe_enhancer {
+                if let Some(enhanced_path) = enhancer.enhance_import_path(&import.path, file_id) {
+                    // Tsconfig alias - convert enhanced path to module format
+                    enhanced_path.trim_start_matches("./").replace('/', ".")
+                } else {
+                    // Regular import - normalize relative to importing module
+                    normalize_import(&import.path, &importing_module.clone().unwrap_or_default())
+                }
+            } else {
+                normalize_import(&import.path, &importing_module.clone().unwrap_or_default())
+            };
+
+            // Collect enhanced import with resolved path
+            enhanced_imports.push(crate::parsing::Import {
+                path: target_module.clone(),
+                file_id: import.file_id,
+                alias: import.alias.clone(),
+                is_glob: import.is_glob,
+                is_type_only: import.is_type_only,
+            });
+
+            // Look up candidates by local_name and match module_path
+            let mut resolved_symbol: Option<SymbolId> = None;
+            let candidates = cache.lookup_candidates(&local_name);
+            for id in candidates {
+                if let Some(symbol) = cache.get(id) {
+                    if let Some(ref module_path) = symbol.module_path {
+                        if module_path.as_ref() == target_module
+                            || target_module.ends_with(module_path.as_ref())
+                            || module_path.ends_with(&target_module)
+                        {
+                            resolved_symbol = Some(id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Determine origin
+            let origin = if resolved_symbol.is_some() {
+                ImportOrigin::Internal
+            } else {
+                ImportOrigin::External
+            };
+
+            // Register binding
+            context.register_import_binding(ImportBinding {
+                import: import.clone(),
+                exposed_name: local_name.clone(),
+                origin,
+                resolved_symbol,
+            });
+
+            if let (ImportOrigin::Internal, Some(symbol_id)) = (origin, resolved_symbol) {
+                context.add_symbol(local_name.clone(), symbol_id, ScopeLevel::Module);
+            }
+        }
+
+        // Populate context with enhanced imports
+        context.populate_imports(&enhanced_imports);
+
+        // Add local symbols from this file
+        for sym_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(sym_id) {
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
+                    if let Some(ref module_path) = symbol.module_path {
+                        context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Module);
+                    }
+                }
+            }
+        }
+
+        (Box::new(context), enhanced_imports)
+    }
+
     // TypeScript-specific: Support hoisting
     fn is_resolvable_symbol(&self, symbol: &crate::Symbol) -> bool {
         use crate::SymbolKind;

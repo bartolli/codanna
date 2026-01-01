@@ -2,6 +2,7 @@
 //!
 //! Tests the parse stage in isolation (no Tantivy, no indexing).
 
+use codanna::indexing::file_info::calculate_hash;
 use codanna::indexing::pipeline::{FileContent, init_parser_cache, parse_file};
 use codanna::{Settings, SymbolKind};
 use std::sync::Arc;
@@ -33,7 +34,11 @@ trait Greeter {
 }
 "#;
 
-    let file_content = FileContent::new("test.rs".into(), content.to_string(), hash(content));
+    let file_content = FileContent::new(
+        "test.rs".into(),
+        content.to_string(),
+        calculate_hash(content),
+    );
 
     let parsed = parse_file(file_content, &settings).expect("Parse should succeed");
 
@@ -97,7 +102,11 @@ impl Foo {
 }
 "#;
 
-    let file_content = FileContent::new("test_rels.rs".into(), content.to_string(), hash(content));
+    let file_content = FileContent::new(
+        "test_rels.rs".into(),
+        content.to_string(),
+        calculate_hash(content),
+    );
 
     let parsed = parse_file(file_content, &settings).expect("Parse should succeed");
 
@@ -160,8 +169,11 @@ use super::other::Thing as Alias;
 fn main() {}
 "#;
 
-    let file_content =
-        FileContent::new("test_imports.rs".into(), content.to_string(), hash(content));
+    let file_content = FileContent::new(
+        "test_imports.rs".into(),
+        content.to_string(),
+        calculate_hash(content),
+    );
 
     let parsed = parse_file(file_content, &settings).expect("Parse should succeed");
 
@@ -202,7 +214,11 @@ fn test_parse_unsupported_file_type() {
     let settings = Arc::new(Settings::default());
     init_parser_cache(settings.clone());
 
-    let file_content = FileContent::new("test.xyz".into(), "content".to_string(), 12345);
+    let file_content = FileContent::new(
+        "test.xyz".into(),
+        "content".to_string(),
+        "abc123def456".to_string(),
+    );
 
     let result = parse_file(file_content, &settings);
 
@@ -233,12 +249,4 @@ fn test_raw_symbol_has_no_id_field() {
     // Verify range is captured (needed for COLLECT stage disambiguation)
     assert_eq!(sym.range.start_line, 1);
     assert_eq!(sym.range.end_line, 1);
-}
-
-/// Simple hash for testing.
-fn hash(content: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    content.hash(&mut h);
-    h.finish()
 }

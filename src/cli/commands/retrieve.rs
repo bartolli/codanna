@@ -1,13 +1,13 @@
 //! Retrieve command - query symbol information from the index.
 
-use crate::SimpleIndexer;
 use crate::cli::RetrieveQuery;
+use crate::indexing::facade::IndexFacade;
 use crate::io::ExitCode;
 use crate::io::OutputFormat;
 use crate::retrieve;
 
 /// Run the retrieve command.
-pub fn run(query: RetrieveQuery, indexer: &SimpleIndexer) -> ExitCode {
+pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
     match query {
         RetrieveQuery::Symbol { args, json } => {
             use crate::io::args::parse_positional_args;
