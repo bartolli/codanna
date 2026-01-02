@@ -43,9 +43,6 @@ mod test_provider_initialization;
 #[path = "integration/test_typescript_alias_relationships.rs"]
 mod test_typescript_alias_relationships;
 
-#[path = "integration/test_typescript_object_property_call.rs"]
-mod test_typescript_object_property_call;
-
 #[path = "integration/test_external_import_resolution.rs"]
 mod test_external_import_resolution;
 

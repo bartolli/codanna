@@ -230,8 +230,9 @@ impl ResolveStage {
             return Some(language_matches[0]);
         }
 
-        // Fallback: first candidate
-        candidates.first().copied()
+        // No appropriate match found - don't resolve cross-language
+        // Return None to prevent incorrect relationships (e.g., Java -> JavaScript)
+        None
     }
 
     /// Find the symbol closest to the call site by range.

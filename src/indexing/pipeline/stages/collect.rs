@@ -22,6 +22,10 @@ use std::sync::Arc;
 /// Collect stage for ID assignment and batching.
 pub struct CollectStage {
     batch_size: usize,
+    /// Starting file counter (for continuing from existing index)
+    start_file_counter: u32,
+    /// Starting symbol counter (for continuing from existing index)
+    start_symbol_counter: u32,
 }
 
 /// Ephemeral caches for relationship reconnection.
@@ -126,7 +130,19 @@ impl CollectStage {
     pub fn new(batch_size: usize) -> Self {
         Self {
             batch_size: batch_size.max(1),
+            start_file_counter: 0,
+            start_symbol_counter: 0,
         }
+    }
+
+    /// Set starting counters from existing index.
+    ///
+    /// Call this before `run()` to continue ID assignment from where the index left off.
+    /// This is critical for multi-directory indexing to avoid ID collisions.
+    pub fn with_start_counters(mut self, file_counter: u32, symbol_counter: u32) -> Self {
+        self.start_file_counter = file_counter;
+        self.start_symbol_counter = symbol_counter;
+        self
     }
 
     /// Create with default batch size (5000 symbols).
@@ -165,32 +181,58 @@ impl CollectStage {
 
     /// Run the collect stage.
     ///
-    /// Returns (total_files, total_symbols).
+    /// Returns (total_files, total_symbols, input_wait, output_wait).
     pub fn run(
         &self,
         receiver: Receiver<ParsedFile>,
         sender: Sender<IndexBatch>,
-    ) -> PipelineResult<(usize, usize)> {
-        let mut state = CollectorState::new(self.batch_size);
+    ) -> PipelineResult<(u32, u32, std::time::Duration, std::time::Duration)> {
+        use std::time::{Duration, Instant};
 
-        for parsed in receiver {
+        let mut state = CollectorState::new(self.batch_size);
+        // Continue from existing index counters (critical for multi-directory indexing)
+        state.file_counter = self.start_file_counter;
+        state.symbol_counter = self.start_symbol_counter;
+
+        let mut input_wait = Duration::ZERO;
+        let mut output_wait = Duration::ZERO;
+
+        loop {
+            // Track input wait (time blocked on recv)
+            let recv_start = Instant::now();
+            let parsed = match receiver.recv() {
+                Ok(p) => p,
+                Err(_) => break, // Channel closed
+            };
+            input_wait += recv_start.elapsed();
+
             self.process_file(&mut state, parsed);
 
             // Flush batch if full
             if state.should_flush() {
                 let batch = state.take_batch();
+                // Track output wait (time blocked on send)
+                let send_start = Instant::now();
                 if sender.send(batch).is_err() {
                     break; // Channel closed
                 }
+                output_wait += send_start.elapsed();
             }
         }
 
         // Flush remaining batch
         if !state.current_batch.is_empty() {
+            let send_start = Instant::now();
             let _ = sender.send(state.take_batch());
+            output_wait += send_start.elapsed();
         }
 
-        Ok((state.file_counter as usize, state.symbol_counter as usize))
+        Ok((
+            state.file_counter,
+            state.symbol_counter,
+            input_wait,
+            output_wait,
+        ))
     }
 
     /// Process a single parsed file.
@@ -360,7 +402,7 @@ mod tests {
         let result = stage.run(parsed_rx, batch_tx);
 
         assert!(result.is_ok());
-        let (files, symbols) = result.unwrap();
+        let (files, symbols, _, _) = result.unwrap();
 
         let batches: Vec<_> = batch_rx.iter().collect();
 
@@ -410,7 +452,7 @@ mod tests {
         let result = stage.run(parsed_rx, batch_tx);
 
         assert!(result.is_ok());
-        let (files, symbols) = result.unwrap();
+        let (files, symbols, _, _) = result.unwrap();
 
         let batches: Vec<_> = batch_rx.iter().collect();
 

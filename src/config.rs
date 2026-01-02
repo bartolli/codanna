@@ -118,9 +118,18 @@ pub struct IndexingConfig {
     #[serde(default = "default_read_threads")]
     pub read_threads: usize,
 
+    /// Number of threads for file discovery (walking directories)
+    #[serde(default = "default_discover_threads")]
+    pub discover_threads: usize,
+
     /// Batches to accumulate before Tantivy commit
     #[serde(default = "default_batches_per_commit")]
     pub batches_per_commit: usize,
+
+    /// Enable detailed pipeline stage tracing (timing, memory, throughput)
+    /// Set logging.modules.pipeline = "info" to see output
+    #[serde(default)]
+    pub pipeline_tracing: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -294,6 +303,9 @@ fn default_batch_size() -> usize {
 fn default_read_threads() -> usize {
     2 // I/O threads for file reading (saturates NVMe)
 }
+fn default_discover_threads() -> usize {
+    4 // Walker threads for directory traversal
+}
 fn default_batches_per_commit() -> usize {
     10 // Commit every 10 batches (~50K symbols)
 }
@@ -361,7 +373,9 @@ impl Default for IndexingConfig {
             indexed_paths: Vec::new(),
             batch_size: default_batch_size(),
             read_threads: default_read_threads(),
+            discover_threads: default_discover_threads(),
             batches_per_commit: default_batches_per_commit(),
+            pipeline_tracing: false,
         }
     }
 }
@@ -837,6 +851,22 @@ impl Settings {
                 result.push_str("# Add folders using: codanna add-dir <path>\n");
                 result.push_str("# Remove folders using: codanna remove-dir <path>\n");
                 result.push_str("# List all folders using: codanna list-dirs\n");
+            } else if line.starts_with("read_threads = ") {
+                result.push_str("\n# Number of I/O threads for file reading (default: 2)\n");
+                result.push_str(
+                    "# Increase to 4 for fast NVMe drives, decrease to 1 for slow HDDs\n",
+                );
+            } else if line.starts_with("discover_threads = ") {
+                result.push_str("\n# Number of threads for directory walking (default: 4)\n");
+                result.push_str("# Lower values reduce CPU load during file discovery\n");
+            } else if line.starts_with("batch_size = ") {
+                result.push_str("\n# Symbols per batch before flushing to index (default: 5000)\n");
+            } else if line.starts_with("batches_per_commit = ") {
+                result.push_str("\n# Number of batches before committing to disk (default: 10)\n");
+            } else if line.starts_with("pipeline_tracing = ") {
+                result.push_str("\n# Enable detailed pipeline stage tracing\n");
+                result.push_str("# Shows timing, throughput, and memory for each stage\n");
+                result.push_str("# Requires: logging.modules.pipeline = \"info\"\n");
             } else if line == "[mcp]" {
                 result.push_str("\n[mcp]\n");
                 prev_line_was_section = true;

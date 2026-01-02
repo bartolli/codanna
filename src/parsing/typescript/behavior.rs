@@ -1235,6 +1235,10 @@ impl LanguageBehavior for TypeScriptBehavior {
         self.state.get_module_path(file_id)
     }
 
+    fn get_file_path(&self, file_id: FileId) -> Option<PathBuf> {
+        self.state.get_file_path(file_id)
+    }
+
     fn import_matches_symbol(
         &self,
         import_path: &str,

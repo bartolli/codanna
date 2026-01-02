@@ -1240,6 +1240,79 @@ pub trait LanguageBehavior: Send + Sync {
         None
     }
 
+    /// Get the file path for a FileId from behavior state
+    ///
+    /// Default implementation returns None. Languages with state tracking
+    /// should override to return the file path.
+    fn get_file_path(&self, _file_id: FileId) -> Option<PathBuf> {
+        None
+    }
+
+    /// Load project resolution rules for a file from the persisted index
+    ///
+    /// Uses a thread-local cache to avoid repeated disk reads.
+    /// Cache is invalidated after 1 second to pick up changes.
+    ///
+    /// This method works with the project resolver infrastructure:
+    /// - TypeScript: tsconfig.json paths
+    /// - JavaScript: jsconfig.json paths
+    /// - Java: Maven/Gradle source roots
+    /// - Swift: Package.swift source roots
+    fn load_project_rules_for_file(
+        &self,
+        file_id: FileId,
+    ) -> Option<crate::project_resolver::persist::ResolutionRules> {
+        use crate::project_resolver::persist::ResolutionPersistence;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
+
+        // Thread-local cache with 1-second TTL
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, String, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
+
+        let language_id = self.language_id().as_str().to_string();
+
+        RULES_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+
+            // Check if cache is fresh (< 1 second old) and same language
+            let needs_reload = if let Some((timestamp, cached_lang, _)) = &*cache {
+                timestamp.elapsed() >= Duration::from_secs(1) || cached_lang != &language_id
+            } else {
+                true
+            };
+
+            // Load fresh from disk if needed
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load(&language_id) {
+                    *cache = Some((Instant::now(), language_id.clone(), index));
+                } else {
+                    // No index file exists yet - that's OK
+                    return None;
+                }
+            }
+
+            // Get rules for the file
+            if let Some((_, _, ref index)) = *cache {
+                // Get the file path for this FileId from behavior state
+                if let Some(file_path) = self.get_file_path(file_id) {
+                    // Find the config that applies to this file
+                    if let Some(config_path) = index.get_config_for_file(&file_path) {
+                        return index.rules.get(config_path).cloned();
+                    }
+                }
+
+                // Fallback: return any rules we have (for tests without proper file registration)
+                index.rules.values().next().cloned()
+            } else {
+                None
+            }
+        })
+    }
+
     /// Register expression-to-type mappings extracted during parsing
     ///
     /// Languages that need additional resolution metadata (e.g., Kotlin generic

@@ -9,7 +9,7 @@ use crossbeam_channel::{Receiver, Sender};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
 /// Read stage for file content loading.
@@ -32,14 +32,18 @@ impl ReadStage {
 
     /// Run the read stage, reading from path channel and sending to content channel.
     ///
-    /// Returns (files_read, files_failed).
+    /// Returns (files_read, files_failed, input_wait, output_wait).
     pub fn run(
         &self,
         receiver: Receiver<PathBuf>,
         sender: Sender<FileContent>,
-    ) -> PipelineResult<(usize, usize)> {
+    ) -> PipelineResult<(usize, usize, std::time::Duration, std::time::Duration)> {
+        use std::time::{Duration, Instant};
+
         let read_count = Arc::new(AtomicUsize::new(0));
         let error_count = Arc::new(AtomicUsize::new(0));
+        let input_wait_ns = Arc::new(AtomicU64::new(0));
+        let output_wait_ns = Arc::new(AtomicU64::new(0));
 
         let handles: Vec<_> = (0..self.threads)
             .map(|_| {
@@ -47,20 +51,36 @@ impl ReadStage {
                 let sender = sender.clone();
                 let read_count = read_count.clone();
                 let error_count = error_count.clone();
+                let input_wait_ns = input_wait_ns.clone();
+                let output_wait_ns = output_wait_ns.clone();
 
                 thread::spawn(move || {
-                    for path in receiver {
+                    loop {
+                        // Track input wait (time blocked on recv)
+                        let recv_start = Instant::now();
+                        let path = match receiver.recv() {
+                            Ok(p) => p,
+                            Err(_) => break, // Channel closed
+                        };
+                        input_wait_ns
+                            .fetch_add(recv_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
                         match read_file(&path) {
                             Ok(content) => {
                                 read_count.fetch_add(1, Ordering::Relaxed);
+
+                                // Track output wait (time blocked on send)
+                                let send_start = Instant::now();
                                 if sender.send(content).is_err() {
-                                    // Channel closed, stop reading
                                     break;
                                 }
+                                output_wait_ns.fetch_add(
+                                    send_start.elapsed().as_nanos() as u64,
+                                    Ordering::Relaxed,
+                                );
                             }
                             Err(_) => {
                                 error_count.fetch_add(1, Ordering::Relaxed);
-                                // Continue with next file
                             }
                         }
                     }
@@ -76,6 +96,8 @@ impl ReadStage {
         Ok((
             read_count.load(Ordering::Relaxed),
             error_count.load(Ordering::Relaxed),
+            Duration::from_nanos(input_wait_ns.load(Ordering::Relaxed)),
+            Duration::from_nanos(output_wait_ns.load(Ordering::Relaxed)),
         ))
     }
 }
@@ -152,12 +174,13 @@ mod tests {
         let result = stage.run(path_rx, content_tx);
 
         assert!(result.is_ok());
-        let (read, failed) = result.unwrap();
+        let (read, failed, input_wait, output_wait) = result.unwrap();
 
         // Collect results
         let contents: Vec<_> = content_rx.iter().collect();
 
         println!("Read {read} files, {failed} failed:");
+        println!("  Input wait: {input_wait:?}, Output wait: {output_wait:?}");
         for fc in &contents {
             println!(
                 "  - {} ({} bytes, hash: {})",
@@ -190,7 +213,7 @@ mod tests {
         let result = stage.run(path_rx, content_tx);
 
         assert!(result.is_ok());
-        let (read, failed) = result.unwrap();
+        let (read, failed, _, _) = result.unwrap();
 
         let contents: Vec<_> = content_rx.iter().collect();
 

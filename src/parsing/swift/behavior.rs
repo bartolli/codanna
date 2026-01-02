@@ -248,6 +248,145 @@ impl LanguageBehavior for SwiftBehavior {
         self.state.get_module_path(file_id)
     }
 
+    fn get_file_path(&self, file_id: FileId) -> Option<PathBuf> {
+        self.state.get_file_path(file_id)
+    }
+
+    /// Build resolution context for parallel pipeline (no Tantivy).
+    ///
+    /// Swift doesn't have path aliases like TypeScript/JavaScript.
+    /// Imports are module-level (e.g., `import Foundation`).
+    ///
+    /// CRITICAL: Symbols from pipeline have `module_path: None`.
+    /// We compute module_path on-the-fly from `symbol.file_path` using rules.
+    fn build_resolution_context_with_pipeline_cache(
+        &self,
+        file_id: FileId,
+        imports: &[crate::parsing::Import],
+        cache: &dyn crate::parsing::PipelineSymbolCache,
+    ) -> (
+        Box<dyn crate::parsing::ResolutionScope>,
+        Vec<crate::parsing::Import>,
+    ) {
+        use crate::parsing::ScopeLevel;
+        use crate::parsing::resolution::{ImportBinding, ImportOrigin};
+        use std::path::PathBuf;
+
+        let mut context = SwiftResolutionContext::new(file_id);
+
+        // Helper to compute module_path from file_path using rules
+        // Rules contain source roots; module_path_from_file extracts module name
+        let compute_module_path = |file_path: &str| -> Option<String> {
+            let path = PathBuf::from(file_path);
+            // project_root is unused by Swift's module_path_from_file (uses rules instead)
+            self.module_path_from_file(&path, &PathBuf::new())
+        };
+
+        // Build enhanced imports (Swift imports are already module-level, no transformation)
+        let mut enhanced_imports = Vec::with_capacity(imports.len());
+
+        for import in imports {
+            // For Swift, the import path is the module name (e.g., "Foundation")
+            let local_name = import.alias.clone().unwrap_or_else(|| import.path.clone());
+
+            // Collect enhanced import (no transformation needed for Swift)
+            enhanced_imports.push(crate::parsing::Import {
+                path: import.path.clone(),
+                file_id: import.file_id,
+                alias: import.alias.clone(),
+                is_glob: import.is_glob,
+                is_type_only: import.is_type_only,
+            });
+
+            // Look up candidates by module name and match computed module_path
+            let mut resolved_symbol: Option<crate::SymbolId> = None;
+            let candidates = cache.lookup_candidates(&local_name);
+            for id in candidates {
+                if let Some(symbol) = cache.get(id) {
+                    // Compute module_path from file_path using rules
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        // Swift: import Foundation matches Foundation.* symbols
+                        if computed_module == import.path
+                            || computed_module.starts_with(&format!("{}.", import.path))
+                        {
+                            resolved_symbol = Some(id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Determine origin (consistent with TypeScript/JavaScript pattern)
+            let origin = if resolved_symbol.is_some() {
+                ImportOrigin::Internal
+            } else {
+                ImportOrigin::External
+            };
+
+            // Register binding
+            context.register_import_binding(ImportBinding {
+                import: import.clone(),
+                exposed_name: local_name.clone(),
+                origin,
+                resolved_symbol,
+            });
+
+            if let (ImportOrigin::Internal, Some(symbol_id)) = (origin, resolved_symbol) {
+                context.add_symbol(local_name.clone(), symbol_id, ScopeLevel::Global);
+            }
+        }
+
+        // Populate context with enhanced imports
+        context.populate_imports(&enhanced_imports);
+
+        // Add local symbols from this file with computed module_path
+        for sym_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(sym_id) {
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
+                    // Compute module_path from file_path using rules
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        context.add_symbol(computed_module, symbol.id, ScopeLevel::Global);
+                    }
+                }
+            }
+        }
+
+        (Box::new(context), enhanced_imports)
+    }
+
+    /// Check if a symbol can participate in resolution
+    fn is_resolvable_symbol(&self, symbol: &Symbol) -> bool {
+        use crate::symbol::ScopeContext;
+
+        // Swift resolves types, functions, and properties
+        let resolvable_kind = matches!(
+            symbol.kind,
+            SymbolKind::Function
+                | SymbolKind::Class
+                | SymbolKind::Interface  // Protocol
+                | SymbolKind::Method
+                | SymbolKind::Field      // Property
+                | SymbolKind::Enum
+                | SymbolKind::Constant
+                | SymbolKind::TypeAlias
+        );
+
+        if !resolvable_kind {
+            return false;
+        }
+
+        // Check scope context - exclude local variables and parameters
+        if let Some(ref scope_context) = symbol.scope_context {
+            matches!(
+                scope_context,
+                ScopeContext::Module | ScopeContext::Global | ScopeContext::ClassMember { .. }
+            )
+        } else {
+            true // No scope context = resolvable
+        }
+    }
+
     /// Initialize resolution context with imports for this file
     ///
     /// Called by the indexer to populate the resolution context with

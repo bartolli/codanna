@@ -3,13 +3,11 @@
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
-use crate::project_resolver::persist::{ResolutionPersistence, ResolutionRules};
+use crate::project_resolver::persist::ResolutionPersistence;
 use crate::storage::DocumentIndex;
 use crate::types::FileId;
 use crate::{SymbolId, Visibility};
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use tree_sitter::Language;
 
 use super::resolution::{JavaScriptInheritanceResolver, JavaScriptResolutionContext};
@@ -87,55 +85,6 @@ impl JavaScriptBehavior {
         Self {
             state: BehaviorState::new(),
         }
-    }
-
-    /// Load project resolution rules for a file from the persisted index
-    ///
-    /// Uses a thread-local cache to avoid repeated disk reads.
-    /// Cache is invalidated after 1 second to pick up changes.
-    fn load_project_rules_for_file(&self, file_id: FileId) -> Option<ResolutionRules> {
-        thread_local! {
-            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
-        }
-
-        RULES_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-
-            // Check if cache is fresh (< 1 second old)
-            let needs_reload = if let Some((timestamp, _)) = *cache {
-                timestamp.elapsed() >= Duration::from_secs(1)
-            } else {
-                true
-            };
-
-            // Load fresh from disk if needed
-            if needs_reload {
-                let persistence =
-                    ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
-                if let Ok(index) = persistence.load("javascript") {
-                    *cache = Some((Instant::now(), index));
-                } else {
-                    // No index file exists yet - that's OK
-                    return None;
-                }
-            }
-
-            // Get rules for the file
-            if let Some((_, ref index)) = *cache {
-                // Get the file path for this FileId from our behavior state
-                if let Some(file_path) = self.state.get_file_path(file_id) {
-                    // Find the config that applies to this file
-                    if let Some(config_path) = index.get_config_for_file(&file_path) {
-                        return index.rules.get(config_path).cloned();
-                    }
-                }
-
-                // Fallback: return any rules we have (for tests without proper file registration)
-                index.rules.values().next().cloned()
-            } else {
-                None
-            }
-        })
     }
 }
 
@@ -885,6 +834,142 @@ impl LanguageBehavior for JavaScriptBehavior {
         Ok(Box::new(context))
     }
 
+    /// Build resolution context for parallel pipeline (no Tantivy).
+    ///
+    /// Uses jsconfig path aliases via JavaScriptProjectEnhancer.
+    /// Returns (scope, enhanced_imports) where enhanced_imports have path aliases resolved.
+    ///
+    /// CRITICAL: Symbols from pipeline have `module_path: None`.
+    /// We compute module_path on-the-fly from `symbol.file_path` using rules.
+    fn build_resolution_context_with_pipeline_cache(
+        &self,
+        file_id: FileId,
+        imports: &[crate::parsing::Import],
+        cache: &dyn crate::parsing::PipelineSymbolCache,
+    ) -> (
+        Box<dyn crate::parsing::ResolutionScope>,
+        Vec<crate::parsing::Import>,
+    ) {
+        use crate::parsing::ScopeLevel;
+        use crate::parsing::resolution::{ImportBinding, ImportOrigin, ProjectResolutionEnhancer};
+        use std::path::PathBuf;
+
+        let mut context = JavaScriptResolutionContext::new(file_id);
+
+        // Helper to compute module_path from file_path using rules
+        // Rules contain jsconfig paths; module_path_from_file extracts canonical module path
+        let compute_module_path = |file_path: &str| -> Option<String> {
+            let path = PathBuf::from(file_path);
+            // project_root is unused by JavaScript's module_path_from_file (uses rules instead)
+            self.module_path_from_file(&path, &PathBuf::new())
+        };
+
+        // Compute importing module from current file
+        let importing_module = cache
+            .symbols_in_file(file_id)
+            .first()
+            .and_then(|id| cache.get(*id))
+            .and_then(|sym| compute_module_path(&sym.file_path));
+
+        // Load project rules for path alias enhancement
+        let maybe_enhancer = self
+            .load_project_rules_for_file(file_id)
+            .map(super::resolution::JavaScriptProjectEnhancer::new);
+
+        // Build enhanced imports with path aliases resolved
+        let mut enhanced_imports = Vec::with_capacity(imports.len());
+
+        for import in imports {
+            // Get the local name to bind (alias or last path segment)
+            let local_name = import.alias.clone().unwrap_or_else(|| {
+                import
+                    .path
+                    .split('/')
+                    .next_back()
+                    .or_else(|| import.path.split('.').next_back())
+                    .unwrap_or(&import.path)
+                    .to_string()
+            });
+
+            // Enhance import path if we have jsconfig rules
+            let target_module = if let Some(ref enhancer) = maybe_enhancer {
+                if let Some(enhanced_path) = enhancer.enhance_import_path(&import.path, file_id) {
+                    // Jsconfig alias - convert enhanced path to module format
+                    enhanced_path.trim_start_matches("./").replace('/', ".")
+                } else {
+                    // Regular import - normalize relative to importing module
+                    normalize_js_import(&import.path, &importing_module.clone().unwrap_or_default())
+                }
+            } else {
+                normalize_js_import(&import.path, &importing_module.clone().unwrap_or_default())
+            };
+
+            // Collect enhanced import with resolved path
+            enhanced_imports.push(crate::parsing::Import {
+                path: target_module.clone(),
+                file_id: import.file_id,
+                alias: import.alias.clone(),
+                is_glob: import.is_glob,
+                is_type_only: import.is_type_only,
+            });
+
+            // Look up candidates by local_name and match computed module_path
+            let mut resolved_symbol: Option<SymbolId> = None;
+            let candidates = cache.lookup_candidates(&local_name);
+            for id in candidates {
+                if let Some(symbol) = cache.get(id) {
+                    // Compute module_path from file_path using rules
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        if computed_module == target_module
+                            || target_module.ends_with(&computed_module)
+                            || computed_module.ends_with(&target_module)
+                        {
+                            resolved_symbol = Some(id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Determine origin
+            let origin = if resolved_symbol.is_some() {
+                ImportOrigin::Internal
+            } else {
+                ImportOrigin::External
+            };
+
+            // Register binding
+            context.register_import_binding(ImportBinding {
+                import: import.clone(),
+                exposed_name: local_name.clone(),
+                origin,
+                resolved_symbol,
+            });
+
+            if let (ImportOrigin::Internal, Some(symbol_id)) = (origin, resolved_symbol) {
+                context.add_symbol(local_name.clone(), symbol_id, ScopeLevel::Module);
+            }
+        }
+
+        // Populate context with enhanced imports
+        context.populate_imports(&enhanced_imports);
+
+        // Add local symbols from this file with computed module_path
+        for sym_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(sym_id) {
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
+                    // Compute module_path from file_path using rules
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        context.add_symbol(computed_module, symbol.id, ScopeLevel::Module);
+                    }
+                }
+            }
+        }
+
+        (Box::new(context), enhanced_imports)
+    }
+
     // JavaScript-specific: Support hoisting
     fn is_resolvable_symbol(&self, symbol: &crate::Symbol) -> bool {
         use crate::SymbolKind;
@@ -976,6 +1061,10 @@ impl LanguageBehavior for JavaScriptBehavior {
     fn get_module_path_for_file(&self, file_id: FileId) -> Option<String> {
         // Use the BehaviorState to get module path (O(1) lookup)
         self.state.get_module_path(file_id)
+    }
+
+    fn get_file_path(&self, file_id: FileId) -> Option<PathBuf> {
+        self.state.get_file_path(file_id)
     }
 
     fn import_matches_symbol(

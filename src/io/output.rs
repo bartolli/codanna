@@ -6,7 +6,7 @@
 use crate::error::IndexError;
 use crate::io::exit_code::ExitCode;
 use crate::io::format::{JsonResponse, OutputFormat};
-use crate::io::schema::{OutputData, UnifiedOutput};
+use crate::io::schema::{OutputData, OutputStatus, UnifiedOutput};
 use serde::Serialize;
 use std::fmt::Display;
 use std::io::{self, Write};
@@ -269,18 +269,24 @@ impl OutputManager {
             }
             OutputFormat::Text => {
                 // For text, check if we have special handling needs
-                match &output.data {
-                    OutputData::Empty => {
-                        // Handle empty case specially
+                match (&output.data, &output.status) {
+                    // Only show "not found" when status is NotFound (symbol doesn't exist)
+                    (OutputData::Empty, OutputStatus::NotFound) => {
                         let entity = format!("{:?}", output.entity_type);
                         let msg = format!("{} not found", entity.to_lowercase());
                         Self::write_ignoring_broken_pipe(&mut *self.stderr, &msg)?;
                     }
-                    OutputData::Items { items } if items.is_empty() => {
-                        // Also handle empty Items variant
+                    (OutputData::Items { items }, OutputStatus::NotFound) if items.is_empty() => {
                         let entity = format!("{:?}", output.entity_type);
                         let msg = format!("{} not found", entity.to_lowercase());
                         Self::write_ignoring_broken_pipe(&mut *self.stderr, &msg)?;
+                    }
+                    // Empty with Success status: symbol exists but no results (handled by guidance)
+                    (OutputData::Empty, OutputStatus::Success) => {
+                        // Don't output "not found" - guidance will explain
+                    }
+                    (OutputData::Items { items }, OutputStatus::Success) if items.is_empty() => {
+                        // Don't output "not found" - guidance will explain
                     }
                     _ => {
                         // For all other cases, use the Display implementation

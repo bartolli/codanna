@@ -200,6 +200,33 @@ pub fn retrieve_callers(
 
     // Get callers for THIS SPECIFIC symbol only (no aggregation)
     let callers = indexer.get_calling_functions_with_metadata(symbol.id);
+
+    // Handle empty results: symbol exists but has no callers
+    if callers.is_empty() {
+        let unified = UnifiedOutput {
+            status: OutputStatus::Success, // Symbol was found, just no callers
+            entity_type: EntityType::Function,
+            count: 0,
+            data: OutputData::<SymbolContext>::Empty,
+            metadata: Some(OutputMetadata {
+                query: Some(Cow::Owned(query_str.clone())),
+                tool: None,
+                timing_ms: None,
+                truncated: None,
+                extra: Default::default(),
+            }),
+            guidance: Some(Cow::Owned(format!("No functions call {query_str}"))),
+            exit_code: ExitCode::Success,
+        };
+        return match output.unified(unified) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("Error writing output: {e}");
+                ExitCode::GeneralError
+            }
+        };
+    }
+
     let all_callers: Vec<Symbol> = callers
         .into_iter()
         .map(|(caller, _metadata)| caller)
@@ -342,6 +369,33 @@ pub fn retrieve_calls(
 
     // Get calls for THIS SPECIFIC symbol only (no aggregation)
     let calls = indexer.get_called_functions_with_metadata(symbol.id);
+
+    // Handle empty results: symbol exists but makes no calls
+    if calls.is_empty() {
+        let unified = UnifiedOutput {
+            status: OutputStatus::Success, // Symbol was found, just no calls
+            entity_type: EntityType::Function,
+            count: 0,
+            data: OutputData::<SymbolContext>::Empty,
+            metadata: Some(OutputMetadata {
+                query: Some(Cow::Owned(query_str.clone())),
+                tool: None,
+                timing_ms: None,
+                truncated: None,
+                extra: Default::default(),
+            }),
+            guidance: Some(Cow::Owned(format!("{query_str} makes no function calls"))),
+            exit_code: ExitCode::Success,
+        };
+        return match output.unified(unified) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("Error writing output: {e}");
+                ExitCode::GeneralError
+            }
+        };
+    }
+
     let all_calls: Vec<Symbol> = calls
         .into_iter()
         .map(|(called, _metadata)| called)

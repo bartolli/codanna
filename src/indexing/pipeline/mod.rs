@@ -30,10 +30,12 @@
 //! ```
 
 pub mod config;
+pub mod metrics;
 pub mod stages;
 pub mod types;
 
 pub use config::PipelineConfig;
+pub use metrics::{PipelineMetrics, StageTracker};
 pub use stages::cleanup::{CleanupStage, CleanupStats};
 pub use stages::context::{ContextStage, ContextStats};
 pub use stages::embed::{EmbedStage, EmbedStats};
@@ -111,6 +113,18 @@ impl Pipeline {
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         let start = Instant::now();
 
+        // Create metrics collector if tracing is enabled
+        let metrics = if self.config.pipeline_tracing {
+            Some(PipelineMetrics::new(root.display().to_string(), true))
+        } else {
+            None
+        };
+
+        // Query existing ID counters BEFORE spawning threads
+        // Critical for multi-directory indexing to avoid ID collisions
+        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
+        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+
         // Create bounded channels with backpressure
         let (path_tx, path_rx) = bounded(self.config.path_channel_size);
         let (content_tx, content_rx) = bounded(self.config.content_channel_size);
@@ -121,14 +135,29 @@ impl Pipeline {
         let settings = Arc::clone(&self.settings);
         let parse_threads = self.config.parse_threads;
         let read_threads = self.config.read_threads;
+        let discover_threads = self.config.discover_threads;
         let batch_size = self.config.batch_size;
         let batches_per_commit = self.config.batches_per_commit;
+        let tracing_enabled = self.config.pipeline_tracing;
 
         // Stage 1: DISCOVER - parallel file walk
         let discover_root = root.to_path_buf();
         let discover_handle = thread::spawn(move || {
-            let stage = DiscoverStage::new(discover_root, 4); // 4 walker threads
-            stage.run(path_tx)
+            let tracker = if tracing_enabled {
+                Some(StageTracker::new("DISCOVER", discover_threads))
+            } else {
+                None
+            };
+
+            let stage = DiscoverStage::new(discover_root, discover_threads);
+            let result = stage.run(path_tx);
+
+            // Record metrics
+            if let (Some(tracker), Ok(count)) = (&tracker, &result) {
+                tracker.record_items(*count);
+            }
+
+            (result, tracker.map(|t| t.finalize()))
         });
 
         // Stage 2: READ - multi-threaded file reading
@@ -145,7 +174,7 @@ impl Pipeline {
         drop(path_rx); // Close original receiver
         drop(content_tx); // Close original sender after cloning
 
-        // Stage 3: PARSE - parallel parsing with thread-local parsers
+        // Stage 3: PARSE - parallel parsing with thread-local parsers (with wait tracking)
         let parse_handles: Vec<_> = (0..parse_threads)
             .map(|_| {
                 let rx = content_rx.clone();
@@ -158,14 +187,30 @@ impl Pipeline {
                     let stage = ParseStage::new(settings);
                     let mut parsed_count = 0;
                     let mut error_count = 0;
+                    let mut symbol_count = 0;
+                    let mut input_wait = std::time::Duration::ZERO;
+                    let mut output_wait = std::time::Duration::ZERO;
 
-                    for content in rx {
+                    loop {
+                        // Track input wait (time blocked on recv)
+                        let recv_start = Instant::now();
+                        let content = match rx.recv() {
+                            Ok(c) => c,
+                            Err(_) => break, // Channel closed
+                        };
+                        input_wait += recv_start.elapsed();
+
                         match stage.parse(content) {
                             Ok(parsed) => {
                                 parsed_count += 1;
+                                symbol_count += parsed.raw_symbols.len();
+
+                                // Track output wait (time blocked on send)
+                                let send_start = Instant::now();
                                 if tx.send(parsed).is_err() {
                                     break; // Channel closed
                                 }
+                                output_wait += send_start.elapsed();
                             }
                             Err(_e) => {
                                 error_count += 1;
@@ -174,62 +219,168 @@ impl Pipeline {
                         }
                     }
 
-                    (parsed_count, error_count)
+                    (
+                        parsed_count,
+                        error_count,
+                        symbol_count,
+                        input_wait,
+                        output_wait,
+                    )
                 })
             })
             .collect();
         drop(content_rx);
         drop(parsed_tx);
 
-        // Stage 4: COLLECT - single-threaded ID assignment
+        // Stage 4: COLLECT - single-threaded ID assignment (with starting counters)
         let collect_handle = thread::spawn(move || {
-            let stage = CollectStage::new(batch_size);
-            stage.run(parsed_rx, batch_tx)
+            let tracker = if tracing_enabled {
+                Some(StageTracker::new("COLLECT", 1).with_secondary("batches"))
+            } else {
+                None
+            };
+
+            let stage = CollectStage::new(batch_size)
+                .with_start_counters(start_file_counter, start_symbol_counter);
+            let result = stage.run(parsed_rx, batch_tx);
+
+            // Record items and wait times before finalizing
+            if let (Some(t), Ok((_, symbol_count, input_wait, output_wait))) = (&tracker, &result) {
+                t.record_items(*symbol_count as usize);
+                t.record_input_wait(*input_wait);
+                t.record_output_wait(*output_wait);
+            }
+
+            (result, tracker.map(|t| t.finalize()))
         });
 
         // Stage 5: INDEX - single-threaded Tantivy writes
+        // Clone index Arc for metadata update after pipeline completes
+        let index_for_metadata = Arc::clone(&index);
         let index_handle = thread::spawn(move || {
+            let tracker = if tracing_enabled {
+                Some(StageTracker::new("INDEX", 1).with_secondary("commits"))
+            } else {
+                None
+            };
+
             let stage = IndexStage::new(index, batches_per_commit);
-            stage.run(batch_rx)
+            let result = stage.run(batch_rx);
+
+            // Record items and wait times before finalizing
+            if let (Some(t), Ok((stats, _, _, input_wait))) = (&tracker, &result) {
+                t.record_items(stats.symbols_found);
+                t.record_input_wait(*input_wait);
+            }
+
+            (result, tracker.map(|t| t.finalize()))
         });
 
         // Wait for all stages to complete and collect results
-        let discover_result = discover_handle
+        let (discover_result, discover_metrics) = discover_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("DISCOVER thread panicked".to_string()))?;
         let files_discovered = discover_result?;
 
+        // Add DISCOVER metrics
+        if let (Some(m), Some(dm)) = (&metrics, discover_metrics) {
+            m.add_stage(dm);
+        }
+
+        // READ stage metrics (aggregate across threads)
+        let read_tracker = if tracing_enabled {
+            Some(StageTracker::new("READ", read_threads).with_secondary("MB"))
+        } else {
+            None
+        };
         let mut read_files = 0;
         let mut read_errors = 0;
+        let mut read_input_wait = std::time::Duration::ZERO;
+        let mut read_output_wait = std::time::Duration::ZERO;
         for handle in read_handles {
-            if let Ok(Ok((files, errors))) = handle.join() {
+            if let Ok(Ok((files, errors, input_wait, output_wait))) = handle.join() {
                 read_files += files;
                 read_errors += errors;
+                read_input_wait += input_wait;
+                read_output_wait += output_wait;
+            }
+        }
+        if let Some(tracker) = read_tracker {
+            tracker.record_items(read_files);
+            tracker.record_input_wait(read_input_wait);
+            tracker.record_output_wait(read_output_wait);
+            if let Some(m) = &metrics {
+                m.add_stage(tracker.finalize());
             }
         }
 
+        // PARSE stage metrics (aggregate across threads)
+        let parse_tracker = if tracing_enabled {
+            Some(StageTracker::new("PARSE", parse_threads).with_secondary("symbols"))
+        } else {
+            None
+        };
         let mut parsed_files = 0;
         let mut parse_errors = 0;
+        let mut total_symbols = 0;
+        let mut parse_input_wait = std::time::Duration::ZERO;
+        let mut parse_output_wait = std::time::Duration::ZERO;
         for handle in parse_handles {
-            if let Ok((files, errors)) = handle.join() {
+            if let Ok((files, errors, symbols, input_wait, output_wait)) = handle.join() {
                 parsed_files += files;
                 parse_errors += errors;
+                total_symbols += symbols;
+                parse_input_wait += input_wait;
+                parse_output_wait += output_wait;
+            }
+        }
+        if let Some(tracker) = parse_tracker {
+            tracker.record_items(parsed_files);
+            tracker.record_secondary(total_symbols);
+            tracker.record_input_wait(parse_input_wait);
+            tracker.record_output_wait(parse_output_wait);
+            if let Some(m) = &metrics {
+                m.add_stage(tracker.finalize());
             }
         }
 
-        let collect_result = collect_handle
+        // Get final counter values from COLLECT stage
+        let (collect_result, collect_metrics) = collect_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("COLLECT thread panicked".to_string()))?;
-        let (_collected_files, _collected_symbols) = collect_result?;
+        let (final_file_count, final_symbol_count, _, _) = collect_result?;
 
-        let index_result = index_handle
+        // Add COLLECT metrics
+        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
+            m.add_stage(cm);
+        }
+
+        let (index_result, index_metrics) = index_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
-        let (mut stats, pending_relationships, symbol_cache) = index_result?;
+        let (mut stats, pending_relationships, symbol_cache, _) = index_result?;
+
+        // Add INDEX metrics
+        if let (Some(m), Some(im)) = (&metrics, index_metrics) {
+            m.add_stage(im);
+        }
+
+        // Store final counter values to metadata for next directory
+        // This is critical for multi-directory indexing to avoid ID collisions
+        use crate::storage::MetadataKey;
+        index_for_metadata.start_batch()?;
+        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
+        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
+        index_for_metadata.commit_batch()?;
 
         // Update stats with timing
         stats.elapsed = start.elapsed();
         stats.files_failed = read_errors + parse_errors;
+
+        // Log pipeline metrics report
+        if let Some(m) = metrics {
+            m.finalize_and_log(start.elapsed());
+        }
 
         tracing::info!(
             target: "pipeline",
@@ -256,6 +407,11 @@ impl Pipeline {
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         let start = Instant::now();
 
+        // Query existing ID counters BEFORE spawning threads
+        // Critical for multi-directory indexing to avoid ID collisions
+        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
+        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+
         // Create bounded channels
         let (path_tx, path_rx) = bounded(self.config.path_channel_size);
         let (content_tx, content_rx) = bounded(self.config.content_channel_size);
@@ -265,13 +421,14 @@ impl Pipeline {
         let settings = Arc::clone(&self.settings);
         let parse_threads = self.config.parse_threads;
         let read_threads = self.config.read_threads;
+        let discover_threads = self.config.discover_threads;
         let batch_size = self.config.batch_size;
         let batches_per_commit = self.config.batches_per_commit;
 
         // Stage 1: DISCOVER
         let discover_root = root.to_path_buf();
         let discover_handle = thread::spawn(move || {
-            let stage = DiscoverStage::new(discover_root, 4);
+            let stage = DiscoverStage::new(discover_root, discover_threads);
             stage.run(path_tx)
         });
 
@@ -319,13 +476,16 @@ impl Pipeline {
         drop(content_rx);
         drop(parsed_tx);
 
-        // Stage 4: COLLECT
+        // Stage 4: COLLECT (with starting counters for multi-directory support)
         let collect_handle = thread::spawn(move || {
-            let stage = CollectStage::new(batch_size);
+            let stage = CollectStage::new(batch_size)
+                .with_start_counters(start_file_counter, start_symbol_counter);
             stage.run(parsed_rx, batch_tx)
         });
 
         // Stage 5: INDEX with optional progress
+        // Clone index Arc for metadata update after pipeline completes
+        let index_for_metadata = Arc::clone(&index);
         let mut index_stage = IndexStage::new(index, batches_per_commit);
         if let Some(prog) = progress {
             index_stage = index_stage.with_progress(prog);
@@ -344,12 +504,23 @@ impl Pipeline {
         for h in parse_handles {
             let _ = h.join();
         }
-        let _ = collect_handle.join();
+        // Get final counter values from COLLECT stage
+        let (final_file_count, final_symbol_count, _, _) = collect_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("COLLECT panicked".to_string()))??;
 
         let index_result = index_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
-        let (mut stats, pending_relationships, symbol_cache) = index_result?;
+        let (mut stats, pending_relationships, symbol_cache, _) = index_result?;
+
+        // Store final counter values to metadata for next directory
+        // This is critical for multi-directory indexing to avoid ID collisions
+        use crate::storage::MetadataKey;
+        index_for_metadata.start_batch()?;
+        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
+        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
+        index_for_metadata.commit_batch()?;
 
         stats.elapsed = start.elapsed();
         Ok((stats, pending_relationships, symbol_cache))
@@ -758,7 +929,8 @@ impl Pipeline {
             )
         } else {
             // Incremental mode: discover first, then create bar with actual count
-            let discover_stage = DiscoverStage::new(root, 4).with_index(Arc::clone(&index));
+            let discover_stage = DiscoverStage::new(root, self.config.discover_threads)
+                .with_index(Arc::clone(&index));
             let discover_result = discover_stage.run_incremental()?;
 
             if discover_result.is_empty() {
@@ -890,7 +1062,8 @@ impl Pipeline {
         }
 
         // Incremental mode: detect changes
-        let discover_stage = DiscoverStage::new(root, 4).with_index(Arc::clone(&index));
+        let discover_stage =
+            DiscoverStage::new(root, self.config.discover_threads).with_index(Arc::clone(&index));
         let discover_result = discover_stage.run_incremental()?;
 
         tracing::info!(
@@ -1034,6 +1207,11 @@ impl Pipeline {
 
         let start = Instant::now();
 
+        // Query existing ID counters BEFORE spawning threads
+        // Critical for incremental indexing to avoid ID collisions
+        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
+        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+
         // Create bounded channels
         let (content_tx, content_rx) = bounded(self.config.content_channel_size);
         let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
@@ -1098,13 +1276,16 @@ impl Pipeline {
         drop(content_rx);
         drop(parsed_tx);
 
-        // Stage 3: COLLECT
+        // Stage 3: COLLECT (with starting counters for incremental indexing)
         let collect_handle = thread::spawn(move || {
-            let stage = CollectStage::new(batch_size);
+            let stage = CollectStage::new(batch_size)
+                .with_start_counters(start_file_counter, start_symbol_counter);
             stage.run(parsed_rx, batch_tx)
         });
 
         // Stage 4: INDEX (with optional semantic search and progress)
+        // Clone index Arc for metadata update after pipeline completes
+        let index_for_metadata = Arc::clone(&index);
         let mut index_stage = IndexStage::new(index, batches_per_commit);
         if let Some(sem) = semantic {
             index_stage = index_stage.with_semantic(sem);
@@ -1120,12 +1301,23 @@ impl Pipeline {
         for h in parse_handles {
             let _ = h.join();
         }
-        let _ = collect_handle.join();
+        // Get final counter values from COLLECT stage
+        let (final_file_count, final_symbol_count, _, _) = collect_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("COLLECT panicked".to_string()))??;
 
         let index_result = index_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
-        let (mut stats, pending, cache) = index_result?;
+        let (mut stats, pending, cache, _) = index_result?;
+
+        // Store final counter values to metadata for next directory
+        // This is critical for incremental indexing to avoid ID collisions
+        use crate::storage::MetadataKey;
+        index_for_metadata.start_batch()?;
+        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
+        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
+        index_for_metadata.commit_batch()?;
 
         stats.elapsed = start.elapsed();
         Ok((stats, pending, cache))
@@ -1223,6 +1415,18 @@ impl Pipeline {
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         let start = Instant::now();
 
+        // Create metrics collector if tracing is enabled
+        let metrics = if self.config.pipeline_tracing {
+            Some(PipelineMetrics::new(root.display().to_string(), true))
+        } else {
+            None
+        };
+
+        // Query existing ID counters BEFORE spawning threads
+        // Critical for multi-directory indexing to avoid ID collisions
+        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
+        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+
         // Create bounded channels
         let (path_tx, path_rx) = bounded(self.config.path_channel_size);
         let (content_tx, content_rx) = bounded(self.config.content_channel_size);
@@ -1232,14 +1436,28 @@ impl Pipeline {
         let settings = Arc::clone(&self.settings);
         let parse_threads = self.config.parse_threads;
         let read_threads = self.config.read_threads;
+        let discover_threads = self.config.discover_threads;
         let batch_size = self.config.batch_size;
         let batches_per_commit = self.config.batches_per_commit;
+        let tracing_enabled = self.config.pipeline_tracing;
 
         // Stage 1: DISCOVER
         let discover_root = root.to_path_buf();
         let discover_handle = thread::spawn(move || {
-            let stage = DiscoverStage::new(discover_root, 4);
-            stage.run(path_tx)
+            let tracker = if tracing_enabled {
+                Some(StageTracker::new("DISCOVER", discover_threads))
+            } else {
+                None
+            };
+
+            let stage = DiscoverStage::new(discover_root, discover_threads);
+            let result = stage.run(path_tx);
+
+            if let (Some(tracker), Ok(count)) = (&tracker, &result) {
+                tracker.record_items(*count);
+            }
+
+            (result, tracker.map(|t| t.finalize()))
         });
 
         // Stage 2: READ
@@ -1256,7 +1474,7 @@ impl Pipeline {
         drop(path_rx);
         drop(content_tx);
 
-        // Stage 3: PARSE
+        // Stage 3: PARSE - with wait time tracking
         let parse_handles: Vec<_> = (0..parse_threads)
             .map(|_| {
                 let rx = content_rx.clone();
@@ -1267,58 +1485,191 @@ impl Pipeline {
                     let stage = ParseStage::new(settings);
                     let mut parsed = 0;
                     let mut errors = 0;
+                    let mut symbol_count = 0;
+                    let mut input_wait = std::time::Duration::ZERO;
+                    let mut output_wait = std::time::Duration::ZERO;
 
-                    for content in rx {
+                    loop {
+                        // Track input wait (time blocked on recv)
+                        let recv_start = Instant::now();
+                        let content = match rx.recv() {
+                            Ok(c) => c,
+                            Err(_) => break, // Channel closed
+                        };
+                        input_wait += recv_start.elapsed();
+
                         match stage.parse(content) {
                             Ok(p) => {
                                 parsed += 1;
+                                symbol_count += p.raw_symbols.len();
+
+                                // Track output wait (time blocked on send)
+                                let send_start = Instant::now();
                                 if tx.send(p).is_err() {
                                     break;
                                 }
+                                output_wait += send_start.elapsed();
                             }
                             Err(_) => errors += 1,
                         }
                     }
-                    (parsed, errors)
+                    (parsed, errors, symbol_count, input_wait, output_wait)
                 })
             })
             .collect();
         drop(content_rx);
         drop(parsed_tx);
 
-        // Stage 4: COLLECT
+        // Stage 4: COLLECT (with starting counters for multi-directory support)
         let collect_handle = thread::spawn(move || {
-            let stage = CollectStage::new(batch_size);
-            stage.run(parsed_rx, batch_tx)
+            let tracker = if tracing_enabled {
+                Some(StageTracker::new("COLLECT", 1).with_secondary("batches"))
+            } else {
+                None
+            };
+
+            let stage = CollectStage::new(batch_size)
+                .with_start_counters(start_file_counter, start_symbol_counter);
+            let result = stage.run(parsed_rx, batch_tx);
+
+            // Record items and wait times before finalizing
+            if let (Some(t), Ok((_, symbol_count, input_wait, output_wait))) = (&tracker, &result) {
+                t.record_items(*symbol_count as usize);
+                t.record_input_wait(*input_wait);
+                t.record_output_wait(*output_wait);
+            }
+
+            (result, tracker.map(|t| t.finalize()))
         });
 
         // Stage 5: INDEX with semantic search and optional progress
-        let mut index_stage = IndexStage::new(index, batches_per_commit).with_semantic(semantic);
-        if let Some(prog) = progress {
-            index_stage = index_stage.with_progress(prog);
-        }
-        let index_handle = thread::spawn(move || index_stage.run(batch_rx));
+        // Clone index Arc for metadata update after pipeline completes
+        let index_for_metadata = Arc::clone(&index);
+        let index_handle = {
+            let mut index_stage =
+                IndexStage::new(index, batches_per_commit).with_semantic(semantic);
+            if let Some(prog) = progress {
+                index_stage = index_stage.with_progress(prog);
+            }
+            thread::spawn(move || {
+                let tracker = if tracing_enabled {
+                    Some(StageTracker::new("INDEX", 1).with_secondary("commits"))
+                } else {
+                    None
+                };
+
+                let result = index_stage.run(batch_rx);
+
+                // Record items and wait times before finalizing
+                if let (Some(t), Ok((stats, _, _, input_wait))) = (&tracker, &result) {
+                    t.record_items(stats.symbols_found);
+                    t.record_input_wait(*input_wait);
+                }
+
+                (result, tracker.map(|t| t.finalize()))
+            })
+        };
 
         // Wait for all stages
-        let discover_result = discover_handle
+        let (discover_result, discover_metrics) = discover_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("DISCOVER panicked".to_string()))?;
         let _files_discovered = discover_result?;
 
-        for h in read_handles {
-            let _ = h.join();
+        // Add DISCOVER metrics
+        if let (Some(m), Some(dm)) = (&metrics, discover_metrics) {
+            m.add_stage(dm);
         }
-        for h in parse_handles {
-            let _ = h.join();
-        }
-        let _ = collect_handle.join();
 
-        let index_result = index_handle
+        // READ stage metrics (aggregate across threads)
+        let read_tracker = if tracing_enabled {
+            Some(StageTracker::new("READ", read_threads).with_secondary("MB"))
+        } else {
+            None
+        };
+        let mut read_files = 0;
+        let mut read_input_wait = std::time::Duration::ZERO;
+        let mut read_output_wait = std::time::Duration::ZERO;
+        for h in read_handles {
+            if let Ok(Ok((files, _errors, input_wait, output_wait))) = h.join() {
+                read_files += files;
+                read_input_wait += input_wait;
+                read_output_wait += output_wait;
+            }
+        }
+        if let Some(tracker) = read_tracker {
+            tracker.record_items(read_files);
+            tracker.record_input_wait(read_input_wait);
+            tracker.record_output_wait(read_output_wait);
+            if let Some(m) = &metrics {
+                m.add_stage(tracker.finalize());
+            }
+        }
+
+        // PARSE stage metrics (aggregate across threads)
+        let parse_tracker = if tracing_enabled {
+            Some(StageTracker::new("PARSE", parse_threads).with_secondary("symbols"))
+        } else {
+            None
+        };
+        let mut parsed_files = 0;
+        let mut total_symbols = 0;
+        let mut total_input_wait = std::time::Duration::ZERO;
+        let mut total_output_wait = std::time::Duration::ZERO;
+        for h in parse_handles {
+            if let Ok((files, _errors, symbols, input_wait, output_wait)) = h.join() {
+                parsed_files += files;
+                total_symbols += symbols;
+                total_input_wait += input_wait;
+                total_output_wait += output_wait;
+            }
+        }
+        if let Some(tracker) = parse_tracker {
+            tracker.record_items(parsed_files);
+            tracker.record_secondary(total_symbols);
+            tracker.record_input_wait(total_input_wait);
+            tracker.record_output_wait(total_output_wait);
+            if let Some(m) = &metrics {
+                m.add_stage(tracker.finalize());
+            }
+        }
+
+        // Get final counter values from COLLECT stage
+        let (collect_result, collect_metrics) = collect_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("COLLECT panicked".to_string()))?;
+        let (final_file_count, final_symbol_count, _, _) = collect_result?;
+
+        // Add COLLECT metrics
+        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
+            m.add_stage(cm);
+        }
+
+        let (index_result, index_metrics) = index_handle
             .join()
             .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
-        let (mut stats, pending, cache) = index_result?;
+        let (mut stats, pending, cache, _) = index_result?;
+
+        // Add INDEX metrics
+        if let (Some(m), Some(im)) = (&metrics, index_metrics) {
+            m.add_stage(im);
+        }
+
+        // Store final counter values to metadata for next directory
+        // This is critical for multi-directory indexing to avoid ID collisions
+        use crate::storage::MetadataKey;
+        index_for_metadata.start_batch()?;
+        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
+        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
+        index_for_metadata.commit_batch()?;
 
         stats.elapsed = start.elapsed();
+
+        // Log pipeline metrics report
+        if let Some(m) = metrics {
+            m.finalize_and_log(start.elapsed());
+        }
+
         Ok((stats, pending, cache))
     }
 

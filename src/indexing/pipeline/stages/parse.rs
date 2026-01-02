@@ -140,12 +140,15 @@ fn parse_with_parser(
     content: FileContent,
     language_id: LanguageId,
     parser: &mut dyn LanguageParser,
-    _settings: &Settings,
+    settings: &Settings,
 ) -> PipelineResult<ParsedFile> {
     // Use a dummy file_id and counter - we just need to extract symbols
     // Real IDs are assigned in COLLECT stage
     let dummy_file_id = FileId::new(1).unwrap();
     let mut counter = SymbolCounter::new();
+
+    // Compute module_path using the language behavior
+    let module_path = compute_module_path(&content.path, language_id, settings);
 
     // Parse symbols
     let symbols = parser.parse(&content.content, dummy_file_id, &mut counter);
@@ -195,11 +198,36 @@ fn parse_with_parser(
         path: content.path,
         content_hash: content.hash,
         language_id,
-        module_path: None, // Will be computed in COLLECT if needed
+        module_path,
         raw_symbols,
         raw_imports,
         raw_relationships,
     })
+}
+
+/// Compute module_path for a file using the language behavior.
+///
+/// This calls behavior.module_path_from_file() which uses:
+/// - For Rust: crate:: path from file location
+/// - For Java/Swift: package from source root via resolution rules
+/// - For TypeScript/JavaScript: path relative to tsconfig/jsconfig
+/// - For other languages: path relative to project root
+fn compute_module_path(
+    file_path: &Path,
+    language_id: LanguageId,
+    settings: &Settings,
+) -> Option<String> {
+    let registry = get_registry();
+    let registry_guard = registry.lock().ok()?;
+    let definition = registry_guard.get(language_id)?;
+    let behavior = definition.create_behavior();
+
+    let project_root = settings
+        .workspace_root
+        .as_deref()
+        .unwrap_or_else(|| Path::new("."));
+
+    behavior.module_path_from_file(file_path, project_root)
 }
 
 /// Extract relationships from parsed content.

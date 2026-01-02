@@ -533,35 +533,8 @@ impl PipelineSymbolCache for SymbolLookupCache {
             return ResolveResult::Ambiguous(same_language);
         }
 
-        // Tier 4: Cross-file fallback with same visibility rules
-        let visible_candidates: Vec<_> = candidates
-            .iter()
-            .filter_map(|&id| {
-                let sym = self.by_id.get(&id)?;
-                // Same file = always visible
-                if sym.file_id == caller.file_id {
-                    return Some(id);
-                }
-                // Same module = always visible
-                if caller.is_same_module(sym.module_path.as_deref()) {
-                    return Some(id);
-                }
-                // Different module = must be Public
-                if sym.visibility == crate::Visibility::Public {
-                    Some(id)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if visible_candidates.len() == 1 {
-            return ResolveResult::Found(visible_candidates[0]);
-        }
-        if !visible_candidates.is_empty() {
-            return ResolveResult::Ambiguous(visible_candidates);
-        }
-
+        // No cross-language fallback - return NotFound
+        // Cross-language resolution causes incorrect relationships
         ResolveResult::NotFound
     }
 

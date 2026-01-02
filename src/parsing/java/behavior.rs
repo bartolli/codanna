@@ -239,6 +239,153 @@ impl LanguageBehavior for JavaBehavior {
         self.state.get_module_path(file_id)
     }
 
+    /// Get file path for a FileId (delegates to BehaviorState)
+    ///
+    /// Required for load_project_rules_for_file to work.
+    fn get_file_path(&self, file_id: FileId) -> Option<PathBuf> {
+        self.state.get_file_path(file_id)
+    }
+
+    /// Build resolution context for parallel pipeline (no Tantivy).
+    ///
+    /// Java doesn't have path aliases like TypeScript/JavaScript.
+    /// Imports are package-based (e.g., `import com.example.MyClass`).
+    ///
+    /// CRITICAL: Symbols from pipeline have `module_path: None`.
+    /// We compute module_path on-the-fly from `symbol.file_path` using rules.
+    fn build_resolution_context_with_pipeline_cache(
+        &self,
+        file_id: FileId,
+        imports: &[crate::parsing::Import],
+        cache: &dyn crate::parsing::PipelineSymbolCache,
+    ) -> (
+        Box<dyn crate::parsing::ResolutionScope>,
+        Vec<crate::parsing::Import>,
+    ) {
+        use crate::parsing::ScopeLevel;
+        use crate::parsing::resolution::{ImportBinding, ImportOrigin};
+        use std::path::PathBuf;
+
+        let mut context = super::JavaResolutionContext::new(file_id);
+
+        // Helper to compute module_path from file_path using rules
+        // Rules contain source roots; module_path_from_file extracts package
+        let compute_module_path = |file_path: &str| -> Option<String> {
+            let path = PathBuf::from(file_path);
+            // project_root is unused by Java's module_path_from_file (uses rules instead)
+            self.module_path_from_file(&path, &PathBuf::new())
+        };
+
+        // Compute importing module from current file
+        let importing_module = cache
+            .symbols_in_file(file_id)
+            .first()
+            .and_then(|id| cache.get(*id))
+            .and_then(|sym| compute_module_path(&sym.file_path));
+
+        // Java imports are already fully qualified (com.example.MyClass)
+        let mut enhanced_imports = Vec::with_capacity(imports.len());
+
+        for import in imports {
+            // Extract the class name from the import path
+            // e.g., "com.example.MyClass" -> "MyClass"
+            let local_name = import.alias.clone().unwrap_or_else(|| {
+                import
+                    .path
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&import.path)
+                    .to_string()
+            });
+
+            // The target module is the package (everything before the class name)
+            // e.g., "com.example.MyClass" -> "com.example"
+            let target_module = if let Some(pos) = import.path.rfind('.') {
+                import.path[..pos].to_string()
+            } else {
+                import.path.clone()
+            };
+
+            // Collect enhanced import (Java imports are already canonical)
+            enhanced_imports.push(crate::parsing::Import {
+                path: target_module.clone(),
+                file_id: import.file_id,
+                alias: import.alias.clone(),
+                is_glob: import.is_glob,
+                is_type_only: import.is_type_only,
+            });
+
+            // Look up candidates by class name and match computed module_path
+            let mut resolved_symbol: Option<crate::SymbolId> = None;
+            let candidates = cache.lookup_candidates(&local_name);
+            for id in candidates {
+                if let Some(symbol) = cache.get(id) {
+                    // Compute module_path from file_path using rules
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        if computed_module == target_module {
+                            resolved_symbol = Some(id);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Determine origin
+            let origin = if resolved_symbol.is_some() {
+                ImportOrigin::Internal
+            } else {
+                ImportOrigin::External
+            };
+
+            // Register binding
+            context.register_import_binding(ImportBinding {
+                import: import.clone(),
+                exposed_name: local_name.clone(),
+                origin,
+                resolved_symbol,
+            });
+
+            if let (ImportOrigin::Internal, Some(symbol_id)) = (origin, resolved_symbol) {
+                context.add_symbol(local_name.clone(), symbol_id, ScopeLevel::Global);
+            }
+        }
+
+        // Populate context with enhanced imports
+        context.populate_imports(&enhanced_imports);
+
+        // Add local symbols from this file with computed module_path
+        for sym_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(sym_id) {
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
+                    // Compute module_path from file_path using rules
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        context.add_symbol(computed_module, symbol.id, ScopeLevel::Global);
+                    }
+                }
+            }
+        }
+
+        // Same-package symbols: symbols with computed same module_path get Package scope
+        if let Some(ref current_pkg) = importing_module {
+            for sym_id in cache.symbols_in_file(file_id) {
+                if let Some(symbol) = cache.get(sym_id) {
+                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                        if &computed_module == current_pkg {
+                            context.add_symbol(
+                                symbol.name.to_string(),
+                                symbol.id,
+                                ScopeLevel::Package,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        (Box::new(context), enhanced_imports)
+    }
+
     /// Register file with behavior state (trait override)
     ///
     /// This override is CRITICAL - without it, module paths won't be stored

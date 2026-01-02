@@ -66,15 +66,23 @@ impl IndexStage {
 
     /// Run the index stage.
     ///
-    /// Returns (stats, accumulated_relationships, symbol_cache) for Phase 2.
+    /// Returns (stats, accumulated_relationships, symbol_cache, input_wait) for Phase 2.
     /// The symbol cache enables O(1) lookups during resolution instead of Tantivy queries.
     pub fn run(
         &self,
         receiver: Receiver<IndexBatch>,
-    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
+    ) -> PipelineResult<(
+        IndexStats,
+        Vec<UnresolvedRelationship>,
+        SymbolLookupCache,
+        std::time::Duration,
+    )> {
+        use std::time::{Duration, Instant};
+
         let mut stats = IndexStats::new();
         let mut pending_relationships: Vec<UnresolvedRelationship> = Vec::new();
         let mut batch_count = 0;
+        let mut input_wait = Duration::ZERO;
 
         // Pre-allocate cache based on expected symbols (will grow if needed)
         let symbol_cache = SymbolLookupCache::with_capacity(10_000);
@@ -82,7 +90,15 @@ impl IndexStage {
         // Start initial batch - StorageError converts to PipelineError via #[from]
         self.index.start_batch()?;
 
-        for batch in receiver {
+        loop {
+            // Track input wait (time blocked on recv)
+            let recv_start = Instant::now();
+            let batch = match receiver.recv() {
+                Ok(b) => b,
+                Err(_) => break, // Channel closed
+            };
+            input_wait += recv_start.elapsed();
+
             self.process_batch(&batch, &mut stats, &symbol_cache)?;
 
             // Accumulate relationships for Phase 2
@@ -99,7 +115,7 @@ impl IndexStage {
         // Final commit
         self.index.commit_batch()?;
 
-        Ok((stats, pending_relationships, symbol_cache))
+        Ok((stats, pending_relationships, symbol_cache, input_wait))
     }
 
     /// Process a single batch.
@@ -248,7 +264,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, rels, symbol_cache) = result.unwrap();
+        let (stats, rels, symbol_cache, _) = result.unwrap();
 
         println!(
             "Indexed {} files, {} symbols, cache has {} entries",
@@ -282,7 +298,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, _, symbol_cache) = result.unwrap();
+        let (stats, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Indexed {} files, {} symbols with batches_per_commit=2, cache has {} entries",
@@ -326,7 +342,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, rels, symbol_cache) = result.unwrap();
+        let (stats, rels, symbol_cache, _) = result.unwrap();
 
         println!(
             "Accumulated {} relationships for Phase 2, cache has {} symbols",
@@ -372,7 +388,7 @@ mod tests {
         drop(batch_tx);
 
         let stage = IndexStage::new(Arc::clone(&index), 10);
-        let (_, _, symbol_cache) = stage.run(batch_rx).unwrap();
+        let (_, _, symbol_cache, _) = stage.run(batch_rx).unwrap();
 
         // Verify lookup by name returns correct candidates
         let candidates = symbol_cache.lookup_candidates("process_data");

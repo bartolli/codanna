@@ -50,13 +50,20 @@ impl DiscoverStage {
         let extensions = get_supported_extensions()?;
         let count = Arc::new(AtomicUsize::new(0));
 
-        let walker = WalkBuilder::new(&self.root)
-            .hidden(false) // Include hidden files
+        let mut builder = WalkBuilder::new(&self.root);
+        builder
+            .hidden(false) // Don't auto-skip hidden directories
             .git_ignore(true) // Respect .gitignore
             .git_global(true) // Respect global gitignore
             .git_exclude(true) // Respect .git/info/exclude
-            .threads(self.threads)
-            .build_parallel();
+            .follow_links(false) // Don't follow symlinks
+            .require_git(false) // Allow gitignore to work in non-git directories
+            .threads(self.threads);
+
+        // Support .codannaignore files (matches FileWalker behavior)
+        builder.add_custom_ignore_filename(".codannaignore");
+
+        let walker = builder.build_parallel();
 
         let count_clone = count.clone();
         let extensions = Arc::new(extensions);
@@ -78,6 +85,15 @@ impl DiscoverStage {
                 }
 
                 let path = entry.path();
+
+                // Skip hidden files (files starting with .) - matches FileWalker behavior
+                if let Some(file_name) = path.file_name() {
+                    if let Some(name_str) = file_name.to_str() {
+                        if name_str.starts_with('.') {
+                            return ignore::WalkState::Continue;
+                        }
+                    }
+                }
 
                 // Filter by extension
                 if !has_supported_extension(path, &extensions) {
@@ -153,12 +169,19 @@ impl DiscoverStage {
         let mut files = Vec::new();
 
         // Use sequential walker for simplicity in incremental mode
-        let walker = WalkBuilder::new(&self.root)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .build();
+        let mut builder = WalkBuilder::new(&self.root);
+        builder
+            .hidden(false) // Don't auto-skip hidden directories
+            .git_ignore(true) // Respect .gitignore
+            .git_global(true) // Respect global gitignore
+            .git_exclude(true) // Respect .git/info/exclude
+            .follow_links(false) // Don't follow symlinks
+            .require_git(false); // Allow gitignore to work in non-git directories
+
+        // Support .codannaignore files (matches FileWalker behavior)
+        builder.add_custom_ignore_filename(".codannaignore");
+
+        let walker = builder.build();
 
         for entry in walker.flatten() {
             if entry.file_type().is_some_and(|ft| ft.is_dir()) {
@@ -166,6 +189,16 @@ impl DiscoverStage {
             }
 
             let path = entry.path();
+
+            // Skip hidden files (files starting with .) - matches FileWalker behavior
+            if let Some(file_name) = path.file_name() {
+                if let Some(name_str) = file_name.to_str() {
+                    if name_str.starts_with('.') {
+                        continue;
+                    }
+                }
+            }
+
             if has_supported_extension(path, &extensions) {
                 files.push(path.to_path_buf());
             }

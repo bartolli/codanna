@@ -14,6 +14,9 @@ pub struct PipelineConfig {
     /// Number of threads for file reading (default: 2)
     pub read_threads: usize,
 
+    /// Number of threads for file discovery/walking (default: 4)
+    pub discover_threads: usize,
+
     /// Number of symbols per batch before sending to INDEX stage
     pub batch_size: usize,
 
@@ -31,6 +34,9 @@ pub struct PipelineConfig {
 
     /// Number of batches between Tantivy commits
     pub batches_per_commit: usize,
+
+    /// Enable detailed stage tracing (timing, memory, throughput)
+    pub pipeline_tracing: bool,
 }
 
 impl Default for PipelineConfig {
@@ -41,12 +47,14 @@ impl Default for PipelineConfig {
         Self {
             parse_threads,
             read_threads: 2,
+            discover_threads: 4,
             batch_size: 5000,
             path_channel_size: 1000,
             content_channel_size: 100,
             parsed_channel_size: 1000,
             batch_channel_size: 20,
             batches_per_commit: 10,
+            pipeline_tracing: false,
         }
     }
 }
@@ -57,8 +65,10 @@ impl PipelineConfig {
     /// Reads from .codanna/settings.toml:
     /// - `indexing.parallel_threads` -> parse_threads
     /// - `indexing.read_threads` -> read_threads
+    /// - `indexing.discover_threads` -> discover_threads
     /// - `indexing.batch_size` -> batch_size
     /// - `indexing.batches_per_commit` -> batches_per_commit
+    /// - `indexing.pipeline_tracing` -> pipeline_tracing
     pub fn from_settings(settings: &Settings) -> Self {
         let indexing = &settings.indexing;
 
@@ -74,12 +84,14 @@ impl PipelineConfig {
         Self {
             parse_threads,
             read_threads: indexing.read_threads,
+            discover_threads: indexing.discover_threads,
             batch_size: indexing.batch_size,
             path_channel_size,
             content_channel_size,
             parsed_channel_size,
             batch_channel_size,
             batches_per_commit: indexing.batches_per_commit,
+            pipeline_tracing: indexing.pipeline_tracing,
         }
     }
 
@@ -88,12 +100,14 @@ impl PipelineConfig {
         Self {
             parse_threads: 4,
             read_threads: 1,
+            discover_threads: 2,
             batch_size: 1000,
             path_channel_size: 500,
             content_channel_size: 50,
             parsed_channel_size: 500,
             batch_channel_size: 10,
             batches_per_commit: 5,
+            pipeline_tracing: false,
         }
     }
 
@@ -103,12 +117,14 @@ impl PipelineConfig {
         Self {
             parse_threads: cpu_count.saturating_sub(2).max(4),
             read_threads: 4,
+            discover_threads: 4,
             batch_size: 10000,
             path_channel_size: 2000,
             content_channel_size: 200,
             parsed_channel_size: 2000,
             batch_channel_size: 50,
             batches_per_commit: 20,
+            pipeline_tracing: false,
         }
     }
 
