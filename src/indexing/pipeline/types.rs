@@ -330,8 +330,8 @@ pub use crate::parsing::CallerContext;
 ///
 /// Key design:
 /// - `by_id`: SymbolId → Symbol for direct lookups
-/// - `by_name`: name → Vec<SymbolId> for candidate resolution
-/// - `by_file_id`: FileId → Vec<SymbolId> for local symbol lookup
+/// - `by_name`: name → `Vec<SymbolId>` for candidate resolution
+/// - `by_file_id`: FileId → `Vec<SymbolId>` for local symbol lookup
 ///
 /// Memory: ~500 bytes/symbol, 600K symbols ≈ 300MB
 #[derive(Debug)]
@@ -806,7 +806,7 @@ pub enum PipelineError {
     #[error("Index error: {0}")]
     Index(#[from] crate::IndexError),
 
-    /// [PIPELINE API] Uses storage::StorageError with proper #[from] conversion.
+    /// [PIPELINE API] Uses storage::StorageError with proper `#[from]` conversion.
     #[error("Storage error: {0}")]
     Storage(#[from] crate::storage::StorageError),
 }

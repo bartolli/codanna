@@ -4,10 +4,10 @@
 //! with all data needed for resolution: local symbols, imports, language.
 //!
 //! Data flow:
-//! - Receives: Vec<UnresolvedRelationship> from Phase 1
+//! - Receives: `Vec<UnresolvedRelationship>` from Phase 1
 //! - Uses: SymbolLookupCache for local symbols + language, DocumentIndex for imports
 //! - Uses: ParserFactory to get LanguageBehavior per language_id (language-agnostic)
-//! - Outputs: Vec<ResolutionContext> for RESOLVE stage
+//! - Outputs: `Vec<ResolutionContext>` for RESOLVE stage
 
 use crate::indexing::pipeline::types::{
     ResolutionContext, SymbolLookupCache, UnresolvedRelationship,

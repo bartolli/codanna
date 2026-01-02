@@ -790,6 +790,15 @@ impl IndexFacade {
     /// Add a directory to tracked indexed paths.
     pub fn add_indexed_path(&mut self, dir_path: &Path) {
         if let Ok(canonical) = dir_path.canonicalize() {
+            // Skip if already covered by an existing parent directory
+            let already_covered = self
+                .indexed_paths
+                .iter()
+                .any(|p| canonical.starts_with(p) && canonical != *p);
+            if already_covered {
+                return;
+            }
+
             // Remove any child paths that would be covered by this directory
             self.indexed_paths
                 .retain(|p| !p.starts_with(&canonical) || *p == canonical);

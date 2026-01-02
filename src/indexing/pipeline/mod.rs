@@ -102,7 +102,7 @@ impl Pipeline {
     ///
     /// Returns:
     /// - IndexStats: Statistics about the indexing operation
-    /// - Vec<UnresolvedRelationship>: Pending references for Phase 2 resolution
+    /// - `Vec<UnresolvedRelationship>`: Pending references for Phase 2 resolution
     /// - SymbolLookupCache: In-memory cache for O(1) Phase 2 resolution
     pub fn index_directory(
         &self,

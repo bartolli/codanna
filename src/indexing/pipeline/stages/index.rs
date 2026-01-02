@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 /// [PIPELINE API] Receives batches from COLLECT and writes to Tantivy efficiently.
 /// Commits are batched to reduce fsync overhead.
 ///
-/// Error handling uses proper #[from] conversion - StorageError -> PipelineError.
+/// Error handling uses proper `#[from]` conversion - StorageError -> PipelineError.
 pub struct IndexStage {
     index: Arc<DocumentIndex>,
     batches_per_commit: usize,

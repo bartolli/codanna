@@ -139,7 +139,7 @@ impl CollectStage {
     /// [PIPELINE API] Used by `Pipeline::index_file_single()` for watcher reindex.
     /// Assigns FileId and SymbolIds using the next available IDs from DocumentIndex.
     ///
-    /// Returns (IndexBatch, Vec<UnresolvedRelationship>) for indexing.
+    /// Returns (IndexBatch, `Vec<UnresolvedRelationship>`) for indexing.
     pub fn process_single(
         &self,
         parsed: ParsedFile,
