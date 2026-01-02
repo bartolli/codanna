@@ -248,14 +248,111 @@ impl Pipeline {
     }
 
     /// Index a directory with progress reporting (Phase 1).
-    pub fn index_directory_with_progress(
+    fn index_directory_with_progress(
         &self,
         root: &Path,
         index: Arc<DocumentIndex>,
-        _progress: bool,
+        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
-        // TODO: Add progress bar integration
-        self.index_directory(root, index)
+        let start = Instant::now();
+
+        // Create bounded channels
+        let (path_tx, path_rx) = bounded(self.config.path_channel_size);
+        let (content_tx, content_rx) = bounded(self.config.content_channel_size);
+        let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
+        let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
+
+        let settings = Arc::clone(&self.settings);
+        let parse_threads = self.config.parse_threads;
+        let read_threads = self.config.read_threads;
+        let batch_size = self.config.batch_size;
+        let batches_per_commit = self.config.batches_per_commit;
+
+        // Stage 1: DISCOVER
+        let discover_root = root.to_path_buf();
+        let discover_handle = thread::spawn(move || {
+            let stage = DiscoverStage::new(discover_root, 4);
+            stage.run(path_tx)
+        });
+
+        // Stage 2: READ
+        let read_handles: Vec<_> = (0..read_threads)
+            .map(|_| {
+                let rx = path_rx.clone();
+                let tx = content_tx.clone();
+                thread::spawn(move || {
+                    let stage = ReadStage::new(1);
+                    stage.run(rx, tx)
+                })
+            })
+            .collect();
+        drop(path_rx);
+        drop(content_tx);
+
+        // Stage 3: PARSE
+        let parse_handles: Vec<_> = (0..parse_threads)
+            .map(|_| {
+                let rx = content_rx.clone();
+                let tx = parsed_tx.clone();
+                let settings = Arc::clone(&settings);
+                thread::spawn(move || {
+                    init_parser_cache(settings.clone());
+                    let stage = ParseStage::new(settings);
+                    let mut parsed = 0;
+                    let mut errors = 0;
+
+                    for content in rx {
+                        match stage.parse(content) {
+                            Ok(p) => {
+                                parsed += 1;
+                                if tx.send(p).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(_) => errors += 1,
+                        }
+                    }
+                    (parsed, errors)
+                })
+            })
+            .collect();
+        drop(content_rx);
+        drop(parsed_tx);
+
+        // Stage 4: COLLECT
+        let collect_handle = thread::spawn(move || {
+            let stage = CollectStage::new(batch_size);
+            stage.run(parsed_rx, batch_tx)
+        });
+
+        // Stage 5: INDEX with optional progress
+        let mut index_stage = IndexStage::new(index, batches_per_commit);
+        if let Some(prog) = progress {
+            index_stage = index_stage.with_progress(prog);
+        }
+        let index_handle = thread::spawn(move || index_stage.run(batch_rx));
+
+        // Wait for all stages
+        let discover_result = discover_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("DISCOVER panicked".to_string()))?;
+        let _files_discovered = discover_result?;
+
+        for h in read_handles {
+            let _ = h.join();
+        }
+        for h in parse_handles {
+            let _ = h.join();
+        }
+        let _ = collect_handle.join();
+
+        let index_result = index_handle
+            .join()
+            .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
+        let (mut stats, pending_relationships, symbol_cache) = index_result?;
+
+        stats.elapsed = start.elapsed();
+        Ok((stats, pending_relationships, symbol_cache))
     }
 
     /// Run Phase 2: Resolve relationships using two-pass strategy.
@@ -277,6 +374,17 @@ impl Pipeline {
         unresolved: Vec<UnresolvedRelationship>,
         symbol_cache: Arc<SymbolLookupCache>,
         index: Arc<DocumentIndex>,
+    ) -> PipelineResult<Phase2Stats> {
+        self.run_phase2_with_progress(unresolved, symbol_cache, index, None)
+    }
+
+    /// Run Phase 2 with optional progress bar.
+    pub fn run_phase2_with_progress(
+        &self,
+        unresolved: Vec<UnresolvedRelationship>,
+        symbol_cache: Arc<SymbolLookupCache>,
+        index: Arc<DocumentIndex>,
+        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<Phase2Stats> {
         let start = Instant::now();
         let total_relationships = unresolved.len();
@@ -320,9 +428,18 @@ impl Pipeline {
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
 
             for ctx in contexts {
+                let rel_count = ctx.unresolved_rels.len() as u64;
                 let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
                 stats.defines_resolved += resolve_stats.defines_resolved;
                 write_stage.write(batch);
+
+                // Update progress bar
+                if let Some(ref prog) = progress {
+                    prog.set_progress(prog.current() + rel_count);
+                    prog.add_extra1(resolve_stats.defines_resolved as u64);
+                    let skipped = rel_count.saturating_sub(resolve_stats.defines_resolved as u64);
+                    prog.add_extra2(skipped);
+                }
             }
 
             // BARRIER: Commit Defines so Pass 2 can query them
@@ -343,10 +460,19 @@ impl Pipeline {
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
 
             for ctx in contexts {
+                let rel_count = ctx.unresolved_rels.len() as u64;
                 let (batch, resolve_stats) = resolve_stage.resolve(&ctx);
                 stats.calls_resolved += resolve_stats.calls_resolved;
                 stats.other_resolved += resolve_stats.resolved - resolve_stats.calls_resolved;
                 write_stage.write(batch);
+
+                // Update progress bar
+                if let Some(ref prog) = progress {
+                    prog.set_progress(prog.current() + rel_count);
+                    prog.add_extra1(resolve_stats.resolved as u64);
+                    let skipped = rel_count.saturating_sub(resolve_stats.resolved as u64);
+                    prog.add_extra2(skipped);
+                }
             }
 
             // Final commit
@@ -464,7 +590,10 @@ impl Pipeline {
                 });
             }
 
-            // File has changed - cleanup old data
+            // File has changed - cleanup old data within a batch
+            // Start batch for cleanup to avoid creating temporary writers
+            index.start_batch()?;
+
             let cleanup_stage = if let Some(ref sem) = semantic {
                 CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
             } else {
@@ -472,6 +601,9 @@ impl Pipeline {
             };
 
             cleanup_stage.cleanup_files(&[path.to_path_buf()])?;
+
+            // Commit cleanup changes before re-indexing
+            index.commit_batch()?;
         }
 
         // Parse file
@@ -498,6 +630,9 @@ impl Pipeline {
             .first()
             .map(|r| r.file_id)
             .unwrap_or(FileId(0));
+
+        // Start a batch before indexing
+        index.start_batch()?;
         index_stage.index_batch(batch)?;
 
         // Commit the batch
@@ -551,12 +686,206 @@ impl Pipeline {
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         force: bool,
     ) -> PipelineResult<IncrementalStats> {
+        self.index_incremental_with_progress(root, index, semantic, force, None)
+    }
+
+    /// Index a directory with progress bars managed internally.
+    ///
+    /// This method creates and manages both Phase 1 and Phase 2 progress bars
+    /// for clean sequential display (Phase 1 completes, then Phase 2 shows).
+    pub fn index_incremental_with_progress_flag(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        force: bool,
+        show_progress: bool,
+        total_files: usize,
+    ) -> PipelineResult<IncrementalStats> {
+        use crate::io::status_line::{
+            ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
+        };
+
+        if !show_progress {
+            return self.index_incremental(root, index, semantic, force);
+        }
+
+        let start = Instant::now();
+        let semantic_path = self.settings.index_path.join("semantic");
+
+        // Progress bar options shared between phases
+        let bar_options = ProgressBarOptions::default()
+            .with_style(ProgressBarStyle::VerticalSolid)
+            .with_width(28);
+
+        // Run Phase 1 indexing with appropriate progress bar
+        let (index_stats, unresolved, symbol_cache, cleanup_stats, discover_counts) = if force {
+            // Force mode: create bar with total file count
+            let phase1_bar = Arc::new(ProgressBar::with_options(
+                total_files as u64,
+                "files",
+                "indexed",
+                "failed",
+                bar_options,
+            ));
+            let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
+
+            let (stats, unresolved, cache) = if let Some(ref sem) = semantic {
+                self.index_directory_with_semantic(
+                    root,
+                    Arc::clone(&index),
+                    Arc::clone(sem),
+                    Some(phase1_bar.clone()),
+                )?
+            } else {
+                self.index_directory_with_progress(
+                    root,
+                    Arc::clone(&index),
+                    Some(phase1_bar.clone()),
+                )?
+            };
+
+            drop(phase1_status);
+            eprintln!("{phase1_bar}");
+
+            let files_indexed = stats.files_indexed;
+            (
+                stats,
+                unresolved,
+                cache,
+                CleanupStats::default(),
+                (files_indexed, 0, 0),
+            )
+        } else {
+            // Incremental mode: discover first, then create bar with actual count
+            let discover_stage = DiscoverStage::new(root, 4).with_index(Arc::clone(&index));
+            let discover_result = discover_stage.run_incremental()?;
+
+            if discover_result.is_empty() {
+                return Ok(IncrementalStats {
+                    new_files: 0,
+                    modified_files: 0,
+                    deleted_files: 0,
+                    index_stats: IndexStats::new(),
+                    cleanup_stats: CleanupStats::default(),
+                    phase2_stats: Phase2Stats::default(),
+                    elapsed: start.elapsed(),
+                });
+            }
+
+            // Cleanup
+            let cleanup_stage = if let Some(ref sem) = semantic {
+                CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
+            } else {
+                CleanupStage::new(Arc::clone(&index), &semantic_path)
+            };
+
+            let mut cleanup_stats = CleanupStats::default();
+            if !discover_result.deleted_files.is_empty() {
+                let stats = cleanup_stage.cleanup_files(&discover_result.deleted_files)?;
+                cleanup_stats.files_cleaned += stats.files_cleaned;
+                cleanup_stats.symbols_removed += stats.symbols_removed;
+            }
+            if !discover_result.modified_files.is_empty() {
+                let stats = cleanup_stage.cleanup_files(&discover_result.modified_files)?;
+                cleanup_stats.files_cleaned += stats.files_cleaned;
+                cleanup_stats.symbols_removed += stats.symbols_removed;
+            }
+
+            let files_to_index: Vec<PathBuf> = discover_result
+                .new_files
+                .iter()
+                .chain(discover_result.modified_files.iter())
+                .cloned()
+                .collect();
+
+            // Create Phase 1 bar with actual files to index count
+            let phase1_bar = Arc::new(ProgressBar::with_options(
+                files_to_index.len() as u64,
+                "files",
+                "indexed",
+                "failed",
+                bar_options,
+            ));
+            let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
+
+            let (stats, unresolved, cache) = self.index_files(
+                &files_to_index,
+                Arc::clone(&index),
+                semantic.clone(),
+                Some(phase1_bar.clone()),
+            )?;
+
+            drop(phase1_status);
+            eprintln!("{phase1_bar}");
+
+            let counts = (
+                discover_result.new_files.len(),
+                discover_result.modified_files.len(),
+                discover_result.deleted_files.len(),
+            );
+            (stats, unresolved, cache, cleanup_stats, counts)
+        };
+
+        // Run Phase 2 with separate progress bar
+        let symbol_cache = Arc::new(symbol_cache);
+        let phase2_stats = if !unresolved.is_empty() {
+            let phase2_bar = Arc::new(ProgressBar::with_options(
+                unresolved.len() as u64,
+                "relationships",
+                "resolved",
+                "skipped",
+                bar_options,
+            ));
+            let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
+
+            let stats = self.run_phase2_with_progress(
+                unresolved,
+                symbol_cache,
+                Arc::clone(&index),
+                Some(phase2_bar.clone()),
+            )?;
+
+            drop(phase2_status);
+            eprintln!("{phase2_bar}");
+            stats
+        } else {
+            Phase2Stats::default()
+        };
+
+        // Save embeddings
+        if let Some(sem) = semantic {
+            if let Ok(guard) = sem.lock() {
+                let _ = guard.save(&semantic_path);
+            }
+        }
+
+        Ok(IncrementalStats {
+            new_files: discover_counts.0,
+            modified_files: discover_counts.1,
+            deleted_files: discover_counts.2,
+            index_stats,
+            cleanup_stats,
+            phase2_stats,
+            elapsed: start.elapsed(),
+        })
+    }
+
+    /// Index a directory with optional progress bar.
+    pub fn index_incremental_with_progress(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        force: bool,
+        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
+    ) -> PipelineResult<IncrementalStats> {
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
 
         if force {
             // Force mode: index everything (no cleanup needed for fresh index)
-            return self.index_full(root, index, semantic, &semantic_path);
+            return self.index_full(root, index, semantic, &semantic_path, progress);
         }
 
         // Incremental mode: detect changes
@@ -616,12 +945,48 @@ impl Pipeline {
             .collect();
 
         // Run Phase 1 on the files to index
-        let (index_stats, unresolved, symbol_cache) =
-            self.index_files(&files_to_index, Arc::clone(&index), semantic.clone())?;
+        let (index_stats, unresolved, symbol_cache) = self.index_files(
+            &files_to_index,
+            Arc::clone(&index),
+            semantic.clone(),
+            progress.clone(),
+        )?;
 
-        // Run Phase 2 resolution
+        // Run Phase 2 resolution with progress if Phase 1 had progress
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?;
+        let phase2_stats = if progress.is_some() && !unresolved.is_empty() {
+            // Create Phase 2 progress bar
+            use crate::io::status_line::{
+                ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
+            };
+
+            let options = ProgressBarOptions::default()
+                .with_style(ProgressBarStyle::VerticalSolid)
+                .with_width(28);
+            let phase2_bar = Arc::new(ProgressBar::with_options(
+                unresolved.len() as u64,
+                "relationships",
+                "resolved",
+                "skipped",
+                options,
+            ));
+            let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
+
+            let stats = self.run_phase2_with_progress(
+                unresolved,
+                symbol_cache,
+                Arc::clone(&index),
+                Some(phase2_bar.clone()),
+            )?;
+
+            // Finalize Phase 2 progress bar
+            drop(phase2_status);
+            eprintln!("{phase2_bar}");
+
+            stats
+        } else {
+            self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?
+        };
 
         // Save embeddings
         if let Some(sem) = semantic {
@@ -655,6 +1020,7 @@ impl Pipeline {
         files: &[PathBuf],
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         if files.is_empty() {
             return Ok((
@@ -736,12 +1102,14 @@ impl Pipeline {
             stage.run(parsed_rx, batch_tx)
         });
 
-        // Stage 4: INDEX (with optional semantic search)
-        let index_stage = if let Some(sem) = semantic {
-            IndexStage::new(index, batches_per_commit).with_semantic(sem)
-        } else {
-            IndexStage::new(index, batches_per_commit)
-        };
+        // Stage 4: INDEX (with optional semantic search and progress)
+        let mut index_stage = IndexStage::new(index, batches_per_commit);
+        if let Some(sem) = semantic {
+            index_stage = index_stage.with_semantic(sem);
+        }
+        if let Some(prog) = progress {
+            index_stage = index_stage.with_progress(prog);
+        }
 
         let index_handle = thread::spawn(move || index_stage.run(batch_rx));
 
@@ -768,19 +1136,53 @@ impl Pipeline {
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         semantic_path: &Path,
+        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
         let start = Instant::now();
+        let show_progress = progress.is_some();
 
         // Run Phase 1 with semantic search integrated
         let (index_stats, unresolved, symbol_cache) = if let Some(ref sem) = semantic {
-            self.index_directory_with_semantic(root, Arc::clone(&index), Arc::clone(sem))?
+            self.index_directory_with_semantic(root, Arc::clone(&index), Arc::clone(sem), progress)?
         } else {
-            self.index_directory(root, Arc::clone(&index))?
+            self.index_directory_with_progress(root, Arc::clone(&index), progress)?
         };
 
-        // Run Phase 2
+        // Run Phase 2 resolution with progress if Phase 1 had progress
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?;
+        let phase2_stats = if show_progress && !unresolved.is_empty() {
+            // Create Phase 2 progress bar
+            use crate::io::status_line::{
+                ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
+            };
+
+            let options = ProgressBarOptions::default()
+                .with_style(ProgressBarStyle::VerticalSolid)
+                .with_width(28);
+            let phase2_bar = Arc::new(ProgressBar::with_options(
+                unresolved.len() as u64,
+                "relationships",
+                "resolved",
+                "skipped",
+                options,
+            ));
+            let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
+
+            let stats = self.run_phase2_with_progress(
+                unresolved,
+                symbol_cache,
+                Arc::clone(&index),
+                Some(phase2_bar.clone()),
+            )?;
+
+            // Finalize Phase 2 progress bar
+            drop(phase2_status);
+            eprintln!("{phase2_bar}");
+
+            stats
+        } else {
+            self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?
+        };
 
         // Save embeddings
         if let Some(sem) = semantic {
@@ -814,6 +1216,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Arc<Mutex<SimpleSemanticSearch>>,
+        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         let start = Instant::now();
 
@@ -886,8 +1289,11 @@ impl Pipeline {
             stage.run(parsed_rx, batch_tx)
         });
 
-        // Stage 5: INDEX with semantic search
-        let index_stage = IndexStage::new(index, batches_per_commit).with_semantic(semantic);
+        // Stage 5: INDEX with semantic search and optional progress
+        let mut index_stage = IndexStage::new(index, batches_per_commit).with_semantic(semantic);
+        if let Some(prog) = progress {
+            index_stage = index_stage.with_progress(prog);
+        }
         let index_handle = thread::spawn(move || index_stage.run(batch_rx));
 
         // Wait for all stages

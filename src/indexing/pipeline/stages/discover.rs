@@ -112,9 +112,13 @@ impl DiscoverStage {
         let disk_files = self.collect_all_files()?;
         let disk_set: HashSet<PathBuf> = disk_files.into_iter().collect();
 
-        // Step 2: Get all indexed paths from Tantivy
+        // Step 2: Get indexed paths from Tantivy, filtered to only those under our root
+        // This prevents marking files from other indexed directories as "deleted"
         let indexed_paths = index.get_all_indexed_paths()?;
-        let indexed_set: HashSet<PathBuf> = indexed_paths.into_iter().collect();
+        let indexed_set: HashSet<PathBuf> = indexed_paths
+            .into_iter()
+            .filter(|p| p.starts_with(&self.root))
+            .collect();
 
         // Step 3: Categorize files
         let mut result = DiscoverResult::default();

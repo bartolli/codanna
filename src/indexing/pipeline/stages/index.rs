@@ -14,6 +14,7 @@ use crate::indexing::IndexStats;
 use crate::indexing::pipeline::types::{
     IndexBatch, PipelineError, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
 };
+use crate::io::status_line::ProgressBar;
 use crate::semantic::SimpleSemanticSearch;
 use crate::storage::DocumentIndex;
 use crate::types::FileId;
@@ -33,6 +34,8 @@ pub struct IndexStage {
     batches_per_commit: usize,
     /// Optional semantic search for embedding generation.
     semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+    /// Optional progress bar for live updates.
+    progress: Option<Arc<ProgressBar>>,
 }
 
 impl IndexStage {
@@ -45,12 +48,19 @@ impl IndexStage {
             index,
             batches_per_commit: batches_per_commit.max(1),
             semantic: None,
+            progress: None,
         }
     }
 
     /// Add semantic search for embedding generation.
     pub fn with_semantic(mut self, semantic: Arc<Mutex<SimpleSemanticSearch>>) -> Self {
         self.semantic = Some(semantic);
+        self
+    }
+
+    /// Add progress bar for live updates.
+    pub fn with_progress(mut self, progress: Arc<ProgressBar>) -> Self {
+        self.progress = Some(progress);
         self
     }
 
@@ -112,6 +122,12 @@ impl IndexStage {
         for registration in &batch.file_registrations {
             self.index.store_file_registration(registration)?;
             stats.files_indexed += 1;
+
+            // Update progress bar if present
+            if let Some(ref progress) = self.progress {
+                progress.inc();
+                progress.add_extra1(1);
+            }
         }
 
         // Write symbols, generate embeddings, and accumulate in cache

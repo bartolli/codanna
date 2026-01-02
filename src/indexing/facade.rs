@@ -998,21 +998,28 @@ impl IndexFacade {
             return Ok(stats);
         }
 
-        // Use Pipeline for indexing
-        let facade_stats = self.index_directory(dir, force)?;
+        // Use Pipeline for indexing with progress flag
+        // The pipeline manages progress bars internally for clean sequential display
+        let pipeline_stats = self.pipeline.index_incremental_with_progress_flag(
+            dir,
+            Arc::clone(&self.document_index),
+            self.semantic_search.clone(),
+            force,
+            progress && total_files > 0,
+            total_files,
+        )?;
+
+        // Update tracked paths
+        self.add_indexed_path(dir);
+
+        // Rebuild symbol cache after indexing
+        self.build_symbol_cache()?;
 
         // Convert to IndexStats format
         let mut stats = IndexStats::new();
-        stats.files_indexed = facade_stats.files_indexed;
-        stats.symbols_found = facade_stats.symbols_found;
+        stats.files_indexed = pipeline_stats.new_files + pipeline_stats.modified_files;
+        stats.symbols_found = pipeline_stats.index_stats.symbols_found;
         stats.stop_timing();
-
-        if progress {
-            println!(
-                "Indexed {} files, {} symbols",
-                stats.files_indexed, stats.symbols_found
-            );
-        }
 
         Ok(stats)
     }

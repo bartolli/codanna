@@ -1251,6 +1251,11 @@ impl CodeIntelligenceServer {
                         }
                     }
 
+                    // Signature
+                    if let Some(ref sig) = symbol.signature {
+                        output.push_str(&format!("   Signature: {sig}\n"));
+                    }
+
                     // Only gather additional context for functions/methods
                     if matches!(
                         symbol.kind,

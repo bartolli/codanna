@@ -70,7 +70,14 @@ pub fn add_paths_to_settings(
                         .indexed_paths
                         .iter()
                         .find(|existing| canonical.starts_with(existing.as_path()))
-                        .map(|existing| SkipReason::CoveredBy(existing.clone()))
+                        .and_then(|existing| {
+                            // Distinguish between exact match and subdirectory
+                            if canonical == *existing {
+                                None // Will use AlreadyPresent
+                            } else {
+                                Some(SkipReason::CoveredBy(existing.clone()))
+                            }
+                        })
                 });
                 skipped_paths.push(SkippedPath {
                     path: path.clone(),

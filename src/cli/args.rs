@@ -624,12 +624,6 @@ pub enum RetrieveQuery {
         json: bool,
     },
 
-    /// Show what types a given symbol uses
-    Uses {
-        /// Name of the symbol
-        symbol: String,
-    },
-
     /// Search for symbols using full-text search
     #[command(
         after_help = "Examples:\n  # Traditional flag format\n  codanna retrieve search \"parse\" --limit 5 --kind function\n  \n  # Key:value format (Unix-style)\n  codanna retrieve search query:parse limit:5 kind:function\n  \n  # Mixed format\n  codanna retrieve search \"parse\" limit:5 --json"
@@ -654,18 +648,6 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
-    },
-
-    /// Show what methods a type or trait defines
-    Defines {
-        /// Name of the type or trait
-        symbol: String,
-    },
-
-    /// Show dependency analysis for a symbol
-    Dependencies {
-        /// Name of the symbol
-        symbol: String,
     },
 
     /// Show information about a symbol

@@ -58,16 +58,15 @@ pub fn run(
                 for skipped in &skipped_paths {
                     match &skipped.reason {
                         SkipReason::CoveredBy(parent) => println!(
-                            "Skipping {} (already covered by {})",
+                            "{}: Included in indexed directory {}",
                             skipped.path.display(),
                             parent.display()
                         ),
-                        SkipReason::AlreadyPresent => println!(
-                            "Skipping {} (already present in indexed paths)",
-                            skipped.path.display()
-                        ),
+                        SkipReason::AlreadyPresent => {
+                            println!("{}: Already indexed", skipped.path.display())
+                        }
                         SkipReason::FileNotPersisted => println!(
-                            "Skipping {} (indexed file is tracked ad-hoc and not stored in settings)",
+                            "{}: Ad-hoc indexed (not in settings.toml)",
                             skipped.path.display()
                         ),
                     }

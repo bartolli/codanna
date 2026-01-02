@@ -380,6 +380,11 @@ impl ProgressBar {
         self.current.store(value, Ordering::Relaxed);
     }
 
+    /// Get the current progress value.
+    pub fn current(&self) -> u64 {
+        self.current.load(Ordering::Relaxed)
+    }
+
     /// Increase the first auxiliary counter.
     pub fn add_extra1(&self, n: u64) {
         self.extra1.fetch_add(n, Ordering::Relaxed);
