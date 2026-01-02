@@ -1015,11 +1015,11 @@ impl IndexFacade {
         // Rebuild symbol cache after indexing
         self.build_symbol_cache()?;
 
-        // Convert to IndexStats format
-        let mut stats = IndexStats::new();
+        // Convert to IndexStats format using pipeline's actual timing
+        let mut stats = IndexStats::default();
         stats.files_indexed = pipeline_stats.new_files + pipeline_stats.modified_files;
         stats.symbols_found = pipeline_stats.index_stats.symbols_found;
-        stats.stop_timing();
+        stats.elapsed = pipeline_stats.elapsed;
 
         Ok(stats)
     }

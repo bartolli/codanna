@@ -827,15 +827,16 @@ impl Pipeline {
             (stats, unresolved, cache, cleanup_stats, counts)
         };
 
-        // Run Phase 2 with separate progress bar
+        // Run Phase 2 with separate progress bar (no rate - not meaningful for relationships)
         let symbol_cache = Arc::new(symbol_cache);
         let phase2_stats = if !unresolved.is_empty() {
+            let phase2_options = bar_options.show_rate(false);
             let phase2_bar = Arc::new(ProgressBar::with_options(
                 unresolved.len() as u64,
                 "relationships",
                 "resolved",
                 "skipped",
-                bar_options,
+                phase2_options,
             ));
             let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
 
@@ -962,7 +963,8 @@ impl Pipeline {
 
             let options = ProgressBarOptions::default()
                 .with_style(ProgressBarStyle::VerticalSolid)
-                .with_width(28);
+                .with_width(28)
+                .show_rate(false); // Rate not meaningful for relationships
             let phase2_bar = Arc::new(ProgressBar::with_options(
                 unresolved.len() as u64,
                 "relationships",
@@ -1158,7 +1160,8 @@ impl Pipeline {
 
             let options = ProgressBarOptions::default()
                 .with_style(ProgressBarStyle::VerticalSolid)
-                .with_width(28);
+                .with_width(28)
+                .show_rate(false); // Rate not meaningful for relationships
             let phase2_bar = Arc::new(ProgressBar::with_options(
                 unresolved.len() as u64,
                 "relationships",
