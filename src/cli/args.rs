@@ -145,9 +145,9 @@ pub enum Commands {
         #[arg(short, long)]
         force: bool,
 
-        /// Show progress during indexing
-        #[arg(short, long)]
-        progress: bool,
+        /// Disable progress bars (overrides settings.toml show_progress)
+        #[arg(long)]
+        no_progress: bool,
 
         /// Dry run - show what would be indexed without indexing
         #[arg(long)]
@@ -336,7 +336,7 @@ pub enum Commands {
         name = "index-parallel",
         about = "Index using parallel pipeline with two-phase resolution",
         long_about = "Index source code using the parallel pipeline architecture.\n\nPhase 1: Parallel file discovery, reading, parsing, and indexing.\nPhase 2: Two-pass cross-file relationship resolution.",
-        after_help = "Examples:\n  codanna index-parallel src\n  codanna index-parallel --progress\n  codanna index-parallel src lib --force"
+        after_help = "Examples:\n  codanna index-parallel src\n  codanna index-parallel --no-progress\n  codanna index-parallel src lib --force"
     )]
     IndexParallel {
         /// Paths to directories to index (uses settings.toml indexed_paths if empty)
@@ -347,9 +347,9 @@ pub enum Commands {
         #[arg(short, long)]
         force: bool,
 
-        /// Show progress during indexing
-        #[arg(short, long)]
-        progress: bool,
+        /// Disable progress bars (overrides settings.toml show_progress)
+        #[arg(long)]
+        no_progress: bool,
     },
 
     /// Manage project profiles
@@ -472,7 +472,7 @@ pub enum DocumentAction {
     /// Index documents from a collection
     #[command(
         about = "Index documents from a configured collection",
-        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents index --all\n  codanna documents index --progress"
+        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents index --all\n  codanna documents index --no-progress"
     )]
     Index {
         /// Collection name to index (from settings.toml)
@@ -487,9 +487,9 @@ pub enum DocumentAction {
         #[arg(short, long)]
         force: bool,
 
-        /// Show progress bar during indexing
-        #[arg(short, long)]
-        progress: bool,
+        /// Disable progress bars (overrides settings.toml show_progress)
+        #[arg(long)]
+        no_progress: bool,
     },
 
     /// Search documents

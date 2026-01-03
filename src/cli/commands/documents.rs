@@ -35,14 +35,16 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
             collection,
             all,
             force,
-            progress,
+            no_progress,
         } => {
+            // Progress enabled by default from settings, --no-progress overrides
+            let show_progress = config.indexing.show_progress && !no_progress;
             run_index(
                 config,
                 collection,
                 all,
                 force,
-                progress,
+                show_progress,
                 create_store_with_embeddings,
             );
         }

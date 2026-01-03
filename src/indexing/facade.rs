@@ -1055,7 +1055,7 @@ impl IndexFacade {
         &mut self,
         stored_paths: Option<Vec<PathBuf>>,
         config_paths: &[PathBuf],
-        _progress: bool,
+        progress: bool,
     ) -> FacadeResult<SyncStats> {
         let stored = stored_paths.unwrap_or_default();
         let stored_set: HashSet<PathBuf> = stored.iter().cloned().collect();
@@ -1067,11 +1067,32 @@ impl IndexFacade {
 
         let mut stats = SyncStats::default();
 
-        // Index new directories
+        // Index new directories with progress if enabled
+        // Use force=true since these are new directories being indexed for the first time
         for path in &to_add {
-            let result = self.index_directory(path, false)?;
-            stats.files_indexed += result.files_indexed;
-            stats.symbols_found += result.symbols_found;
+            // Count files first for accurate progress bar
+            let file_count = if progress {
+                use crate::indexing::FileWalker;
+                let walker = FileWalker::new(Arc::clone(&self.settings));
+                walker.walk(path).count()
+            } else {
+                0
+            };
+
+            let result = self.pipeline.index_incremental_with_progress_flag(
+                path,
+                Arc::clone(&self.document_index),
+                self.semantic_search.clone(),
+                self.embedding_pool.clone(),
+                true, // force: new directories should be fully indexed
+                progress,
+                file_count,
+            )?;
+            stats.files_indexed += result.new_files + result.modified_files;
+            stats.symbols_found += result.index_stats.symbols_found;
+
+            // Rebuild cache after each directory
+            self.build_symbol_cache()?;
         }
         stats.added_dirs = to_add.len();
 

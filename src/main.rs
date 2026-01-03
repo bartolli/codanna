@@ -291,7 +291,7 @@ async fn main() {
         threads: Some(t), ..
     } = &cli.command
     {
-        config.indexing.parallel_threads = *t;
+        config.indexing.parallelism = *t;
     }
 
     // Set up persistence based on config
@@ -408,8 +408,15 @@ async fn main() {
     // Skip sync if force flag is present (force means fresh start, not incremental)
     let is_force_index = matches!(cli.command, Commands::Index { force: true, .. });
 
-    // Extract progress flag from Index command for sync operations
-    let show_progress = matches!(cli.command, Commands::Index { progress: true, .. });
+    // Progress is enabled by default from settings, can be disabled with --no-progress
+    let no_progress_flag = matches!(
+        cli.command,
+        Commands::Index {
+            no_progress: true,
+            ..
+        }
+    );
+    let show_progress = config.indexing.show_progress && !no_progress_flag;
     if let Some(report) = &seed_report {
         if is_force_index {
             if !report.newly_seeded.is_empty() {
@@ -609,12 +616,14 @@ async fn main() {
         Commands::Index {
             paths,
             force,
-            progress,
+            no_progress,
             dry_run,
             max_files,
             ..
         } => {
             use codanna::cli::commands::index::{IndexArgs, run as run_index};
+            // Progress enabled by default from settings, --no-progress overrides
+            let progress = config.indexing.show_progress && !no_progress;
             run_index(
                 IndexArgs {
                     paths,
@@ -687,11 +696,13 @@ async fn main() {
         Commands::IndexParallel {
             paths,
             force,
-            progress,
+            no_progress,
         } => {
             use codanna::cli::commands::index_parallel::{
                 IndexParallelArgs, run as run_index_parallel,
             };
+            // Progress enabled by default from settings, --no-progress overrides
+            let progress = config.indexing.show_progress && !no_progress;
             run_index_parallel(
                 IndexParallelArgs {
                     paths,

@@ -62,29 +62,35 @@ impl Default for PipelineConfig {
 impl PipelineConfig {
     /// Create config from Settings.
     ///
-    /// Reads from .codanna/settings.toml:
-    /// - `indexing.parallel_threads` -> parse_threads
-    /// - `indexing.read_threads` -> read_threads
-    /// - `indexing.discover_threads` -> discover_threads
+    /// Derives thread counts from `indexing.parallelism`:
+    /// - parse_threads: 60% of parallelism (CPU-bound parsing)
+    /// - read_threads: 20% of parallelism (I/O-bound file reading)
+    /// - discover_threads: 10% of parallelism (filesystem walking)
+    ///
+    /// Also reads:
     /// - `indexing.batch_size` -> batch_size
     /// - `indexing.batches_per_commit` -> batches_per_commit
     /// - `indexing.pipeline_tracing` -> pipeline_tracing
     pub fn from_settings(settings: &Settings) -> Self {
         let indexing = &settings.indexing;
+        let parallelism = indexing.parallelism;
 
-        // Parse threads: use parallel_threads but reserve some for I/O
-        let parse_threads = indexing.parallel_threads.saturating_sub(4).max(1);
+        // Derive thread counts from single parallelism value
+        // 60% for CPU-heavy parsing, 20% for I/O, 10% for discovery
+        let parse_threads = (parallelism * 60 / 100).max(2);
+        let read_threads = (parallelism * 20 / 100).max(1);
+        let discover_threads = (parallelism * 10 / 100).max(1);
 
-        // Channel sizes derived from thread counts
-        let path_channel_size = indexing.parallel_threads * 100;
-        let content_channel_size = indexing.read_threads * 50;
+        // Channel sizes scale with derived thread counts
+        let path_channel_size = parallelism * 100;
+        let content_channel_size = read_threads * 50;
         let parsed_channel_size = parse_threads * 100;
         let batch_channel_size = 20;
 
         Self {
             parse_threads,
-            read_threads: indexing.read_threads,
-            discover_threads: indexing.discover_threads,
+            read_threads,
+            discover_threads,
             batch_size: indexing.batch_size,
             path_channel_size,
             content_channel_size,
@@ -191,18 +197,21 @@ mod tests {
 
         // Should use values from settings.indexing
         assert_eq!(config.batch_size, settings.indexing.batch_size);
-        assert_eq!(config.read_threads, settings.indexing.read_threads);
         assert_eq!(
             config.batches_per_commit,
             settings.indexing.batches_per_commit
         );
 
-        // parse_threads derived from parallel_threads
-        assert!(config.parse_threads >= 1);
+        // Thread counts derived from parallelism
+        let parallelism = settings.indexing.parallelism;
+        assert_eq!(config.parse_threads, (parallelism * 60 / 100).max(2));
+        assert_eq!(config.read_threads, (parallelism * 20 / 100).max(1));
+        assert_eq!(config.discover_threads, (parallelism * 10 / 100).max(1));
 
-        println!("Config from settings:");
+        println!("Config from settings (parallelism={parallelism}):");
         println!("  parse_threads: {}", config.parse_threads);
         println!("  read_threads: {}", config.read_threads);
+        println!("  discover_threads: {}", config.discover_threads);
         println!("  batch_size: {}", config.batch_size);
         println!("  batches_per_commit: {}", config.batches_per_commit);
     }
