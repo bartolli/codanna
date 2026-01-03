@@ -247,7 +247,8 @@ fn sustained_benchmark_cuda_large() {
     let cuda_ep = CUDAExecutionProvider::default().build();
 
     let mut model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::MultilingualE5Large).with_execution_providers(vec![cuda_ep]),
+        InitOptions::new(EmbeddingModel::MultilingualE5Large)
+            .with_execution_providers(vec![cuda_ep]),
     )
     .expect("Failed to create CUDA model");
 
