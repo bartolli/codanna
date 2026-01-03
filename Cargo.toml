@@ -16,7 +16,7 @@ autoexamples = false
 [dependencies]
 anyhow = "1.0.100"
 bitflags = "2.10.0"
-clap = { version = "4.5.53", features = ["derive", "color", "env"] }
+clap = { version = "4.5.54", features = ["derive", "color", "env"] }
 crossbeam-channel = "0.5.15"
 dashmap = "6.1.0"
 dirs = "6.0.0"
@@ -36,7 +36,7 @@ serde_json = "1.0.148"
 sha2 = "0.10"
 tantivy = "0.25.0"
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 toml = { version = "0.9.8", features = ["preserve_order"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
@@ -51,7 +51,8 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
-fastembed = "5.5.0"
+# fastembed = "5.6.0"
+fastembed = { path = "vendors/fastembed-rs" }
 rand = "0.9.2"
 indicatif = "0.18.3"
 comfy-table = "7.2.1"
@@ -81,6 +82,7 @@ sysinfo = "0.37.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
+ort = { version = "2.0.0-rc.10", default-features = false }
 testcontainers = "0.26.3"
 thread-id = "5.0.0"
 
@@ -94,6 +96,14 @@ tower-http = ["dep:tower-http"]
 axum-server = ["dep:axum-server"]
 rustls = ["dep:rustls"]
 rcgen = ["dep:rcgen"]
+
+# GPU/Hardware Acceleration for embeddings (pass through to fastembed → ort)
+gpu-cuda = ["fastembed/cuda"]
+gpu-tensorrt = ["fastembed/tensorrt"]
+gpu-coreml = ["fastembed/coreml"]
+gpu-directml = ["fastembed/directml"]
+gpu-openvino = ["fastembed/openvino"]
+gpu-rocm = ["fastembed/rocm"]
 
 [profile.release]
 # opt-level = 3
