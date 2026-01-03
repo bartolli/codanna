@@ -192,6 +192,7 @@ impl EmbeddingPool {
 
     /// Generate embeddings for multiple documents in parallel using rayon.
     ///
+    /// Uses batched embedding (64 docs per model call) for optimal throughput.
     /// Returns a Vec of (SymbolId, embedding, language) for successful embeddings.
     /// Failed embeddings are logged and skipped.
     pub fn embed_parallel(
@@ -200,36 +201,59 @@ impl EmbeddingPool {
     ) -> Vec<(SymbolId, Vec<f32>, String)> {
         use rayon::prelude::*;
 
-        let results: Vec<_> = items
-            .par_iter()
-            .filter_map(|(symbol_id, doc, language)| {
-                if doc.trim().is_empty() {
-                    return None;
-                }
+        // Optimal batch size for embedding models (matches benchmark)
+        const BATCH_SIZE: usize = 64;
 
-                match self.embed_one(doc) {
-                    Ok(embedding) => {
-                        if embedding.len() == self.dimensions {
-                            Some((*symbol_id, embedding, (*language).to_string()))
-                        } else {
-                            tracing::warn!(
-                                target: "semantic",
-                                "Dimension mismatch for {}: expected {}, got {}",
-                                symbol_id.to_u32(),
-                                self.dimensions,
-                                embedding.len()
-                            );
-                            None
+        // Filter out empty docs first
+        let valid_items: Vec<_> = items
+            .iter()
+            .filter(|(_, doc, _)| !doc.trim().is_empty())
+            .collect();
+
+        if valid_items.is_empty() {
+            return Vec::new();
+        }
+
+        // Process in batches of 64, parallelized across available model instances
+        let results: Vec<_> = valid_items
+            .chunks(BATCH_SIZE)
+            .par_bridge()
+            .flat_map(|batch| {
+                // Collect texts for batch embedding
+                let texts: Vec<&str> = batch.iter().map(|(_, doc, _)| *doc).collect();
+
+                // Acquire model, embed entire batch, release model
+                let mut instance = self.acquire();
+                let embeddings_result = instance.model.embed(texts.clone(), None);
+                self.release(instance);
+
+                // Process results
+                match embeddings_result {
+                    Ok(embeddings) => {
+                        let mut results = Vec::with_capacity(batch.len());
+                        for (item, embedding) in batch.iter().zip(embeddings.into_iter()) {
+                            let (symbol_id, _, language) = *item;
+                            if embedding.len() == self.dimensions {
+                                results.push((*symbol_id, embedding, (*language).to_string()));
+                            } else {
+                                tracing::warn!(
+                                    target: "semantic",
+                                    "Dimension mismatch for {}: expected {}, got {}",
+                                    symbol_id.to_u32(),
+                                    self.dimensions,
+                                    embedding.len()
+                                );
+                            }
                         }
+                        results
                     }
                     Err(e) => {
                         tracing::warn!(
                             target: "semantic",
-                            "Failed to embed {}: {}",
-                            symbol_id.to_u32(),
+                            "Batch embedding failed: {}",
                             e
                         );
-                        None
+                        Vec::new()
                     }
                 }
             })
