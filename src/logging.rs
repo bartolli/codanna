@@ -42,7 +42,7 @@ impl FormatTime for CompactTime {
 
 /// Modules that use explicit `target: "name"` or are external crates.
 /// These don't need the `codanna::` prefix in filter strings.
-const EXTERNAL_TARGETS: &[&str] = &["cli", "tantivy", "pipeline"];
+const EXTERNAL_TARGETS: &[&str] = &["cli", "tantivy", "pipeline", "semantic"];
 
 /// Initialize logging with configuration.
 ///

@@ -849,15 +849,17 @@ impl Pipeline {
     /// * `root` - Root directory to index
     /// * `index` - DocumentIndex for storage
     /// * `semantic` - Optional semantic search for embeddings
+    /// * `embedding_pool` - Optional pool for parallel embedding generation
     /// * `force` - If true, re-index all files regardless of hash
     pub fn index_incremental(
         &self,
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         force: bool,
     ) -> PipelineResult<IncrementalStats> {
-        self.index_incremental_with_progress(root, index, semantic, force, None)
+        self.index_incremental_with_progress(root, index, semantic, embedding_pool, force, None)
     }
 
     /// Index a directory with progress bars managed internally.
@@ -869,6 +871,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         force: bool,
         show_progress: bool,
         total_files: usize,
@@ -878,7 +881,7 @@ impl Pipeline {
         };
 
         if !show_progress {
-            return self.index_incremental(root, index, semantic, force);
+            return self.index_incremental(root, index, semantic, embedding_pool, force);
         }
 
         let start = Instant::now();
@@ -906,6 +909,7 @@ impl Pipeline {
                     root,
                     Arc::clone(&index),
                     Arc::clone(sem),
+                    embedding_pool.clone(),
                     Some(phase1_bar.clone()),
                 )?
             } else {
@@ -985,6 +989,7 @@ impl Pipeline {
                 &files_to_index,
                 Arc::clone(&index),
                 semantic.clone(),
+                embedding_pool.clone(),
                 Some(phase1_bar.clone()),
             )?;
 
@@ -1050,6 +1055,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         force: bool,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
@@ -1058,7 +1064,14 @@ impl Pipeline {
 
         if force {
             // Force mode: index everything (no cleanup needed for fresh index)
-            return self.index_full(root, index, semantic, &semantic_path, progress);
+            return self.index_full(
+                root,
+                index,
+                semantic,
+                embedding_pool,
+                &semantic_path,
+                progress,
+            );
         }
 
         // Incremental mode: detect changes
@@ -1123,6 +1136,7 @@ impl Pipeline {
             &files_to_index,
             Arc::clone(&index),
             semantic.clone(),
+            embedding_pool.clone(),
             progress.clone(),
         )?;
 
@@ -1195,6 +1209,7 @@ impl Pipeline {
         files: &[PathBuf],
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         if files.is_empty() {
@@ -1283,12 +1298,15 @@ impl Pipeline {
             stage.run(parsed_rx, batch_tx)
         });
 
-        // Stage 4: INDEX (with optional semantic search and progress)
+        // Stage 4: INDEX (with optional semantic search, embedding pool, and progress)
         // Clone index Arc for metadata update after pipeline completes
         let index_for_metadata = Arc::clone(&index);
         let mut index_stage = IndexStage::new(index, batches_per_commit);
         if let Some(sem) = semantic {
             index_stage = index_stage.with_semantic(sem);
+        }
+        if let Some(pool) = embedding_pool {
+            index_stage = index_stage.with_embedding_pool(pool);
         }
         if let Some(prog) = progress {
             index_stage = index_stage.with_progress(prog);
@@ -1329,6 +1347,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         semantic_path: &Path,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
@@ -1337,7 +1356,13 @@ impl Pipeline {
 
         // Run Phase 1 with semantic search integrated
         let (index_stats, unresolved, symbol_cache) = if let Some(ref sem) = semantic {
-            self.index_directory_with_semantic(root, Arc::clone(&index), Arc::clone(sem), progress)?
+            self.index_directory_with_semantic(
+                root,
+                Arc::clone(&index),
+                Arc::clone(sem),
+                embedding_pool,
+                progress,
+            )?
         } else {
             self.index_directory_with_progress(root, Arc::clone(&index), progress)?
         };
@@ -1411,6 +1436,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Arc<Mutex<SimpleSemanticSearch>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         let start = Instant::now();
@@ -1542,12 +1568,15 @@ impl Pipeline {
             (result, tracker.map(|t| t.finalize()))
         });
 
-        // Stage 5: INDEX with semantic search and optional progress
+        // Stage 5: INDEX with semantic search, embedding pool, and optional progress
         // Clone index Arc for metadata update after pipeline completes
         let index_for_metadata = Arc::clone(&index);
         let index_handle = {
             let mut index_stage =
                 IndexStage::new(index, batches_per_commit).with_semantic(semantic);
+            if let Some(pool) = embedding_pool {
+                index_stage = index_stage.with_embedding_pool(pool);
+            }
             if let Some(prog) = progress {
                 index_stage = index_stage.with_progress(prog);
             }
@@ -1696,6 +1725,7 @@ impl Pipeline {
         config_paths: &[PathBuf],
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         _progress: bool,
     ) -> PipelineResult<SyncStats> {
         use std::collections::HashSet;
@@ -1742,7 +1772,13 @@ impl Pipeline {
             for path in &new_paths {
                 tracing::debug!(target: "pipeline", "  + {}", path.display());
 
-                match self.index_incremental(path, Arc::clone(&index), semantic.clone(), false) {
+                match self.index_incremental(
+                    path,
+                    Arc::clone(&index),
+                    semantic.clone(),
+                    embedding_pool.clone(),
+                    false,
+                ) {
                     Ok(inc_stats) => {
                         stats.files_indexed += inc_stats.index_stats.files_indexed;
                         stats.symbols_found += inc_stats.index_stats.symbols_found;

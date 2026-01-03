@@ -172,6 +172,10 @@ pub struct SemanticSearchConfig {
     /// Similarity threshold for search results
     #[serde(default = "default_similarity_threshold")]
     pub threshold: f32,
+
+    /// Number of parallel embedding model instances
+    #[serde(default = "default_embedding_threads")]
+    pub embedding_threads: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -324,6 +328,9 @@ fn default_embedding_model() -> String {
 fn default_similarity_threshold() -> f32 {
     0.6
 }
+fn default_embedding_threads() -> usize {
+    3
+}
 fn default_debounce_ms() -> u64 {
     500
 }
@@ -394,6 +401,7 @@ impl Default for SemanticSearchConfig {
             enabled: true, // Enabled by default for better code intelligence
             model: default_embedding_model(),
             threshold: default_similarity_threshold(),
+            embedding_threads: default_embedding_threads(),
         }
     }
 }
@@ -897,6 +905,11 @@ impl Settings {
                 result.push_str("# - See documentation for full list of available models\n");
             } else if line.starts_with("threshold = ") {
                 result.push_str("\n# Similarity threshold for search results (0.0 to 1.0)\n");
+            } else if line.starts_with("embedding_threads = ") {
+                result.push_str("\n# Number of parallel embedding model instances (default: 3)\n");
+                result
+                    .push_str("# Each instance uses ~86MB RAM. Higher values = faster indexing.\n");
+                result.push_str("# Set to 1 for low-memory systems, 4-6 for high-end machines.\n");
             } else if line == "[file_watch]" {
                 result.push_str("\n[file_watch]\n");
                 result.push_str("# Enable automatic file watching for indexed files\n");

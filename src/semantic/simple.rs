@@ -200,6 +200,21 @@ impl SimpleSemanticSearch {
         Ok(())
     }
 
+    /// Store pre-generated embeddings (from parallel pool generation).
+    ///
+    /// Used when embeddings are generated in parallel by EmbeddingPool.
+    pub fn store_embeddings(&mut self, items: Vec<(SymbolId, Vec<f32>, String)>) -> usize {
+        let mut count = 0;
+        for (symbol_id, embedding, language) in items {
+            if embedding.len() == self.dimensions {
+                self.embeddings.insert(symbol_id, embedding);
+                self.symbol_languages.insert(symbol_id, language);
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Search for similar documentation using a natural language query
     ///
     /// Returns symbol IDs with their similarity scores, sorted by score descending

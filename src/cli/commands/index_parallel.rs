@@ -102,7 +102,7 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
 
         tracing::info!(target: "pipeline", "Indexing directory ({mode}): {}", path.display());
 
-        match pipeline.index_incremental(path, Arc::clone(&index), semantic.clone(), force) {
+        match pipeline.index_incremental(path, Arc::clone(&index), semantic.clone(), None, force) {
             Ok(stats) => {
                 display_incremental_stats(&stats, progress);
             }

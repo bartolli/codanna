@@ -25,7 +25,7 @@
 
 use crate::config::Settings;
 use crate::indexing::pipeline::Pipeline;
-use crate::semantic::SimpleSemanticSearch;
+use crate::semantic::{EmbeddingPool, SimpleSemanticSearch};
 use crate::storage::{DocumentIndex, SearchResult};
 use crate::symbol::context::{ContextIncludes, SymbolContext, SymbolRelationships};
 use crate::{FileId, IndexError, RelationKind, Relationship, Symbol, SymbolId, SymbolKind};
@@ -67,6 +67,9 @@ pub struct IndexFacade {
     /// Optional semantic search for doc comment embeddings
     semantic_search: Option<Arc<Mutex<SimpleSemanticSearch>>>,
 
+    /// Optional embedding pool for parallel embedding generation
+    embedding_pool: Option<Arc<EmbeddingPool>>,
+
     /// Optional fast symbol cache for O(1) lookups
     symbol_cache: Option<Arc<crate::storage::symbol_cache::ConcurrentSymbolCache>>,
 
@@ -103,6 +106,7 @@ impl IndexFacade {
             document_index,
             pipeline,
             semantic_search: None,
+            embedding_pool: None,
             symbol_cache: None,
             settings,
             indexed_paths: HashSet::new(),
@@ -127,6 +131,7 @@ impl IndexFacade {
             document_index,
             pipeline,
             semantic_search,
+            embedding_pool: None,
             symbol_cache: None,
             settings,
             indexed_paths: HashSet::new(),
@@ -167,6 +172,14 @@ impl IndexFacade {
 
         let semantic = SimpleSemanticSearch::from_model_name(model)?;
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+
+        // Create embedding pool for parallel generation
+        let pool_size = self.settings.semantic_search.embedding_threads;
+        let embedding_model = crate::vector::parse_embedding_model(model)
+            .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
+        let pool = EmbeddingPool::new(pool_size, embedding_model)?;
+        self.embedding_pool = Some(Arc::new(pool));
+
         Ok(())
     }
 
@@ -944,6 +957,7 @@ impl IndexFacade {
             path,
             Arc::clone(&self.document_index),
             self.semantic_search.clone(),
+            self.embedding_pool.clone(),
             force,
         )?;
 
@@ -1013,6 +1027,7 @@ impl IndexFacade {
             dir,
             Arc::clone(&self.document_index),
             self.semantic_search.clone(),
+            self.embedding_pool.clone(),
             force,
             progress && total_files > 0,
             total_files,

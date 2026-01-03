@@ -2,12 +2,12 @@
 //!
 //! [PIPELINE API] Part of the new parallel indexing pipeline.
 //!
-//! Single-threaded stage that:
+//! Parallel stage that:
 //! - Receives IndexBatch from COLLECT stage
-//! - Writes symbols, imports, file registrations to Tantivy
-//! - Generates embeddings for symbols with doc_comments
+//! - Writes symbols, imports, file registrations to Tantivy (parallel via RwLock)
+//! - Generates embeddings for symbols with doc_comments (parallel via EmbeddingPool)
 //! - Accumulates UnresolvedRelationships for Phase 2
-//! - Builds SymbolLookupCache for O(1) Phase 2 resolution
+//! - Builds SymbolLookupCache for O(1) Phase 2 resolution (concurrent DashMap)
 //! - Commits every N batches for efficient I/O
 
 use crate::indexing::IndexStats;
@@ -15,10 +15,11 @@ use crate::indexing::pipeline::types::{
     IndexBatch, PipelineError, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
 };
 use crate::io::status_line::ProgressBar;
-use crate::semantic::SimpleSemanticSearch;
+use crate::semantic::{EmbeddingPool, SimpleSemanticSearch};
 use crate::storage::DocumentIndex;
 use crate::types::FileId;
 use crossbeam_channel::Receiver;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -32,8 +33,10 @@ use std::sync::{Arc, Mutex};
 pub struct IndexStage {
     index: Arc<DocumentIndex>,
     batches_per_commit: usize,
-    /// Optional semantic search for embedding generation.
+    /// Optional semantic search for embedding storage.
     semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+    /// Optional embedding pool for parallel embedding generation.
+    embedding_pool: Option<Arc<EmbeddingPool>>,
     /// Optional progress bar for live updates.
     progress: Option<Arc<ProgressBar>>,
 }
@@ -48,13 +51,23 @@ impl IndexStage {
             index,
             batches_per_commit: batches_per_commit.max(1),
             semantic: None,
+            embedding_pool: None,
             progress: None,
         }
     }
 
-    /// Add semantic search for embedding generation.
+    /// Add semantic search for embedding storage (used with embedding pool).
     pub fn with_semantic(mut self, semantic: Arc<Mutex<SimpleSemanticSearch>>) -> Self {
         self.semantic = Some(semantic);
+        self
+    }
+
+    /// Add embedding pool for parallel embedding generation.
+    ///
+    /// When set, embeddings are generated in parallel using the pool,
+    /// then stored in the semantic search instance.
+    pub fn with_embedding_pool(mut self, pool: Arc<EmbeddingPool>) -> Self {
+        self.embedding_pool = Some(pool);
         self
     }
 
@@ -120,7 +133,7 @@ impl IndexStage {
 
     /// Process a single batch.
     ///
-    /// Writes to Tantivy, generates embeddings, and accumulates symbols in cache.
+    /// Writes to Tantivy in parallel, generates embeddings, and accumulates symbols in cache.
     fn process_batch(
         &self,
         batch: &IndexBatch,
@@ -134,52 +147,112 @@ impl IndexStage {
             .map(|r| (r.file_id, r.language_id.as_str()))
             .collect();
 
-        // Write file registrations
-        for registration in &batch.file_registrations {
-            self.index.store_file_registration(registration)?;
-            stats.files_indexed += 1;
+        // Write file registrations in parallel
+        batch
+            .file_registrations
+            .par_iter()
+            .for_each(|registration| {
+                if let Err(e) = self.index.store_file_registration(registration) {
+                    tracing::warn!(
+                        target: "pipeline",
+                        "Failed to store file registration for {}: {e}",
+                        registration.path.display()
+                    );
+                }
+                // Update progress bar if present (atomic operations)
+                if let Some(ref progress) = self.progress {
+                    progress.inc();
+                    progress.add_extra1(1);
+                }
+            });
+        stats.files_indexed += batch.file_registrations.len();
 
-            // Update progress bar if present
-            if let Some(ref progress) = self.progress {
-                progress.inc();
-                progress.add_extra1(1);
+        // Write symbols to Tantivy in parallel and collect embedding candidates
+        // SymbolLookupCache uses DashMap which is concurrent-safe
+        batch.symbols.par_iter().for_each(|(symbol, path)| {
+            if let Err(e) = self.index.index_symbol(symbol, &path.to_string_lossy()) {
+                tracing::warn!(
+                    target: "pipeline",
+                    "Failed to index symbol {}: {e}",
+                    symbol.name
+                );
             }
-        }
+            // Insert into cache for O(1) Phase 2 resolution (DashMap is concurrent)
+            symbol_cache.insert(symbol.clone());
+        });
+        stats.symbols_found += batch.symbols.len();
 
-        // Write symbols, generate embeddings, and accumulate in cache
-        for (symbol, path) in &batch.symbols {
-            self.index.index_symbol(symbol, &path.to_string_lossy())?;
+        // Collect embedding candidates (needs to be sequential for borrowing)
+        let embedding_items: Vec<(crate::SymbolId, &str, &str)> = if self.semantic.is_some() {
+            batch
+                .symbols
+                .iter()
+                .filter_map(|(symbol, _)| {
+                    symbol.doc_comment.as_ref().map(|doc| {
+                        let language = file_languages
+                            .get(&symbol.file_id)
+                            .copied()
+                            .unwrap_or("unknown");
+                        (symbol.id, doc.as_ref(), language)
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
-            // Generate embedding if semantic search is enabled and symbol has doc_comment
-            if let (Some(semantic), Some(doc)) = (&self.semantic, &symbol.doc_comment) {
-                // Get language for this symbol's file
-                let language = file_languages
-                    .get(&symbol.file_id)
-                    .copied()
-                    .unwrap_or("unknown");
+        // Generate embeddings (parallel if pool available, single-threaded otherwise)
+        if let Some(semantic) = &self.semantic {
+            if !embedding_items.is_empty() {
+                if let Some(pool) = &self.embedding_pool {
+                    // Parallel embedding generation using pool
+                    let embeddings = pool.embed_parallel(&embedding_items);
+                    let count = embeddings.len();
 
-                let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
-                    path: PathBuf::new(),
-                    reason: "Failed to lock semantic search".to_string(),
-                })?;
+                    // Store in semantic search
+                    let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
+                        path: PathBuf::new(),
+                        reason: "Failed to lock semantic search".to_string(),
+                    })?;
+                    semantic_guard.store_embeddings(embeddings);
 
-                // Ignore embedding errors to avoid blocking indexing
-                if let Err(e) =
-                    semantic_guard.index_doc_comment_with_language(symbol.id, doc, language)
-                {
-                    tracing::warn!(target: "pipeline", "Failed to generate embedding for {}: {e}", symbol.name);
+                    tracing::debug!(
+                        target: "pipeline",
+                        "Parallel embedded {count}/{} symbols",
+                        embedding_items.len()
+                    );
+                } else {
+                    // Single-threaded fallback (original behavior)
+                    let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
+                        path: PathBuf::new(),
+                        reason: "Failed to lock semantic search".to_string(),
+                    })?;
+
+                    for (symbol_id, doc, language) in &embedding_items {
+                        if let Err(e) = semantic_guard
+                            .index_doc_comment_with_language(*symbol_id, doc, language)
+                        {
+                            tracing::warn!(
+                                target: "pipeline",
+                                "Failed to generate embedding for {}: {e}",
+                                symbol_id.to_u32()
+                            );
+                        }
+                    }
                 }
             }
-
-            // Insert into cache for O(1) Phase 2 resolution
-            symbol_cache.insert(symbol.clone());
-            stats.symbols_found += 1;
         }
 
-        // Write imports
-        for import in &batch.imports {
-            self.index.store_import(import)?;
-        }
+        // Write imports in parallel
+        batch.imports.par_iter().for_each(|import| {
+            if let Err(e) = self.index.store_import(import) {
+                tracing::warn!(
+                    target: "pipeline",
+                    "Failed to store import {}: {e}",
+                    import.path
+                );
+            }
+        });
 
         Ok(())
     }
