@@ -211,3 +211,45 @@ fn sustained_benchmark_coreml_large() {
 
     run_benchmark(&mut model, &chunks, "CoreML (E5-Large)");
 }
+
+/// Small model CUDA benchmark
+#[test]
+#[ignore]
+#[cfg(feature = "gpu-cuda")]
+fn sustained_benchmark_cuda_small() {
+    use ort::execution_providers::CUDAExecutionProvider;
+
+    let corpus = load_corpus();
+    let chunks = chunk_text(&corpus, TARGET_CHUNKS);
+    println!("Loaded {} chunks from corpus", chunks.len());
+
+    let cuda_ep = CUDAExecutionProvider::default().build();
+
+    let mut model = TextEmbedding::try_new(
+        InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_execution_providers(vec![cuda_ep]),
+    )
+    .expect("Failed to create CUDA model");
+
+    run_benchmark(&mut model, &chunks, "CUDA (AllMiniLML6V2)");
+}
+
+/// Large model CUDA benchmark
+#[test]
+#[ignore]
+#[cfg(feature = "gpu-cuda")]
+fn sustained_benchmark_cuda_large() {
+    use ort::execution_providers::CUDAExecutionProvider;
+
+    let corpus = load_corpus();
+    let chunks = chunk_text(&corpus, TARGET_CHUNKS);
+    println!("Loaded {} chunks from corpus", chunks.len());
+
+    let cuda_ep = CUDAExecutionProvider::default().build();
+
+    let mut model = TextEmbedding::try_new(
+        InitOptions::new(EmbeddingModel::MultilingualE5Large).with_execution_providers(vec![cuda_ep]),
+    )
+    .expect("Failed to create CUDA model");
+
+    run_benchmark(&mut model, &chunks, "CUDA (E5-Large)");
+}
