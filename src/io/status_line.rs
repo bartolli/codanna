@@ -311,7 +311,8 @@ pub struct ProgressBar {
     total: u64,
     extra1: AtomicU64,
     extra2: AtomicU64,
-    labels: (&'static str, &'static str, &'static str),
+    extra3: AtomicU64,
+    labels: (&'static str, &'static str, &'static str, &'static str),
     start_time: Instant,
     options: ProgressBarOptions,
 }
@@ -336,7 +337,30 @@ impl ProgressBar {
             total,
             extra1: AtomicU64::new(0),
             extra2: AtomicU64::new(0),
-            labels: (label, extra1_label, extra2_label),
+            extra3: AtomicU64::new(0),
+            labels: (label, extra1_label, extra2_label, ""),
+            start_time: Instant::now(),
+            options,
+        }
+    }
+
+    /// Create a progress bar with 4 labels (main + 3 extra counters).
+    pub fn with_4_labels(
+        total: u64,
+        label: &'static str,
+        extra1_label: &'static str,
+        extra2_label: &'static str,
+        extra3_label: &'static str,
+        mut options: ProgressBarOptions,
+    ) -> Self {
+        options.width = options.width.max(1);
+        Self {
+            current: AtomicU64::new(0),
+            total,
+            extra1: AtomicU64::new(0),
+            extra2: AtomicU64::new(0),
+            extra3: AtomicU64::new(0),
+            labels: (label, extra1_label, extra2_label, extra3_label),
             start_time: Instant::now(),
             options,
         }
@@ -395,12 +419,18 @@ impl ProgressBar {
         self.extra2.fetch_add(n, Ordering::Relaxed);
     }
 
+    /// Increase the third auxiliary counter.
+    pub fn add_extra3(&self, n: u64) {
+        self.extra3.fetch_add(n, Ordering::Relaxed);
+    }
+
     /// Update the total expected count (resets elapsed timer).
     pub fn reset_total(&mut self, total: u64) {
         self.total = total;
         self.current.store(0, Ordering::Relaxed);
         self.extra1.store(0, Ordering::Relaxed);
         self.extra2.store(0, Ordering::Relaxed);
+        self.extra3.store(0, Ordering::Relaxed);
         self.start_time = Instant::now();
     }
 }
@@ -410,6 +440,7 @@ impl Display for ProgressBar {
         let current = self.current.load(Ordering::Relaxed);
         let extra1 = self.extra1.load(Ordering::Relaxed);
         let extra2 = self.extra2.load(Ordering::Relaxed);
+        let extra3 = self.extra3.load(Ordering::Relaxed);
         let elapsed = self.start_time.elapsed().as_secs_f64();
 
         let ratio = if self.total > 0 {
@@ -442,6 +473,10 @@ impl Display for ProgressBar {
 
         if !self.labels.2.is_empty() && extra2 > 0 {
             write!(f, " | {} {}", extra2, self.labels.2)?;
+        }
+
+        if !self.labels.3.is_empty() && extra3 > 0 {
+            write!(f, " | {} {}", extra3, self.labels.3)?;
         }
 
         if self.options.show_rate {

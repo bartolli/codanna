@@ -148,6 +148,7 @@ impl IndexStage {
             .collect();
 
         // Write file registrations in parallel
+        // Note: progress.inc() moved to AFTER embeddings to show accurate completion
         batch
             .file_registrations
             .par_iter()
@@ -159,13 +160,9 @@ impl IndexStage {
                         registration.path.display()
                     );
                 }
-                // Update progress bar if present (atomic operations)
-                if let Some(ref progress) = self.progress {
-                    progress.inc();
-                    progress.add_extra1(1);
-                }
             });
-        stats.files_indexed += batch.file_registrations.len();
+        let files_in_batch = batch.file_registrations.len();
+        stats.files_indexed += files_in_batch;
 
         // Write symbols to Tantivy in parallel and collect embedding candidates
         // SymbolLookupCache uses DashMap which is concurrent-safe
@@ -216,6 +213,11 @@ impl IndexStage {
                     })?;
                     semantic_guard.store_embeddings(embeddings);
 
+                    // Track embedding count in progress bar (extra3 = "embedded")
+                    if let Some(ref progress) = self.progress {
+                        progress.add_extra3(count as u64);
+                    }
+
                     tracing::debug!(
                         target: "pipeline",
                         "Parallel embedded {count}/{} symbols",
@@ -228,6 +230,7 @@ impl IndexStage {
                         reason: "Failed to lock semantic search".to_string(),
                     })?;
 
+                    let mut embedded_count = 0u64;
                     for (symbol_id, doc, language) in &embedding_items {
                         if let Err(e) = semantic_guard
                             .index_doc_comment_with_language(*symbol_id, doc, language)
@@ -237,7 +240,14 @@ impl IndexStage {
                                 "Failed to generate embedding for {}: {e}",
                                 symbol_id.to_u32()
                             );
+                        } else {
+                            embedded_count += 1;
                         }
+                    }
+
+                    // Track embedding count in progress bar (extra3 = "embedded")
+                    if let Some(ref progress) = self.progress {
+                        progress.add_extra3(embedded_count);
                     }
                 }
             }
@@ -253,6 +263,15 @@ impl IndexStage {
                 );
             }
         });
+
+        // Update progress AFTER all work (including embeddings) is complete
+        // This ensures 100% only shows when files are truly fully processed
+        if let Some(ref progress) = self.progress {
+            for _ in 0..files_in_batch {
+                progress.inc();
+            }
+            progress.add_extra1(files_in_batch as u64);
+        }
 
         Ok(())
     }

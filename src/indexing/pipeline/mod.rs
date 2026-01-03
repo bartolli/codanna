@@ -62,6 +62,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+/// Result of Phase 1 indexing with optional metrics for deferred logging.
+type Phase1Result = (
+    IndexStats,
+    Vec<UnresolvedRelationship>,
+    SymbolLookupCache,
+    Option<Arc<PipelineMetrics>>,
+);
+
 /// The parallel indexing pipeline.
 ///
 /// [PIPELINE API] Orchestrates multiple stages to efficiently index source code
@@ -895,16 +903,18 @@ impl Pipeline {
         // Run Phase 1 indexing with appropriate progress bar
         let (index_stats, unresolved, symbol_cache, cleanup_stats, discover_counts) = if force {
             // Force mode: create bar with total file count
-            let phase1_bar = Arc::new(ProgressBar::with_options(
+            // Labels: files, indexed, failed, embedded (for embedding visibility)
+            let phase1_bar = Arc::new(ProgressBar::with_4_labels(
                 total_files as u64,
                 "files",
                 "indexed",
                 "failed",
+                "embedded",
                 bar_options,
             ));
             let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
 
-            let (stats, unresolved, cache) = if let Some(ref sem) = semantic {
+            let (stats, unresolved, cache, metrics) = if let Some(ref sem) = semantic {
                 self.index_directory_with_semantic(
                     root,
                     Arc::clone(&index),
@@ -913,14 +923,20 @@ impl Pipeline {
                     Some(phase1_bar.clone()),
                 )?
             } else {
-                self.index_directory_with_progress(
+                let (s, u, c) = self.index_directory_with_progress(
                     root,
                     Arc::clone(&index),
                     Some(phase1_bar.clone()),
-                )?
+                )?;
+                (s, u, c, None)
             };
 
+            // Drop StatusLine BEFORE logging to avoid stderr race condition
             drop(phase1_status);
+            // Log pipeline metrics after StatusLine is dropped
+            if let Some(m) = metrics {
+                m.log();
+            }
             eprintln!("{phase1_bar}");
 
             let files_indexed = stats.files_indexed;
@@ -976,11 +992,13 @@ impl Pipeline {
                 .collect();
 
             // Create Phase 1 bar with actual files to index count
-            let phase1_bar = Arc::new(ProgressBar::with_options(
+            // Labels: files, indexed, failed, embedded (for embedding visibility)
+            let phase1_bar = Arc::new(ProgressBar::with_4_labels(
                 files_to_index.len() as u64,
                 "files",
                 "indexed",
                 "failed",
+                "embedded",
                 bar_options,
             ));
             let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
@@ -1355,7 +1373,7 @@ impl Pipeline {
         let show_progress = progress.is_some();
 
         // Run Phase 1 with semantic search integrated
-        let (index_stats, unresolved, symbol_cache) = if let Some(ref sem) = semantic {
+        let (index_stats, unresolved, symbol_cache, metrics) = if let Some(ref sem) = semantic {
             self.index_directory_with_semantic(
                 root,
                 Arc::clone(&index),
@@ -1364,8 +1382,15 @@ impl Pipeline {
                 progress,
             )?
         } else {
-            self.index_directory_with_progress(root, Arc::clone(&index), progress)?
+            let (s, u, c) =
+                self.index_directory_with_progress(root, Arc::clone(&index), progress)?;
+            (s, u, c, None)
         };
+
+        // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
+        if let Some(m) = metrics {
+            m.log();
+        }
 
         // Run Phase 2 resolution with progress if Phase 1 had progress
         let symbol_cache = Arc::new(symbol_cache);
@@ -1438,7 +1463,7 @@ impl Pipeline {
         semantic: Arc<Mutex<SimpleSemanticSearch>>,
         embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
-    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
+    ) -> PipelineResult<Phase1Result> {
         let start = Instant::now();
 
         // Create metrics collector if tracing is enabled
@@ -1694,12 +1719,12 @@ impl Pipeline {
 
         stats.elapsed = start.elapsed();
 
-        // Log pipeline metrics report
-        if let Some(m) = metrics {
-            m.finalize_and_log(start.elapsed());
+        // Finalize metrics but don't log (caller logs after StatusLine drop)
+        if let Some(ref m) = metrics {
+            m.finalize(start.elapsed());
         }
 
-        Ok((stats, pending, cache))
+        Ok((stats, pending, cache, metrics))
     }
 
     /// Synchronize index with configuration (directory-level change detection).
