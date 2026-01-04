@@ -254,11 +254,6 @@ fn index_directory(
 }
 
 fn save_index(indexer: &mut IndexFacade, persistence: &IndexPersistence, config: &Settings) {
-    // Build symbol cache before saving
-    if let Err(e) = indexer.build_symbol_cache() {
-        eprintln!("Warning: Failed to build symbol cache: {e}");
-    }
-
     // Save the index
     eprintln!(
         "\nSaving index with {} total symbols, {} total relationships...",

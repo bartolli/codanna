@@ -15,6 +15,8 @@ use std::thread;
 /// Read stage for file content loading.
 pub struct ReadStage {
     threads: usize,
+    /// Workspace root for path normalization (stores relative paths)
+    workspace_root: Option<PathBuf>,
 }
 
 impl ReadStage {
@@ -22,6 +24,15 @@ impl ReadStage {
     pub fn new(threads: usize) -> Self {
         Self {
             threads: threads.max(1),
+            workspace_root: None,
+        }
+    }
+
+    /// Create a new read stage with workspace root for path normalization.
+    pub fn with_workspace_root(threads: usize, workspace_root: Option<PathBuf>) -> Self {
+        Self {
+            threads: threads.max(1),
+            workspace_root,
         }
     }
 
@@ -45,6 +56,9 @@ impl ReadStage {
         let input_wait_ns = Arc::new(AtomicU64::new(0));
         let output_wait_ns = Arc::new(AtomicU64::new(0));
 
+        let workspace_root = self.workspace_root.clone();
+        let workspace_root = Arc::new(workspace_root);
+
         let handles: Vec<_> = (0..self.threads)
             .map(|_| {
                 let receiver = receiver.clone();
@@ -53,6 +67,7 @@ impl ReadStage {
                 let error_count = error_count.clone();
                 let input_wait_ns = input_wait_ns.clone();
                 let output_wait_ns = output_wait_ns.clone();
+                let workspace_root = workspace_root.clone();
 
                 thread::spawn(move || {
                     loop {
@@ -66,7 +81,14 @@ impl ReadStage {
                             .fetch_add(recv_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
                         match read_file(&path) {
-                            Ok(content) => {
+                            Ok(mut content) => {
+                                // Normalize path to relative if workspace_root is set
+                                if let Some(ref root) = *workspace_root {
+                                    if let Ok(relative) = content.path.strip_prefix(root) {
+                                        content.path = relative.to_path_buf();
+                                    }
+                                }
+
                                 read_count.fetch_add(1, Ordering::Relaxed);
 
                                 // Track output wait (time blocked on send)

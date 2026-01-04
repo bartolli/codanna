@@ -366,16 +366,7 @@ async fn main() {
                 }
 
                 // Create a new indexer with the given settings (after clearing)
-                let mut new_indexer =
-                    IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade");
-
-                if force_recreate_index {
-                    // Clear symbol cache to fix Windows file locking issues
-                    if let Err(e) = new_indexer.clear_symbol_cache(true) {
-                        eprintln!("Warning: Failed to clear symbol cache: {e}");
-                    }
-                }
-                new_indexer
+                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
             }
         })
     };

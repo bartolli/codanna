@@ -45,7 +45,7 @@ pub fn calculate_hash(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Get current UTC timestamp in seconds since UNIX_EPOCH
+/// Get current UTC timestamp in seconds since UNIX_EPOCH TEST 5
 pub fn get_utc_timestamp() -> u64 {
     // Use chrono for accurate cross-platform timestamp
     Utc::now().timestamp() as u64

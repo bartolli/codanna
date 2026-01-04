@@ -21,15 +21,12 @@ crossbeam-channel = "0.5.15"
 dashmap = "6.1.0"
 dirs = "6.0.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-hnsw = "0.11.0"
 ignore = "0.4.25"
-lz4_flex = "0.12.0"
 memmap2 = "0.9.9"
 notify = "8.2.0"
 num_cpus = "1.17.0"
 parking_lot = "0.12.5"
 rayon = "1.11.0"
-# rkyv = { version = "0.8.12", features = ["bytecheck", "std"] }
 rmcp = { version = "0.12.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
@@ -62,7 +59,7 @@ axum = { version = "0.8.8", optional = true }
 tower = { version = "0.5.2", optional = true }
 tower-http = { version = "0.6.8", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
-tokio-util = "0.7.17"
+tokio-util = "0.7.18"
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
 rustls = { version = "0.23.35", default-features = false, features = ["ring"], optional = true }
 rcgen = { version = "0.14.6", optional = true }
@@ -82,7 +79,7 @@ sysinfo = "0.37.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-ort = { version = "2.0.0-rc.10", default-features = false }
+ort = { version = "=2.0.0-rc.10", default-features = false }
 testcontainers = "0.26.3"
 thread-id = "5.0.0"
 

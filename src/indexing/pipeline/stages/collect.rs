@@ -167,12 +167,12 @@ impl CollectStage {
     /// [PIPELINE API] Used by `Pipeline::index_file_single()` for watcher reindex.
     /// Assigns FileId and SymbolIds using the next available IDs from DocumentIndex.
     ///
-    /// Returns (IndexBatch, `Vec<UnresolvedRelationship>`) for indexing.
+    /// Returns (IndexBatch, `Vec<UnresolvedRelationship>`, EmbeddingBatch) for indexing.
     pub fn process_single(
         &self,
         parsed: ParsedFile,
         index: Arc<crate::storage::DocumentIndex>,
-    ) -> PipelineResult<(IndexBatch, Vec<UnresolvedRelationship>)> {
+    ) -> PipelineResult<(IndexBatch, Vec<UnresolvedRelationship>, EmbeddingBatch)> {
         // Get next available IDs from the index
         let next_file_id = index.get_next_file_id()?;
         let next_symbol_id = index.get_next_symbol_id()?;
@@ -185,10 +185,11 @@ impl CollectStage {
         // Process the file
         self.process_file(&mut state, parsed);
 
-        // Extract relationships from batch
+        // Extract relationships and embedding candidates from batch
         let unresolved = std::mem::take(&mut state.current_batch.unresolved_relationships);
+        let embed_batch = state.take_embed_batch();
 
-        Ok((state.current_batch, unresolved))
+        Ok((state.current_batch, unresolved, embed_batch))
     }
 
     /// Run the collect stage.

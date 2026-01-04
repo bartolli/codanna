@@ -649,12 +649,8 @@ impl CallerContext {
 
 /// Trait for symbol cache used in pipeline resolution.
 ///
-/// This abstracts over different cache implementations:
-/// - `SymbolLookupCache` (DashMap-based, used in new parallel pipeline)
-/// - `ConcurrentSymbolCache` (memory-mapped, used in old simple indexer)
-///
-/// The trait provides the methods needed by `build_resolution_context_with_pipeline_cache()`
-/// to resolve imports and symbols without hitting Tantivy.
+/// Implemented by `SymbolLookupCache` (DashMap-based parallel pipeline cache).
+/// Provides methods for resolving imports and symbols without hitting Tantivy.
 pub trait PipelineSymbolCache: Send + Sync {
     /// Multi-tier symbol resolution with proper priority order.
     ///

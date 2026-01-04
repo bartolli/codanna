@@ -118,7 +118,13 @@ impl CleanupStage {
             0
         };
 
-        // Step 4: Remove file documents from Tantivy
+        // Step 4: Remove relationships (both outgoing and incoming)
+        // This garbage-collects orphaned refs when a symbol is renamed/deleted
+        for symbol_id in &symbol_ids {
+            self.index.delete_relationships_for_symbol(*symbol_id)?;
+        }
+
+        // Step 5: Remove file documents from Tantivy
         self.index.remove_file_documents(&path_str)?;
 
         Ok((symbol_count, embedding_count))

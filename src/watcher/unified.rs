@@ -168,7 +168,7 @@ impl UnifiedWatcher {
             // Check if any handler cares about this path
             let matched = self.handlers.iter().any(|h| h.matches(&path));
             if !matched {
-                crate::debug_event!(
+                crate::trace_event!(
                     "watcher",
                     "unmatched",
                     "{:?} {}",

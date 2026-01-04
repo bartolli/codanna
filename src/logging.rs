@@ -161,3 +161,16 @@ macro_rules! debug_event {
         tracing::debug!("[{}] {}: {}", $handler, $event, format!($($arg)*))
     };
 }
+
+/// Trace-level event logging macro.
+///
+/// Used for high-frequency events that would clutter debug logs.
+#[macro_export]
+macro_rules! trace_event {
+    ($handler:expr, $event:expr) => {
+        tracing::trace!("[{}] {}", $handler, $event)
+    };
+    ($handler:expr, $event:expr, $($arg:tt)*) => {
+        tracing::trace!("[{}] {}: {}", $handler, $event, format!($($arg)*))
+    };
+}

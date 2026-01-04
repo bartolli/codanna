@@ -70,9 +70,6 @@ pub struct IndexFacade {
     /// Optional embedding pool for parallel embedding generation
     embedding_pool: Option<Arc<EmbeddingPool>>,
 
-    /// Optional fast symbol cache for O(1) lookups
-    symbol_cache: Option<Arc<crate::storage::symbol_cache::ConcurrentSymbolCache>>,
-
     /// Configuration
     settings: Arc<Settings>,
 
@@ -107,7 +104,6 @@ impl IndexFacade {
             pipeline,
             semantic_search: None,
             embedding_pool: None,
-            symbol_cache: None,
             settings,
             indexed_paths: HashSet::new(),
             index_base,
@@ -132,7 +128,6 @@ impl IndexFacade {
             pipeline,
             semantic_search,
             embedding_pool: None,
-            symbol_cache: None,
             settings,
             indexed_paths: HashSet::new(),
             index_base,
@@ -198,11 +193,28 @@ impl IndexFacade {
     }
 
     /// Load semantic search data from disk.
+    ///
+    /// Also initializes the embedding pool for incremental updates.
     pub fn load_semantic_search(&mut self, path: &Path) -> FacadeResult<bool> {
         if path.join("metadata.json").exists() {
             match SimpleSemanticSearch::load(path) {
                 Ok(semantic) => {
                     self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+
+                    // Initialize embedding pool for incremental updates (watcher reindexing)
+                    if self.embedding_pool.is_none() {
+                        let model = &self.settings.semantic_search.model;
+                        let pool_size = self.settings.semantic_search.embedding_threads;
+                        if let Ok(embedding_model) = crate::vector::parse_embedding_model(model) {
+                            if let Ok(pool) = EmbeddingPool::new(pool_size, embedding_model) {
+                                self.embedding_pool = Some(Arc::new(pool));
+                                tracing::debug!(
+                                    "Initialized embedding pool for incremental updates"
+                                );
+                            }
+                        }
+                    }
+
                     return Ok(true);
                 }
                 Err(e) => {
@@ -232,16 +244,8 @@ impl IndexFacade {
     // Symbol Query Methods (delegate to DocumentIndex)
     // =========================================================================
 
-    /// Find a symbol by name (uses cache if available for O(1) lookup).
+    /// Find a symbol by name.
     pub fn find_symbol(&self, name: &str) -> Option<SymbolId> {
-        // Try cache first for O(1) lookup
-        if let Some(ref cache) = self.symbol_cache {
-            if let Some(id) = cache.lookup_by_name(name) {
-                return Some(id);
-            }
-        }
-
-        // Fall back to DocumentIndex query
         self.document_index
             .find_symbols_by_name(name, None)
             .ok()
@@ -832,66 +836,6 @@ impl IndexFacade {
     }
 
     // =========================================================================
-    // Symbol Cache Management
-    // =========================================================================
-
-    /// Build the symbol cache for fast lookups.
-    pub fn build_symbol_cache(&mut self) -> FacadeResult<()> {
-        use crate::storage::symbol_cache::{ConcurrentSymbolCache, SymbolHashCache};
-
-        // Clear existing cache to release mmap
-        self.symbol_cache = None;
-
-        let cache_path = self.index_base.join("symbol_cache.bin");
-
-        // Get all symbols from index
-        let symbols = self.document_index.get_all_symbols(1_000_000)?;
-
-        if symbols.is_empty() {
-            return Ok(());
-        }
-
-        // Build cache using SymbolHashCache static method
-        SymbolHashCache::build_from_symbols(&cache_path, symbols.iter())?;
-
-        // Load for immediate use
-        if let Ok(hash_cache) = SymbolHashCache::open(&cache_path) {
-            self.symbol_cache = Some(Arc::new(ConcurrentSymbolCache::new(hash_cache)));
-        }
-
-        Ok(())
-    }
-
-    /// Load existing symbol cache.
-    pub fn load_symbol_cache(&mut self) -> FacadeResult<()> {
-        use crate::storage::symbol_cache::{ConcurrentSymbolCache, SymbolHashCache};
-
-        let cache_path = self.index_base.join("symbol_cache.bin");
-
-        if cache_path.exists() {
-            if let Ok(hash_cache) = SymbolHashCache::open(&cache_path) {
-                self.symbol_cache = Some(Arc::new(ConcurrentSymbolCache::new(hash_cache)));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Clear the symbol cache.
-    pub fn clear_symbol_cache(&mut self, delete_file: bool) -> FacadeResult<()> {
-        self.symbol_cache = None;
-
-        if delete_file {
-            let cache_path = self.index_base.join("symbol_cache.bin");
-            if cache_path.exists() {
-                std::fs::remove_file(&cache_path)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    // =========================================================================
     // Mutation Methods (delegate to Pipeline)
     // =========================================================================
 
@@ -907,6 +851,7 @@ impl IndexFacade {
             path,
             Arc::clone(&self.document_index),
             self.semantic_search.clone(),
+            self.embedding_pool.clone(),
         )?;
 
         Ok(crate::IndexingResult::Indexed(stats.file_id))
@@ -963,9 +908,6 @@ impl IndexFacade {
 
         // Update tracked paths
         self.add_indexed_path(path);
-
-        // Rebuild symbol cache after indexing
-        self.build_symbol_cache()?;
 
         Ok(IndexingStats {
             files_indexed: stats.new_files + stats.modified_files,
@@ -1036,9 +978,6 @@ impl IndexFacade {
         // Update tracked paths
         self.add_indexed_path(dir);
 
-        // Rebuild symbol cache after indexing
-        self.build_symbol_cache()?;
-
         // Convert to IndexStats format using pipeline's actual timing
         let mut stats = IndexStats::default();
         stats.files_indexed = pipeline_stats.new_files + pipeline_stats.modified_files;
@@ -1094,9 +1033,6 @@ impl IndexFacade {
             )?;
             stats.files_indexed += result.new_files + result.modified_files;
             stats.symbols_found += result.index_stats.symbols_found;
-
-            // Rebuild cache after each directory
-            self.build_symbol_cache()?;
         }
         stats.added_dirs = to_add.len();
 

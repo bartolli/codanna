@@ -172,12 +172,14 @@ impl Pipeline {
         });
 
         // Stage 2: READ - multi-threaded file reading
+        let workspace_root = settings.workspace_root.clone();
         let read_handles: Vec<_> = (0..read_threads)
             .map(|_| {
                 let rx = path_rx.clone();
                 let tx = content_tx.clone();
+                let workspace_root = workspace_root.clone();
                 thread::spawn(move || {
-                    let stage = ReadStage::new(1);
+                    let stage = ReadStage::with_workspace_root(1, workspace_root);
                     stage.run(rx, tx)
                 })
             })
@@ -446,12 +448,14 @@ impl Pipeline {
         });
 
         // Stage 2: READ
+        let workspace_root = settings.workspace_root.clone();
         let read_handles: Vec<_> = (0..read_threads)
             .map(|_| {
                 let rx = path_rx.clone();
                 let tx = content_tx.clone();
+                let workspace_root = workspace_root.clone();
                 thread::spawn(move || {
-                    let stage = ReadStage::new(1);
+                    let stage = ReadStage::with_workspace_root(1, workspace_root);
                     stage.run(rx, tx)
                 })
             })
@@ -730,6 +734,7 @@ impl Pipeline {
         path: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
     ) -> PipelineResult<SingleFileStats> {
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
@@ -755,9 +760,11 @@ impl Pipeline {
                 ),
             })?;
 
-        // Read file using ReadStage
+        // Read file using ReadStage (with absolute path for fs access)
         let read_stage = ReadStage::new(1);
-        let file_content = read_stage.read_single(&path.to_path_buf())?;
+        let mut file_content = read_stage.read_single(&path.to_path_buf())?;
+        // Use normalized path for storage consistency with full index
+        file_content.path = normalized_path.to_path_buf();
         let content_hash = file_content.hash.clone();
 
         // Check if file already exists by querying Tantivy
@@ -784,7 +791,7 @@ impl Pipeline {
                 CleanupStage::new(Arc::clone(&index), &semantic_path)
             };
 
-            cleanup_stage.cleanup_files(&[path.to_path_buf()])?;
+            cleanup_stage.cleanup_files(&[normalized_path.to_path_buf()])?;
 
             // Commit cleanup changes before re-indexing
             index.commit_batch()?;
@@ -795,11 +802,12 @@ impl Pipeline {
         let parse_stage = ParseStage::new(Arc::clone(&self.settings));
         let parsed = parse_stage.parse(file_content)?;
 
-        // Collect into a batch
+        // Collect into a batch (now includes embedding candidates)
         let collect_stage = CollectStage::new(self.config.batch_size);
-        let (batch, unresolved) = collect_stage.process_single(parsed, Arc::clone(&index))?;
+        let (batch, unresolved, embed_batch) =
+            collect_stage.process_single(parsed, Arc::clone(&index))?;
 
-        // Index the batch (embedding handled separately via save at end)
+        // Index the batch
         let index_stage = IndexStage::new(Arc::clone(&index), self.config.batches_per_commit);
 
         let symbols_found = batch.symbols.len();
@@ -816,6 +824,35 @@ impl Pipeline {
 
         // Commit the batch
         index.commit_batch()?;
+
+        // Generate embeddings for symbols with doc_comments
+        if let (Some(pool), Some(sem)) = (&embedding_pool, &semantic) {
+            if !embed_batch.candidates.is_empty() {
+                tracing::info!(
+                    target: "pipeline",
+                    "Generating {} embeddings for {}",
+                    embed_batch.candidates.len(),
+                    path.display()
+                );
+
+                // Convert to the format expected by embed_parallel
+                let items: Vec<_> = embed_batch
+                    .candidates
+                    .iter()
+                    .map(|(id, doc, lang)| (*id, doc.as_ref(), lang.as_ref()))
+                    .collect();
+
+                // Generate embeddings
+                let embeddings = pool.embed_parallel(&items);
+
+                // Store in semantic search
+                if !embeddings.is_empty() {
+                    if let Ok(mut guard) = sem.lock() {
+                        guard.store_embeddings(embeddings);
+                    }
+                }
+            }
+        }
 
         // Build symbol cache for resolution
         let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
@@ -1299,6 +1336,7 @@ impl Pipeline {
 
         // Stage 1: READ - Send files directly (already have the paths)
         let files_to_read = files.to_vec();
+        let workspace_root = settings.workspace_root.clone();
         let read_handle = thread::spawn(move || {
             let stage = ReadStage::new(1);
             let mut count = 0;
@@ -1306,7 +1344,13 @@ impl Pipeline {
 
             for path in files_to_read {
                 match stage.read_single(&path) {
-                    Ok(content) => {
+                    Ok(mut content) => {
+                        // Normalize path to relative if workspace_root is set
+                        if let Some(ref root) = workspace_root {
+                            if let Ok(relative) = content.path.strip_prefix(root) {
+                                content.path = relative.to_path_buf();
+                            }
+                        }
                         if content_tx.send(content).is_err() {
                             break;
                         }
@@ -1599,12 +1643,14 @@ impl Pipeline {
         });
 
         // Stage 2: READ
+        let workspace_root = settings.workspace_root.clone();
         let read_handles: Vec<_> = (0..read_threads)
             .map(|_| {
                 let rx = path_rx.clone();
                 let tx = content_tx.clone();
+                let workspace_root = workspace_root.clone();
                 thread::spawn(move || {
-                    let stage = ReadStage::new(1);
+                    let stage = ReadStage::with_workspace_root(1, workspace_root);
                     stage.run(rx, tx)
                 })
             })

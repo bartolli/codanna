@@ -104,11 +104,6 @@ impl IndexPersistence {
             }
         }
 
-        // Load symbol cache if available
-        if let Err(e) = facade.load_symbol_cache() {
-            tracing::debug!("[persistence] no symbol cache loaded: {e}");
-        }
-
         Ok(facade)
     }
 

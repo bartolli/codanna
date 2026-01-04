@@ -107,7 +107,7 @@ impl HotReloadWatcher {
         };
 
         if !should_reload {
-            debug!("Index file unchanged");
+            tracing::trace!("Index file unchanged");
             return Ok(());
         }
 
