@@ -15,15 +15,16 @@ pub mod index;
 pub mod parse;
 pub mod read;
 pub mod resolve;
+pub mod semantic_embed;
 pub mod write;
 
 // Pre-phase stages (incremental mode)
 pub use cleanup::{CleanupStage, CleanupStats};
 
 // Phase 1 stages
-pub use collect::CollectStage;
+pub use collect::{CollectStage, EmbedTotalCallback};
 pub use discover::DiscoverStage;
-pub use index::IndexStage;
+pub use index::{IndexProgressCallback, IndexStage};
 pub use parse::{ParseStage, compute_hash, init_parser_cache, parse_file};
 pub use read::ReadStage;
 
@@ -34,6 +35,7 @@ pub use write::{WriteStage, WriteStats};
 
 // Embedding (separate from main pipeline)
 pub use embed::{EmbedStage, EmbedStats};
+pub use semantic_embed::{EmbedProgressCallback, SemanticEmbedStage, SemanticEmbedStats};
 
 // Re-export types from parent module for convenience
 pub use super::types::SymbolLookupCache;

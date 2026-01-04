@@ -5,24 +5,21 @@
 //! Parallel stage that:
 //! - Receives IndexBatch from COLLECT stage
 //! - Writes symbols, imports, file registrations to Tantivy (parallel via RwLock)
-//! - Generates embeddings for symbols with doc_comments (parallel via EmbeddingPool)
 //! - Accumulates UnresolvedRelationships for Phase 2
 //! - Builds SymbolLookupCache for O(1) Phase 2 resolution (concurrent DashMap)
 //! - Commits every N batches for efficient I/O
+//!
+//! Note: Embedding generation moved to separate EMBED stage (parallel with INDEX).
 
 use crate::indexing::IndexStats;
 use crate::indexing::pipeline::types::{
-    IndexBatch, PipelineError, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
+    IndexBatch, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
 };
 use crate::io::status_line::ProgressBar;
-use crate::semantic::{EmbeddingPool, SimpleSemanticSearch};
 use crate::storage::DocumentIndex;
-use crate::types::FileId;
 use crossbeam_channel::Receiver;
 use rayon::prelude::*;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Index stage for Tantivy writes.
 ///
@@ -30,15 +27,16 @@ use std::sync::{Arc, Mutex};
 /// Commits are batched to reduce fsync overhead.
 ///
 /// Error handling uses proper `#[from]` conversion - StorageError -> PipelineError.
+/// Progress callback type for INDEX stage.
+pub type IndexProgressCallback = Arc<dyn Fn(u64) + Send + Sync>;
+
 pub struct IndexStage {
     index: Arc<DocumentIndex>,
     batches_per_commit: usize,
-    /// Optional semantic search for embedding storage.
-    semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-    /// Optional embedding pool for parallel embedding generation.
-    embedding_pool: Option<Arc<EmbeddingPool>>,
     /// Optional progress bar for live updates.
     progress: Option<Arc<ProgressBar>>,
+    /// Optional progress callback (alternative to progress bar).
+    progress_callback: Option<IndexProgressCallback>,
 }
 
 impl IndexStage {
@@ -50,30 +48,20 @@ impl IndexStage {
         Self {
             index,
             batches_per_commit: batches_per_commit.max(1),
-            semantic: None,
-            embedding_pool: None,
             progress: None,
+            progress_callback: None,
         }
-    }
-
-    /// Add semantic search for embedding storage (used with embedding pool).
-    pub fn with_semantic(mut self, semantic: Arc<Mutex<SimpleSemanticSearch>>) -> Self {
-        self.semantic = Some(semantic);
-        self
-    }
-
-    /// Add embedding pool for parallel embedding generation.
-    ///
-    /// When set, embeddings are generated in parallel using the pool,
-    /// then stored in the semantic search instance.
-    pub fn with_embedding_pool(mut self, pool: Arc<EmbeddingPool>) -> Self {
-        self.embedding_pool = Some(pool);
-        self
     }
 
     /// Add progress bar for live updates.
     pub fn with_progress(mut self, progress: Arc<ProgressBar>) -> Self {
         self.progress = Some(progress);
+        self
+    }
+
+    /// Add a progress callback that receives the count of files indexed per batch.
+    pub fn with_progress_callback(mut self, callback: IndexProgressCallback) -> Self {
+        self.progress_callback = Some(callback);
         self
     }
 
@@ -133,22 +121,15 @@ impl IndexStage {
 
     /// Process a single batch.
     ///
-    /// Writes to Tantivy in parallel, generates embeddings, and accumulates symbols in cache.
+    /// Writes symbols, imports, and file registrations to Tantivy in parallel.
+    /// Accumulates symbols in cache for Phase 2 resolution.
     fn process_batch(
         &self,
         batch: &IndexBatch,
         stats: &mut IndexStats,
         symbol_cache: &SymbolLookupCache,
     ) -> PipelineResult<()> {
-        // Build file_id -> language_id mapping from registrations
-        let file_languages: HashMap<FileId, &str> = batch
-            .file_registrations
-            .iter()
-            .map(|r| (r.file_id, r.language_id.as_str()))
-            .collect();
-
         // Write file registrations in parallel
-        // Note: progress.inc() moved to AFTER embeddings to show accurate completion
         batch
             .file_registrations
             .par_iter()
@@ -164,7 +145,7 @@ impl IndexStage {
         let files_in_batch = batch.file_registrations.len();
         stats.files_indexed += files_in_batch;
 
-        // Write symbols to Tantivy in parallel and collect embedding candidates
+        // Write symbols to Tantivy in parallel
         // SymbolLookupCache uses DashMap which is concurrent-safe
         batch.symbols.par_iter().for_each(|(symbol, path)| {
             if let Err(e) = self.index.index_symbol(symbol, &path.to_string_lossy()) {
@@ -179,80 +160,6 @@ impl IndexStage {
         });
         stats.symbols_found += batch.symbols.len();
 
-        // Collect embedding candidates (needs to be sequential for borrowing)
-        let embedding_items: Vec<(crate::SymbolId, &str, &str)> = if self.semantic.is_some() {
-            batch
-                .symbols
-                .iter()
-                .filter_map(|(symbol, _)| {
-                    symbol.doc_comment.as_ref().map(|doc| {
-                        let language = file_languages
-                            .get(&symbol.file_id)
-                            .copied()
-                            .unwrap_or("unknown");
-                        (symbol.id, doc.as_ref(), language)
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Generate embeddings (parallel if pool available, single-threaded otherwise)
-        if let Some(semantic) = &self.semantic {
-            if !embedding_items.is_empty() {
-                if let Some(pool) = &self.embedding_pool {
-                    // Parallel embedding generation using pool
-                    let embeddings = pool.embed_parallel(&embedding_items);
-                    let count = embeddings.len();
-
-                    // Store in semantic search
-                    let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
-                        path: PathBuf::new(),
-                        reason: "Failed to lock semantic search".to_string(),
-                    })?;
-                    semantic_guard.store_embeddings(embeddings);
-
-                    // Track embedding count in progress bar (extra3 = "embedded")
-                    if let Some(ref progress) = self.progress {
-                        progress.add_extra3(count as u64);
-                    }
-
-                    tracing::debug!(
-                        target: "pipeline",
-                        "Parallel embedded {count}/{} symbols",
-                        embedding_items.len()
-                    );
-                } else {
-                    // Single-threaded fallback (original behavior)
-                    let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
-                        path: PathBuf::new(),
-                        reason: "Failed to lock semantic search".to_string(),
-                    })?;
-
-                    let mut embedded_count = 0u64;
-                    for (symbol_id, doc, language) in &embedding_items {
-                        if let Err(e) = semantic_guard
-                            .index_doc_comment_with_language(*symbol_id, doc, language)
-                        {
-                            tracing::warn!(
-                                target: "pipeline",
-                                "Failed to generate embedding for {}: {e}",
-                                symbol_id.to_u32()
-                            );
-                        } else {
-                            embedded_count += 1;
-                        }
-                    }
-
-                    // Track embedding count in progress bar (extra3 = "embedded")
-                    if let Some(ref progress) = self.progress {
-                        progress.add_extra3(embedded_count);
-                    }
-                }
-            }
-        }
-
         // Write imports in parallel
         batch.imports.par_iter().for_each(|import| {
             if let Err(e) = self.index.store_import(import) {
@@ -264,13 +171,18 @@ impl IndexStage {
             }
         });
 
-        // Update progress AFTER all work (including embeddings) is complete
+        // Update progress AFTER all work is complete
         // This ensures 100% only shows when files are truly fully processed
         if let Some(ref progress) = self.progress {
             for _ in 0..files_in_batch {
                 progress.inc();
             }
             progress.add_extra1(files_in_batch as u64);
+        }
+
+        // Report via callback (for dual progress bar)
+        if let Some(ref callback) = self.progress_callback {
+            callback(files_in_batch as u64);
         }
 
         Ok(())

@@ -293,6 +293,44 @@ impl Default for IndexBatch {
     }
 }
 
+/// A batch of embedding candidates for the EMBED stage.
+///
+/// Sent from COLLECT to EMBED in parallel with IndexBatch to INDEX.
+/// Contains symbols that have doc_comments suitable for embedding.
+#[derive(Debug)]
+pub struct EmbeddingBatch {
+    /// Embedding candidates: (symbol_id, doc_comment, language)
+    pub candidates: Vec<(SymbolId, Box<str>, Box<str>)>,
+}
+
+impl EmbeddingBatch {
+    pub fn new() -> Self {
+        Self {
+            candidates: Vec::new(),
+        }
+    }
+
+    pub fn with_capacity(size: usize) -> Self {
+        Self {
+            candidates: Vec::with_capacity(size),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.candidates.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.candidates.len()
+    }
+}
+
+impl Default for EmbeddingBatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // READ stage types
 // ═══════════════════════════════════════════════════════════════════════════

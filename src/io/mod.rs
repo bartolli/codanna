@@ -22,5 +22,7 @@ pub use exit_code::ExitCode;
 pub use format::{ErrorDetails, JsonResponse, OutputFormat, ResponseMeta};
 pub use output::OutputManager;
 pub use schema::{EntityType, OutputData, OutputStatus, UnifiedOutput, UnifiedOutputBuilder};
-pub use status_line::{ProgressBar, ProgressBarOptions, ProgressBarStyle, Spinner, SpinnerOptions};
+pub use status_line::{
+    DualProgressBar, ProgressBar, ProgressBarOptions, ProgressBarStyle, Spinner, SpinnerOptions,
+};
 // Future: pub use input::{JsonRpcRequest, JsonRpcResponse};

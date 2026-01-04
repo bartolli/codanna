@@ -8,8 +8,8 @@
 //! - Batches output for efficient Tantivy writes
 
 use crate::indexing::pipeline::types::{
-    FileRegistration, IndexBatch, ParsedFile, PipelineResult, RawRelationship, RawSymbol,
-    UnresolvedRelationship,
+    EmbeddingBatch, FileRegistration, IndexBatch, ParsedFile, PipelineResult, RawRelationship,
+    RawSymbol, UnresolvedRelationship,
 };
 use crate::symbol::Symbol;
 use crate::types::{FileId, Range, SymbolId};
@@ -18,6 +18,9 @@ use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Callback type for reporting embedding candidate totals to progress display.
+pub type EmbedTotalCallback = Arc<dyn Fn(u64) + Send + Sync>;
 
 /// Collect stage for ID assignment and batching.
 pub struct CollectStage {
@@ -91,7 +94,10 @@ struct CollectorState {
     symbol_counter: u32,
     caches: CollectorCaches,
     current_batch: IndexBatch,
+    current_embed_batch: EmbeddingBatch,
     batch_size: usize,
+    /// Current file's language_id for embedding metadata
+    current_language: Box<str>,
 }
 
 impl CollectorState {
@@ -101,7 +107,9 @@ impl CollectorState {
             symbol_counter: 0,
             caches: CollectorCaches::new(),
             current_batch: IndexBatch::new(),
+            current_embed_batch: EmbeddingBatch::new(),
             batch_size,
+            current_language: "unknown".into(),
         }
     }
 
@@ -121,6 +129,10 @@ impl CollectorState {
 
     fn take_batch(&mut self) -> IndexBatch {
         std::mem::take(&mut self.current_batch)
+    }
+
+    fn take_embed_batch(&mut self) -> EmbeddingBatch {
+        std::mem::take(&mut self.current_embed_batch)
     }
 }
 
@@ -181,12 +193,20 @@ impl CollectStage {
 
     /// Run the collect stage.
     ///
-    /// Returns (total_files, total_symbols, input_wait, output_wait).
+    /// Returns (total_files, total_symbols, embedding_candidates, input_wait, output_wait).
+    ///
+    /// # Arguments
+    /// * `receiver` - Channel receiving ParsedFile from PARSE stage
+    /// * `index_sender` - Channel sending IndexBatch to INDEX stage
+    /// * `embed_sender` - Optional channel sending EmbeddingBatch to EMBED stage (parallel)
+    /// * `embed_total_callback` - Optional callback to report embed candidate counts for progress
     pub fn run(
         &self,
         receiver: Receiver<ParsedFile>,
-        sender: Sender<IndexBatch>,
-    ) -> PipelineResult<(u32, u32, std::time::Duration, std::time::Duration)> {
+        index_sender: Sender<IndexBatch>,
+        embed_sender: Option<Sender<EmbeddingBatch>>,
+        embed_total_callback: Option<EmbedTotalCallback>,
+    ) -> PipelineResult<(u32, u32, u32, std::time::Duration, std::time::Duration)> {
         use std::time::{Duration, Instant};
 
         let mut state = CollectorState::new(self.batch_size);
@@ -196,6 +216,7 @@ impl CollectStage {
 
         let mut input_wait = Duration::ZERO;
         let mut output_wait = Duration::ZERO;
+        let mut total_embed_candidates = 0u32;
 
         loop {
             // Track input wait (time blocked on recv)
@@ -210,26 +231,59 @@ impl CollectStage {
 
             // Flush batch if full
             if state.should_flush() {
-                let batch = state.take_batch();
+                let index_batch = state.take_batch();
+                let embed_batch = state.take_embed_batch();
+                let batch_candidates = embed_batch.len() as u32;
+                total_embed_candidates += batch_candidates;
+
                 // Track output wait (time blocked on send)
                 let send_start = Instant::now();
-                if sender.send(batch).is_err() {
+
+                // Send to INDEX channel
+                if index_sender.send(index_batch).is_err() {
                     break; // Channel closed
                 }
+
+                // Send to EMBED channel (if enabled) and report total
+                if let Some(ref tx) = embed_sender {
+                    if !embed_batch.is_empty() {
+                        // Report candidate count for progress display
+                        if let Some(ref callback) = embed_total_callback {
+                            callback(batch_candidates as u64);
+                        }
+                        let _ = tx.send(embed_batch);
+                    }
+                }
+
                 output_wait += send_start.elapsed();
             }
         }
 
-        // Flush remaining batch
+        // Flush remaining batches
         if !state.current_batch.is_empty() {
             let send_start = Instant::now();
-            let _ = sender.send(state.take_batch());
+            let _ = index_sender.send(state.take_batch());
+
+            let embed_batch = state.take_embed_batch();
+            let batch_candidates = embed_batch.len() as u32;
+            total_embed_candidates += batch_candidates;
+            if let Some(ref tx) = embed_sender {
+                if !embed_batch.is_empty() {
+                    // Report candidate count for progress display
+                    if let Some(ref callback) = embed_total_callback {
+                        callback(batch_candidates as u64);
+                    }
+                    let _ = tx.send(embed_batch);
+                }
+            }
+
             output_wait += send_start.elapsed();
         }
 
         Ok((
             state.file_counter,
             state.symbol_counter,
+            total_embed_candidates,
             input_wait,
             output_wait,
         ))
@@ -239,6 +293,9 @@ impl CollectStage {
     fn process_file(&self, state: &mut CollectorState, parsed: ParsedFile) {
         let file_id = state.next_file_id();
         let file_path: Box<str> = parsed.path.to_string_lossy().into();
+
+        // Set current language for embedding metadata
+        state.current_language = parsed.language_id.as_str().into();
 
         // Cache path -> FileId for Phase 2 resolution (per decisions.md)
         state.caches.insert_file(parsed.path.clone(), file_id);
@@ -264,6 +321,15 @@ impl CollectStage {
             state
                 .caches
                 .insert(name.clone(), file_id, raw_sym.range, symbol_id);
+
+            // Extract embedding candidate if symbol has doc_comment
+            if let Some(ref doc) = raw_sym.doc_comment {
+                state.current_embed_batch.candidates.push((
+                    symbol_id,
+                    doc.clone(),
+                    state.current_language.clone(),
+                ));
+            }
 
             // Create Symbol
             let symbol = create_symbol(
@@ -399,10 +465,10 @@ mod tests {
         drop(parsed_tx);
 
         let stage = CollectStage::new(100);
-        let result = stage.run(parsed_rx, batch_tx);
+        let result = stage.run(parsed_rx, batch_tx, None, None);
 
         assert!(result.is_ok());
-        let (files, symbols, _, _) = result.unwrap();
+        let (files, symbols, _, _, _) = result.unwrap();
 
         let batches: Vec<_> = batch_rx.iter().collect();
 
@@ -449,10 +515,10 @@ mod tests {
 
         // Small batch size to force multiple batches
         let stage = CollectStage::new(15);
-        let result = stage.run(parsed_rx, batch_tx);
+        let result = stage.run(parsed_rx, batch_tx, None, None);
 
         assert!(result.is_ok());
-        let (files, symbols, _, _) = result.unwrap();
+        let (files, symbols, _, _, _) = result.unwrap();
 
         let batches: Vec<_> = batch_rx.iter().collect();
 
@@ -496,7 +562,7 @@ mod tests {
         drop(parsed_tx);
 
         let stage = CollectStage::new(100);
-        let _ = stage.run(parsed_rx, batch_tx);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
 
         let batches: Vec<_> = batch_rx.iter().collect();
 
@@ -535,7 +601,7 @@ mod tests {
         drop(parsed_tx);
 
         let stage = CollectStage::new(100);
-        let _ = stage.run(parsed_rx, batch_tx);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
 
         let batches: Vec<_> = batch_rx.iter().collect();
 
@@ -588,7 +654,7 @@ mod tests {
         drop(parsed_tx);
 
         let stage = CollectStage::new(100);
-        let _ = stage.run(parsed_rx, batch_tx);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
 
         let batches: Vec<_> = batch_rx.iter().collect();
         let registrations = &batches[0].file_registrations;
@@ -658,7 +724,7 @@ mod tests {
         drop(parsed_tx);
 
         let stage = CollectStage::new(100);
-        let result = stage.run(parsed_rx, batch_tx);
+        let result = stage.run(parsed_rx, batch_tx, None, None);
         assert!(result.is_ok());
 
         let batches: Vec<_> = batch_rx.iter().collect();

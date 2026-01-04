@@ -486,7 +486,7 @@ async fn main() {
                                 sync_made_changes = Some(true);
                                 if stats.added_dirs > 0 {
                                     eprintln!(
-                                        "  ✓ Added {} new directories ({} files, {} symbols)",
+                                        "  ✓ Indexed {} directories ({} files, {} symbols)",
                                         stats.added_dirs, stats.files_indexed, stats.symbols_found
                                     );
                                 }

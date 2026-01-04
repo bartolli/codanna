@@ -264,6 +264,8 @@ pub struct ProgressBarOptions {
     pub width: usize,
     pub show_rate: bool,
     pub show_elapsed: bool,
+    /// Label displayed before the progress bar (e.g., "LINKS", "INDEX")
+    pub label: &'static str,
 }
 
 impl ProgressBarOptions {
@@ -273,7 +275,13 @@ impl ProgressBarOptions {
             width: width.max(1),
             show_rate: true,
             show_elapsed: true,
+            label: "",
         }
+    }
+
+    pub fn with_label(mut self, label: &'static str) -> Self {
+        self.label = label;
+        self
     }
 
     pub fn with_style(mut self, style: ProgressBarStyle) -> Self {
@@ -464,7 +472,13 @@ impl Display for ProgressBar {
             0.0
         };
 
-        writeln!(f, "Progress: [{bar}] {pct:3}%")?;
+        // Use custom label if set, otherwise default to "Progress"
+        let label = if self.options.label.is_empty() {
+            "Progress"
+        } else {
+            self.options.label
+        };
+        writeln!(f, "{label}: [{bar}] {pct:3}%")?;
         write!(f, "{}/{} {}", current, self.total, self.labels.0)?;
 
         if !self.labels.1.is_empty() && extra1 > 0 {
@@ -687,6 +701,206 @@ impl Spinner {
             8 => ExitCode::UnsupportedOperation,
             _ => ExitCode::GeneralError,
         }
+    }
+}
+
+/// Dual progress bars for parallel stages (e.g., EMBED + INDEX).
+///
+/// Displays two progress bars on separate lines, each with its own counters.
+/// Designed for concurrent operations where both stages run in parallel.
+pub struct DualProgressBar {
+    /// First progress bar (typically EMBED)
+    bar1: ProgressBar,
+    /// Second progress bar (typically INDEX)
+    bar2: ProgressBar,
+    /// Labels for each bar
+    labels: (&'static str, &'static str),
+    /// Dynamic total for bar1 (updated by producer, e.g., COLLECT sends candidates)
+    bar1_dynamic_total: AtomicU64,
+    /// Frozen elapsed time for bar1 when it completes (0 = still running)
+    bar1_completed_ms: AtomicU64,
+    /// Frozen elapsed time for bar2 when it completes (0 = still running)
+    bar2_completed_ms: AtomicU64,
+}
+
+impl DualProgressBar {
+    /// Create a dual progress bar with the specified totals and labels.
+    ///
+    /// For bar1 (EMBED), total1 is initial estimate. Use `add_bar1_total()` to
+    /// update dynamically as the producer (COLLECT) sends batches.
+    pub fn new(
+        label1: &'static str,
+        total1: u64,
+        unit1: &'static str,
+        label2: &'static str,
+        total2: u64,
+        unit2: &'static str,
+    ) -> Self {
+        let options = ProgressBarOptions::default()
+            .with_style(ProgressBarStyle::VerticalSolid)
+            .with_width(20)
+            .show_elapsed(false);
+
+        Self {
+            bar1: ProgressBar::with_options(total1, unit1, "", "", options),
+            bar2: ProgressBar::with_options(total2, unit2, "", "", options),
+            labels: (label1, label2),
+            bar1_dynamic_total: AtomicU64::new(0),
+            bar1_completed_ms: AtomicU64::new(0),
+            bar2_completed_ms: AtomicU64::new(0),
+        }
+    }
+
+    /// Add to bar1's dynamic total (called by producer when sending batches).
+    pub fn add_bar1_total(&self, n: u64) {
+        self.bar1_dynamic_total.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Get bar1's dynamic total.
+    pub fn bar1_dynamic_total(&self) -> u64 {
+        self.bar1_dynamic_total.load(Ordering::Relaxed)
+    }
+
+    /// Mark bar1 as complete, freezing its elapsed time.
+    pub fn complete_bar1(&self) {
+        let elapsed_ms = (self.bar1.start_time.elapsed().as_secs_f64() * 1000.0) as u64;
+        self.bar1_completed_ms.store(elapsed_ms, Ordering::Relaxed);
+    }
+
+    /// Mark bar2 as complete, freezing its elapsed time.
+    pub fn complete_bar2(&self) {
+        let elapsed_ms = (self.bar2.start_time.elapsed().as_secs_f64() * 1000.0) as u64;
+        self.bar2_completed_ms.store(elapsed_ms, Ordering::Relaxed);
+    }
+
+    /// Increment the first bar (EMBED).
+    pub fn inc_bar1(&self) {
+        self.bar1.inc();
+    }
+
+    /// Increment the second bar (INDEX).
+    pub fn inc_bar2(&self) {
+        self.bar2.inc();
+    }
+
+    /// Add to the first bar's progress.
+    pub fn add_bar1(&self, n: u64) {
+        let current = self.bar1.current.load(Ordering::Relaxed);
+        self.bar1.current.store(current + n, Ordering::Relaxed);
+    }
+
+    /// Add to the second bar's progress.
+    pub fn add_bar2(&self, n: u64) {
+        let current = self.bar2.current.load(Ordering::Relaxed);
+        self.bar2.current.store(current + n, Ordering::Relaxed);
+    }
+
+    /// Set bar1 progress directly.
+    pub fn set_bar1(&self, value: u64) {
+        self.bar1.set_progress(value);
+    }
+
+    /// Set bar2 progress directly.
+    pub fn set_bar2(&self, value: u64) {
+        self.bar2.set_progress(value);
+    }
+
+    /// Get bar1 current value.
+    pub fn bar1_current(&self) -> u64 {
+        self.bar1.current()
+    }
+
+    /// Get bar2 current value.
+    pub fn bar2_current(&self) -> u64 {
+        self.bar2.current()
+    }
+
+    /// Get bar1 total.
+    pub fn bar1_total(&self) -> u64 {
+        self.bar1.total
+    }
+
+    /// Get bar2 total.
+    pub fn bar2_total(&self) -> u64 {
+        self.bar2.total
+    }
+}
+
+impl Display for DualProgressBar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Use frozen elapsed time if completed, otherwise use live elapsed
+        let bar1_completed_ms = self.bar1_completed_ms.load(Ordering::Relaxed);
+        let bar2_completed_ms = self.bar2_completed_ms.load(Ordering::Relaxed);
+
+        let elapsed1 = if bar1_completed_ms > 0 {
+            bar1_completed_ms as f64 / 1000.0
+        } else {
+            self.bar1.start_time.elapsed().as_secs_f64()
+        };
+        let elapsed2 = if bar2_completed_ms > 0 {
+            bar2_completed_ms as f64 / 1000.0
+        } else {
+            self.bar2.start_time.elapsed().as_secs_f64()
+        };
+        let elapsed = elapsed1.max(elapsed2);
+
+        // Bar 1 (EMBED) - uses dynamic total from COLLECT
+        let current1 = self.bar1.current.load(Ordering::Relaxed);
+        let total1 = self.bar1_dynamic_total.load(Ordering::Relaxed);
+        let ratio1 = if total1 > 0 {
+            (current1 as f64 / total1 as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let pct1 = (ratio1 * 100.0).round() as u8;
+        let filled1 = (ratio1 * self.bar1.options.width as f64).round() as usize;
+        let filled1 = filled1.min(self.bar1.options.width);
+        let empty1 = self.bar1.options.width - filled1;
+        let bar1_str = format!(
+            "{}{}",
+            self.bar1.options.style.filled_cell().repeat(filled1),
+            self.bar1.options.style.empty_cell().repeat(empty1)
+        );
+        let rate1 = if elapsed1 > 0.0 {
+            current1 as f64 / elapsed1
+        } else {
+            0.0
+        };
+
+        // Bar 2 (INDEX)
+        let current2 = self.bar2.current.load(Ordering::Relaxed);
+        let total2 = self.bar2.total;
+        let ratio2 = if total2 > 0 {
+            (current2 as f64 / total2 as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let pct2 = (ratio2 * 100.0).round() as u8;
+        let filled2 = (ratio2 * self.bar2.options.width as f64).round() as usize;
+        let filled2 = filled2.min(self.bar2.options.width);
+        let empty2 = self.bar2.options.width - filled2;
+        let bar2_str = format!(
+            "{}{}",
+            self.bar2.options.style.filled_cell().repeat(filled2),
+            self.bar2.options.style.empty_cell().repeat(empty2)
+        );
+        let rate2 = if elapsed2 > 0.0 {
+            current2 as f64 / elapsed2
+        } else {
+            0.0
+        };
+
+        // Format: LABEL: [bar] pct%  current/total unit | rate/s
+        writeln!(
+            f,
+            "{:>5}: [{}] {:3}%  {}/{} {} | {:.0}/s",
+            self.labels.0, bar1_str, pct1, current1, total1, self.bar1.labels.0, rate1
+        )?;
+        write!(
+            f,
+            "{:>5}: [{}] {:3}%  {}/{} {} | {:.0}/s | {:.1}s",
+            self.labels.1, bar2_str, pct2, current2, total2, self.bar2.labels.0, rate2, elapsed
+        )
     }
 }
 

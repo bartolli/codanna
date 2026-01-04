@@ -218,22 +218,24 @@ fn index_directory(
     force: bool,
     max_files: Option<usize>,
 ) {
+    // Visual separator between directory cycles (use stderr to sync with progress bars)
+    eprintln!();
     if let Some(max) = max_files {
-        println!(
+        eprintln!(
             "Indexing directory: {} (limited to {} files)",
             path.display(),
             max
         );
     } else {
-        println!("Indexing directory: {}", path.display());
+        eprintln!("Indexing directory: {}", path.display());
     }
 
     // Track this directory as indexed
     indexer.add_indexed_path(path);
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
-        Ok(stats) => {
-            stats.display();
+        Ok(_stats) => {
+            // Progress bars show all needed info; verbose stats logged via tracing
         }
         Err(e) => {
             eprintln!("Error indexing directory {}: {e}", path.display());

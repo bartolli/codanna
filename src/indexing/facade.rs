@@ -1070,6 +1070,10 @@ impl IndexFacade {
         // Index new directories with progress if enabled
         // Use force=true since these are new directories being indexed for the first time
         for path in &to_add {
+            // Visual separator and directory label (stderr syncs with progress bars)
+            eprintln!();
+            eprintln!("Indexing directory: {}", path.display());
+
             // Count files first for accurate progress bar
             let file_count = if progress {
                 use crate::indexing::FileWalker;
