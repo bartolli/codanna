@@ -238,7 +238,7 @@ impl LanguageBehavior for PythonBehavior {
         let path_str = path_buf;
 
         // Ensure file_info exists
-        let file_id = if let Ok(Some((fid, _))) = document_index.get_file_info(&path_str) {
+        let file_id = if let Ok(Some((fid, _, _))) = document_index.get_file_info(&path_str) {
             fid
         } else {
             let next_file_id =

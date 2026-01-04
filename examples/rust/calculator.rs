@@ -11,13 +11,13 @@ impl Calculator {
 
     /// Add a number to the current value
     /// Returns the new total after addition
-    pub fn plus(&mut self, x: i32) -> i32 {
+    pub fn add(&mut self, x: i32) -> i32 {
         self.value += x;
         self.value
     }
 
     /// Multiply the current value by the given factor
-    pub fn times(&mut self, x: i32) -> i32 {
+    pub fn multiply(&mut self, x: i32) -> i32 {
         self.value *= x;
         self.value
     }

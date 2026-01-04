@@ -473,24 +473,33 @@ async fn main() {
                         show_progress,
                     ) {
                         Ok(stats) => {
-                            if stats.added_dirs > 0 || stats.removed_dirs > 0 {
+                            if stats.has_changes() {
                                 sync_made_changes = Some(true);
                                 if stats.added_dirs > 0 {
-                                    eprintln!(
-                                        "  ✓ Indexed {} directories ({} files, {} symbols)",
+                                    tracing::info!(
+                                        target: "sync",
+                                        "indexed {} directories ({} files, {} symbols)",
                                         stats.added_dirs, stats.files_indexed, stats.symbols_found
                                     );
                                 }
                                 if stats.removed_dirs > 0 {
-                                    eprintln!(
-                                        "  ✓ Removed {} directories from index",
+                                    tracing::info!(
+                                        target: "sync",
+                                        "removed {} directories from index",
                                         stats.removed_dirs
+                                    );
+                                }
+                                if stats.files_modified > 0 || stats.files_added > 0 {
+                                    tracing::info!(
+                                        target: "sync",
+                                        "synced {} modified, {} new files",
+                                        stats.files_modified, stats.files_added
                                     );
                                 }
 
                                 // Save updated index
                                 if let Err(e) = persistence.save_facade(idx) {
-                                    eprintln!("Warning: Failed to save updated index: {e}");
+                                    tracing::warn!(target: "sync", "failed to save updated index: {e}");
                                 }
                             } else {
                                 sync_made_changes = Some(false);
@@ -656,16 +665,41 @@ async fn main() {
             positional,
             args,
             json,
+            watch,
         } => {
-            codanna::cli::commands::mcp::run(
-                tool,
-                positional,
-                args,
-                json,
-                indexer.expect("mcp requires indexer"),
-                &config,
-            )
-            .await;
+            let mut indexer = indexer.expect("mcp requires indexer");
+
+            // If --watch is enabled, check for file changes and reindex
+            if watch {
+                let paths = config.get_indexed_paths();
+                if !paths.is_empty() {
+                    let mut total_indexed = 0usize;
+                    for path in &paths {
+                        if path.is_dir() {
+                            // Run incremental indexing (force=false)
+                            match indexer.index_directory_with_options(
+                                path, false, // no progress bars for watch mode
+                                false, // not dry run
+                                false, // not force (incremental)
+                                None,  // no max_files limit
+                            ) {
+                                Ok(stats) => total_indexed += stats.files_indexed,
+                                Err(e) => {
+                                    tracing::warn!(target: "mcp", "watch reindex failed for {}: {e}", path.display());
+                                }
+                            }
+                        }
+                    }
+                    // Only save if changes were made
+                    if total_indexed > 0 {
+                        if let Err(e) = persistence.save_facade(&indexer) {
+                            tracing::warn!(target: "mcp", "failed to save index after watch reindex: {e}");
+                        }
+                    }
+                }
+            }
+
+            codanna::cli::commands::mcp::run(tool, positional, args, json, indexer, &config).await;
         }
 
         Commands::Benchmark { language, file } => {

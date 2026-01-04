@@ -51,6 +51,17 @@ pub struct SyncStats {
     pub removed_dirs: usize,
     pub files_indexed: usize,
     pub symbols_found: usize,
+    pub files_modified: usize,
+    pub files_added: usize,
+}
+
+impl SyncStats {
+    pub fn has_changes(&self) -> bool {
+        self.added_dirs > 0
+            || self.removed_dirs > 0
+            || self.files_modified > 0
+            || self.files_added > 0
+    }
 }
 
 /// IndexFacade - Unified interface for code intelligence operations
@@ -759,7 +770,7 @@ impl IndexFacade {
             .get_file_info(path)
             .ok()
             .flatten()
-            .map(|(id, _)| id)
+            .map(|(id, _, _)| id)
     }
 
     /// Get file path for a FileId.

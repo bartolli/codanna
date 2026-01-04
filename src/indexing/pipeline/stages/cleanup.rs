@@ -62,12 +62,26 @@ impl CleanupStage {
     pub fn cleanup_files(&self, files: &[PathBuf]) -> PipelineResult<CleanupStats> {
         let mut stats = CleanupStats::default();
 
+        // Start batch for delete operations
+        self.index.start_batch().map_err(|e| PipelineError::Parse {
+            path: PathBuf::new(),
+            reason: format!("Failed to start batch: {e}"),
+        })?;
+
         for file in files {
             let file_stats = self.cleanup_single_file(file)?;
             stats.files_cleaned += 1;
             stats.symbols_removed += file_stats.0;
             stats.embeddings_removed += file_stats.1;
         }
+
+        // Commit batch after all deletions
+        self.index
+            .commit_batch()
+            .map_err(|e| PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: format!("Failed to commit batch: {e}"),
+            })?;
 
         // Save embeddings to disk after all removals (critical for sync)
         if let Some(ref semantic) = self.semantic {
@@ -95,7 +109,7 @@ impl CleanupStage {
 
         // Step 1: Get file_id from path
         let file_info = self.index.get_file_info(&path_str)?;
-        let Some((file_id, _hash)) = file_info else {
+        let Some((file_id, _hash, _mtime)) = file_info else {
             // File not in index, nothing to clean
             return Ok((0, 0));
         };

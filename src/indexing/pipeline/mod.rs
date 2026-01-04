@@ -768,7 +768,7 @@ impl Pipeline {
         let content_hash = file_content.hash.clone();
 
         // Check if file already exists by querying Tantivy
-        if let Ok(Some((existing_file_id, existing_hash))) = index.get_file_info(path_str) {
+        if let Ok(Some((existing_file_id, existing_hash, _mtime))) = index.get_file_info(path_str) {
             if existing_hash == content_hash {
                 // File hasn't changed, skip re-indexing
                 return Ok(SingleFileStats {
@@ -1028,7 +1028,8 @@ impl Pipeline {
         } else {
             // Incremental mode: discover first, then create bar with actual count
             let discover_stage = DiscoverStage::new(root, self.config.discover_threads)
-                .with_index(Arc::clone(&index));
+                .with_index(Arc::clone(&index))
+                .with_workspace_root(self.settings.workspace_root.clone());
             let discover_result = discover_stage.run_incremental()?;
 
             if discover_result.is_empty() {
@@ -1171,8 +1172,9 @@ impl Pipeline {
         }
 
         // Incremental mode: detect changes
-        let discover_stage =
-            DiscoverStage::new(root, self.config.discover_threads).with_index(Arc::clone(&index));
+        let discover_stage = DiscoverStage::new(root, self.config.discover_threads)
+            .with_index(Arc::clone(&index))
+            .with_workspace_root(self.settings.workspace_root.clone());
         let discover_result = discover_stage.run_incremental()?;
 
         tracing::info!(

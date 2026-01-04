@@ -95,48 +95,50 @@ pub fn run(
 
         if !force {
             match sync_made_changes {
-                Some(false) => {
-                    println!("Index already up to date (no changes detected).");
+                Some(true) => {
+                    // Sync added new directories, already indexed - save and return
                     if let Err(e) = persistence.save_facade(indexer) {
                         eprintln!("Error saving index: {e}");
                         std::process::exit(1);
                     }
+                    return;
                 }
-                Some(true) => {
-                    // Sync already performed work and saved the index above.
-                }
-                None => {
-                    println!(
-                        "Skipping incremental update (metadata unavailable); index already up to date."
-                    );
+                Some(false) | None => {
+                    // No directory changes - check file-level changes via incremental
+                    tracing::debug!(target: "indexing", "checking {} paths for file-level changes", config_paths.len());
                 }
             }
-            return;
         }
 
-        // Force with config paths - will clear and re-index below
+        // Run incremental (force=false) or full reindex (force=true)
         config_paths
     };
 
-    // Process each path
+    // Process each path, tracking total changes
+    let mut total_indexed = 0usize;
     for path in &paths_to_index {
         if path.is_file() {
-            index_single_file(indexer, path, force);
+            if index_single_file(indexer, path, force) {
+                total_indexed += 1;
+            }
         } else if path.is_dir() {
-            index_directory(indexer, path, progress, dry_run, force, max_files);
+            total_indexed += index_directory(indexer, path, progress, dry_run, force, max_files);
         } else {
             eprintln!("Error: Path does not exist: {}", path.display());
             std::process::exit(1);
         }
     }
 
-    // After processing all paths, save the index if not in dry-run mode
-    if !dry_run {
+    // Only save if changes were made and not in dry-run mode
+    if !dry_run && total_indexed > 0 {
         save_index(indexer, persistence, config);
+    } else if !dry_run && total_indexed == 0 {
+        tracing::debug!(target: "indexing", "no changes detected, skipping save");
     }
 }
 
-fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) {
+/// Index a single file. Returns true if file was indexed (not cached).
+fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) -> bool {
     match indexer.index_file_with_force(path, force) {
         Ok(result) => {
             let language_name = path
@@ -150,6 +152,8 @@ fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) {
                         .and_then(|r| r.get_by_extension(ext).map(|def| def.name().to_string()))
                 })
                 .unwrap_or_else(|| "unknown".to_string());
+
+            let was_indexed = !result.is_cached();
 
             if result.is_cached() {
                 println!(
@@ -193,6 +197,8 @@ fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) {
             println!("  Methods: {methods}");
             println!("  Structs: {structs}");
             println!("  Traits: {traits}");
+
+            was_indexed
         }
         Err(e) => {
             eprintln!("Error indexing file {}: {e}", path.display());
@@ -210,6 +216,7 @@ fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) {
     }
 }
 
+/// Index a directory. Returns the number of files indexed.
 fn index_directory(
     indexer: &mut IndexFacade,
     path: &PathBuf,
@@ -217,7 +224,7 @@ fn index_directory(
     dry_run: bool,
     force: bool,
     max_files: Option<usize>,
-) {
+) -> usize {
     // Visual separator between directory cycles (use stderr to sync with progress bars)
     eprintln!();
     if let Some(max) = max_files {
@@ -234,9 +241,7 @@ fn index_directory(
     indexer.add_indexed_path(path);
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
-        Ok(_stats) => {
-            // Progress bars show all needed info; verbose stats logged via tracing
-        }
+        Ok(stats) => stats.files_indexed,
         Err(e) => {
             eprintln!("Error indexing directory {}: {e}", path.display());
 

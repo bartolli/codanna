@@ -302,6 +302,7 @@ impl CollectStage {
         state.caches.insert_file(parsed.path.clone(), file_id);
 
         // Register file
+        let mtime = crate::indexing::file_info::get_file_mtime(&parsed.path).unwrap_or(0);
         state
             .current_batch
             .file_registrations
@@ -311,6 +312,7 @@ impl CollectStage {
                 content_hash: parsed.content_hash,
                 language_id: parsed.language_id,
                 timestamp: get_utc_timestamp(),
+                mtime,
             });
 
         // Process symbols

@@ -276,6 +276,10 @@ pub enum Commands {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+
+        /// Check for file changes and reindex before running tool
+        #[arg(long)]
+        watch: bool,
     },
 
     /// Benchmark parser performance

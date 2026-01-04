@@ -218,6 +218,8 @@ pub struct FileRegistration {
     pub language_id: LanguageId,
     /// Unix timestamp when the file was indexed
     pub timestamp: u64,
+    /// File modification time (seconds since UNIX_EPOCH)
+    pub mtime: u64,
 }
 
 /// Unresolved relationship with from_id populated.

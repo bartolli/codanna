@@ -238,6 +238,7 @@ mod tests {
             content_hash: "abc123def456".to_string(),
             language_id: LanguageId::new("rust"),
             timestamp: 1700000000,
+            mtime: 1700000000,
         });
 
         for i in 0..symbol_count {
@@ -377,6 +378,7 @@ mod tests {
             content_hash: "abc123def456".to_string(),
             language_id: LanguageId::new("rust"),
             timestamp: 1700000000,
+            mtime: 1700000000,
         });
 
         // Add symbols with known names

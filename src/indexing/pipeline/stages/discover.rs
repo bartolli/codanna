@@ -25,6 +25,8 @@ pub struct DiscoverStage {
     threads: usize,
     /// Optional index for incremental mode.
     index: Option<Arc<DocumentIndex>>,
+    /// Workspace root for path normalization.
+    workspace_root: Option<PathBuf>,
 }
 
 impl DiscoverStage {
@@ -34,6 +36,7 @@ impl DiscoverStage {
             root: root.into(),
             threads: threads.max(1),
             index: None,
+            workspace_root: None,
         }
     }
 
@@ -41,6 +44,27 @@ impl DiscoverStage {
     pub fn with_index(mut self, index: Arc<DocumentIndex>) -> Self {
         self.index = Some(index);
         self
+    }
+
+    /// Set workspace root for path normalization.
+    pub fn with_workspace_root(mut self, root: Option<PathBuf>) -> Self {
+        self.workspace_root = root;
+        self
+    }
+
+    /// Normalize a path relative to workspace_root.
+    fn normalize_path(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() {
+            if let Some(ref root) = self.workspace_root {
+                path.strip_prefix(root)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| path.to_path_buf())
+            } else {
+                path.to_path_buf()
+            }
+        } else {
+            path.to_path_buf()
+        }
     }
 
     /// Run the discover stage, sending paths to the provided channel.
@@ -124,17 +148,30 @@ impl DiscoverStage {
             reason: "Incremental mode requires an index".to_string(),
         })?;
 
-        // Step 1: Collect all current files on disk
+        // Step 1: Collect all current files on disk, normalized to relative paths
         let disk_files = self.collect_all_files()?;
-        let disk_set: HashSet<PathBuf> = disk_files.into_iter().collect();
+        let disk_set: HashSet<PathBuf> = disk_files
+            .into_iter()
+            .map(|p| self.normalize_path(&p))
+            .collect();
 
         // Step 2: Get indexed paths from Tantivy, filtered to only those under our root
         // This prevents marking files from other indexed directories as "deleted"
+        let normalized_root = self.normalize_path(&self.root);
         let indexed_paths = index.get_all_indexed_paths()?;
         let indexed_set: HashSet<PathBuf> = indexed_paths
             .into_iter()
-            .filter(|p| p.starts_with(&self.root))
+            .filter(|p| p.starts_with(&normalized_root))
             .collect();
+
+        tracing::debug!(
+            target: "pipeline",
+            "incremental: root={}, normalized_root={}, disk={}, indexed={}",
+            self.root.display(),
+            normalized_root.display(),
+            disk_set.len(),
+            indexed_set.len()
+        );
 
         // Step 3: Categorize files
         let mut result = DiscoverResult::default();
@@ -159,6 +196,14 @@ impl DiscoverStage {
                 result.modified_files.push(path.clone());
             }
         }
+
+        tracing::debug!(
+            target: "pipeline",
+            "incremental result: new={}, modified={}, deleted={}",
+            result.new_files.len(),
+            result.modified_files.len(),
+            result.deleted_files.len()
+        );
 
         Ok(result)
     }
@@ -207,25 +252,45 @@ impl DiscoverStage {
         Ok(files)
     }
 
-    /// Check if a file has been modified by comparing hashes.
+    /// Check if a file has been modified.
+    /// Uses mtime as fast heuristic - only reads file if mtime changed.
     fn is_modified(&self, path: &Path, index: &DocumentIndex) -> PipelineResult<bool> {
         let path_str = path.to_string_lossy();
 
-        // Get stored hash from index
+        // Get stored info from index
         let stored_info = index.get_file_info(&path_str)?;
-        let Some((_file_id, stored_hash)) = stored_info else {
-            // Not in index = treat as new (shouldn't happen in this code path)
+        let Some((_file_id, stored_hash, stored_mtime)) = stored_info else {
+            // Not in index = treat as new
+            tracing::trace!(target: "pipeline", "is_modified: {} not in index", path.display());
             return Ok(true);
         };
 
-        // Compute current hash
+        // Fast path: check mtime first (stat only, no file read)
+        let current_mtime = crate::indexing::file_info::get_file_mtime(path).unwrap_or(0);
+        if stored_mtime > 0 && current_mtime == stored_mtime {
+            // mtime unchanged = file unchanged
+            return Ok(false);
+        }
+
+        // mtime changed or unknown - verify with hash (requires file read)
         let content = fs::read_to_string(path).map_err(|e| PipelineError::FileRead {
             path: path.to_path_buf(),
             source: e,
         })?;
         let current_hash = calculate_hash(&content);
 
-        Ok(current_hash != stored_hash)
+        let modified = current_hash != stored_hash;
+        if modified {
+            tracing::trace!(
+                target: "pipeline",
+                "is_modified: {} hash changed (stored_mtime={}, current_mtime={})",
+                path.display(),
+                stored_mtime,
+                current_mtime
+            );
+        }
+
+        Ok(modified)
     }
 }
 

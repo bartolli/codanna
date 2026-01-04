@@ -63,6 +63,7 @@ pub struct IndexSchema {
     pub file_id: Field,
     pub file_hash: Field,
     pub file_timestamp: Field,
+    pub file_mtime: Field,
 
     // Metadata fields
     pub meta_key: Field,
@@ -151,6 +152,7 @@ impl IndexSchema {
         let file_id = builder.add_u64_field("file_id", indexed_u64_options.clone());
         let file_hash = builder.add_text_field("file_hash", STRING | STORED);
         let file_timestamp = builder.add_u64_field("file_timestamp", STORED | FAST);
+        let file_mtime = builder.add_u64_field("file_mtime", STORED | FAST);
 
         // Metadata fields (for counters, etc.)
         let meta_key = builder.add_text_field("meta_key", STRING | STORED | FAST);
@@ -197,6 +199,7 @@ impl IndexSchema {
             file_id,
             file_hash,
             file_timestamp,
+            file_mtime,
             meta_key,
             meta_value,
             cluster_id,
@@ -1746,7 +1749,8 @@ impl DocumentIndex {
     }
 
     /// Get file info by path
-    pub fn get_file_info(&self, path: &str) -> StorageResult<Option<(FileId, String)>> {
+    /// Returns (file_id, hash, mtime). Mtime is 0 for legacy entries without mtime.
+    pub fn get_file_info(&self, path: &str) -> StorageResult<Option<(FileId, String, u64)>> {
         let searcher = self.reader.searcher();
         let query = BooleanQuery::from(vec![
             (
@@ -1788,7 +1792,12 @@ impl DocumentIndex {
                 })?
                 .to_string();
 
-            Ok(Some((file_id, hash)))
+            let mtime = doc
+                .get_first(self.schema.file_mtime)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            Ok(Some((file_id, hash, mtime)))
         } else {
             Ok(None)
         }
@@ -2339,6 +2348,7 @@ impl DocumentIndex {
         // Hash is already a SHA256 hex string
         doc.add_text(self.schema.file_hash, &registration.content_hash);
         doc.add_u64(self.schema.file_timestamp, registration.timestamp);
+        doc.add_u64(self.schema.file_mtime, registration.mtime);
         // Store language for incremental indexing (parser selection)
         doc.add_text(self.schema.language, registration.language_id.as_str());
 
