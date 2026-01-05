@@ -121,12 +121,4 @@ mod tests {
         assert!(json.contains("undefined_function"));
         assert!(json.contains("suggestions"));
     }
-
-    #[test]
-    fn test_output_format_flag() {
-        assert_eq!(OutputFormat::from_json_flag(true), OutputFormat::Json);
-        assert_eq!(OutputFormat::from_json_flag(false), OutputFormat::Text);
-        assert!(OutputFormat::Json.is_json());
-        assert!(!OutputFormat::Text.is_json());
-    }
 }

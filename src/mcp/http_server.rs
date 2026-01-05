@@ -5,9 +5,10 @@
 
 #[cfg(feature = "http-server")]
 pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
+    use crate::IndexPersistence;
+    use crate::indexing::facade::IndexFacade;
     use crate::mcp::{CodeIntelligenceServer, notifications::NotificationBroadcaster};
     use crate::watcher::HotReloadWatcher;
-    use crate::{IndexPersistence, SimpleIndexer};
     use axum::Router;
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -26,30 +27,28 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
     // Create notification broadcaster for file change events
     let broadcaster = Arc::new(NotificationBroadcaster::new(100));
 
-    // Create shared indexer
-    let indexer = Arc::new(RwLock::new(SimpleIndexer::with_settings(Arc::new(
-        config.clone(),
-    ))));
-
-    // Load existing index if available
+    // Create shared facade
+    let settings = Arc::new(config.clone());
     let persistence = IndexPersistence::new(config.index_path.clone());
-    if persistence.exists() {
-        match persistence.load_with_settings(Arc::new(config.clone())) {
+
+    let facade = if persistence.exists() {
+        match persistence.load_facade(settings.clone()) {
             Ok(loaded) => {
-                let mut indexer_guard = indexer.write().await;
-                *indexer_guard = loaded;
-                let symbol_count = indexer_guard.symbol_count();
-                drop(indexer_guard);
+                let symbol_count = loaded.symbol_count();
                 crate::log_event!("http", "loaded", "{symbol_count} symbols");
+                loaded
             }
             Err(e) => {
                 tracing::warn!("[http] failed to load index: {e}");
                 crate::log_event!("http", "starting", "empty index");
+                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
             }
         }
     } else {
         crate::log_event!("http", "starting", "no existing index");
-    }
+        IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+    };
+    let indexer = Arc::new(RwLock::new(facade));
 
     // Create cancellation token for coordinated shutdown
     let ct = CancellationToken::new();
@@ -187,7 +186,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
     let mcp_service = StreamableHttpService::new(
         move || {
             crate::debug_event!("mcp", "creating server instance");
-            let server = CodeIntelligenceServer::new_with_indexer(
+            let server = CodeIntelligenceServer::new_with_facade(
                 indexer_for_service.clone(),
                 config_for_service.clone(),
             );

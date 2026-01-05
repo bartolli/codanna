@@ -402,7 +402,7 @@ impl LanguageBehavior for TypeScriptBehavior {
         let path_str = path_buf;
 
         // Ensure file_info exists
-        let file_id = if let Ok(Some((fid, _))) = document_index.get_file_info(&path_str) {
+        let file_id = if let Ok(Some((fid, _, _))) = document_index.get_file_info(&path_str) {
             fid
         } else {
             let next_file_id =
@@ -646,263 +646,146 @@ impl LanguageBehavior for TypeScriptBehavior {
         Ok(Box::new(context))
     }
 
-    /// Build resolution context using symbol cache (fast path) with TypeScript semantics
-    fn build_resolution_context_with_cache(
+    /// Build resolution context for parallel pipeline (no Tantivy).
+    ///
+    /// Uses tsconfig path aliases via TypeScriptProjectEnhancer.
+    /// Returns (scope, enhanced_imports) where enhanced_imports have path aliases resolved.
+    fn build_resolution_context_with_pipeline_cache(
         &self,
         file_id: FileId,
-        cache: &crate::storage::symbol_cache::ConcurrentSymbolCache,
-        document_index: &DocumentIndex,
-    ) -> crate::error::IndexResult<Box<dyn ResolutionScope>> {
-        tracing::debug!("[typescript] build_resolution_context_with_cache file_id={file_id:?}");
-        use crate::error::IndexError;
-        // Create TypeScript-specific resolution context
-        let mut context = TypeScriptResolutionContext::new(file_id);
+        imports: &[crate::parsing::Import],
+        cache: &dyn crate::parsing::PipelineSymbolCache,
+    ) -> (
+        Box<dyn crate::parsing::ResolutionScope>,
+        Vec<crate::parsing::Import>,
+    ) {
+        use crate::parsing::ScopeLevel;
+        use crate::parsing::resolution::{ImportBinding, ImportOrigin, ProjectResolutionEnhancer};
 
-        // Helper: normalize TS import to module path relative to importing module
-        fn normalize_ts_import(import_path: &str, importing_mod: &str) -> String {
-            // Helper: parent module (drop the last segment of the importing module)
-            fn parent_module(m: &str) -> String {
-                let mut parts: Vec<&str> = if m.is_empty() {
-                    Vec::new()
-                } else {
-                    m.split('.').collect()
-                };
-                if !parts.is_empty() {
-                    parts.pop();
-                }
-                parts.join(".")
-            }
-
+        // Helper to normalize relative imports
+        fn normalize_import(import_path: &str, importing_mod: &str) -> String {
             if import_path.starts_with("./") {
-                // Same directory as the file: use parent of importing module
-                let base_owned = parent_module(importing_mod);
-                let base = base_owned.as_str();
                 let rel = import_path.trim_start_matches("./").replace('/', ".");
-                if base.is_empty() {
+                if importing_mod.is_empty() {
                     rel
                 } else {
-                    format!("{base}.{rel}")
+                    // Get parent of importing module
+                    let parts: Vec<&str> = importing_mod.split('.').collect();
+                    let parent = parts[..parts.len().saturating_sub(1)].join(".");
+                    if parent.is_empty() {
+                        rel
+                    } else {
+                        format!("{parent}.{rel}")
+                    }
                 }
             } else if import_path.starts_with("../") {
-                // Walk up segments from the importing module's parent
-                let base_owned = parent_module(importing_mod);
-                let mut parts: Vec<&str> = base_owned.split('.').collect();
-                let mut rest = import_path;
-                while rest.starts_with("../") {
-                    if !parts.is_empty() {
-                        parts.pop();
-                    }
-                    rest = &rest[3..];
-                }
-                let rest = rest.trim_start_matches("./").replace('/', ".");
-                let mut combined = parts.join(".");
-                if !rest.is_empty() {
-                    combined = if combined.is_empty() {
-                        rest
-                    } else {
-                        format!("{combined}.{rest}")
-                    };
-                }
-                combined
+                // Just use the path as-is for now
+                import_path.replace('/', ".")
             } else {
-                // Bare module or path alias; leave as-is (converted separators)
+                // External or absolute
                 import_path.replace('/', ".")
             }
         }
 
-        // 1) Imports: prefer cache for imported names; skip side-effect and unnamed named imports
-        let imports = self.get_imports_for_file(file_id);
-        tracing::debug!("[typescript] building context: {} imports", imports.len());
-        let importing_module = self.get_module_path_for_file(file_id).unwrap_or_default();
-        tracing::debug!(
-            "[typescript] build_context importing_module={importing_module} imports_count={}",
-            imports.len()
-        );
+        let mut context = TypeScriptResolutionContext::new(file_id);
+
+        let importing_module = self.get_module_path_for_file(file_id);
+
+        // Load project rules for path alias enhancement
+        let maybe_enhancer = self
+            .load_project_rules_for_file(file_id)
+            .map(super::resolution::TypeScriptProjectEnhancer::new);
+
+        // Build enhanced imports with path aliases resolved
+        let mut enhanced_imports = Vec::with_capacity(imports.len());
+
         for import in imports {
-            tracing::debug!(
-                "[typescript] build_context import path='{}' alias={:?}",
-                import.path,
-                import.alias
-            );
-            // Determine the local name to bind in this file (alias or named import).
-            let Some(local_name) = import.alias.clone() else {
-                // Named imports without explicit alias are not captured individually yet.
-                // Fall back to database resolution which may still assist via module-level usage.
-                tracing::debug!(
-                    "[typescript] build_context skipped import without alias: '{}'",
-                    import.path
-                );
-                continue;
-            };
+            // Get the local name to bind (alias or last path segment)
+            let local_name = import.alias.clone().unwrap_or_else(|| {
+                import
+                    .path
+                    .split('/')
+                    .next_back()
+                    .or_else(|| import.path.split('.').next_back())
+                    .unwrap_or(&import.path)
+                    .to_string()
+            });
 
-            // Try to enhance using tsconfig infrastructure
-            // If enhancement succeeds, the path is absolute from tsconfig root
-            // If it fails, it's a regular relative import
-            let target_module = if let Some(rules) = self.load_project_rules_for_file(file_id) {
-                let enhancer = super::resolution::TypeScriptProjectEnhancer::new(rules);
-                use crate::parsing::resolution::ProjectResolutionEnhancer;
-
+            // Enhance import path if we have tsconfig rules
+            let target_module = if let Some(ref enhancer) = maybe_enhancer {
                 if let Some(enhanced_path) = enhancer.enhance_import_path(&import.path, file_id) {
-                    // Successfully enhanced - this is a tsconfig alias
-                    // Enhanced path is absolute from tsconfig root, convert directly to module path
-                    tracing::debug!(
-                        "[typescript] build_context enhanced '{}' -> '{enhanced_path}'",
-                        import.path
-                    );
+                    // Tsconfig alias - convert enhanced path to module format
                     enhanced_path.trim_start_matches("./").replace('/', ".")
                 } else {
-                    // Not a tsconfig alias - regular relative import
-                    // Normalize relative to importing module
-                    tracing::debug!(
-                        "[typescript] build_context not enhanced '{}' - using relative normalization",
-                        import.path
-                    );
-                    normalize_ts_import(&import.path, &importing_module)
+                    // Regular import - normalize relative to importing module
+                    normalize_import(&import.path, &importing_module.clone().unwrap_or_default())
                 }
             } else {
-                // No tsconfig rules - treat as regular relative import
-                tracing::debug!(
-                    "[typescript] build_context no rules for file - using relative normalization"
-                );
-                normalize_ts_import(&import.path, &importing_module)
+                normalize_import(&import.path, &importing_module.clone().unwrap_or_default())
             };
-            tracing::debug!(
-                "[typescript] build_context local_name='{local_name}' target_module='{target_module}'"
-            );
 
-            // Try cache candidates by local name
-            let mut matched: Option<SymbolId> = None;
-            let candidates = cache.lookup_candidates(&local_name, 16);
-            tracing::debug!(
-                "[typescript] cache candidates for '{local_name}': {}",
-                candidates.len()
-            );
+            // Collect enhanced import with resolved path
+            enhanced_imports.push(crate::parsing::Import {
+                path: target_module.clone(),
+                file_id: import.file_id,
+                alias: import.alias.clone(),
+                is_glob: import.is_glob,
+                is_type_only: import.is_type_only,
+            });
+
+            // Look up candidates by local_name and match module_path
+            let mut resolved_symbol: Option<SymbolId> = None;
+            let candidates = cache.lookup_candidates(&local_name);
             for id in candidates {
-                if let Ok(Some(symbol)) = document_index.find_symbol_by_id(id) {
-                    if let Some(module_path) = &symbol.module_path {
-                        tracing::debug!(
-                            "[typescript] build_context checking candidate: symbol_module='{}' vs target='{target_module}'",
-                            module_path.as_ref()
-                        );
-                        if module_path.as_ref() == target_module {
-                            tracing::debug!(
-                                "[typescript] build_context matched: resolved '{local_name}' to {id:?}"
-                            );
-                            matched = Some(id);
+                if let Some(symbol) = cache.get(id) {
+                    if let Some(ref module_path) = symbol.module_path {
+                        if module_path.as_ref() == target_module
+                            || target_module.ends_with(module_path.as_ref())
+                            || module_path.ends_with(&target_module)
+                        {
+                            resolved_symbol = Some(id);
                             break;
                         }
                     }
                 }
             }
 
-            // Fallback to DB by name if cache path match not found
-            if matched.is_none() {
-                tracing::debug!("[typescript] cache miss for '{local_name}', falling back to DB");
-                if let Ok(cands) = document_index.find_symbols_by_name(&local_name, None) {
-                    for s in cands {
-                        if let Some(module_path) = &s.module_path {
-                            if module_path.as_ref() == target_module {
-                                tracing::debug!(
-                                    "[typescript] DB match for '{local_name}': {:?}",
-                                    s.id
-                                );
-                                matched = Some(s.id);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if let Some(symbol_id) = matched {
-                // Respect type-only imports for proper space placement
-                tracing::debug!(
-                    "[typescript] build_context adding to context: '{local_name}' -> {symbol_id:?}"
-                );
-                context.add_import_symbol(local_name, symbol_id, import.is_type_only);
+            // Determine origin
+            let origin = if resolved_symbol.is_some() {
+                ImportOrigin::Internal
             } else {
-                tracing::debug!(
-                    "[typescript] build_context unresolved: local='{local_name}', target_module='{target_module}'"
-                );
+                ImportOrigin::External
+            };
+
+            // Register binding
+            context.register_import_binding(ImportBinding {
+                import: import.clone(),
+                exposed_name: local_name.clone(),
+                origin,
+                resolved_symbol,
+            });
+
+            if let (ImportOrigin::Internal, Some(symbol_id)) = (origin, resolved_symbol) {
+                context.add_symbol(local_name.clone(), symbol_id, ScopeLevel::Module);
             }
         }
 
-        // 2) File's own symbols (module-level, with scope context)
-        let file_symbols =
-            document_index
-                .find_symbols_by_file(file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_file".to_string(),
-                    cause: e.to_string(),
-                })?;
+        // Populate context with enhanced imports
+        context.populate_imports(&enhanced_imports);
 
-        for symbol in file_symbols {
-            if self.is_resolvable_symbol(&symbol) {
-                context.add_symbol_with_context(
-                    symbol.name.to_string(),
-                    symbol.id,
-                    symbol.scope_context.as_ref(),
-                );
-
-                // CRITICAL: Also add by module_path for cross-module resolution
-                if let Some(ref module_path) = symbol.module_path {
-                    context.add_symbol(
-                        module_path.to_string(),
-                        symbol.id,
-                        crate::parsing::ScopeLevel::Global,
-                    );
-                }
-            }
-        }
-
-        // 3) Avoid global get_all_symbols; we rely on imported files where possible
-        // Collect imported files via cache to add visible symbols sparingly
-        let mut imported_files = std::collections::HashSet::new();
-        for import in self.get_imports_for_file(file_id) {
-            if let Some(alias) = &import.alias {
-                for id in cache.lookup_candidates(alias, 4) {
-                    if let Ok(Some(sym)) = document_index.find_symbol_by_id(id) {
-                        imported_files.insert(sym.file_id);
-                    }
-                }
-            }
-        }
-        tracing::debug!(
-            "[typescript] imported files discovered via cache: {}",
-            imported_files.len()
-        );
-
-        for imported_file_id in imported_files {
-            if imported_file_id == file_id {
-                continue;
-            }
-            let imported_syms = document_index
-                .find_symbols_by_file(imported_file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_file for imports".to_string(),
-                    cause: e.to_string(),
-                })?;
-            for symbol in imported_syms {
-                if self.is_symbol_visible_from_file(&symbol, file_id) {
-                    context.add_symbol(
-                        symbol.name.to_string(),
-                        symbol.id,
-                        crate::parsing::ScopeLevel::Global,
-                    );
-
-                    // CRITICAL: Also add by module_path for cross-module resolution
+        // Add local symbols from this file
+        for sym_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(sym_id) {
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
                     if let Some(ref module_path) = symbol.module_path {
-                        context.add_symbol(
-                            module_path.to_string(),
-                            symbol.id,
-                            crate::parsing::ScopeLevel::Global,
-                        );
+                        context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Module);
                     }
                 }
             }
         }
 
-        Ok(Box::new(context))
+        (Box::new(context), enhanced_imports)
     }
 
     // TypeScript-specific: Support hoisting
@@ -1091,6 +974,10 @@ impl LanguageBehavior for TypeScriptBehavior {
     fn get_module_path_for_file(&self, file_id: FileId) -> Option<String> {
         // Use the BehaviorState to get module path (O(1) lookup)
         self.state.get_module_path(file_id)
+    }
+
+    fn get_file_path(&self, file_id: FileId) -> Option<PathBuf> {
+        self.state.get_file_path(file_id)
     }
 
     fn import_matches_symbol(

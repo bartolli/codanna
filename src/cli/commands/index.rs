@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use crate::SimpleIndexer;
 use crate::cli::commands::directories::{SkipReason, add_paths_to_settings};
 use crate::config::Settings;
+use crate::indexing::facade::IndexFacade;
 use crate::storage::IndexPersistence;
 use crate::types::SymbolKind;
 
@@ -25,7 +25,7 @@ pub struct IndexArgs {
 pub fn run(
     args: IndexArgs,
     config: &mut Settings,
-    indexer: &mut SimpleIndexer,
+    indexer: &mut IndexFacade,
     persistence: &IndexPersistence,
     sync_made_changes: Option<bool>,
 ) {
@@ -58,16 +58,15 @@ pub fn run(
                 for skipped in &skipped_paths {
                     match &skipped.reason {
                         SkipReason::CoveredBy(parent) => println!(
-                            "Skipping {} (already covered by {})",
+                            "{}: Included in indexed directory {}",
                             skipped.path.display(),
                             parent.display()
                         ),
-                        SkipReason::AlreadyPresent => println!(
-                            "Skipping {} (already present in indexed paths)",
-                            skipped.path.display()
-                        ),
+                        SkipReason::AlreadyPresent => {
+                            println!("{}: Already indexed", skipped.path.display())
+                        }
                         SkipReason::FileNotPersisted => println!(
-                            "Skipping {} (indexed file is tracked ad-hoc and not stored in settings)",
+                            "{}: Ad-hoc indexed (not in settings.toml)",
                             skipped.path.display()
                         ),
                     }
@@ -96,48 +95,50 @@ pub fn run(
 
         if !force {
             match sync_made_changes {
-                Some(false) => {
-                    println!("Index already up to date (no changes detected).");
-                    if let Err(e) = persistence.save(indexer) {
+                Some(true) => {
+                    // Sync added new directories, already indexed - save and return
+                    if let Err(e) = persistence.save_facade(indexer) {
                         eprintln!("Error saving index: {e}");
                         std::process::exit(1);
                     }
+                    return;
                 }
-                Some(true) => {
-                    // Sync already performed work and saved the index above.
-                }
-                None => {
-                    println!(
-                        "Skipping incremental update (metadata unavailable); index already up to date."
-                    );
+                Some(false) | None => {
+                    // No directory changes - check file-level changes via incremental
+                    tracing::debug!(target: "indexing", "checking {} paths for file-level changes", config_paths.len());
                 }
             }
-            return;
         }
 
-        // Force with config paths - will clear and re-index below
+        // Run incremental (force=false) or full reindex (force=true)
         config_paths
     };
 
-    // Process each path
+    // Process each path, tracking total changes
+    let mut total_indexed = 0usize;
     for path in &paths_to_index {
         if path.is_file() {
-            index_single_file(indexer, path, force);
+            if index_single_file(indexer, path, force) {
+                total_indexed += 1;
+            }
         } else if path.is_dir() {
-            index_directory(indexer, path, progress, dry_run, force, max_files);
+            total_indexed += index_directory(indexer, path, progress, dry_run, force, max_files);
         } else {
             eprintln!("Error: Path does not exist: {}", path.display());
             std::process::exit(1);
         }
     }
 
-    // After processing all paths, save the index if not in dry-run mode
-    if !dry_run {
+    // Only save if changes were made and not in dry-run mode
+    if !dry_run && total_indexed > 0 {
         save_index(indexer, persistence, config);
+    } else if !dry_run && total_indexed == 0 {
+        tracing::debug!(target: "indexing", "no changes detected, skipping save");
     }
 }
 
-fn index_single_file(indexer: &mut SimpleIndexer, path: &PathBuf, force: bool) {
+/// Index a single file. Returns true if file was indexed (not cached).
+fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) -> bool {
     match indexer.index_file_with_force(path, force) {
         Ok(result) => {
             let language_name = path
@@ -151,6 +152,8 @@ fn index_single_file(indexer: &mut SimpleIndexer, path: &PathBuf, force: bool) {
                         .and_then(|r| r.get_by_extension(ext).map(|def| def.name().to_string()))
                 })
                 .unwrap_or_else(|| "unknown".to_string());
+
+            let was_indexed = !result.is_cached();
 
             if result.is_cached() {
                 println!(
@@ -194,6 +197,8 @@ fn index_single_file(indexer: &mut SimpleIndexer, path: &PathBuf, force: bool) {
             println!("  Methods: {methods}");
             println!("  Structs: {structs}");
             println!("  Traits: {traits}");
+
+            was_indexed
         }
         Err(e) => {
             eprintln!("Error indexing file {}: {e}", path.display());
@@ -211,33 +216,32 @@ fn index_single_file(indexer: &mut SimpleIndexer, path: &PathBuf, force: bool) {
     }
 }
 
+/// Index a directory. Returns the number of files indexed.
 fn index_directory(
-    indexer: &mut SimpleIndexer,
+    indexer: &mut IndexFacade,
     path: &PathBuf,
     progress: bool,
     dry_run: bool,
     force: bool,
     max_files: Option<usize>,
-) {
+) -> usize {
+    // Visual separator between directory cycles (use stderr to sync with progress bars)
+    eprintln!();
     if let Some(max) = max_files {
-        println!(
+        eprintln!(
             "Indexing directory: {} (limited to {} files)",
             path.display(),
             max
         );
     } else {
-        println!("Indexing directory: {}", path.display());
+        eprintln!("Indexing directory: {}", path.display());
     }
 
     // Track this directory as indexed
-    if let Err(e) = indexer.add_indexed_path(path) {
-        eprintln!("Warning: Failed to track indexed directory: {e}");
-    }
+    indexer.add_indexed_path(path);
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
-        Ok(stats) => {
-            stats.display();
-        }
+        Ok(stats) => stats.files_indexed,
         Err(e) => {
             eprintln!("Error indexing directory {}: {e}", path.display());
 
@@ -254,19 +258,14 @@ fn index_directory(
     }
 }
 
-fn save_index(indexer: &mut SimpleIndexer, persistence: &IndexPersistence, config: &Settings) {
-    // Build symbol cache before saving
-    if let Err(e) = indexer.build_symbol_cache() {
-        eprintln!("Warning: Failed to build symbol cache: {e}");
-    }
-
+fn save_index(indexer: &mut IndexFacade, persistence: &IndexPersistence, config: &Settings) {
     // Save the index
     eprintln!(
         "\nSaving index with {} total symbols, {} total relationships...",
         indexer.symbol_count(),
         indexer.relationship_count()
     );
-    match persistence.save(indexer) {
+    match persistence.save_facade(indexer) {
         Ok(_) => {
             println!("Index saved to: {}", config.index_path.display());
         }

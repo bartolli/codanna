@@ -3,7 +3,9 @@
 //! This module provides the trait abstractions that allow each language to implement
 //! its own resolution logic while keeping the indexer language-agnostic.
 
+use super::LanguageId;
 use super::context::ScopeType;
+use crate::types::Range;
 use crate::{FileId, SymbolId, parsing::Import};
 use std::collections::HashMap;
 
@@ -577,6 +579,132 @@ impl InheritanceResolver for GenericInheritanceResolver {
 
         methods
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Pipeline Symbol Cache Trait
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Context about the calling symbol for visibility and scope resolution.
+///
+/// Used by `PipelineSymbolCache::resolve()` to determine what the caller can see.
+/// Three-level visibility model:
+/// - Same file: always visible
+/// - Same module: always visible (module_path prefix match)
+/// - Different module: must be Public
+///
+/// # Example
+/// ```ignore
+/// let caller = CallerContext {
+///     file_id: file_100,
+///     module_path: Some("src.components".into()),
+///     language_id: LanguageId::new("typescript"),
+/// };
+/// let result = cache.resolve("Button", &caller, None, &imports);
+/// ```
+#[derive(Debug, Clone)]
+pub struct CallerContext {
+    /// File where the call/reference originates
+    pub file_id: FileId,
+    /// Module path of the calling symbol (for same-module visibility check)
+    pub module_path: Option<Box<str>>,
+    /// Language of the calling code (for cross-language filtering)
+    pub language_id: LanguageId,
+}
+
+impl CallerContext {
+    /// Create caller context with explicit values.
+    pub fn new(file_id: FileId, module_path: Option<Box<str>>, language_id: LanguageId) -> Self {
+        Self {
+            file_id,
+            module_path,
+            language_id,
+        }
+    }
+
+    /// Create caller context from file and language (no module path).
+    pub fn from_file(file_id: FileId, language_id: LanguageId) -> Self {
+        Self {
+            file_id,
+            module_path: None,
+            language_id,
+        }
+    }
+
+    /// Check if caller is in the same module as a target symbol.
+    ///
+    /// Same module = module_path prefix match (e.g., "src.components" matches "src.components.Button").
+    /// Returns false if either lacks module_path (falls back to file check).
+    pub fn is_same_module(&self, target_module_path: Option<&str>) -> bool {
+        match (&self.module_path, target_module_path) {
+            (Some(caller), Some(target)) => {
+                // Same module if one is prefix of the other
+                caller.starts_with(target) || target.starts_with(caller.as_ref())
+            }
+            // If either lacks module_path, fall back to file check (done by caller)
+            _ => false,
+        }
+    }
+}
+
+/// Trait for symbol cache used in pipeline resolution.
+///
+/// Implemented by `SymbolLookupCache` (DashMap-based parallel pipeline cache).
+/// Provides methods for resolving imports and symbols without hitting Tantivy.
+pub trait PipelineSymbolCache: Send + Sync {
+    /// Multi-tier symbol resolution with proper priority order.
+    ///
+    /// Resolves a symbol reference using all available context to find the correct target.
+    /// Priority order ensures we pick the most likely match:
+    ///
+    /// 1. **Local**: Same file + matching name + defined before `to_range`
+    /// 2. **Import**: Name matches import alias or last segment of import path
+    /// 3. **Same module**: Module path prefix match (same package/namespace)
+    /// 4. **Cross-file**: Public symbol, same language
+    ///
+    /// # Parameters
+    /// - `name`: The symbol name to resolve (e.g., "helper", "UserService")
+    /// - `caller`: Context about the calling symbol (file, module, language)
+    /// - `to_range`: Optional source location of the reference (for local scope ordering)
+    /// - `imports`: Imports visible in the file (from CONTEXT stage)
+    ///
+    /// # Returns
+    /// - `Found(id)`: Unambiguous match
+    /// - `Ambiguous(ids)`: Multiple candidates, need more context
+    /// - `NotFound`: No matching symbol in cache
+    fn resolve(
+        &self,
+        name: &str,
+        caller: &CallerContext,
+        to_range: Option<&Range>,
+        imports: &[Import],
+    ) -> ResolveResult;
+
+    /// Direct lookup by ID for metadata access.
+    ///
+    /// Used after resolution to get full symbol details (module_path, kind, etc).
+    fn get(&self, id: SymbolId) -> Option<crate::Symbol>;
+
+    /// Get all symbols in a file (for local scope building).
+    ///
+    /// Returns symbol IDs for all definitions in the file.
+    fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId>;
+
+    /// Get candidate symbol IDs by name.
+    ///
+    /// Returns all symbols with the given name for module path matching.
+    fn lookup_candidates(&self, name: &str) -> Vec<SymbolId>;
+}
+
+/// Result of multi-tier symbol resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveResult {
+    /// Unambiguous match found.
+    Found(SymbolId),
+    /// Multiple candidates match - need more context to disambiguate.
+    Ambiguous(Vec<SymbolId>),
+    /// No matching symbol in cache.
+    NotFound,
 }
 
 #[cfg(test)]

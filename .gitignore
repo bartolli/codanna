@@ -22,6 +22,7 @@
 /contributing/tree-sitter/.env
 
 # Rust (additional)
+.cargo/config.toml
 **/target/
 *.rlib
 *.d
@@ -73,3 +74,4 @@ Icon?
 index.db
 index.db-*
 index.scip
+vendors/fastembed-rs

@@ -896,6 +896,7 @@ impl JavaParser {
                         receiver,
                         is_static: false, // TODO: detect static calls (Type.method vs instance.method)
                         range,
+                        caller_range: None, // TODO: track caller definition range
                     });
                 }
             }

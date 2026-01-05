@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::SimpleIndexer;
 use crate::config::Settings;
+use crate::indexing::facade::IndexFacade;
 
 /// Arguments for the serve command.
 pub struct ServeArgs {
@@ -20,7 +20,7 @@ pub async fn run(
     args: ServeArgs,
     config: Settings,
     settings: Arc<Settings>,
-    indexer: SimpleIndexer,
+    facade: IndexFacade,
     index_path: PathBuf,
 ) {
     let ServeArgs {
@@ -75,7 +75,7 @@ pub async fn run(
             run_stdio_server(
                 config,
                 settings,
-                indexer,
+                facade,
                 index_path,
                 watch,
                 actual_watch_interval,
@@ -136,7 +136,7 @@ async fn run_http_server(config: Settings, watch: bool, bind_address: String) {
 async fn run_stdio_server(
     config: Settings,
     settings: Arc<Settings>,
-    indexer: SimpleIndexer,
+    facade: IndexFacade,
     index_path: PathBuf,
     watch: bool,
     actual_watch_interval: u64,
@@ -148,23 +148,23 @@ async fn run_stdio_server(
     }
     eprintln!("To test: npx @modelcontextprotocol/inspector cargo run -- serve");
 
-    // Create MCP server using the already-loaded indexer
+    // Create MCP server using the already-loaded facade
     tracing::debug!(
         target: "mcp",
-        "creating server with indexer - symbols: {}, semantic: {}",
-        indexer.symbol_count(),
-        indexer.has_semantic_search()
+        "creating server with facade - symbols: {}, semantic: {}",
+        facade.symbol_count(),
+        facade.has_semantic_search()
     );
-    let server = crate::mcp::CodeIntelligenceServer::new(indexer);
+    let server = crate::mcp::CodeIntelligenceServer::new(facade);
 
     // If watch mode is enabled, start the hot-reload watcher
     if watch {
         use crate::watcher::HotReloadWatcher;
         use std::time::Duration;
 
-        let indexer_arc = server.get_indexer_arc();
+        let facade_arc = server.get_facade_arc();
         let watcher = HotReloadWatcher::new(
-            indexer_arc,
+            facade_arc,
             settings.clone(),
             Duration::from_secs(actual_watch_interval),
         );
@@ -195,19 +195,19 @@ async fn run_stdio_server(
 
         let settings_path = workspace_root.join(".codanna/settings.toml");
         let debounce_ms = config.file_watch.debounce_ms;
-        let indexer_arc = server.get_indexer_arc();
+        let facade_arc = server.get_facade_arc();
 
         // Build unified watcher with handlers
         let mut builder = UnifiedWatcher::builder()
             .broadcaster(broadcaster.clone())
-            .indexer(indexer_arc.clone())
+            .indexer(facade_arc.clone())
             .index_path(index_path.clone())
             .workspace_root(workspace_root.clone())
             .debounce_ms(debounce_ms);
 
         // Add code file handler
         builder = builder.handler(CodeFileHandler::new(
-            indexer_arc.clone(),
+            facade_arc.clone(),
             workspace_root.clone(),
         ));
 

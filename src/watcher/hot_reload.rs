@@ -10,8 +10,9 @@ use tokio::sync::RwLock;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
+use crate::indexing::facade::IndexFacade;
 use crate::mcp::notifications::{FileChangeEvent, NotificationBroadcaster};
-use crate::{IndexPersistence, Settings, SimpleIndexer};
+use crate::{IndexPersistence, Settings};
 
 /// Watches for external index changes and hot-reloads them.
 ///
@@ -20,7 +21,7 @@ use crate::{IndexPersistence, Settings, SimpleIndexer};
 /// CI/CD pipelines). It does NOT watch source files - that's handled by UnifiedWatcher.
 pub struct HotReloadWatcher {
     index_path: PathBuf,
-    indexer: Arc<RwLock<SimpleIndexer>>,
+    facade: Arc<RwLock<IndexFacade>>,
     settings: Arc<Settings>,
     persistence: IndexPersistence,
     last_modified: Option<SystemTime>,
@@ -32,7 +33,7 @@ pub struct HotReloadWatcher {
 impl HotReloadWatcher {
     /// Create a new hot-reload watcher.
     pub fn new(
-        indexer: Arc<RwLock<SimpleIndexer>>,
+        facade: Arc<RwLock<IndexFacade>>,
         settings: Arc<Settings>,
         check_interval: Duration,
     ) -> Self {
@@ -53,7 +54,7 @@ impl HotReloadWatcher {
 
         Self {
             index_path,
-            indexer,
+            facade,
             settings,
             persistence,
             last_modified,
@@ -106,29 +107,29 @@ impl HotReloadWatcher {
         };
 
         if !should_reload {
-            debug!("Index file unchanged");
+            tracing::trace!("Index file unchanged");
             return Ok(());
         }
 
         crate::log_event!("hot-reload", "reloading", "{}", self.index_path.display());
 
-        // Load the new index
-        match self.persistence.load_with_settings(self.settings.clone()) {
-            Ok(new_indexer) => {
-                // Get write lock and replace the indexer
-                let mut indexer_guard = self.indexer.write().await;
-                *indexer_guard = new_indexer;
+        // Load the new index as a facade
+        match self.persistence.load_facade(self.settings.clone()) {
+            Ok(new_facade) => {
+                // Get write lock and replace the facade
+                let mut facade_guard = self.facade.write().await;
+                *facade_guard = new_facade;
 
                 // Update last modified time
                 self.last_modified = Some(current_modified);
 
                 // Ensure semantic search stays attached after hot reloads
                 let mut restored_semantic = false;
-                if !indexer_guard.has_semantic_search() {
+                if !facade_guard.has_semantic_search() {
                     let semantic_path = self.index_path.join("semantic");
                     let metadata_exists = semantic_path.join("metadata.json").exists();
                     if metadata_exists {
-                        match indexer_guard.load_semantic_search(&semantic_path) {
+                        match facade_guard.load_semantic_search(&semantic_path) {
                             Ok(true) => {
                                 restored_semantic = true;
                             }
@@ -152,25 +153,11 @@ impl HotReloadWatcher {
                     }
                 }
 
-                let symbol_count = indexer_guard.symbol_count();
-                let has_semantic = indexer_guard.has_semantic_search();
+                let symbol_count = facade_guard.symbol_count();
+                let has_semantic = facade_guard.has_semantic_search();
                 if restored_semantic {
-                    match indexer_guard.semantic_search_embedding_count() {
-                        Ok(count) => {
-                            crate::debug_event!(
-                                "hot-reload",
-                                "restored semantic",
-                                "{count} embeddings"
-                            );
-                        }
-                        Err(e) => {
-                            crate::debug_event!(
-                                "hot-reload",
-                                "restored semantic",
-                                "failed to count: {e}"
-                            );
-                        }
-                    }
+                    let count = facade_guard.semantic_search_embedding_count();
+                    crate::debug_event!("hot-reload", "restored semantic", "{count} embeddings");
                 }
                 crate::log_event!("hot-reload", "reloaded", "{symbol_count} symbols");
                 crate::debug_event!("hot-reload", "semantic search", "{has_semantic}");
@@ -224,7 +211,7 @@ impl HotReloadWatcher {
 
     /// Get current index statistics.
     pub async fn get_stats(&self) -> IndexStats {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
         IndexStats {
             symbol_count: indexer.symbol_count(),
             last_modified: self.last_modified,

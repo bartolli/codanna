@@ -37,57 +37,21 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux x64
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            variant: full
-            features: --all-features
 
-          - name: linux-x64-slim
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            variant: slim
-            features: ""
-
-          # macOS x64 (Intel)
           - name: macos-x64
-            os: macos-14
+            os: macos-latest
             target: x86_64-apple-darwin
-            variant: full
-            features: --all-features
 
-          - name: macos-x64-slim
-            os: macos-14
-            target: x86_64-apple-darwin
-            variant: slim
-            features: ""
-
-          # macOS ARM64 (Apple Silicon)
           - name: macos-arm64
-            os: macos-15
+            os: macos-latest
             target: aarch64-apple-darwin
-            variant: full
-            features: --all-features
 
-          - name: macos-arm64-slim
-            os: macos-15
-            target: aarch64-apple-darwin
-            variant: slim
-            features: ""
-
-          # Windows x64
           - name: windows-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-            variant: full
-            features: --all-features
-
-          - name: windows-x64-slim
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            variant: slim
-            features: ""
 
     name: Build ${{ matrix.name }}
     needs: info
@@ -107,10 +71,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-${{ matrix.variant }}
+          key: ${{ matrix.target }}
 
       - name: Build binary
-        run: cargo build --release --locked --target ${{ matrix.target }} ${{ matrix.features }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -199,31 +163,19 @@ jobs:
             for file in codanna-*.tar.xz codanna-*.zip; do
               [[ -f "$file" ]] || continue
 
-              # Extract platform and variant
+              # Extract platform from filename: codanna-0.8.9-linux-x64.tar.xz -> linux-x64
               platform=$(echo "$file" | sed -n 's/codanna-[^-]*-\([^.]*\)\..*/\1/p')
-              variant="full"
-              if [[ "$file" == *"-slim."* ]]; then
-                variant="slim"
-                platform=$(echo "$platform" | sed 's/-slim$//')
-              fi
-
-              # Get checksum
               sha256=$(shasum -a 256 "$file" | cut -d' ' -f1)
-
-              # Build URL
               url="https://github.com/${repo}/releases/download/v${version}/${file}"
 
-              # Add comma if not first
               [[ "$first" == "false" ]] && echo ","
               first=false
 
-              # Output artifact entry (without tab in echo to avoid YAML issues)
               echo "    {"
               echo "      \"name\": \"$file\","
               echo "      \"url\": \"$url\","
               echo "      \"sha256\": \"$sha256\","
-              echo "      \"platform\": \"$platform\","
-              echo "      \"variant\": \"$variant\""
+              echo "      \"platform\": \"$platform\""
               echo "    }"
             done
 

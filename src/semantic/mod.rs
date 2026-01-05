@@ -4,10 +4,12 @@
 //! designed to integrate with the existing indexing system.
 
 mod metadata;
+mod pool;
 mod simple;
 mod storage;
 
 pub use metadata::SemanticMetadata;
+pub use pool::EmbeddingPool;
 pub use simple::{SemanticSearchError, SimpleSemanticSearch};
 pub use storage::SemanticVectorStorage;
 

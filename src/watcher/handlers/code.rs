@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::SimpleIndexer;
+use crate::indexing::facade::IndexFacade;
 use crate::watcher::{WatchAction, WatchError, WatchHandler};
 
 /// Handler for code file changes.
@@ -17,8 +17,8 @@ use crate::watcher::{WatchAction, WatchError, WatchHandler};
 /// Tracks files that are in the code index and returns reindex/remove
 /// actions when they change.
 pub struct CodeFileHandler {
-    /// Shared reference to the indexer.
-    indexer: Arc<RwLock<SimpleIndexer>>,
+    /// Shared reference to the facade.
+    facade: Arc<RwLock<IndexFacade>>,
     /// Cached set of indexed paths for fast lookup.
     cached_paths: RwLock<HashSet<PathBuf>>,
     /// Workspace root for path resolution.
@@ -27,18 +27,18 @@ pub struct CodeFileHandler {
 
 impl CodeFileHandler {
     /// Create a new code file handler.
-    pub fn new(indexer: Arc<RwLock<SimpleIndexer>>, workspace_root: PathBuf) -> Self {
+    pub fn new(facade: Arc<RwLock<IndexFacade>>, workspace_root: PathBuf) -> Self {
         Self {
-            indexer,
+            facade,
             cached_paths: RwLock::new(HashSet::new()),
             workspace_root,
         }
     }
 
-    /// Initialize the cached paths from the indexer.
+    /// Initialize the cached paths from the facade.
     pub async fn init_cache(&self) {
-        let indexer = self.indexer.read().await;
-        let paths: HashSet<PathBuf> = indexer
+        let facade = self.facade.read().await;
+        let paths: HashSet<PathBuf> = facade
             .get_all_indexed_paths()
             .into_iter()
             .map(|p| self.to_absolute(&p))
@@ -83,8 +83,8 @@ impl WatchHandler for CodeFileHandler {
     }
 
     async fn tracked_paths(&self) -> Vec<PathBuf> {
-        let indexer = self.indexer.read().await;
-        indexer
+        let facade = self.facade.read().await;
+        facade
             .get_all_indexed_paths()
             .into_iter()
             .map(|p| self.to_absolute(&p))

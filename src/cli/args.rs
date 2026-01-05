@@ -145,9 +145,9 @@ pub enum Commands {
         #[arg(short, long)]
         force: bool,
 
-        /// Show progress during indexing
-        #[arg(short, long)]
-        progress: bool,
+        /// Disable progress bars (overrides settings.toml show_progress)
+        #[arg(long)]
+        no_progress: bool,
 
         /// Dry run - show what would be indexed without indexing
         #[arg(long)]
@@ -276,6 +276,10 @@ pub enum Commands {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+
+        /// Check for file changes and reindex before running tool
+        #[arg(long)]
+        watch: bool,
     },
 
     /// Benchmark parser performance
@@ -329,6 +333,27 @@ pub enum Commands {
     Documents {
         #[command(subcommand)]
         action: DocumentAction,
+    },
+
+    /// Index with parallel pipeline (experimental)
+    #[command(
+        name = "index-parallel",
+        about = "Index using parallel pipeline with two-phase resolution",
+        long_about = "Index source code using the parallel pipeline architecture.\n\nPhase 1: Parallel file discovery, reading, parsing, and indexing.\nPhase 2: Two-pass cross-file relationship resolution.",
+        after_help = "Examples:\n  codanna index-parallel src\n  codanna index-parallel --no-progress\n  codanna index-parallel src lib --force"
+    )]
+    IndexParallel {
+        /// Paths to directories to index (uses settings.toml indexed_paths if empty)
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+
+        /// Force re-indexing (clears existing index)
+        #[arg(short, long)]
+        force: bool,
+
+        /// Disable progress bars (overrides settings.toml show_progress)
+        #[arg(long)]
+        no_progress: bool,
     },
 
     /// Manage project profiles
@@ -451,7 +476,7 @@ pub enum DocumentAction {
     /// Index documents from a collection
     #[command(
         about = "Index documents from a configured collection",
-        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents index --all\n  codanna documents index --progress"
+        after_help = "Examples:\n  codanna documents index --collection docs\n  codanna documents index --all\n  codanna documents index --no-progress"
     )]
     Index {
         /// Collection name to index (from settings.toml)
@@ -466,9 +491,9 @@ pub enum DocumentAction {
         #[arg(short, long)]
         force: bool,
 
-        /// Show progress bar during indexing
-        #[arg(short, long)]
-        progress: bool,
+        /// Disable progress bars (overrides settings.toml show_progress)
+        #[arg(long)]
+        no_progress: bool,
     },
 
     /// Search documents
@@ -603,12 +628,6 @@ pub enum RetrieveQuery {
         json: bool,
     },
 
-    /// Show what types a given symbol uses
-    Uses {
-        /// Name of the symbol
-        symbol: String,
-    },
-
     /// Search for symbols using full-text search
     #[command(
         after_help = "Examples:\n  # Traditional flag format\n  codanna retrieve search \"parse\" --limit 5 --kind function\n  \n  # Key:value format (Unix-style)\n  codanna retrieve search query:parse limit:5 kind:function\n  \n  # Mixed format\n  codanna retrieve search \"parse\" limit:5 --json"
@@ -633,18 +652,6 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
-    },
-
-    /// Show what methods a type or trait defines
-    Defines {
-        /// Name of the type or trait
-        symbol: String,
-    },
-
-    /// Show dependency analysis for a symbol
-    Dependencies {
-        /// Name of the symbol
-        symbol: String,
     },
 
     /// Show information about a symbol

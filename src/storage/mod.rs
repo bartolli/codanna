@@ -3,7 +3,6 @@ pub mod memory;
 pub mod metadata;
 pub mod metadata_keys;
 pub mod persistence;
-pub mod symbol_cache;
 pub mod tantivy;
 pub use error::{StorageError, StorageResult};
 pub use metadata::{DataSource, IndexMetadata};

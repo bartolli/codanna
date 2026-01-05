@@ -42,7 +42,7 @@ impl FormatTime for CompactTime {
 
 /// Modules that use explicit `target: "name"` or are external crates.
 /// These don't need the `codanna::` prefix in filter strings.
-const EXTERNAL_TARGETS: &[&str] = &["cli", "tantivy"];
+const EXTERNAL_TARGETS: &[&str] = &["cli", "tantivy", "pipeline", "semantic", "rag"];
 
 /// Initialize logging with configuration.
 ///
@@ -159,5 +159,18 @@ macro_rules! debug_event {
     };
     ($handler:expr, $event:expr, $($arg:tt)*) => {
         tracing::debug!("[{}] {}: {}", $handler, $event, format!($($arg)*))
+    };
+}
+
+/// Trace-level event logging macro.
+///
+/// Used for high-frequency events that would clutter debug logs.
+#[macro_export]
+macro_rules! trace_event {
+    ($handler:expr, $event:expr) => {
+        tracing::trace!("[{}] {}", $handler, $event)
+    };
+    ($handler:expr, $event:expr, $($arg:tt)*) => {
+        tracing::trace!("[{}] {}: {}", $handler, $event, format!($($arg)*))
     };
 }

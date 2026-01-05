@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use codanna::SimpleIndexer;
 use codanna::config::{SemanticSearchConfig, Settings};
+use codanna::indexing::facade::IndexFacade;
 use codanna::mcp::{
     CodeIntelligenceServer, FindSymbolRequest, SemanticSearchRequest,
     SemanticSearchWithContextRequest,
@@ -146,7 +146,7 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     };
 
     let settings = Arc::new(settings);
-    let mut indexer = SimpleIndexer::with_settings(settings.clone());
+    let mut indexer = IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade");
     indexer
         .enable_semantic_search()
         .expect("enable semantic search");
@@ -243,11 +243,10 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
 
     // Test 4: Verify embeddings were created for Kotlin symbols
     let embedding_count = server
-        .get_indexer_arc()
+        .get_facade_arc()
         .read()
         .await
-        .semantic_search_embedding_count()
-        .expect("get embedding count");
+        .semantic_search_embedding_count();
 
     assert!(
         embedding_count >= 3,
@@ -315,7 +314,7 @@ class UserService(
     };
 
     let settings = Arc::new(settings);
-    let mut indexer = SimpleIndexer::with_settings(settings.clone());
+    let mut indexer = IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade");
     indexer
         .enable_semantic_search()
         .expect("enable semantic search");

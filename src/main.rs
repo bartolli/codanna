@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use codanna::cli::{Cli, Commands, RetrieveQuery};
+use codanna::indexing::facade::IndexFacade;
 use codanna::project_resolver::{
     providers::{
         java::JavaProvider, javascript::JavaScriptProvider, swift::SwiftProvider,
@@ -13,7 +14,7 @@ use codanna::project_resolver::{
     registry::SimpleProviderRegistry,
 };
 use codanna::storage::IndexMetadata;
-use codanna::{IndexPersistence, Settings, SimpleIndexer};
+use codanna::{IndexPersistence, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -123,7 +124,7 @@ struct SeedReport {
 }
 
 fn seed_indexer_with_config_paths(
-    indexer: &mut SimpleIndexer,
+    indexer: &mut IndexFacade,
     config_paths: &[PathBuf],
 ) -> SeedReport {
     let mut report = SeedReport::default();
@@ -156,26 +157,17 @@ fn seed_indexer_with_config_paths(
         }
 
         let len_before = existing.len();
-        match indexer.add_indexed_path(path) {
-            Ok(_) => {
-                // Refresh our view of tracked paths to honor internal dedup logic
-                existing = indexer.get_indexed_paths().iter().cloned().collect();
-                if existing.len() > len_before {
-                    report.newly_seeded.push(path.clone());
-                }
-                tracing::debug!(
-                    target: "cli",
-                    "seeded configured directory into tracked paths: {}",
-                    path.display()
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "Warning: Failed to track configured directory '{}': {e}",
-                    path.display()
-                );
-            }
+        indexer.add_indexed_path(path);
+        // Refresh our view of tracked paths to honor internal dedup logic
+        existing = indexer.get_indexed_paths().iter().cloned().collect();
+        if existing.len() > len_before {
+            report.newly_seeded.push(path.clone());
         }
+        tracing::debug!(
+            target: "cli",
+            "seeded configured directory into tracked paths: {}",
+            path.display()
+        );
     }
 
     report
@@ -268,6 +260,7 @@ async fn main() {
             | Commands::Plugin { .. }
             | Commands::Documents { .. }
             | Commands::Profile { .. }
+            | Commands::IndexParallel { .. }
     );
 
     // Initialize project resolution providers (only if needed)
@@ -298,7 +291,7 @@ async fn main() {
         threads: Some(t), ..
     } = &cli.command
     {
-        config.indexing.parallel_threads = *t;
+        config.indexing.parallelism = *t;
     }
 
     // Set up persistence based on config
@@ -323,7 +316,7 @@ async fn main() {
 
     // Load existing index or create new one (only if command needs it)
     let settings = Arc::new(config.clone());
-    let mut indexer: Option<SimpleIndexer> = if !needs_indexer {
+    let mut indexer: Option<IndexFacade> = if !needs_indexer {
         None
     } else {
         Some({
@@ -337,7 +330,7 @@ async fn main() {
                     tracing::debug!(target: "cli", "using lazy initialization (skipping trait resolver)");
                 }
 
-                match persistence.load_with_settings_lazy(settings.clone(), skip_trait_resolver) {
+                match persistence.load_facade(settings.clone()) {
                     Ok(loaded) => {
                         tracing::debug!(target: "cli", "successfully loaded index from disk");
                         if cli.info {
@@ -350,7 +343,7 @@ async fn main() {
                     }
                     Err(e) => {
                         eprintln!("Warning: Could not load index: {e}. Creating new index.");
-                        SimpleIndexer::with_settings(settings.clone())
+                        IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
                     }
                 }
             } else {
@@ -373,15 +366,7 @@ async fn main() {
                 }
 
                 // Create a new indexer with the given settings (after clearing)
-                let mut new_indexer = SimpleIndexer::with_settings_lazy(settings.clone());
-
-                if force_recreate_index {
-                    // Clear symbol cache to fix Windows file locking issues
-                    if let Err(e) = new_indexer.clear_symbol_cache(true) {
-                        eprintln!("Warning: Failed to clear symbol cache: {e}");
-                    }
-                }
-                new_indexer
+                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
             }
         })
     };
@@ -414,8 +399,15 @@ async fn main() {
     // Skip sync if force flag is present (force means fresh start, not incremental)
     let is_force_index = matches!(cli.command, Commands::Index { force: true, .. });
 
-    // Extract progress flag from Index command for sync operations
-    let show_progress = matches!(cli.command, Commands::Index { progress: true, .. });
+    // Progress is enabled by default from settings, can be disabled with --no-progress
+    let no_progress_flag = matches!(
+        cli.command,
+        Commands::Index {
+            no_progress: true,
+            ..
+        }
+    );
+    let show_progress = config.indexing.show_progress && !no_progress_flag;
     if let Some(report) = &seed_report {
         if is_force_index {
             if !report.newly_seeded.is_empty() {
@@ -480,21 +472,34 @@ async fn main() {
                         &config.indexing.indexed_paths,
                         show_progress,
                     ) {
-                        Ok((added, removed, files, symbols)) => {
-                            if added > 0 || removed > 0 {
+                        Ok(stats) => {
+                            if stats.has_changes() {
                                 sync_made_changes = Some(true);
-                                if added > 0 {
-                                    eprintln!(
-                                        "  ✓ Added {added} new directories ({files} files, {symbols} symbols)"
+                                if stats.added_dirs > 0 {
+                                    tracing::info!(
+                                        target: "sync",
+                                        "indexed {} directories ({} files, {} symbols)",
+                                        stats.added_dirs, stats.files_indexed, stats.symbols_found
                                     );
                                 }
-                                if removed > 0 {
-                                    eprintln!("  ✓ Removed {removed} directories from index");
+                                if stats.removed_dirs > 0 {
+                                    tracing::info!(
+                                        target: "sync",
+                                        "removed {} directories from index",
+                                        stats.removed_dirs
+                                    );
+                                }
+                                if stats.files_modified > 0 || stats.files_added > 0 {
+                                    tracing::info!(
+                                        target: "sync",
+                                        "synced {} modified, {} new files",
+                                        stats.files_modified, stats.files_added
+                                    );
                                 }
 
                                 // Save updated index
-                                if let Err(e) = persistence.save(idx) {
-                                    eprintln!("Warning: Failed to save updated index: {e}");
+                                if let Err(e) = persistence.save_facade(idx) {
+                                    tracing::warn!(target: "sync", "failed to save updated index: {e}");
                                 }
                             } else {
                                 sync_made_changes = Some(false);
@@ -611,12 +616,14 @@ async fn main() {
         Commands::Index {
             paths,
             force,
-            progress,
+            no_progress,
             dry_run,
             max_files,
             ..
         } => {
             use codanna::cli::commands::index::{IndexArgs, run as run_index};
+            // Progress enabled by default from settings, --no-progress overrides
+            let progress = config.indexing.show_progress && !no_progress;
             run_index(
                 IndexArgs {
                     paths,
@@ -658,16 +665,41 @@ async fn main() {
             positional,
             args,
             json,
+            watch,
         } => {
-            codanna::cli::commands::mcp::run(
-                tool,
-                positional,
-                args,
-                json,
-                indexer.expect("mcp requires indexer"),
-                &config,
-            )
-            .await;
+            let mut indexer = indexer.expect("mcp requires indexer");
+
+            // If --watch is enabled, check for file changes and reindex
+            if watch {
+                let paths = config.get_indexed_paths();
+                if !paths.is_empty() {
+                    let mut total_indexed = 0usize;
+                    for path in &paths {
+                        if path.is_dir() {
+                            // Run incremental indexing (force=false)
+                            match indexer.index_directory_with_options(
+                                path, false, // no progress bars for watch mode
+                                false, // not dry run
+                                false, // not force (incremental)
+                                None,  // no max_files limit
+                            ) {
+                                Ok(stats) => total_indexed += stats.files_indexed,
+                                Err(e) => {
+                                    tracing::warn!(target: "mcp", "watch reindex failed for {}: {e}", path.display());
+                                }
+                            }
+                        }
+                    }
+                    // Only save if changes were made
+                    if total_indexed > 0 {
+                        if let Err(e) = persistence.save_facade(&indexer) {
+                            tracing::warn!(target: "mcp", "failed to save index after watch reindex: {e}");
+                        }
+                    }
+                }
+            }
+
+            codanna::cli::commands::mcp::run(tool, positional, args, json, indexer, &config).await;
         }
 
         Commands::Benchmark { language, file } => {
@@ -684,6 +716,26 @@ async fn main() {
 
         Commands::Profile { action } => {
             codanna::cli::commands::profile::run(action);
+        }
+
+        Commands::IndexParallel {
+            paths,
+            force,
+            no_progress,
+        } => {
+            use codanna::cli::commands::index_parallel::{
+                IndexParallelArgs, run as run_index_parallel,
+            };
+            // Progress enabled by default from settings, --no-progress overrides
+            let progress = config.indexing.show_progress && !no_progress;
+            run_index_parallel(
+                IndexParallelArgs {
+                    paths,
+                    force,
+                    progress,
+                },
+                &config,
+            );
         }
     }
 }
@@ -706,7 +758,8 @@ mod seed_indexer_tests {
             index_path: temp_dir.path().join("index"),
             ..Settings::default()
         };
-        let mut indexer = SimpleIndexer::with_settings(Arc::new(settings));
+        let mut indexer =
+            IndexFacade::new(Arc::new(settings)).expect("Failed to create IndexFacade");
         assert!(indexer.get_indexed_paths().is_empty());
 
         let canonical_parent = parent.canonicalize().unwrap();
@@ -742,7 +795,7 @@ mod seed_indexer_tests {
             index_path: temp_dir.path().join("index"),
             ..Settings::default()
         });
-        let mut indexer = SimpleIndexer::with_settings(settings);
+        let mut indexer = IndexFacade::new(settings).expect("Failed to create IndexFacade");
 
         let report = seed_indexer_with_config_paths(&mut indexer, std::slice::from_ref(&missing));
         assert!(

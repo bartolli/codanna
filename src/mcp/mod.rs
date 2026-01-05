@@ -36,7 +36,8 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
 use crate::documents::{DocumentStore, SearchQuery as DocSearchQuery};
-use crate::{Settings, SimpleIndexer, Symbol};
+use crate::indexing::facade::IndexFacade;
+use crate::{Settings, Symbol};
 
 /// Generate guidance for MCP tool responses
 fn generate_mcp_guidance(settings: &Settings, tool: &str, result_count: usize) -> Option<String> {
@@ -189,7 +190,7 @@ fn default_context_limit() -> u32 {
 
 #[derive(Clone)]
 pub struct CodeIntelligenceServer {
-    pub indexer: Arc<RwLock<SimpleIndexer>>,
+    pub facade: Arc<RwLock<IndexFacade>>,
     pub document_store: Option<Arc<RwLock<DocumentStore>>>,
     tool_router: ToolRouter<Self>,
     peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
@@ -197,29 +198,29 @@ pub struct CodeIntelligenceServer {
 
 #[tool_router]
 impl CodeIntelligenceServer {
-    pub fn new(indexer: SimpleIndexer) -> Self {
+    pub fn new(facade: IndexFacade) -> Self {
         Self {
-            indexer: Arc::new(RwLock::new(indexer)),
+            facade: Arc::new(RwLock::new(facade)),
             document_store: None,
             tool_router: Self::tool_router(),
             peer: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Create server from an already-loaded indexer (most efficient)
-    pub fn from_indexer(indexer: Arc<RwLock<SimpleIndexer>>) -> Self {
+    /// Create server from an already-loaded facade (most efficient)
+    pub fn from_facade(facade: Arc<RwLock<IndexFacade>>) -> Self {
         Self {
-            indexer,
+            facade,
             document_store: None,
             tool_router: Self::tool_router(),
             peer: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Create server with existing indexer and settings (for HTTP server)
-    pub fn new_with_indexer(indexer: Arc<RwLock<SimpleIndexer>>, _settings: Arc<Settings>) -> Self {
+    /// Create server with existing facade and settings (for HTTP server)
+    pub fn new_with_facade(facade: Arc<RwLock<IndexFacade>>, _settings: Arc<Settings>) -> Self {
         Self {
-            indexer,
+            facade,
             document_store: None,
             tool_router: Self::tool_router(),
             peer: Arc::new(Mutex::new(None)),
@@ -232,9 +233,9 @@ impl CodeIntelligenceServer {
         self
     }
 
-    /// Get a reference to the indexer Arc for external management (e.g., hot-reload)
-    pub fn get_indexer_arc(&self) -> Arc<RwLock<SimpleIndexer>> {
-        self.indexer.clone()
+    /// Get a reference to the facade Arc for external management (e.g., hot-reload)
+    pub fn get_facade_arc(&self) -> Arc<RwLock<IndexFacade>> {
+        self.facade.clone()
     }
 
     /// Send a notification when a file is re-indexed
@@ -269,7 +270,7 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         use crate::symbol::context::ContextIncludes;
 
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         // Support symbol_id:XXX format for direct lookup (from semantic search results)
         let symbols = if let Some(id_str) = name.strip_prefix("symbol_id:") {
@@ -510,7 +511,7 @@ impl CodeIntelligenceServer {
             symbol_id,
         }): Parameters<GetCallsRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         // Get the symbol either by ID or by name
         let (symbol, identifier) = if let Some(id) = symbol_id {
@@ -655,7 +656,7 @@ impl CodeIntelligenceServer {
             symbol_id,
         }): Parameters<FindCallersRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         // Get the symbol either by ID or by name
         let (symbol, identifier) = if let Some(id) = symbol_id {
@@ -807,7 +808,7 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         use crate::symbol::context::ContextIncludes;
 
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         // Get the symbol either by ID or by name
         let (symbol, identifier) = if let Some(id) = symbol_id {
@@ -988,7 +989,7 @@ impl CodeIntelligenceServer {
         &self,
         Parameters(_params): Parameters<GetIndexInfoRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
         let symbol_count = indexer.symbol_count();
         let file_count = indexer.file_count();
         let relationship_count = indexer.relationship_count();
@@ -1041,7 +1042,7 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SemanticSearchRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         tracing::debug!(
             target: "mcp",
@@ -1167,7 +1168,7 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SemanticSearchWithContextRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         if !indexer.has_semantic_search() {
             tracing::debug!(
@@ -1248,6 +1249,11 @@ impl CodeIntelligenceServer {
                         if doc.lines().count() > 5 {
                             output.push_str("     ...\n");
                         }
+                    }
+
+                    // Signature
+                    if let Some(ref sig) = symbol.signature {
+                        output.push_str(&format!("   Signature: {sig}\n"));
                     }
 
                     // Only gather additional context for functions/methods
@@ -1692,7 +1698,7 @@ impl CodeIntelligenceServer {
             lang,
         }): Parameters<SearchSymbolsRequest>,
     ) -> Result<CallToolResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         // Parse the kind filter if provided
         let kind_filter = kind.as_ref().and_then(|k| match k.to_lowercase().as_str() {
@@ -1805,7 +1811,15 @@ impl CodeIntelligenceServer {
         };
 
         let mut store = store.write().await;
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
+
+        // Auto-sync: check for file changes in all collections before searching
+        let settings = indexer.settings();
+        for (name, config) in &settings.documents.collections {
+            if let Err(e) = store.index_collection(name, config, &settings.documents.defaults) {
+                tracing::warn!(target: "rag", "auto-sync failed for collection '{}': {}", name, e);
+            }
+        }
 
         let search_query = DocSearchQuery {
             text: query.clone(),
@@ -1934,7 +1948,7 @@ impl CodeIntelligenceServer {
             .and_then(|p| p.get("paths"))
             .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-        let mut indexer = self.indexer.write().await;
+        let mut indexer = self.facade.write().await;
 
         let (reindexed, symbols) = if let Some(paths) = paths {
             // Reindex specific paths
@@ -1950,7 +1964,7 @@ impl CodeIntelligenceServer {
                         }
                     }
                 } else if path.is_dir() {
-                    match indexer.index_directory(path, false, false) {
+                    match indexer.index_directory(path, false) {
                         Ok(stats) => total_reindexed += stats.files_indexed,
                         Err(e) => {
                             tracing::warn!("Failed to reindex {}: {e}", path.display());
@@ -1966,7 +1980,7 @@ impl CodeIntelligenceServer {
 
             for path in &indexed_paths {
                 if path.is_dir() {
-                    match indexer.index_directory(path, false, false) {
+                    match indexer.index_directory(path, false) {
                         Ok(stats) => total_reindexed += stats.files_indexed,
                         Err(e) => {
                             tracing::warn!("Failed to reindex {}: {e}", path.display());
@@ -1988,7 +2002,7 @@ impl CodeIntelligenceServer {
 
     /// Handle index-stats request
     async fn handle_index_stats(&self) -> Result<CustomResult, McpError> {
-        let indexer = self.indexer.read().await;
+        let indexer = self.facade.read().await;
 
         let semantic = if let Some(metadata) = indexer.get_semantic_metadata() {
             serde_json::json!({

@@ -24,6 +24,7 @@ pub mod semantic;
 pub mod storage;
 pub mod symbol;
 pub mod types;
+pub mod utils;
 pub mod vector;
 pub mod watcher;
 
@@ -33,7 +34,7 @@ pub use error::{
     IndexError, IndexResult, McpError, McpResult, ParseError, ParseResult, StorageError,
     StorageResult,
 };
-pub use indexing::{SimpleIndexer, calculate_hash};
+pub use indexing::calculate_hash;
 pub use parsing::RustParser;
 pub use relationship::{RelationKind, Relationship, RelationshipEdge};
 pub use storage::IndexPersistence;

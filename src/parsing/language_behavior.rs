@@ -60,7 +60,7 @@
 use crate::parsing::MethodCall;
 use crate::parsing::resolution::{
     GenericInheritanceResolver, GenericResolutionContext, ImportBinding, ImportOrigin,
-    InheritanceResolver, ResolutionScope, ScopeLevel,
+    InheritanceResolver, PipelineSymbolCache, ResolutionScope, ScopeLevel,
 };
 use crate::relationship::RelationKind;
 use crate::storage::DocumentIndex;
@@ -669,145 +669,117 @@ pub trait LanguageBehavior: Send + Sync {
         Ok(context)
     }
 
-    /// Build resolution context using symbol cache (fast path)
-    /// This version actually USES the cache to minimize memory usage
-    fn build_resolution_context_with_cache(
+    /// Build resolution context for parallel pipeline (no Tantivy access).
+    ///
+    /// This method is used by the parallel indexing pipeline where all symbol
+    /// data is already in the `PipelineSymbolCache`. Unlike `build_resolution_context_with_cache`,
+    /// this version does NOT access DocumentIndex/Tantivy - all resolution uses cached data.
+    ///
+    /// # Arguments
+    /// * `file_id` - The file being resolved
+    /// * `imports` - Imports for this file (already extracted by CONTEXT stage)
+    /// * `cache` - Symbol cache with full Symbol metadata
+    ///
+    /// # Returns
+    /// A tuple of (ResolutionScope, enhanced_imports) where:
+    /// - ResolutionScope: Language-specific context for resolution
+    /// - enhanced_imports: Import paths normalized for module path matching
+    fn build_resolution_context_with_pipeline_cache(
         &self,
         file_id: FileId,
-        cache: &crate::storage::symbol_cache::ConcurrentSymbolCache,
-        document_index: &DocumentIndex,
-    ) -> IndexResult<Box<dyn ResolutionScope>> {
+        imports: &[crate::parsing::Import],
+        cache: &dyn PipelineSymbolCache,
+    ) -> (Box<dyn ResolutionScope>, Vec<crate::parsing::Import>) {
         // Create language-specific resolution context
         let mut context = self.create_resolution_context(file_id);
 
-        // 1. FIRST: Add imported symbols (HIGHEST PRIORITY)
-        // Optimized: Use cache to resolve imports when possible
-        // MERGE from both sources (Tantivy + BehaviorState)
-        let mut imports =
-            document_index
-                .get_imports_for_file(file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "get_imports_for_file".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-        // Merge with in-memory imports (deduplication)
-        let memory_imports = self.get_imports_for_file(file_id);
-        for import in memory_imports {
-            if !imports
-                .iter()
-                .any(|i| i.path == import.path && i.alias == import.alias)
-            {
-                imports.push(import);
-            }
-        }
-
-        // CRITICAL: Populate raw imports into context for is_external_import() checks
-        context.populate_imports(&imports);
+        // 1. Build enhanced imports with normalized paths
         let importing_module = self.get_module_path_for_file(file_id);
-        for import in imports {
-            // Try cache first for simple imports, fall back to full resolution
+        let separator = self.module_separator();
+
+        let enhanced_imports: Vec<crate::parsing::Import> = imports
+            .iter()
+            .map(|import| {
+                // Normalize path: "./foo/bar" → "foo.bar" (using module separator)
+                let enhanced_path = if import.path.starts_with("./") {
+                    import.path.trim_start_matches("./").replace('/', separator)
+                } else if import.path.starts_with("../") {
+                    // Relative parent - normalize without leading ../
+                    import.path.replace('/', separator)
+                } else {
+                    // Absolute or external - normalize separators
+                    import.path.replace('/', separator)
+                };
+
+                crate::parsing::Import {
+                    path: enhanced_path,
+                    file_id: import.file_id,
+                    alias: import.alias.clone(),
+                    is_glob: import.is_glob,
+                    is_type_only: import.is_type_only,
+                }
+            })
+            .collect();
+
+        context.populate_imports(&enhanced_imports);
+
+        // 2. Add imported symbols (HIGHEST PRIORITY)
+        // Build CallerContext for resolution
+        let caller = crate::parsing::CallerContext::from_file(file_id, self.language_id());
+
+        for import in &enhanced_imports {
             let separator = self.module_separator();
-            let symbol_name = import
-                .path
-                .split(separator)
-                .last()
-                .unwrap_or(&import.path)
-                .to_string();
-            tracing::debug!(
-                "[resolution] looking up '{symbol_name}' (from import path '{}')",
-                import.path
+            let symbol_name = import.path.split(separator).last().unwrap_or(&import.path);
+
+            // Use PipelineSymbolCache.resolve() for multi-tier resolution
+            let result = cache.resolve(
+                symbol_name,
+                &caller,
+                None, // No specific range for imports
+                imports,
             );
 
-            // Try multiple cache candidates to disambiguate by module path before DB fallback
-            let candidates = cache.lookup_candidates(&symbol_name, 16);
-            tracing::debug!(
-                "[resolution] cache candidates for '{symbol_name}' (import '{}'): {}",
-                import.path,
-                candidates.len()
-            );
-            let resolved_symbol = if candidates.is_empty() {
-                // Not in cache, use full resolution
-                tracing::debug!(
-                    "[resolution] cache miss for '{symbol_name}' (import path: '{}') - using database",
-                    import.path
-                );
-                self.resolve_import(&import, document_index)
-            } else {
-                // Iterate candidates, verify with module_path and language rules
-                let mut matched: Option<SymbolId> = None;
-                let our_language = self.language_id();
-                for id in candidates.into_iter() {
-                    tracing::debug!(
-                        "[resolution] cache hit for '{symbol_name}' -> SymbolId({id:?})"
-                    );
-                    if let Ok(Some(symbol)) = document_index.find_symbol_by_id(id) {
-                        // Filter by language to prevent cross-language resolution
-                        if let Some(symbol_lang) = &symbol.language_id {
-                            if *symbol_lang != our_language {
-                                tracing::debug!(
-                                    "[resolution] skipping cross-language candidate: symbol={symbol_lang:?}, behavior={our_language:?}"
-                                );
-                                continue;
-                            }
-                        }
+            let resolved_symbol = match result {
+                crate::parsing::ResolveResult::Found(id) => Some(id),
+                crate::parsing::ResolveResult::Ambiguous(ids) => ids.first().copied(),
+                crate::parsing::ResolveResult::NotFound => None,
+            };
 
-                        if let Some(module_path) = &symbol.module_path {
+            // Determine origin (simplified without Tantivy access)
+            let origin = if let Some(id) = resolved_symbol {
+                if let Some(sym) = cache.get(id) {
+                    // Internal if same language and has matching module path
+                    if sym.language_id.as_ref() == Some(&self.language_id()) {
+                        if let Some(ref module_path) = sym.module_path {
                             if self.import_matches_symbol(
                                 &import.path,
                                 module_path.as_ref(),
                                 importing_module.as_deref(),
                             ) {
-                                tracing::debug!(
-                                    "[resolution] cache hit verified - using cached symbol"
-                                );
-                                matched = Some(id);
-                                break;
+                                ImportOrigin::Internal
+                            } else {
+                                ImportOrigin::External
                             }
-                            tracing::debug!(
-                                "[resolution] candidate mismatch, trying next: symbol_module='{module_path}', import='{}'",
-                                import.path
-                            );
                         } else {
-                            tracing::debug!(
-                                "[resolution] cache hit but no module path - trying next candidate"
-                            );
+                            ImportOrigin::Internal // Same language, assume internal
                         }
                     } else {
-                        tracing::debug!(
-                            "[resolution] cache hit but symbol not found by ID - trying next candidate"
-                        );
+                        ImportOrigin::External
                     }
-                }
-
-                if matched.is_some() {
-                    matched
                 } else {
-                    tracing::debug!(
-                        "[resolution] cache hit but wrong symbol - falling back to database"
-                    );
-                    self.resolve_import(&import, document_index)
+                    ImportOrigin::Unknown
                 }
+            } else {
+                ImportOrigin::External // Not found = likely external dependency
             };
 
-            let origin = self.classify_import_origin(
-                &import,
-                resolved_symbol,
-                importing_module.as_deref(),
-                document_index,
-            );
-
+            // Register bindings
             let mut binding_names: Vec<String> = Vec::new();
             if let Some(alias) = &import.alias {
                 binding_names.push(alias.clone());
             }
-
-            if !binding_names.contains(&symbol_name) {
-                binding_names.push(symbol_name.clone());
-            }
-
-            if !binding_names.contains(&import.path) {
-                binding_names.push(import.path.clone());
+            if !binding_names.contains(&symbol_name.to_string()) {
+                binding_names.push(symbol_name.to_string());
             }
 
             let import_clone = import.clone();
@@ -824,149 +796,32 @@ pub trait LanguageBehavior: Send + Sync {
                 let primary_name = binding_names
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| import_clone.alias.clone().unwrap_or(symbol_name.clone()));
+                    .unwrap_or_else(|| symbol_name.to_string());
                 context.add_symbol(primary_name, symbol_id, ScopeLevel::Module);
             }
         }
 
-        // 2. SECOND: Add file's local symbols (MEDIUM PRIORITY)
-        // This is necessary - we need all local symbols for the current file
-        let file_symbols =
-            document_index
-                .find_symbols_by_file(file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_file".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-        for symbol in file_symbols {
-            if self.is_resolvable_symbol(&symbol) {
-                context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
-
-                // Also add by module_path for fully qualified resolution
-                // This allows resolving "crate::module::function" in addition to "function"
-                if let Some(module_path) = &symbol.module_path {
-                    context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Module);
-                }
-            }
-        }
-
-        // 2.5. Add same-package/same-module symbols (for Java, Kotlin, Go, etc.)
-        // Languages with package-level visibility can reference symbols in the same package
-        // without explicit imports. Only add if the file has a module path set.
-        if let Some(current_module) = &importing_module {
-            let same_package_symbols = document_index
-                .find_symbols_by_module(current_module)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_module".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-            for symbol in same_package_symbols {
-                // Skip symbols from current file (already added in section 2)
-                if symbol.file_id == file_id {
-                    continue;
-                }
-
-                // Add to package scope (resolution context decides how to handle it)
+        // 2. Add file's local symbols (MEDIUM PRIORITY)
+        for symbol_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(symbol_id) {
                 if self.is_resolvable_symbol(&symbol) {
-                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Package);
-                }
-            }
-        }
-
-        // 3. THIRD: ELIMINATE get_all_symbols entirely!
-        // Instead of loading thousands of symbols, we'll only load symbols that are:
-        // - Public/exported
-        // - From files we actually import from
-        // This is a much smaller set!
-
-        // Get the list of files we import from (transitively)
-        let mut imported_files = std::collections::HashSet::new();
-        for import in self.get_imports_for_file(file_id) {
-            // Try to find which file this import comes from
-            // Use just the symbol name, not the full path
-            let symbol_name = import
-                .path
-                .split(self.module_separator())
-                .last()
-                .unwrap_or(&import.path);
-            if let Some(symbol_id) = cache.lookup_by_name(symbol_name) {
-                if let Ok(Some(symbol)) = document_index.find_symbol_by_id(symbol_id) {
-                    tracing::debug!(
-                        "[resolution] found import source file via cache: {:?} for '{}'",
-                        symbol.file_id,
-                        import.path
-                    );
-                    imported_files.insert(symbol.file_id);
-                }
-            }
-        }
-        tracing::debug!(
-            "[resolution] total imported files to load symbols from: {}",
-            imported_files.len()
-        );
-
-        // Only load public symbols from files we import from
-        for imported_file_id in &imported_files {
-            if *imported_file_id == file_id {
-                continue; // Skip current file
-            }
-
-            // Get only public symbols from this specific file
-            let imported_file_symbols = document_index
-                .find_symbols_by_file(*imported_file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_file for imports".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-            for symbol in imported_file_symbols {
-                // Only add if it's visible from our file
-                if self.is_symbol_visible_from_file(&symbol, file_id) {
-                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Global);
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
 
                     // Also add by module_path for fully qualified resolution
                     if let Some(module_path) = &symbol.module_path {
-                        context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Global);
+                        context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Module);
                     }
                 }
             }
         }
 
-        // If we have no imports, we might still need some standard library symbols
-        // Load a VERY small set of commonly used symbols (like String, Vec, etc.)
-        if imported_files.is_empty() {
-            tracing::debug!(
-                "[resolution] no imports found - loading minimal fallback symbols (100 instead of 10000)"
-            );
-            // Only load 100 most common symbols as a fallback
-            let minimal_symbols = document_index
-                .get_all_symbols(100) // Drastically reduced from 1000
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "get_all_symbols minimal".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-            for symbol in minimal_symbols {
-                if symbol.file_id != file_id && self.is_symbol_visible_from_file(&symbol, file_id) {
-                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Global);
-
-                    // Also add by module_path for fully qualified resolution
-                    if let Some(module_path) = &symbol.module_path {
-                        context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Global);
-                    }
-                }
-            }
-        } else {
-            tracing::debug!(
-                "[resolution] skipping get_all_symbols, using only symbols from {} imported files",
-                imported_files.len()
-            );
-        }
+        // 3. Skip global symbol loading - cache.resolve() handles cross-file lookup
+        // This is the key difference from build_resolution_context_with_cache:
+        // We don't need to load all symbols upfront because PipelineSymbolCache
+        // has them all and resolve() does multi-tier lookup on demand.
 
         self.initialize_resolution_context(context.as_mut(), file_id);
-        Ok(context)
+        (context, enhanced_imports)
     }
 
     /// Check if a symbol should be resolvable (added to resolution context)
@@ -1083,6 +938,79 @@ pub trait LanguageBehavior: Send + Sync {
     /// should override to return the module path.
     fn get_module_path_for_file(&self, _file_id: FileId) -> Option<String> {
         None
+    }
+
+    /// Get the file path for a FileId from behavior state
+    ///
+    /// Default implementation returns None. Languages with state tracking
+    /// should override to return the file path.
+    fn get_file_path(&self, _file_id: FileId) -> Option<PathBuf> {
+        None
+    }
+
+    /// Load project resolution rules for a file from the persisted index
+    ///
+    /// Uses a thread-local cache to avoid repeated disk reads.
+    /// Cache is invalidated after 1 second to pick up changes.
+    ///
+    /// This method works with the project resolver infrastructure:
+    /// - TypeScript: tsconfig.json paths
+    /// - JavaScript: jsconfig.json paths
+    /// - Java: Maven/Gradle source roots
+    /// - Swift: Package.swift source roots
+    fn load_project_rules_for_file(
+        &self,
+        file_id: FileId,
+    ) -> Option<crate::project_resolver::persist::ResolutionRules> {
+        use crate::project_resolver::persist::ResolutionPersistence;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
+
+        // Thread-local cache with 1-second TTL
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, String, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
+
+        let language_id = self.language_id().as_str().to_string();
+
+        RULES_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+
+            // Check if cache is fresh (< 1 second old) and same language
+            let needs_reload = if let Some((timestamp, cached_lang, _)) = &*cache {
+                timestamp.elapsed() >= Duration::from_secs(1) || cached_lang != &language_id
+            } else {
+                true
+            };
+
+            // Load fresh from disk if needed
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load(&language_id) {
+                    *cache = Some((Instant::now(), language_id.clone(), index));
+                } else {
+                    // No index file exists yet - that's OK
+                    return None;
+                }
+            }
+
+            // Get rules for the file
+            if let Some((_, _, ref index)) = *cache {
+                // Get the file path for this FileId from behavior state
+                if let Some(file_path) = self.get_file_path(file_id) {
+                    // Find the config that applies to this file
+                    if let Some(config_path) = index.get_config_for_file(&file_path) {
+                        return index.rules.get(config_path).cloned();
+                    }
+                }
+
+                // Fallback: return any rules we have (for tests without proper file registration)
+                index.rules.values().next().cloned()
+            } else {
+                None
+            }
+        })
     }
 
     /// Register expression-to-type mappings extracted during parsing

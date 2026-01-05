@@ -3,8 +3,9 @@
 //! This module manages metadata and ensures Tantivy index exists.
 //! All actual data is stored in Tantivy.
 
+use crate::indexing::facade::IndexFacade;
 use crate::storage::{DataSource, IndexMetadata};
-use crate::{IndexError, IndexResult, Settings, SimpleIndexer};
+use crate::{IndexError, IndexResult, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,30 +26,108 @@ impl IndexPersistence {
         self.base_path.join("semantic")
     }
 
-    /// Save metadata for the index
+    // =========================================================================
+    // IndexFacade Persistence Methods
+    // =========================================================================
+
+    /// Load an IndexFacade from disk
+    #[must_use = "Load errors should be handled appropriately"]
+    pub fn load_facade(&self, settings: Arc<Settings>) -> IndexResult<IndexFacade> {
+        // Load metadata to understand data sources
+        let metadata = IndexMetadata::load(&self.base_path).ok();
+
+        // Check if Tantivy index exists
+        let tantivy_path = self.base_path.join("tantivy");
+        if !tantivy_path.join("meta.json").exists() {
+            return Err(IndexError::FileRead {
+                path: tantivy_path,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Tantivy index not found",
+                ),
+            });
+        }
+
+        // Create IndexFacade - it will open the existing Tantivy index
+        let mut facade = IndexFacade::new(settings)?;
+
+        // Display source info with fresh counts
+        if let Some(ref meta) = metadata {
+            let fresh_symbol_count = facade.symbol_count();
+            let fresh_file_count = facade.file_count();
+
+            match &meta.data_source {
+                DataSource::Tantivy {
+                    path, doc_count, ..
+                } => {
+                    tracing::info!(
+                        "[persistence] loaded facade from Tantivy index: {} ({} documents)",
+                        path.display(),
+                        doc_count
+                    );
+                }
+                DataSource::Fresh => {
+                    tracing::info!("[persistence] created fresh facade");
+                }
+            }
+            tracing::info!(
+                "[persistence] facade contains {fresh_symbol_count} symbols from {fresh_file_count} files"
+            );
+        }
+
+        // Load semantic search if available
+        let semantic_path = self.semantic_path();
+        tracing::debug!(
+            "[persistence] semantic path computed as: {}",
+            semantic_path.display()
+        );
+        match facade.load_semantic_search(&semantic_path) {
+            Ok(true) => {
+                tracing::debug!("[persistence] loaded semantic search for facade");
+            }
+            Ok(false) => {
+                tracing::debug!("[persistence] no semantic data found (this is optional)");
+            }
+            Err(e) => {
+                tracing::warn!("[persistence] failed to load semantic search: {e}");
+            }
+        }
+
+        // Restore indexed_paths from metadata
+        if let Some(ref meta) = metadata {
+            if let Some(ref stored_paths) = meta.indexed_paths {
+                facade.set_indexed_paths(stored_paths.clone());
+                tracing::debug!(
+                    "[persistence] restored {} indexed paths from metadata",
+                    stored_paths.len()
+                );
+            }
+        }
+
+        Ok(facade)
+    }
+
+    /// Save metadata for an IndexFacade
     #[must_use = "Save errors should be handled to ensure data is persisted"]
-    pub fn save(&self, indexer: &SimpleIndexer) -> IndexResult<()> {
+    pub fn save_facade(&self, facade: &IndexFacade) -> IndexResult<()> {
         // Update metadata
         let mut metadata =
             IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
 
-        metadata.update_counts(indexer.symbol_count() as u32, indexer.file_count());
+        metadata.update_counts(facade.symbol_count() as u32, facade.file_count());
 
         // Update indexed paths for sync detection on next load
-        let indexed_paths: Vec<PathBuf> = indexer.get_indexed_paths().iter().cloned().collect();
+        let indexed_paths: Vec<PathBuf> = facade.get_indexed_paths().iter().cloned().collect();
         tracing::debug!(
             "[persistence] saving {} indexed paths to metadata",
             indexed_paths.len()
         );
-        for path in &indexed_paths {
-            tracing::trace!("[persistence] indexed path: {}", path.display());
-        }
         metadata.update_indexed_paths(indexed_paths);
 
         // Update metadata to reflect Tantivy
         metadata.data_source = DataSource::Tantivy {
             path: self.base_path.join("tantivy"),
-            doc_count: indexer.document_count().unwrap_or(0),
+            doc_count: facade.document_count().unwrap_or(0),
             timestamp: crate::indexing::get_utc_timestamp(),
         };
 
@@ -56,136 +135,25 @@ impl IndexPersistence {
 
         // Update project registry with latest metadata
         if let Err(err) = self.update_project_registry(&metadata) {
-            eprintln!(
-                "Note: Skipped project registry update ({err}). The index itself was saved successfully; registry metadata will refresh once permissions allow writing to ~/.codanna."
+            tracing::debug!(
+                target: "persistence",
+                "Skipped project registry update: {err}"
             );
         }
 
         // Save semantic search if enabled
-        if indexer.has_semantic_search() {
+        if facade.has_semantic_search() {
             let semantic_path = self.semantic_path();
             std::fs::create_dir_all(&semantic_path).map_err(|e| {
                 IndexError::General(format!("Failed to create semantic directory: {e}"))
             })?;
 
-            indexer
+            facade
                 .save_semantic_search(&semantic_path)
                 .map_err(|e| IndexError::General(format!("Failed to save semantic search: {e}")))?;
         }
 
         Ok(())
-    }
-
-    /// Load the indexer from disk
-    #[must_use = "Load errors should be handled appropriately"]
-    pub fn load(&self) -> IndexResult<SimpleIndexer> {
-        self.load_with_settings(Arc::new(Settings::default()))
-    }
-
-    /// Load the indexer from disk with custom settings
-    #[must_use = "Load errors should be handled appropriately"]
-    pub fn load_with_settings(&self, settings: Arc<Settings>) -> IndexResult<SimpleIndexer> {
-        self.load_with_settings_lazy(settings, false)
-    }
-
-    /// Load the indexer from disk with custom settings and lazy initialization options
-    #[must_use = "Load errors should be handled appropriately"]
-    pub fn load_with_settings_lazy(
-        &self,
-        settings: Arc<Settings>,
-        skip_trait_resolver: bool,
-    ) -> IndexResult<SimpleIndexer> {
-        // Load metadata to understand data sources
-        let metadata = IndexMetadata::load(&self.base_path).ok();
-
-        // Check if Tantivy index exists
-        let tantivy_path = self.base_path.join("tantivy");
-        if tantivy_path.join("meta.json").exists() {
-            // Create indexer that will load from Tantivy
-            // Note: skip_trait_resolver no longer needed - behaviors handle resolution now
-            let mut indexer = if skip_trait_resolver {
-                SimpleIndexer::with_settings_lazy(settings)
-            } else {
-                SimpleIndexer::with_settings(settings)
-            };
-
-            // Display source info with fresh counts
-            if let Some(ref meta) = metadata {
-                // Get fresh counts from the actual index
-                let fresh_symbol_count = indexer.symbol_count();
-                let fresh_file_count = indexer.file_count();
-
-                // Log the metadata with fresh counts
-                match &meta.data_source {
-                    DataSource::Tantivy {
-                        path, doc_count, ..
-                    } => {
-                        tracing::info!(
-                            "[persistence] loaded from Tantivy index: {} ({} documents)",
-                            path.display(),
-                            doc_count
-                        );
-                    }
-                    DataSource::Fresh => {
-                        tracing::info!("[persistence] created fresh index");
-                    }
-                }
-                tracing::info!(
-                    "[persistence] index contains {fresh_symbol_count} symbols from {fresh_file_count} files"
-                );
-            }
-
-            // NEW: Always try to load semantic search - let the actual load determine if data exists
-            // This is more robust than checking filesystem paths which can fail due to resolution issues
-            let semantic_path = self.semantic_path();
-            tracing::debug!("[persistence] base_path: {}", self.base_path.display());
-            tracing::debug!(
-                "[persistence] semantic path computed as: {}",
-                semantic_path.display()
-            );
-            match indexer.load_semantic_search(&semantic_path) {
-                Ok(true) => {
-                    // Successfully loaded (message already printed by load_semantic_search)
-                }
-                Ok(false) => {
-                    // No semantic data found - this is fine, semantic search is optional
-                    tracing::debug!("[persistence] no semantic data found (this is optional)");
-                }
-                Err(e) => {
-                    // Log error but continue - semantic search is optional
-                    tracing::warn!("[persistence] failed to load semantic search: {e}");
-                }
-            }
-
-            // Restore indexed_paths from metadata to the indexer
-            if let Some(ref meta) = metadata {
-                if let Some(ref stored_paths) = meta.indexed_paths {
-                    for path in stored_paths {
-                        if let Err(e) = indexer.add_indexed_path(path) {
-                            tracing::debug!(
-                                "[persistence] failed to restore indexed path {}: {}",
-                                path.display(),
-                                e
-                            );
-                        }
-                    }
-                    tracing::debug!(
-                        "[persistence] restored {} indexed paths from metadata",
-                        stored_paths.len()
-                    );
-                }
-            }
-
-            Ok(indexer)
-        } else {
-            Err(IndexError::FileRead {
-                path: tantivy_path,
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Tantivy index not found",
-                ),
-            })
-        }
     }
 
     /// Check if an index exists
@@ -295,39 +263,12 @@ impl IndexPersistence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use tempfile::TempDir;
 
     /// Check if semantic data exists (test helper)
     fn has_semantic_data(persistence: &IndexPersistence) -> bool {
         // Check if metadata exists - that's the definitive indicator
         persistence.semantic_path().join("metadata.json").exists()
-    }
-
-    #[test]
-    fn test_save_and_load() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create a custom settings with temp_dir as the index path
-        let settings = Settings {
-            index_path: temp_dir.path().to_path_buf(),
-            ..Settings::default()
-        };
-
-        let persistence = IndexPersistence::new(temp_dir.path().to_path_buf());
-
-        // Create required directories for the indexer
-        std::fs::create_dir_all(temp_dir.path().join("tantivy")).unwrap();
-
-        // Create an indexer with custom settings
-        let indexer = SimpleIndexer::with_settings(Arc::new(settings));
-
-        // Save it
-        persistence.save(&indexer).unwrap();
-
-        // Check metadata exists
-        let metadata_path = temp_dir.path().join("index.meta");
-        assert!(metadata_path.exists());
     }
 
     #[test]

@@ -5,9 +5,10 @@
 
 #[cfg(feature = "https-server")]
 pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
+    use crate::IndexPersistence;
+    use crate::indexing::facade::IndexFacade;
     use crate::mcp::{CodeIntelligenceServer, notifications::NotificationBroadcaster};
     use crate::watcher::HotReloadWatcher;
-    use crate::{IndexPersistence, SimpleIndexer};
     use anyhow::Context;
     use axum::Router;
     use axum_server::tls_rustls::RustlsConfig;
@@ -29,30 +30,28 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     // Create notification broadcaster for file change events
     let broadcaster = Arc::new(NotificationBroadcaster::new(100));
 
-    // Create shared indexer
-    let indexer = Arc::new(RwLock::new(SimpleIndexer::with_settings(Arc::new(
-        config.clone(),
-    ))));
-
-    // Load existing index if available
+    // Create shared facade
+    let settings = Arc::new(config.clone());
     let persistence = IndexPersistence::new(config.index_path.clone());
-    if persistence.exists() {
-        match persistence.load_with_settings(Arc::new(config.clone())) {
-            Ok(loaded_indexer) => {
-                let mut indexer_guard = indexer.write().await;
-                *indexer_guard = loaded_indexer;
-                let symbol_count = indexer_guard.symbol_count();
-                drop(indexer_guard);
+
+    let facade = if persistence.exists() {
+        match persistence.load_facade(settings.clone()) {
+            Ok(loaded) => {
+                let symbol_count = loaded.symbol_count();
                 crate::log_event!("https", "loaded", "{symbol_count} symbols");
+                loaded
             }
             Err(e) => {
                 tracing::warn!("[https] failed to load index: {e}");
                 crate::log_event!("https", "starting", "empty index");
+                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
             }
         }
     } else {
         crate::log_event!("https", "starting", "no existing index");
-    }
+        IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+    };
+    let indexer = Arc::new(RwLock::new(facade));
 
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
@@ -190,7 +189,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
 
     // Create a shared service instance that all connections will use
     let shared_service =
-        CodeIntelligenceServer::new_with_indexer(indexer_for_service, config_for_service);
+        CodeIntelligenceServer::new_with_facade(indexer_for_service, config_for_service);
 
     // Start notification listener to forward file change events to MCP clients
     let notification_receiver = broadcaster.subscribe();

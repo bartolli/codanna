@@ -63,6 +63,7 @@ pub struct IndexSchema {
     pub file_id: Field,
     pub file_hash: Field,
     pub file_timestamp: Field,
+    pub file_mtime: Field,
 
     // Metadata fields
     pub meta_key: Field,
@@ -151,6 +152,7 @@ impl IndexSchema {
         let file_id = builder.add_u64_field("file_id", indexed_u64_options.clone());
         let file_hash = builder.add_text_field("file_hash", STRING | STORED);
         let file_timestamp = builder.add_u64_field("file_timestamp", STORED | FAST);
+        let file_mtime = builder.add_u64_field("file_mtime", STORED | FAST);
 
         // Metadata fields (for counters, etc.)
         let meta_key = builder.add_text_field("meta_key", STRING | STORED | FAST);
@@ -197,6 +199,7 @@ impl IndexSchema {
             file_id,
             file_hash,
             file_timestamp,
+            file_mtime,
             meta_key,
             meta_value,
             cluster_id,
@@ -395,7 +398,7 @@ pub struct DocumentIndex {
     reader: IndexReader,
     schema: IndexSchema,
     index_path: PathBuf,
-    pub(crate) writer: Mutex<Option<IndexWriter<Document>>>,
+    pub(crate) writer: RwLock<Option<IndexWriter<Document>>>,
     /// Tantivy heap size in bytes
     heap_size: usize,
     /// Maximum retry attempts for transient errors
@@ -485,7 +488,7 @@ impl DocumentIndex {
             reader,
             schema: index_schema,
             index_path,
-            writer: Mutex::new(None),
+            writer: RwLock::new(None),
             heap_size,
             max_retry_attempts,
             vector_storage_path: None,
@@ -817,8 +820,8 @@ impl DocumentIndex {
 
         // Perform batch update
         self.start_batch()?;
-        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         for (symbol_id, cluster_id) in updates_needed {
             // Find the document by symbol_id
@@ -862,7 +865,10 @@ impl DocumentIndex {
 
     /// Start a batch operation for adding multiple documents
     pub fn start_batch(&self) -> StorageResult<()> {
-        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let mut writer_lock = self
+            .writer
+            .write()
+            .map_err(|_| StorageError::LockPoisoned)?;
         if writer_lock.is_none() {
             let writer = self.create_writer_with_retry()?;
             *writer_lock = Some(writer);
@@ -905,8 +911,8 @@ impl DocumentIndex {
         scope_context: Option<crate::ScopeContext>,
         language_id: Option<&str>, // Language identifier for the symbol
     ) -> StorageResult<()> {
-        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "symbol");
@@ -977,10 +983,10 @@ impl DocumentIndex {
 
     /// Commit the current batch and reload the reader
     pub fn commit_batch(&self) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let mut writer_lock = match self.writer.write() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in commit_batch");
+                eprintln!("Warning: Recovering from poisoned writer rwlock in commit_batch");
                 poisoned.into_inner()
             }
         };
@@ -1042,10 +1048,10 @@ impl DocumentIndex {
     /// Remove documents for a specific file
     pub fn remove_file_documents(&self, file_path: &str) -> StorageResult<()> {
         // Use existing batch writer if available, otherwise create temporary one
-        let mut writer_lock = self.writer.lock().map_err(|_| StorageError::LockPoisoned)?;
+        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
         let term = Term::from_field_text(self.schema.file_path, file_path);
 
-        if let Some(writer) = writer_lock.as_mut() {
+        if let Some(writer) = writer_lock.as_ref() {
             // Use existing batch writer
             writer.delete_term(term);
             // Note: We don't commit here - that happens at batch end
@@ -1743,7 +1749,8 @@ impl DocumentIndex {
     }
 
     /// Get file info by path
-    pub fn get_file_info(&self, path: &str) -> StorageResult<Option<(FileId, String)>> {
+    /// Returns (file_id, hash, mtime). Mtime is 0 for legacy entries without mtime.
+    pub fn get_file_info(&self, path: &str) -> StorageResult<Option<(FileId, String, u64)>> {
         let searcher = self.reader.searcher();
         let query = BooleanQuery::from(vec![
             (
@@ -1785,7 +1792,12 @@ impl DocumentIndex {
                 })?
                 .to_string();
 
-            Ok(Some((file_id, hash)))
+            let mtime = doc
+                .get_first(self.schema.file_mtime)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            Ok(Some((file_id, hash, mtime)))
         } else {
             Ok(None)
         }
@@ -1837,14 +1849,14 @@ impl DocumentIndex {
 
     /// Delete a symbol
     pub fn delete_symbol(&self, id: SymbolId) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in delete_symbol");
+                eprintln!("Warning: Recovering from poisoned writer rwlock in delete_symbol");
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let term = Term::from_field_u64(self.schema.symbol_id, id.0 as u64);
         writer.delete_term(term);
@@ -1853,14 +1865,16 @@ impl DocumentIndex {
 
     /// Delete relationships for a symbol
     pub fn delete_relationships_for_symbol(&self, id: SymbolId) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in delete_relationships");
+                eprintln!(
+                    "Warning: Recovering from poisoned writer rwlock in delete_relationships"
+                );
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         // Delete where from_symbol_id = id
         let from_term = Term::from_field_u64(self.schema.from_symbol_id, id.0 as u64);
@@ -2204,14 +2218,14 @@ impl DocumentIndex {
         to: SymbolId,
         rel: &Relationship,
     ) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in store_relationship");
+                eprintln!("Warning: Recovering from poisoned writer rwlock in store_relationship");
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "relationship");
@@ -2284,14 +2298,14 @@ impl DocumentIndex {
         hash: &str,
         timestamp: u64,
     ) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in store_file_info");
+                eprintln!("Warning: Recovering from poisoned writer rwlock in store_file_info");
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "file_info");
@@ -2304,19 +2318,57 @@ impl DocumentIndex {
         Ok(())
     }
 
+    /// Store file registration from parallel pipeline.
+    ///
+    /// [PIPELINE API] This method is part of the new parallel indexing pipeline.
+    /// It takes FileRegistration directly and handles all field conversions.
+    /// Old methods like store_file_info will be retired once pipeline is complete.
+    pub fn store_file_registration(
+        &self,
+        registration: &crate::indexing::pipeline::FileRegistration,
+    ) -> StorageResult<()> {
+        let writer_lock = match self.writer.read() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!(
+                    "Warning: Recovering from poisoned writer rwlock in store_file_registration"
+                );
+                poisoned.into_inner()
+            }
+        };
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
+
+        let mut doc = Document::new();
+        doc.add_text(self.schema.doc_type, "file_info");
+        doc.add_u64(self.schema.file_id, registration.file_id.value() as u64);
+        doc.add_text(
+            self.schema.file_path,
+            registration.path.to_string_lossy().as_ref(),
+        );
+        // Hash is already a SHA256 hex string
+        doc.add_text(self.schema.file_hash, &registration.content_hash);
+        doc.add_u64(self.schema.file_timestamp, registration.timestamp);
+        doc.add_u64(self.schema.file_mtime, registration.mtime);
+        // Store language for incremental indexing (parser selection)
+        doc.add_text(self.schema.language, registration.language_id.as_str());
+
+        writer.add_document(doc)?;
+        Ok(())
+    }
+
     /// Store an import document in the index
     ///
     /// This is a pure storage operation storing raw import metadata.
     /// Resolution logic happens in the resolution layer.
     pub fn store_import(&self, import: &crate::parsing::Import) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in store_import");
+                eprintln!("Warning: Recovering from poisoned writer rwlock in store_import");
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let mut doc = Document::new();
 
@@ -2419,16 +2471,16 @@ impl DocumentIndex {
     ///
     /// Used during file updates and deletions.
     pub fn delete_imports_for_file(&self, file_id: FileId) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
                 eprintln!(
-                    "Warning: Recovering from poisoned writer mutex in delete_imports_for_file"
+                    "Warning: Recovering from poisoned writer rwlock in delete_imports_for_file"
                 );
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let query = BooleanQuery::new(vec![
             (
@@ -2453,14 +2505,14 @@ impl DocumentIndex {
 
     /// Store metadata (counters, etc.)
     pub(crate) fn store_metadata(&self, key: MetadataKey, value: u64) -> StorageResult<()> {
-        let mut writer_lock = match self.writer.lock() {
+        let writer_lock = match self.writer.read() {
             Ok(lock) => lock,
             Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer mutex in store_metadata");
+                eprintln!("Warning: Recovering from poisoned writer rwlock in store_metadata");
                 poisoned.into_inner()
             }
         };
-        let writer = writer_lock.as_mut().ok_or(StorageError::NoActiveBatch)?;
+        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         // First delete any existing metadata with this key
         let key_str = key.as_str();
@@ -3331,9 +3383,9 @@ mod tests {
 
             index
                 .writer
-                .lock()
+                .read()
                 .unwrap()
-                .as_mut()
+                .as_ref()
                 .unwrap()
                 .add_document(doc)
                 .unwrap();
@@ -3439,9 +3491,9 @@ mod tests {
 
         index
             .writer
-            .lock()
+            .read()
             .unwrap()
-            .as_mut()
+            .as_ref()
             .unwrap()
             .add_document(doc)
             .unwrap();

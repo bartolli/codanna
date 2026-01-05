@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.8.9"
+version = "0.9.0"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -12,31 +12,50 @@ readme = "README.md"
 keywords = ["mcp-server", "code-intelligence", "semantic-search", "llm", "rag"]
 categories = ["development-tools", "command-line-utilities", "parsing", "text-processing", "compilers"]
 autoexamples = false
+exclude = [".github/", "contributing/", "tests/", "docs/"]
+
+[package.metadata.binstall]
+pkg-fmt = "txz"
+bin-dir = "{ name }-{ version }-{ target-family }/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-linux-x64.tar.xz"
+bin-dir = "{ name }-{ version }-linux-x64/{ bin }"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-macos-x64.tar.xz"
+bin-dir = "{ name }-{ version }-macos-x64/{ bin }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-macos-arm64.tar.xz"
+bin-dir = "{ name }-{ version }-macos-arm64/{ bin }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-windows-x64.zip"
+pkg-fmt = "zip"
+bin-dir = "{ name }-{ version }-windows-x64/{ bin }{ binary-ext }"
 
 [dependencies]
 anyhow = "1.0.100"
 bitflags = "2.10.0"
-clap = { version = "4.5.53", features = ["derive", "color", "env"] }
+clap = { version = "4.5.54", features = ["derive", "color", "env"] }
 crossbeam-channel = "0.5.15"
 dashmap = "6.1.0"
 dirs = "6.0.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-hnsw = "0.11.0"
 ignore = "0.4.25"
-lz4_flex = "0.12.0"
 memmap2 = "0.9.9"
 notify = "8.2.0"
 num_cpus = "1.17.0"
 parking_lot = "0.12.5"
 rayon = "1.11.0"
-# rkyv = { version = "0.8.12", features = ["bytecheck", "std"] }
 rmcp = { version = "0.12.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
 sha2 = "0.10"
 tantivy = "0.25.0"
 thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.49.0", features = ["full"] }
 toml = { version = "0.9.8", features = ["preserve_order"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
@@ -51,7 +70,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
-fastembed = "5.5.0"
+fastembed = "5.6.0"
 rand = "0.9.2"
 indicatif = "0.18.3"
 comfy-table = "7.2.1"
@@ -61,7 +80,7 @@ axum = { version = "0.8.8", optional = true }
 tower = { version = "0.5.2", optional = true }
 tower-http = { version = "0.6.8", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
-tokio-util = "0.7.17"
+tokio-util = "0.7.18"
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
 rustls = { version = "0.23.35", default-features = false, features = ["ring"], optional = true }
 rcgen = { version = "0.14.6", optional = true }
@@ -77,13 +96,16 @@ serde_json5 = "0.2.1"
 tree-sitter-swift = "0.7.1"
 glob = "0.3.3"
 async-trait = "0.1.89"
+sysinfo = "0.37.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
+ort = { version = "=2.0.0-rc.10", default-features = false }
 testcontainers = "0.26.3"
+thread-id = "5.0.0"
 
 [features]
-default = []
+default = ["http-server"]
 http-server = ["axum", "tower", "tower-http"]
 https-server = ["http-server", "axum-server", "rustls", "rcgen"]
 axum = ["dep:axum"]
@@ -92,6 +114,15 @@ tower-http = ["dep:tower-http"]
 axum-server = ["dep:axum-server"]
 rustls = ["dep:rustls"]
 rcgen = ["dep:rcgen"]
+
+# GPU/Hardware Acceleration (requires vendored fastembed in .cargo/config.toml)
+# Upstream fastembed does not expose these features yet.
+# gpu-cuda = ["fastembed/cuda"]
+# gpu-tensorrt = ["fastembed/tensorrt"]
+# gpu-coreml = ["fastembed/coreml"]
+# gpu-directml = ["fastembed/directml"]
+# gpu-openvino = ["fastembed/openvino"]
+# gpu-rocm = ["fastembed/rocm"]
 
 [profile.release]
 opt-level = 3
@@ -104,9 +135,18 @@ strip = true
 # See clippy.toml for behavior configuration (thresholds, etc.)
 uninlined_format_args = "warn"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("gpu-cuda", "gpu-tensorrt", "gpu-coreml", "gpu-directml", "gpu-openvino", "gpu-rocm"))'
+] }
+
 [[example]]
 name = "simple_progress_demo"
 path = "examples/simple_progress_demo.rs"
+
+[[example]]
+name = "pipeline_metrics_demo"
+path = "examples/pipeline_metrics_demo.rs"
 
 [[bench]]
 name = "unified_output_bench"

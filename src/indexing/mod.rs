@@ -1,14 +1,20 @@
+pub mod facade;
 pub mod file_info;
 pub mod progress;
-pub mod simple;
 pub mod transaction;
 pub mod walker;
 
-#[cfg(test)]
-pub mod import_resolution_proof;
+// Parallel pipeline for high-performance indexing
+pub mod pipeline;
 
+// Re-exports
 pub use file_info::{FileInfo, calculate_hash, get_utc_timestamp};
 pub use progress::IndexStats;
-pub use simple::SimpleIndexer;
 pub use transaction::{FileTransaction, IndexTransaction};
 pub use walker::FileWalker;
+
+// Pipeline exports
+pub use pipeline::{Pipeline, PipelineConfig};
+
+// Facade - primary API for indexing operations
+pub use facade::{FacadeResult, IndexFacade, IndexingStats, SyncStats};

@@ -10,7 +10,7 @@
 //!
 //! Environment variables must be prefixed with `CI_` and use double underscores
 //! to separate nested levels:
-//! - `CI_INDEXING__PARALLEL_THREADS=8` sets `indexing.parallel_threads`
+//! - `CI_INDEXING__PARALLELISM=8` sets `indexing.parallelism`
 //! - `CI_LOGGING__DEFAULT=debug` sets `logging.default`
 //! - `CI_INDEXING__INCLUDE_TESTS=false` sets `indexing.include_tests`
 //!
@@ -81,9 +81,10 @@ pub struct Settings {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct IndexingConfig {
-    /// Number of parallel threads for indexing
-    #[serde(default = "default_parallel_threads")]
-    pub parallel_threads: usize,
+    /// CPU cores to use for indexing (0 = auto-detect all cores)
+    /// Thread counts for each stage are derived from this value
+    #[serde(default = "default_parallelism")]
+    pub parallelism: usize,
 
     /// Tantivy heap size in megabytes
     /// Controls memory usage before flushing to disk
@@ -108,6 +109,24 @@ pub struct IndexingConfig {
     /// This list is managed by the add-dir and remove-dir commands
     #[serde(default)]
     pub indexed_paths: Vec<PathBuf>,
+
+    // Pipeline settings (parallel indexer)
+    /// Symbols per batch before flushing to Tantivy
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+
+    /// Batches to accumulate before Tantivy commit
+    #[serde(default = "default_batches_per_commit")]
+    pub batches_per_commit: usize,
+
+    /// Enable detailed pipeline stage tracing (timing, memory, throughput)
+    /// Set logging.modules.pipeline = "info" to see output
+    #[serde(default)]
+    pub pipeline_tracing: bool,
+
+    /// Show progress bars during indexing (default: true)
+    #[serde(default = "default_true")]
+    pub show_progress: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -150,6 +169,10 @@ pub struct SemanticSearchConfig {
     /// Similarity threshold for search results
     #[serde(default = "default_similarity_threshold")]
     pub threshold: f32,
+
+    /// Number of parallel embedding model instances
+    #[serde(default = "default_embedding_threads")]
+    pub embedding_threads: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -208,6 +231,8 @@ fn default_logging_modules() -> HashMap<String, String> {
     let mut modules = HashMap::new();
     // Suppress verbose Tantivy internal logs by default
     modules.insert("tantivy".to_string(), "warn".to_string());
+    // Pipeline logs at warn by default (use "info" to see progress)
+    modules.insert("pipeline".to_string(), "warn".to_string());
     modules
 }
 
@@ -264,7 +289,7 @@ fn default_index_path() -> PathBuf {
     let local_dir = crate::init::local_dir_name();
     PathBuf::from(local_dir).join("index")
 }
-fn default_parallel_threads() -> usize {
+fn default_parallelism() -> usize {
     num_cpus::get()
 }
 fn default_tantivy_heap_mb() -> usize {
@@ -272,6 +297,12 @@ fn default_tantivy_heap_mb() -> usize {
 }
 fn default_max_retry_attempts() -> u32 {
     3 // Exponential backoff: 100ms, 200ms, 400ms
+}
+fn default_batch_size() -> usize {
+    5000 // Symbols per batch before Tantivy flush
+}
+fn default_batches_per_commit() -> usize {
+    10 // Commit every 10 batches (~50K symbols)
 }
 fn default_true() -> bool {
     true
@@ -287,6 +318,9 @@ fn default_embedding_model() -> String {
 }
 fn default_similarity_threshold() -> f32 {
     0.6
+}
+fn default_embedding_threads() -> usize {
+    3
 }
 fn default_debounce_ms() -> u64 {
     500
@@ -324,7 +358,7 @@ impl Default for Settings {
 impl Default for IndexingConfig {
     fn default() -> Self {
         Self {
-            parallel_threads: default_parallel_threads(),
+            parallelism: default_parallelism(),
             tantivy_heap_mb: default_tantivy_heap_mb(),
             max_retry_attempts: default_max_retry_attempts(),
             project_root: None,
@@ -335,6 +369,10 @@ impl Default for IndexingConfig {
                 "*.generated.*".to_string(),
             ],
             indexed_paths: Vec::new(),
+            batch_size: default_batch_size(),
+            batches_per_commit: default_batches_per_commit(),
+            pipeline_tracing: false,
+            show_progress: true,
         }
     }
 }
@@ -353,6 +391,7 @@ impl Default for SemanticSearchConfig {
             enabled: true, // Enabled by default for better code intelligence
             model: default_embedding_model(),
             threshold: default_similarity_threshold(),
+            embedding_threads: default_embedding_threads(),
         }
     }
 }
@@ -790,10 +829,9 @@ impl Settings {
                 result.push_str("\n[indexing]\n");
                 prev_line_was_section = true;
                 continue;
-            } else if line.starts_with("parallel_threads = ") {
-                result.push_str(
-                    "# Number of parallel threads for indexing (defaults to CPU count)\n",
-                );
+            } else if line.starts_with("parallelism = ") {
+                result.push_str("# CPU cores to use for indexing (default: all cores)\n");
+                result.push_str("# Thread counts for each stage are derived from this value\n");
             } else if line.starts_with("tantivy_heap_mb = ") {
                 result.push_str("\n# Tantivy heap size in megabytes\n");
                 result.push_str("# Reduce to 15-25MB if you have permission issues (antivirus, SELinux, containers)\n");
@@ -810,6 +848,17 @@ impl Settings {
                 result.push_str("# Add folders using: codanna add-dir <path>\n");
                 result.push_str("# Remove folders using: codanna remove-dir <path>\n");
                 result.push_str("# List all folders using: codanna list-dirs\n");
+            } else if line.starts_with("batch_size = ") {
+                result.push_str("\n# Items per batch before flushing to index (default: 5000)\n");
+            } else if line.starts_with("batches_per_commit = ") {
+                result.push_str("\n# Number of batches before committing to disk (default: 10)\n");
+            } else if line.starts_with("pipeline_tracing = ") {
+                result.push_str("\n# Enable detailed pipeline stage tracing\n");
+                result.push_str("# Shows timing, throughput, and memory for each stage\n");
+                result.push_str("# Requires: logging.modules.pipeline = \"info\"\n");
+            } else if line.starts_with("show_progress = ") {
+                result.push_str("\n# Show progress bars during indexing (default: true)\n");
+                result.push_str("# Use --no-progress CLI flag to override\n");
             } else if line == "[mcp]" {
                 result.push_str("\n[mcp]\n");
                 prev_line_was_section = true;
@@ -840,6 +889,11 @@ impl Settings {
                 result.push_str("# - See documentation for full list of available models\n");
             } else if line.starts_with("threshold = ") {
                 result.push_str("\n# Similarity threshold for search results (0.0 to 1.0)\n");
+            } else if line.starts_with("embedding_threads = ") {
+                result.push_str("\n# Number of parallel embedding model instances (default: 3)\n");
+                result
+                    .push_str("# Each instance uses ~86MB RAM. Higher values = faster indexing.\n");
+                result.push_str("# Set to 1 for low-memory systems, 4-6 for high-end machines.\n");
             } else if line == "[file_watch]" {
                 result.push_str("\n[file_watch]\n");
                 result.push_str("# Enable automatic file watching for indexed files\n");
@@ -879,13 +933,16 @@ impl Settings {
             } else if line == "[logging.modules]" {
                 result.push_str("\n[logging.modules]\n");
                 result.push_str("# Per-module log level overrides\n");
+                result.push_str("# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage\n");
                 result.push_str(
-                    "# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage, semantic\n",
+                    "# External targets (used as-is): cli, tantivy, pipeline, semantic, rag\n",
                 );
-                result.push_str("# External targets (used as-is): cli, tantivy\n");
-                result.push_str("# Example: cli = \"debug\"     # CLI startup logs\n");
-                result.push_str("# Example: tantivy = \"error\" # Suppress Tantivy logs\n");
-                result.push_str("# Example: watcher = \"debug\" # File watcher events\n");
+                result.push_str("# Examples (uncomment to enable):\n");
+                result.push_str("# pipeline = \"info\"   # Code indexing stages and progress\n");
+                result.push_str("# semantic = \"info\"   # Embedding pool and code embeddings\n");
+                result.push_str("# rag = \"info\"        # Document collections and chunks\n");
+                result.push_str("# watcher = \"debug\"   # File watcher events\n");
+                result.push_str("# mcp = \"debug\"       # MCP server operations\n");
                 prev_line_was_section = true;
                 continue;
             } else if line == "[documents]" {
@@ -937,7 +994,6 @@ impl Settings {
             } else if line.starts_with("[languages.") {
                 if !in_languages_section {
                     result.push_str("\n# Language-specific settings\n");
-                    result.push_str("# Currently supported: Rust, Python, PHP, TypeScript, Go, C, C++, CSharp, Gdscript\n");
                     in_languages_section = true;
                 }
                 result.push('\n');
@@ -1128,7 +1184,7 @@ mod tests {
         // Use the correct local dir name for test mode
         let expected_index_path = PathBuf::from(format!("{}/index", crate::init::local_dir_name()));
         assert_eq!(settings.index_path, expected_index_path);
-        assert!(settings.indexing.parallel_threads > 0);
+        assert!(settings.indexing.parallelism > 0);
         assert!(settings.languages.contains_key("rust"));
     }
 
@@ -1141,7 +1197,7 @@ mod tests {
 version = 2
 
 [indexing]
-parallel_threads = 4
+parallelism = 4
 ignore_patterns = ["custom/**"]
 include_tests = false
 
@@ -1156,7 +1212,7 @@ enabled = false
 
         let settings = Settings::load_from(&config_path).unwrap();
         assert_eq!(settings.version, 2);
-        assert_eq!(settings.indexing.parallel_threads, 4);
+        assert_eq!(settings.indexing.parallelism, 4);
         assert_eq!(settings.indexing.ignore_patterns, vec!["custom/**"]);
         // Default ignore patterns should be replaced by custom ones
         assert_eq!(settings.indexing.ignore_patterns.len(), 1);
@@ -1170,13 +1226,13 @@ enabled = false
         let config_path = temp_dir.path().join("settings.toml");
 
         let mut settings = Settings::default();
-        settings.indexing.parallel_threads = 2;
+        settings.indexing.parallelism = 2;
         settings.mcp.max_context_size = 50000;
 
         settings.save(&config_path).unwrap();
 
         let loaded = Settings::load_from(&config_path).unwrap();
-        assert_eq!(loaded.indexing.parallel_threads, 2);
+        assert_eq!(loaded.indexing.parallelism, 2);
         assert_eq!(loaded.mcp.max_context_size, 50000);
     }
 
@@ -1188,7 +1244,7 @@ enabled = false
         // Only specify a few settings
         let toml_content = r#"
 [indexing]
-parallel_threads = 16
+parallelism = 16
 
 [languages.python]
 enabled = true
@@ -1199,7 +1255,7 @@ enabled = true
         let settings = Settings::load_from(&config_path).unwrap();
 
         // Modified values
-        assert_eq!(settings.indexing.parallel_threads, 16);
+        assert_eq!(settings.indexing.parallelism, 16);
         assert!(settings.languages["python"].enabled);
 
         // Default values should still be present
@@ -1222,7 +1278,7 @@ enabled = true
         // Create a config file
         let toml_content = r#"
 [indexing]
-parallel_threads = 8
+parallelism = 8
 include_tests = true
 
 [mcp]
@@ -1235,14 +1291,14 @@ default = "info"
 
         // Set environment variables that should override config file
         unsafe {
-            std::env::set_var("CI_INDEXING__PARALLEL_THREADS", "16");
+            std::env::set_var("CI_INDEXING__PARALLELISM", "16");
             std::env::set_var("CI_LOGGING__DEFAULT", "debug");
         }
 
         let settings = Settings::load().unwrap();
 
         // Environment variable should override config file
-        assert_eq!(settings.indexing.parallel_threads, 16);
+        assert_eq!(settings.indexing.parallelism, 16);
         // Config file value should be used when no env var
         assert_eq!(settings.mcp.max_context_size, 50000);
         // Env var overrides logging default
@@ -1252,7 +1308,7 @@ default = "info"
 
         // Clean up
         unsafe {
-            std::env::remove_var("CI_INDEXING__PARALLEL_THREADS");
+            std::env::remove_var("CI_INDEXING__PARALLELISM");
             std::env::remove_var("CI_LOGGING__DEFAULT");
         }
         std::env::set_current_dir(original_dir).unwrap();

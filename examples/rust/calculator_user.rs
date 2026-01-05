@@ -5,7 +5,7 @@ use crate::calculator::Calculator;
 pub fn process_numbers() -> i32 {
     let mut calc = Calculator::new(10);
     calc.add(5);
-    calc.multiply(2);
+    calc.times(2);
     calc.get_value()
 }
 

@@ -1870,6 +1870,7 @@ impl GoParser {
                                 receiver: receiver.map(|r| r.to_string()),
                                 is_static,
                                 range,
+                                caller_range: None, // TODO: track caller definition range
                             };
 
                             calls.push(method_call);

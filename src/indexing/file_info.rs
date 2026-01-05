@@ -6,7 +6,7 @@
 use crate::FileId;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Information about an indexed file
 #[derive(Debug, Clone)]
@@ -19,16 +19,20 @@ pub struct FileInfo {
     pub hash: String,
     /// UTC timestamp when last indexed (seconds since UNIX_EPOCH)
     pub last_indexed_utc: u64,
+    /// File modification time (seconds since UNIX_EPOCH)
+    pub mtime: u64,
 }
 
 impl FileInfo {
     /// Create new file info with current timestamp
     pub fn new(id: FileId, path: PathBuf, content: &str) -> Self {
+        let mtime = get_file_mtime(&path).unwrap_or(0);
         Self {
             id,
             path,
             hash: calculate_hash(content),
             last_indexed_utc: get_utc_timestamp(),
+            mtime,
         }
     }
 
@@ -38,6 +42,15 @@ impl FileInfo {
     }
 }
 
+/// Get file modification time in seconds since UNIX_EPOCH
+pub fn get_file_mtime(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+}
+
 /// Calculate SHA256 hash of content
 pub fn calculate_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
@@ -45,7 +58,7 @@ pub fn calculate_hash(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Get current UTC timestamp in seconds since UNIX_EPOCH
+/// Get current UTC timestamp in seconds since UNIX_EPOCH TEST 5
 pub fn get_utc_timestamp() -> u64 {
     // Use chrono for accurate cross-platform timestamp
     Utc::now().timestamp() as u64
