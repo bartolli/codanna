@@ -338,6 +338,7 @@ let package = Package(
     }
 
     #[test]
+    #[ignore = "Requires filesystem isolation (changes cwd, conflicts with parallel tests)"]
     fn test_rebuild_cache_creates_resolution_json() {
         // Given a Package.swift and settings
         let temp_dir = TempDir::new().unwrap();

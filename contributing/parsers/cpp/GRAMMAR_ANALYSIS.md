@@ -1,6 +1,6 @@
 # C++ Grammar Analysis
 
-*Generated: 2025-12-12 17:18:50 UTC*
+*Generated: 2026-01-05 15:18:21 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 223

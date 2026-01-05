@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-01-05
+
+### Added
+
+- Parallel indexing pipeline with 5-stage architecture (DISCOVER, READ, PARSE, COLLECT, INDEX)
+- SemanticEmbedStage for parallel embedding generation
+- EmbeddingPool with configurable model instances for parallel embedding
+- Progress bars for Phase 1 and Phase 2 indexing with dual progress bar support
+- Pipeline metrics with stage timing, memory tracking, and bottleneck detection
+- GPU execution provider feature flags (CUDA, TensorRT, CoreML, DirectML, OpenVINO, ROCm)
+- GPU embedding benchmarks for CPU vs accelerator comparison
+- Incremental file-level change detection with mtime fast path
+- Document search auto-sync with mtime-based change detection
+- Install scripts for curl-based installation (install.sh, install.ps1)
+- IndexFacade as unified interface wrapping DocumentIndex, Pipeline, and SemanticSearch
+- `--watch` flag to mcp command for pre-tool reindex
+- `--no-progress` flag (progress enabled by default)
+
+### Changed
+
+- Replaced SimpleIndexer with IndexFacade across codebase
+- Consolidated thread settings into single parallelism value (derives stage threads)
+- Batch embeddings in groups of 64 for throughput
+- DocumentIndex.writer uses RwLock instead of Mutex for concurrent writes
+- Release workflow: removed slim variants (8 builds to 4 builds)
+- Release workflow: use macos-latest for both macOS targets
+- Manifest format simplified (removed variant field)
+
+### Removed
+
+- SimpleIndexer (6000+ lines, replaced by IndexFacade)
+- SymbolCache and related cache methods
+- Slim build variants from release pipeline
+- Unused retrieve commands: Uses, Defines, Dependencies
+
+### Fixed
+
+- Multi-directory symbol ID collisions by querying IDs before spawning threads
+- Pipeline metrics logging race with StatusLine
+- Child paths incorrectly processed when parent already indexed
+
 ## [0.8.9] - 2025-12-30
 
 ### Changed

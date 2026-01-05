@@ -1,6 +1,0 @@
-# Local development overrides
-# This file is gitignored - each developer can customize their setup
-
-[patch.crates-io]
-# Vendored fastembed with GPU feature support
-fastembed = { path = "vendors/fastembed-rs" }
