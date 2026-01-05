@@ -482,13 +482,29 @@ impl DocumentStore {
         // Detect changes
         let (changed, unchanged, removed) = self.detect_changes(&files, name);
 
+        tracing::info!(
+            target: "rag",
+            "collection '{}': {} to index, {} unchanged, {} removed",
+            name,
+            changed.len(),
+            unchanged.len(),
+            removed.len()
+        );
+
         stats.files_skipped = unchanged.len();
 
         // Remove chunks from deleted/changed files
         for path in removed.iter().chain(changed.iter()) {
             if let Some(state) = self.file_states.get(path) {
-                stats.chunks_removed += state.chunk_ids.len();
+                let chunk_count = state.chunk_ids.len();
+                stats.chunks_removed += chunk_count;
                 self.delete_chunks_by_file(path, name)?;
+                tracing::info!(
+                    target: "rag",
+                    "deleted {} chunks from {}",
+                    chunk_count,
+                    path.display()
+                );
             }
         }
 
@@ -529,6 +545,7 @@ impl DocumentStore {
                 content_hash: calculate_hash(&content),
                 chunk_ids,
                 last_indexed: get_utc_timestamp(),
+                mtime: crate::indexing::file_info::get_file_mtime(path).unwrap_or(0),
             };
             self.file_states.insert(path.clone(), file_state);
 
@@ -540,7 +557,13 @@ impl DocumentStore {
 
         // Phase 2: Generate embeddings in batches
         if !pending_embeddings.is_empty() {
+            let embed_count = pending_embeddings.len();
             self.process_embeddings_batched(&pending_embeddings, &mut on_progress)?;
+            tracing::info!(
+                target: "rag",
+                "generated embeddings for {} chunks",
+                embed_count
+            );
         }
 
         // Remove file states for deleted files
@@ -566,13 +589,19 @@ impl DocumentStore {
         chunking_config: &ChunkingConfig,
     ) -> StoreResult<Option<usize>> {
         // Look up collection from file state
-        let collection = match self.file_states.get(path) {
-            Some(state) => state.collection.clone(),
+        let (collection, old_chunk_count) = match self.file_states.get(path) {
+            Some(state) => (state.collection.clone(), state.chunk_ids.len()),
             None => return Ok(None), // File not in index
         };
 
         // Delete existing chunks
         self.delete_chunks_by_file(path, &collection)?;
+        tracing::info!(
+            target: "rag",
+            "deleted {} chunks from {}",
+            old_chunk_count,
+            path.display()
+        );
 
         // Read file content
         let content = std::fs::read_to_string(path)?;
@@ -600,6 +629,11 @@ impl DocumentStore {
         let chunks_created = pending_embeddings.len();
         if !pending_embeddings.is_empty() {
             self.process_embeddings_batched(&pending_embeddings, &mut |_| {})?;
+            tracing::info!(
+                target: "rag",
+                "generated embeddings for {} chunks",
+                chunks_created
+            );
         }
 
         // Update file state
@@ -609,6 +643,7 @@ impl DocumentStore {
             content_hash: calculate_hash(&content),
             chunk_ids,
             last_indexed: get_utc_timestamp(),
+            mtime: crate::indexing::file_info::get_file_mtime(path).unwrap_or(0),
         };
         self.file_states.insert(path.to_path_buf(), file_state);
 
@@ -627,9 +662,18 @@ impl DocumentStore {
             return Ok(false);
         };
 
+        let chunk_count = state.chunk_ids.len();
+
         // Delete chunks from tantivy
         self.delete_chunks_by_file(path, &state.collection)?;
         self.commit()?;
+
+        tracing::info!(
+            target: "rag",
+            "removed {} chunks for deleted file {}",
+            chunk_count,
+            path.display()
+        );
 
         // Persist state
         self.save_state()?;
@@ -824,7 +868,7 @@ impl DocumentStore {
     fn detect_changes(
         &self,
         files: &[PathBuf],
-        _collection: &str,
+        collection: &str,
     ) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
         let mut changed = Vec::new();
         let mut unchanged = Vec::new();
@@ -835,12 +879,27 @@ impl DocumentStore {
         // Find changed and unchanged files
         for path in files {
             if let Some(state) = self.file_states.get(path) {
-                // Check if file content changed
+                // Fast path: check mtime first (stat only, no file read)
+                let current_mtime = crate::indexing::file_info::get_file_mtime(path).unwrap_or(0);
+                if state.mtime > 0 && current_mtime == state.mtime {
+                    // mtime unchanged = file unchanged
+                    unchanged.push(path.clone());
+                    continue;
+                }
+
+                // mtime changed or unknown - verify with hash (requires file read)
                 if let Ok(content) = std::fs::read_to_string(path) {
                     let current_hash = calculate_hash(&content);
                     if current_hash == state.content_hash {
                         unchanged.push(path.clone());
                     } else {
+                        tracing::trace!(
+                            target: "rag",
+                            "file changed: {} (mtime: {} -> {})",
+                            path.display(),
+                            state.mtime,
+                            current_mtime
+                        );
                         changed.push(path.clone());
                     }
                 } else {
@@ -859,6 +918,15 @@ impl DocumentStore {
                 removed.push(path.clone());
             }
         }
+
+        tracing::debug!(
+            target: "rag",
+            "detect_changes: collection={}, changed={}, unchanged={}, removed={}",
+            collection,
+            changed.len(),
+            unchanged.len(),
+            removed.len()
+        );
 
         (changed, unchanged, removed)
     }

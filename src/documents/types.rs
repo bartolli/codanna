@@ -147,6 +147,10 @@ pub struct FileState {
 
     /// UTC timestamp when last indexed.
     pub last_indexed: u64,
+
+    /// File modification time (seconds since UNIX_EPOCH) for fast change detection.
+    #[serde(default)]
+    pub mtime: u64,
 }
 
 impl FileState {
@@ -156,6 +160,7 @@ impl FileState {
         collection: String,
         content_hash: String,
         chunk_ids: Vec<ChunkId>,
+        mtime: u64,
     ) -> Self {
         Self {
             path,
@@ -166,6 +171,7 @@ impl FileState {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            mtime,
         }
     }
 
@@ -214,6 +220,7 @@ mod tests {
             "docs".to_string(),
             "abc123".to_string(),
             vec![ChunkId::from_u32(1).unwrap()],
+            1700000000,
         );
 
         assert!(!state.has_changed("abc123"));

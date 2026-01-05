@@ -1813,6 +1813,14 @@ impl CodeIntelligenceServer {
         let mut store = store.write().await;
         let indexer = self.facade.read().await;
 
+        // Auto-sync: check for file changes in all collections before searching
+        let settings = indexer.settings();
+        for (name, config) in &settings.documents.collections {
+            if let Err(e) = store.index_collection(name, config, &settings.documents.defaults) {
+                tracing::warn!(target: "rag", "auto-sync failed for collection '{}': {}", name, e);
+            }
+        }
+
         let search_query = DocSearchQuery {
             text: query.clone(),
             collection,
