@@ -42,11 +42,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
 
           - name: macos-x64
-            os: macos-latest
+            os: macos-14
             target: x86_64-apple-darwin
 
           - name: macos-arm64
-            os: macos-latest
+            os: macos-15
             target: aarch64-apple-darwin
 
           - name: windows-x64
@@ -71,10 +71,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-v2
 
       - name: Build binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --all-features
 
       - name: Package (Unix)
         if: runner.os != 'Windows'

@@ -125,10 +125,10 @@ rcgen = ["dep:rcgen"]
 # gpu-rocm = ["fastembed/rocm"]
 
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true
+# opt-level = 3
+# lto = true
+# codegen-units = 1
+# strip = true
 
 [lints.clippy]
 # Minimal lints - main enforcement via CI with `cargo clippy -- -D warnings`
