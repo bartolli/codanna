@@ -22,6 +22,7 @@
 /contributing/tree-sitter/.env
 
 # Rust (additional)
+.cargo/config.toml
 **/target/
 *.rlib
 *.d

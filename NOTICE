@@ -14,7 +14,6 @@ This software includes the following third-party components:
 - tantivy: MIT License
 - tokio: MIT License
 - serde: MIT OR Apache-2.0
-- candle: MIT OR Apache-2.0
 - fastembed: Apache-2.0
 
 For full license information of dependencies, see Cargo.toml and Cargo.lock.

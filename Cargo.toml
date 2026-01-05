@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.8.9"
+version = "0.9.0"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -12,6 +12,28 @@ readme = "README.md"
 keywords = ["mcp-server", "code-intelligence", "semantic-search", "llm", "rag"]
 categories = ["development-tools", "command-line-utilities", "parsing", "text-processing", "compilers"]
 autoexamples = false
+exclude = [".github/", "contributing/", "tests/", "docs/"]
+
+[package.metadata.binstall]
+pkg-fmt = "txz"
+bin-dir = "{ name }-{ version }-{ target-family }/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-linux-x64.tar.xz"
+bin-dir = "{ name }-{ version }-linux-x64/{ bin }"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-macos-x64.tar.xz"
+bin-dir = "{ name }-{ version }-macos-x64/{ bin }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-macos-arm64.tar.xz"
+bin-dir = "{ name }-{ version }-macos-arm64/{ bin }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-windows-x64.zip"
+pkg-fmt = "zip"
+bin-dir = "{ name }-{ version }-windows-x64/{ bin }{ binary-ext }"
 
 [dependencies]
 anyhow = "1.0.100"
@@ -48,8 +70,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
-# fastembed = "5.6.0"
-fastembed = { path = "vendors/fastembed-rs" }
+fastembed = "5.6.0"
 rand = "0.9.2"
 indicatif = "0.18.3"
 comfy-table = "7.2.1"
@@ -84,7 +105,7 @@ testcontainers = "0.26.3"
 thread-id = "5.0.0"
 
 [features]
-default = []
+default = ["http-server"]
 http-server = ["axum", "tower", "tower-http"]
 https-server = ["http-server", "axum-server", "rustls", "rcgen"]
 axum = ["dep:axum"]
@@ -94,24 +115,30 @@ axum-server = ["dep:axum-server"]
 rustls = ["dep:rustls"]
 rcgen = ["dep:rcgen"]
 
-# GPU/Hardware Acceleration for embeddings (pass through to fastembed → ort)
-gpu-cuda = ["fastembed/cuda"]
-gpu-tensorrt = ["fastembed/tensorrt"]
-gpu-coreml = ["fastembed/coreml"]
-gpu-directml = ["fastembed/directml"]
-gpu-openvino = ["fastembed/openvino"]
-gpu-rocm = ["fastembed/rocm"]
+# GPU/Hardware Acceleration (requires vendored fastembed in .cargo/config.toml)
+# Upstream fastembed does not expose these features yet.
+# gpu-cuda = ["fastembed/cuda"]
+# gpu-tensorrt = ["fastembed/tensorrt"]
+# gpu-coreml = ["fastembed/coreml"]
+# gpu-directml = ["fastembed/directml"]
+# gpu-openvino = ["fastembed/openvino"]
+# gpu-rocm = ["fastembed/rocm"]
 
 [profile.release]
-# opt-level = 3
-# lto = true
-# codegen-units = 1
-# strip = true
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
 
 [lints.clippy]
 # Minimal lints - main enforcement via CI with `cargo clippy -- -D warnings`
 # See clippy.toml for behavior configuration (thresholds, etc.)
 uninlined_format_args = "warn"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("gpu-cuda", "gpu-tensorrt", "gpu-coreml", "gpu-directml", "gpu-openvino", "gpu-rocm"))'
+] }
 
 [[example]]
 name = "simple_progress_demo"

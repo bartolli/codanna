@@ -933,13 +933,16 @@ impl Settings {
             } else if line == "[logging.modules]" {
                 result.push_str("\n[logging.modules]\n");
                 result.push_str("# Per-module log level overrides\n");
+                result.push_str("# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage\n");
                 result.push_str(
-                    "# Internal modules (auto-prefixed with codanna::): watcher, mcp, indexing, storage, semantic\n",
+                    "# External targets (used as-is): cli, tantivy, pipeline, semantic, rag\n",
                 );
-                result.push_str("# External targets (used as-is): cli, tantivy, pipeline\n");
-                result.push_str("# Example: cli = \"debug\"      # CLI startup logs\n");
-                result.push_str("# Example: tantivy = \"error\"  # Suppress Tantivy logs\n");
-                result.push_str("# Example: pipeline = \"info\"  # Pipeline progress logs\n");
+                result.push_str("# Examples (uncomment to enable):\n");
+                result.push_str("# pipeline = \"info\"   # Code indexing stages and progress\n");
+                result.push_str("# semantic = \"info\"   # Embedding pool and code embeddings\n");
+                result.push_str("# rag = \"info\"        # Document collections and chunks\n");
+                result.push_str("# watcher = \"debug\"   # File watcher events\n");
+                result.push_str("# mcp = \"debug\"       # MCP server operations\n");
                 prev_line_was_section = true;
                 continue;
             } else if line == "[documents]" {
