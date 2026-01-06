@@ -1,0 +1,50 @@
+name: Brew Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to update (e.g., 0.9.0)'
+        required: true
+
+jobs:
+  trigger-homebrew:
+    name: Trigger Homebrew formula update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version format
+        run: |
+          version="${{ github.event.inputs.version }}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Error: Version must be in format X.Y.Z (got: $version)"
+            exit 1
+          fi
+
+      - name: Check release exists
+        run: |
+          version="${{ github.event.inputs.version }}"
+          url="https://github.com/${{ github.repository }}/releases/tag/v${version}"
+          if ! curl -sfL -o /dev/null "$url"; then
+            echo "Error: Release v${version} not found at $url"
+            exit 1
+          fi
+          echo "Release v${version} exists"
+
+      - name: Check dist-manifest.json exists
+        run: |
+          version="${{ github.event.inputs.version }}"
+          url="https://github.com/${{ github.repository }}/releases/download/v${version}/dist-manifest.json"
+          if ! curl -sfL -o /dev/null "$url"; then
+            echo "Error: dist-manifest.json not found for v${version}"
+            exit 1
+          fi
+          echo "dist-manifest.json exists"
+
+      - name: Trigger formula update
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.HOMEBREW_TAP_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/bartolli/homebrew-codanna/dispatches \
+            -d '{"event_type":"update-formula","client_payload":{"version":"${{ github.event.inputs.version }}"}}'
+          echo "Dispatch sent to homebrew-codanna"
