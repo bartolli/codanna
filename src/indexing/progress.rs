@@ -15,6 +15,9 @@ pub struct IndexStats {
     /// Total number of symbols found
     pub symbols_found: usize,
 
+    /// Number of symbols that failed embedding generation
+    pub embeddings_failed: usize,
+
     /// Time elapsed during indexing
     pub elapsed: Duration,
 
@@ -64,6 +67,14 @@ impl IndexStats {
 
             let symbols_per_file = self.symbols_found as f64 / self.files_indexed as f64;
             println!("  Average symbols/file: {symbols_per_file:.1}");
+        }
+
+        if self.embeddings_failed > 0 {
+            println!(
+                "\nWarning: {} symbols failed embedding generation. Semantic search may be incomplete.",
+                self.embeddings_failed
+            );
+            println!("  Run with --force to regenerate embeddings.");
         }
 
         if !self.errors.is_empty() {

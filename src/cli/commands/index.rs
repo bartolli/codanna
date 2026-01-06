@@ -227,21 +227,27 @@ fn index_directory(
 ) -> usize {
     // Visual separator between directory cycles (use stderr to sync with progress bars)
     eprintln!();
+
+    // Show pre-indexing message only if we have a file limit (implies actual work)
     if let Some(max) = max_files {
         eprintln!(
             "Indexing directory: {} (limited to {} files)",
             path.display(),
             max
         );
-    } else {
-        eprintln!("Indexing directory: {}", path.display());
     }
 
     // Track this directory as indexed
     indexer.add_indexed_path(path);
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
-        Ok(stats) => stats.files_indexed,
+        Ok(stats) => {
+            // Print message only when no files need indexing (pipeline trace handles the rest)
+            if stats.files_indexed == 0 {
+                eprintln!("Index up to date: {}", path.display());
+            }
+            stats.files_indexed
+        }
         Err(e) => {
             eprintln!("Error indexing directory {}: {e}", path.display());
 

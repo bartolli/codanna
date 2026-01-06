@@ -35,7 +35,7 @@ pub mod stages;
 pub mod types;
 
 pub use config::PipelineConfig;
-pub use metrics::{PipelineMetrics, StageTracker};
+pub use metrics::{PipelineMetrics, StageMetrics, StageTracker};
 pub use stages::cleanup::{CleanupStage, CleanupStats};
 pub use stages::context::{ContextStage, ContextStats};
 pub use stages::embed::{EmbedStage, EmbedStats};
@@ -63,7 +63,7 @@ use stages::{CollectStage, DiscoverStage, IndexStage, ReadStage};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Result of Phase 1 indexing with optional metrics for deferred logging.
 type Phase1Result = (
@@ -72,6 +72,18 @@ type Phase1Result = (
     SymbolLookupCache,
     Option<Arc<PipelineMetrics>>,
 );
+
+/// Thread join handle type for READ workers.
+/// Returns (files, errors, input_wait, output_wait, wall_time).
+type ReadJoinHandle =
+    thread::JoinHandle<Result<(usize, usize, Duration, Duration, Duration), PipelineError>>;
+
+/// Thread join handle type for PARSE workers (with timing).
+/// Returns (files, errors, symbols, input_wait, output_wait, wall_time).
+type ParseJoinHandle = thread::JoinHandle<(usize, usize, usize, Duration, Duration, Duration)>;
+
+/// Thread join handle type for simple PARSE workers (no timing).
+type ParseSimpleJoinHandle = thread::JoinHandle<(usize, usize)>;
 
 /// The parallel indexing pipeline.
 ///
@@ -104,6 +116,147 @@ impl Pipeline {
         &self.settings
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Helper methods for consistent data flow
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Query starting ID counters from the index.
+    ///
+    /// Must be called BEFORE spawning threads to avoid ID collisions
+    /// in multi-directory or incremental indexing.
+    fn get_start_counters(&self, index: &DocumentIndex) -> PipelineResult<(u32, u32)> {
+        let file_id = index.get_next_file_id()?.saturating_sub(1);
+        let symbol_id = index.get_next_symbol_id()?.saturating_sub(1);
+        Ok((file_id, symbol_id))
+    }
+
+    /// Save final counter values to metadata.
+    ///
+    /// Must be called AFTER all stages complete to persist counters
+    /// for the next indexing run.
+    fn save_final_counters(
+        &self,
+        index: &DocumentIndex,
+        file_count: u32,
+        symbol_count: u32,
+    ) -> PipelineResult<()> {
+        use crate::storage::MetadataKey;
+        index.start_batch()?;
+        index.store_metadata(MetadataKey::FileCounter, u64::from(file_count))?;
+        index.store_metadata(MetadataKey::SymbolCounter, u64::from(symbol_count))?;
+        index.commit_batch()?;
+        Ok(())
+    }
+
+    /// Join READ worker threads and aggregate results.
+    ///
+    /// Returns (files_read, errors, total_input_wait, total_output_wait).
+    /// Panicked threads are logged and counted as errors.
+    fn join_read_workers(
+        &self,
+        handles: Vec<ReadJoinHandle>,
+    ) -> (usize, usize, Duration, Duration, Duration) {
+        let mut files = 0;
+        let mut errors = 0;
+        let mut input_wait = Duration::ZERO;
+        let mut output_wait = Duration::ZERO;
+        let mut max_wall_time = Duration::ZERO;
+
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok((f, e, i, o, w))) => {
+                    files += f;
+                    errors += e;
+                    input_wait += i;
+                    output_wait += o;
+                    // Use max wall_time (when last thread finished)
+                    if w > max_wall_time {
+                        max_wall_time = w;
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(target: "pipeline", "READ worker error: {e}");
+                    errors += 1;
+                }
+                Err(_) => {
+                    tracing::error!(target: "pipeline", "READ worker panicked");
+                    errors += 1;
+                }
+            }
+        }
+
+        (files, errors, input_wait, output_wait, max_wall_time)
+    }
+
+    /// Join PARSE worker threads and aggregate results.
+    ///
+    /// Returns (files_parsed, errors, symbols, total_input_wait, total_output_wait, max_wall_time).
+    /// Panicked threads are logged and counted as errors.
+    fn join_parse_workers(
+        &self,
+        handles: Vec<ParseJoinHandle>,
+    ) -> (usize, usize, usize, Duration, Duration, Duration) {
+        let mut files = 0;
+        let mut errors = 0;
+        let mut symbols = 0;
+        let mut input_wait = Duration::ZERO;
+        let mut output_wait = Duration::ZERO;
+        let mut max_wall_time = Duration::ZERO;
+
+        for handle in handles {
+            match handle.join() {
+                Ok((f, e, s, i, o, w)) => {
+                    files += f;
+                    errors += e;
+                    symbols += s;
+                    input_wait += i;
+                    output_wait += o;
+                    // Use max wall_time (when last thread finished)
+                    if w > max_wall_time {
+                        max_wall_time = w;
+                    }
+                }
+                Err(_) => {
+                    tracing::error!(target: "pipeline", "PARSE worker panicked");
+                    errors += 1;
+                }
+            }
+        }
+
+        (
+            files,
+            errors,
+            symbols,
+            input_wait,
+            output_wait,
+            max_wall_time,
+        )
+    }
+
+    /// Join simple PARSE worker threads (no timing tracking).
+    ///
+    /// Used by `index_files` which doesn't need wait time metrics.
+    /// Returns (files_parsed, errors).
+    fn join_parse_workers_simple(&self, handles: Vec<ParseSimpleJoinHandle>) -> (usize, usize) {
+        let mut files = 0;
+        let mut errors = 0;
+
+        for handle in handles {
+            match handle.join() {
+                Ok((f, e)) => {
+                    files += f;
+                    errors += e;
+                }
+                Err(_) => {
+                    tracing::error!(target: "pipeline", "PARSE worker panicked");
+                    errors += 1;
+                }
+            }
+        }
+
+        (files, errors)
+    }
+
     /// Index a directory using the parallel pipeline (Phase 1).
     ///
     /// [PIPELINE API] This is the main entry point for indexing. It:
@@ -132,9 +285,7 @@ impl Pipeline {
         };
 
         // Query existing ID counters BEFORE spawning threads
-        // Critical for multi-directory indexing to avoid ID collisions
-        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
-        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
 
         // Create bounded channels with backpressure
         let (path_tx, path_rx) = bounded(self.config.path_channel_size);
@@ -194,6 +345,7 @@ impl Pipeline {
                 let tx = parsed_tx.clone();
                 let settings = Arc::clone(&settings);
                 thread::spawn(move || {
+                    let start = Instant::now();
                     // Initialize thread-local parser cache
                     init_parser_cache(settings.clone());
 
@@ -238,6 +390,7 @@ impl Pipeline {
                         symbol_count,
                         input_wait,
                         output_wait,
+                        start.elapsed(),
                     )
                 })
             })
@@ -303,60 +456,41 @@ impl Pipeline {
         }
 
         // READ stage metrics (aggregate across threads)
-        let read_tracker = if tracing_enabled {
-            Some(StageTracker::new("READ", read_threads).with_secondary("MB"))
-        } else {
-            None
-        };
-        let mut read_files = 0;
-        let mut read_errors = 0;
-        let mut read_input_wait = std::time::Duration::ZERO;
-        let mut read_output_wait = std::time::Duration::ZERO;
-        for handle in read_handles {
-            if let Ok(Ok((files, errors, input_wait, output_wait))) = handle.join() {
-                read_files += files;
-                read_errors += errors;
-                read_input_wait += input_wait;
-                read_output_wait += output_wait;
-            }
-        }
-        if let Some(tracker) = read_tracker {
-            tracker.record_items(read_files);
-            tracker.record_input_wait(read_input_wait);
-            tracker.record_output_wait(read_output_wait);
-            if let Some(m) = &metrics {
-                m.add_stage(tracker.finalize());
-            }
+        let (read_files, read_errors, read_input_wait, read_output_wait, read_wall_time) =
+            self.join_read_workers(read_handles);
+        if let Some(m) = &metrics {
+            m.add_stage(StageMetrics {
+                name: "READ",
+                threads: read_threads,
+                wall_time: read_wall_time,
+                input_wait: read_input_wait,
+                output_wait: read_output_wait,
+                items_processed: read_files,
+                secondary_count: 0,
+                secondary_label: "MB",
+            });
         }
 
         // PARSE stage metrics (aggregate across threads)
-        let parse_tracker = if tracing_enabled {
-            Some(StageTracker::new("PARSE", parse_threads).with_secondary("symbols"))
-        } else {
-            None
-        };
-        let mut parsed_files = 0;
-        let mut parse_errors = 0;
-        let mut total_symbols = 0;
-        let mut parse_input_wait = std::time::Duration::ZERO;
-        let mut parse_output_wait = std::time::Duration::ZERO;
-        for handle in parse_handles {
-            if let Ok((files, errors, symbols, input_wait, output_wait)) = handle.join() {
-                parsed_files += files;
-                parse_errors += errors;
-                total_symbols += symbols;
-                parse_input_wait += input_wait;
-                parse_output_wait += output_wait;
-            }
-        }
-        if let Some(tracker) = parse_tracker {
-            tracker.record_items(parsed_files);
-            tracker.record_secondary(total_symbols);
-            tracker.record_input_wait(parse_input_wait);
-            tracker.record_output_wait(parse_output_wait);
-            if let Some(m) = &metrics {
-                m.add_stage(tracker.finalize());
-            }
+        let (
+            parsed_files,
+            parse_errors,
+            total_symbols,
+            parse_input_wait,
+            parse_output_wait,
+            parse_wall_time,
+        ) = self.join_parse_workers(parse_handles);
+        if let Some(m) = &metrics {
+            m.add_stage(StageMetrics {
+                name: "PARSE",
+                threads: parse_threads,
+                wall_time: parse_wall_time,
+                input_wait: parse_input_wait,
+                output_wait: parse_output_wait,
+                items_processed: parsed_files,
+                secondary_count: total_symbols,
+                secondary_label: "symbols",
+            });
         }
 
         // Get final counter values from COLLECT stage
@@ -380,15 +514,10 @@ impl Pipeline {
             m.add_stage(im);
         }
 
-        // Store final counter values to metadata for next directory
-        // This is critical for multi-directory indexing to avoid ID collisions
-        use crate::storage::MetadataKey;
-        index_for_metadata.start_batch()?;
-        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
-        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
-        index_for_metadata.commit_batch()?;
+        // Store final counter values to metadata
+        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
 
-        // Update stats with timing
+        // Update stats with timing and error counts
         stats.elapsed = start.elapsed();
         stats.files_failed = read_errors + parse_errors;
 
@@ -423,9 +552,7 @@ impl Pipeline {
         let start = Instant::now();
 
         // Query existing ID counters BEFORE spawning threads
-        // Critical for multi-directory indexing to avoid ID collisions
-        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
-        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
 
         // Create bounded channels
         let (path_tx, path_rx) = bounded(self.config.path_channel_size);
@@ -515,12 +642,12 @@ impl Pipeline {
             .map_err(|_| PipelineError::ChannelRecv("DISCOVER panicked".to_string()))?;
         let _files_discovered = discover_result?;
 
-        for h in read_handles {
-            let _ = h.join();
-        }
-        for h in parse_handles {
-            let _ = h.join();
-        }
+        // Join READ workers and capture errors
+        let (_, read_errors, _, _, _) = self.join_read_workers(read_handles);
+
+        // Join PARSE workers and capture errors
+        let (_, parse_errors) = self.join_parse_workers_simple(parse_handles);
+
         // Get final counter values from COLLECT stage
         let (final_file_count, final_symbol_count, _, _, _) = collect_handle
             .join()
@@ -531,15 +658,13 @@ impl Pipeline {
             .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
         let (mut stats, pending_relationships, symbol_cache, _) = index_result?;
 
-        // Store final counter values to metadata for next directory
-        // This is critical for multi-directory indexing to avoid ID collisions
-        use crate::storage::MetadataKey;
-        index_for_metadata.start_batch()?;
-        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
-        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
-        index_for_metadata.commit_batch()?;
+        // Store final counter values to metadata
+        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
 
+        // Update stats with timing and error counts
         stats.elapsed = start.elapsed();
+        stats.files_failed = read_errors + parse_errors;
+
         Ok((stats, pending_relationships, symbol_cache))
     }
 
@@ -1322,9 +1447,7 @@ impl Pipeline {
         let start = Instant::now();
 
         // Query existing ID counters BEFORE spawning threads
-        // Critical for incremental indexing to avoid ID collisions
-        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
-        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
 
         // Create bounded channels
         let (content_tx, content_rx) = bounded(self.config.content_channel_size);
@@ -1434,46 +1557,93 @@ impl Pipeline {
         }
         let index_handle = thread::spawn(move || index_stage.run(batch_rx));
 
-        // Wait for stages to complete
-        let _ = read_handle.join();
-        for h in parse_handles {
-            let _ = h.join();
-        }
+        // Wait for READ stage and capture errors
+        let (_, read_errors) = match read_handle.join() {
+            Ok((count, errors)) => (count, errors),
+            Err(_) => {
+                tracing::error!(target: "pipeline", "READ thread panicked in index_files");
+                (0, 1)
+            }
+        };
 
-        // Get final counter values from COLLECT stage
-        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("COLLECT panicked".to_string()))??;
+        // Wait for PARSE stages and aggregate errors
+        let (_, parse_errors) = self.join_parse_workers_simple(parse_handles);
 
-        // Wait for EMBED to complete (parallel with INDEX)
-        if let Some(handle) = embed_handle {
-            let embed_result = handle
-                .join()
-                .map_err(|_| PipelineError::ChannelRecv("EMBED panicked".to_string()))?;
-            let embed_stats = embed_result?;
-            tracing::info!(
-                target: "semantic",
-                "EMBED: {}/{} embedded ({} candidates from COLLECT)",
-                embed_stats.embedded,
-                embed_stats.received,
-                embed_candidates
-            );
-        }
+        // Join all remaining threads first (COLLECT, EMBED, INDEX)
+        let collect_join = collect_handle.join();
+        let embed_join = embed_handle.map(|h| h.join());
+        let index_join = index_handle.join();
 
-        let index_result = index_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
+        // CRITICAL: Unwrap INDEX first - this is the critical path.
+        // If INDEX succeeded, we MUST save counters regardless of EMBED status.
+        let index_result = match index_join {
+            Ok(result) => result,
+            Err(_) => return Err(PipelineError::ChannelRecv("INDEX panicked".into())),
+        };
         let (mut stats, pending, cache, _) = index_result?;
 
-        // Store final counter values to metadata for next directory
-        // This is critical for incremental indexing to avoid ID collisions
-        use crate::storage::MetadataKey;
-        index_for_metadata.start_batch()?;
-        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
-        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
-        index_for_metadata.commit_batch()?;
+        // Unwrap COLLECT (needed for counters)
+        let collect_result = match collect_join {
+            Ok(result) => result,
+            Err(_) => return Err(PipelineError::ChannelRecv("COLLECT panicked".into())),
+        };
+        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_result?;
 
+        // CRITICAL: Save counters NOW, before checking EMBED.
+        // INDEX succeeded, so we MUST persist the new ID pointers.
+        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
+
+        // Handle EMBED results (Soft Failure - log but don't fail pipeline)
+        if let Some(join_result) = embed_join {
+            match join_result {
+                Ok(Ok(embed_stats)) => {
+                    // Validate COLLECT/EMBED data flow integrity
+                    if embed_stats.received != embed_candidates as usize {
+                        tracing::warn!(
+                            target: "pipeline",
+                            "EMBED data flow mismatch: COLLECT sent {} candidates, EMBED received {}",
+                            embed_candidates,
+                            embed_stats.received
+                        );
+                    }
+
+                    // Track any symbols that failed embedding
+                    let failed = embed_stats.received.saturating_sub(embed_stats.embedded);
+                    if failed > 0 {
+                        stats.embeddings_failed = failed;
+                    }
+
+                    tracing::info!(
+                        target: "semantic",
+                        "EMBED: {}/{} embedded ({} candidates from COLLECT)",
+                        embed_stats.embedded,
+                        embed_stats.received,
+                        embed_candidates
+                    );
+                }
+                Ok(Err(e)) => {
+                    // All candidates failed embedding
+                    stats.embeddings_failed = embed_candidates as usize;
+                    tracing::error!(
+                        target: "pipeline",
+                        "Embedding generation failed: {e}. Index is valid but semantic search may be incomplete."
+                    );
+                }
+                Err(_) => {
+                    // All candidates failed embedding
+                    stats.embeddings_failed = embed_candidates as usize;
+                    tracing::error!(
+                        target: "pipeline",
+                        "EMBED thread panicked. Index is valid but semantic search may be incomplete."
+                    );
+                }
+            }
+        }
+
+        // Update stats with timing and error counts
         stats.elapsed = start.elapsed();
+        stats.files_failed = read_errors + parse_errors;
+
         Ok((stats, pending, cache))
     }
 
@@ -1599,9 +1769,7 @@ impl Pipeline {
         };
 
         // Query existing ID counters BEFORE spawning threads
-        // Critical for multi-directory indexing to avoid ID collisions
-        let start_file_counter = index.get_next_file_id()?.saturating_sub(1);
-        let start_symbol_counter = index.get_next_symbol_id()?.saturating_sub(1);
+        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
 
         // Create bounded channels
         let (path_tx, path_rx) = bounded(self.config.path_channel_size);
@@ -1667,6 +1835,7 @@ impl Pipeline {
                 let tx = parsed_tx.clone();
                 let settings = Arc::clone(&settings);
                 thread::spawn(move || {
+                    let start = Instant::now();
                     init_parser_cache(settings.clone());
                     let stage = ParseStage::new(settings);
                     let mut parsed = 0;
@@ -1699,7 +1868,14 @@ impl Pipeline {
                             Err(_) => errors += 1,
                         }
                     }
-                    (parsed, errors, symbol_count, input_wait, output_wait)
+                    (
+                        parsed,
+                        errors,
+                        symbol_count,
+                        input_wait,
+                        output_wait,
+                        start.elapsed(),
+                    )
                 })
             })
             .collect();
@@ -1817,87 +1993,61 @@ impl Pipeline {
         }
 
         // READ stage metrics (aggregate across threads)
-        let read_tracker = if tracing_enabled {
-            Some(StageTracker::new("READ", read_threads).with_secondary("MB"))
-        } else {
-            None
-        };
-        let mut read_files = 0;
-        let mut read_input_wait = std::time::Duration::ZERO;
-        let mut read_output_wait = std::time::Duration::ZERO;
-        for h in read_handles {
-            if let Ok(Ok((files, _errors, input_wait, output_wait))) = h.join() {
-                read_files += files;
-                read_input_wait += input_wait;
-                read_output_wait += output_wait;
-            }
-        }
-        if let Some(tracker) = read_tracker {
-            tracker.record_items(read_files);
-            tracker.record_input_wait(read_input_wait);
-            tracker.record_output_wait(read_output_wait);
-            if let Some(m) = &metrics {
-                m.add_stage(tracker.finalize());
-            }
+        let (read_files, read_errors, read_input_wait, read_output_wait, read_wall_time) =
+            self.join_read_workers(read_handles);
+        if let Some(m) = &metrics {
+            m.add_stage(StageMetrics {
+                name: "READ",
+                threads: read_threads,
+                wall_time: read_wall_time,
+                input_wait: read_input_wait,
+                output_wait: read_output_wait,
+                items_processed: read_files,
+                secondary_count: 0,
+                secondary_label: "MB",
+            });
         }
 
         // PARSE stage metrics (aggregate across threads)
-        let parse_tracker = if tracing_enabled {
-            Some(StageTracker::new("PARSE", parse_threads).with_secondary("symbols"))
-        } else {
-            None
+        let (
+            parsed_files,
+            parse_errors,
+            total_symbols,
+            total_input_wait,
+            total_output_wait,
+            parse_wall_time,
+        ) = self.join_parse_workers(parse_handles);
+        if let Some(m) = &metrics {
+            m.add_stage(StageMetrics {
+                name: "PARSE",
+                threads: parse_threads,
+                wall_time: parse_wall_time,
+                input_wait: total_input_wait,
+                output_wait: total_output_wait,
+                items_processed: parsed_files,
+                secondary_count: total_symbols,
+                secondary_label: "symbols",
+            });
+        }
+
+        // Join ALL threads first to ensure cleanup, then check results
+        // This ensures progress bars are completed even on error paths
+        let collect_join = collect_handle.join();
+        let embed_join = embed_handle.map(|h| h.join());
+        let index_join = index_handle.join();
+
+        // Complete progress bars (idempotent - safe even if threads already completed them)
+        if let Some(ref dp) = dual_progress {
+            dp.complete_bar1();
+            dp.complete_bar2();
+        }
+
+        // CRITICAL: Unwrap INDEX first - this is the critical path.
+        // If INDEX succeeded, we MUST save counters regardless of EMBED status.
+        let (index_result, index_metrics) = match index_join {
+            Ok(result) => result,
+            Err(_) => return Err(PipelineError::ChannelRecv("INDEX panicked".into())),
         };
-        let mut parsed_files = 0;
-        let mut total_symbols = 0;
-        let mut total_input_wait = std::time::Duration::ZERO;
-        let mut total_output_wait = std::time::Duration::ZERO;
-        for h in parse_handles {
-            if let Ok((files, _errors, symbols, input_wait, output_wait)) = h.join() {
-                parsed_files += files;
-                total_symbols += symbols;
-                total_input_wait += input_wait;
-                total_output_wait += output_wait;
-            }
-        }
-        if let Some(tracker) = parse_tracker {
-            tracker.record_items(parsed_files);
-            tracker.record_secondary(total_symbols);
-            tracker.record_input_wait(total_input_wait);
-            tracker.record_output_wait(total_output_wait);
-            if let Some(m) = &metrics {
-                m.add_stage(tracker.finalize());
-            }
-        }
-
-        // Get final counter values from COLLECT stage
-        let (collect_result, collect_metrics) = collect_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("COLLECT panicked".to_string()))?;
-        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_result?;
-
-        // Add COLLECT metrics
-        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
-            m.add_stage(cm);
-        }
-
-        // Wait for EMBED to complete (parallel with INDEX)
-        if let Some(handle) = embed_handle {
-            let embed_result = handle
-                .join()
-                .map_err(|_| PipelineError::ChannelRecv("EMBED panicked".to_string()))?;
-            let embed_stats = embed_result?;
-            tracing::info!(
-                target: "semantic",
-                "EMBED: {}/{} embedded ({} candidates from COLLECT)",
-                embed_stats.embedded,
-                embed_stats.received,
-                embed_candidates
-            );
-        }
-
-        let (index_result, index_metrics) = index_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
         let (mut stats, pending, cache, _) = index_result?;
 
         // Add INDEX metrics
@@ -1905,15 +2055,88 @@ impl Pipeline {
             m.add_stage(im);
         }
 
-        // Store final counter values to metadata for next directory
-        // This is critical for multi-directory indexing to avoid ID collisions
-        use crate::storage::MetadataKey;
-        index_for_metadata.start_batch()?;
-        index_for_metadata.store_metadata(MetadataKey::FileCounter, final_file_count as u64)?;
-        index_for_metadata.store_metadata(MetadataKey::SymbolCounter, final_symbol_count as u64)?;
-        index_for_metadata.commit_batch()?;
+        // Unwrap COLLECT (needed for counters)
+        let (collect_result, collect_metrics) = match collect_join {
+            Ok(result) => result,
+            Err(_) => return Err(PipelineError::ChannelRecv("COLLECT panicked".into())),
+        };
+        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_result?;
 
+        // Add COLLECT metrics
+        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
+            m.add_stage(cm);
+        }
+
+        // CRITICAL: Save counters NOW, before checking EMBED.
+        // INDEX succeeded, so we MUST persist the new ID pointers to prevent
+        // duplicate IDs on the next run.
+        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
+
+        // Handle EMBED results (Soft Failure - log but don't fail pipeline)
+        // The index is valid even if embeddings failed; semantic search will be incomplete.
+        if let Some(join_result) = embed_join {
+            match join_result {
+                Ok(Ok(embed_stats)) => {
+                    // Validate COLLECT/EMBED data flow integrity
+                    if embed_stats.received != embed_candidates as usize {
+                        tracing::warn!(
+                            target: "pipeline",
+                            "EMBED data flow mismatch: COLLECT sent {} candidates, EMBED received {}",
+                            embed_candidates,
+                            embed_stats.received
+                        );
+                    }
+
+                    // Track any symbols that failed embedding
+                    let failed = embed_stats.received.saturating_sub(embed_stats.embedded);
+                    if failed > 0 {
+                        stats.embeddings_failed = failed;
+                    }
+
+                    // Add EMBED metrics to pipeline report
+                    if let Some(m) = &metrics {
+                        m.add_stage(StageMetrics {
+                            name: "EMBED",
+                            threads: 1, // Single coordinator thread (pool parallelizes internally)
+                            wall_time: embed_stats.elapsed,
+                            input_wait: embed_stats.input_wait,
+                            output_wait: Duration::ZERO, // EMBED has no output channel
+                            items_processed: embed_stats.embedded,
+                            secondary_count: embed_stats.skipped,
+                            secondary_label: "skipped",
+                        });
+                    }
+
+                    tracing::info!(
+                        target: "semantic",
+                        "EMBED: {}/{} embedded ({} candidates from COLLECT)",
+                        embed_stats.embedded,
+                        embed_stats.received,
+                        embed_candidates
+                    );
+                }
+                Ok(Err(e)) => {
+                    // All candidates failed embedding
+                    stats.embeddings_failed = embed_candidates as usize;
+                    tracing::error!(
+                        target: "pipeline",
+                        "Embedding generation failed: {e}. Index is valid but semantic search may be incomplete. Run with --force to regenerate."
+                    );
+                }
+                Err(_) => {
+                    // All candidates failed embedding
+                    stats.embeddings_failed = embed_candidates as usize;
+                    tracing::error!(
+                        target: "pipeline",
+                        "EMBED thread panicked. Index is valid but semantic search may be incomplete."
+                    );
+                }
+            }
+        }
+
+        // Update stats with timing and error counts
         stats.elapsed = start.elapsed();
+        stats.files_failed = read_errors + parse_errors;
 
         // Finalize metrics but don't log (caller logs after StatusLine drop)
         if let Some(ref m) = metrics {

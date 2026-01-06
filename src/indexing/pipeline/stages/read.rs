@@ -43,14 +43,21 @@ impl ReadStage {
 
     /// Run the read stage, reading from path channel and sending to content channel.
     ///
-    /// Returns (files_read, files_failed, input_wait, output_wait).
+    /// Returns (files_read, files_failed, input_wait, output_wait, wall_time).
     pub fn run(
         &self,
         receiver: Receiver<PathBuf>,
         sender: Sender<FileContent>,
-    ) -> PipelineResult<(usize, usize, std::time::Duration, std::time::Duration)> {
+    ) -> PipelineResult<(
+        usize,
+        usize,
+        std::time::Duration,
+        std::time::Duration,
+        std::time::Duration,
+    )> {
         use std::time::{Duration, Instant};
 
+        let start = Instant::now();
         let read_count = Arc::new(AtomicUsize::new(0));
         let error_count = Arc::new(AtomicUsize::new(0));
         let input_wait_ns = Arc::new(AtomicU64::new(0));
@@ -120,6 +127,7 @@ impl ReadStage {
             error_count.load(Ordering::Relaxed),
             Duration::from_nanos(input_wait_ns.load(Ordering::Relaxed)),
             Duration::from_nanos(output_wait_ns.load(Ordering::Relaxed)),
+            start.elapsed(),
         ))
     }
 }
@@ -196,13 +204,15 @@ mod tests {
         let result = stage.run(path_rx, content_tx);
 
         assert!(result.is_ok());
-        let (read, failed, input_wait, output_wait) = result.unwrap();
+        let (read, failed, input_wait, output_wait, wall_time) = result.unwrap();
 
         // Collect results
         let contents: Vec<_> = content_rx.iter().collect();
 
         println!("Read {read} files, {failed} failed:");
-        println!("  Input wait: {input_wait:?}, Output wait: {output_wait:?}");
+        println!(
+            "  Input wait: {input_wait:?}, Output wait: {output_wait:?}, Wall time: {wall_time:?}"
+        );
         for fc in &contents {
             println!(
                 "  - {} ({} bytes, hash: {})",
@@ -235,7 +245,7 @@ mod tests {
         let result = stage.run(path_rx, content_tx);
 
         assert!(result.is_ok());
-        let (read, failed, _, _) = result.unwrap();
+        let (read, failed, _, _, _) = result.unwrap();
 
         let contents: Vec<_> = content_rx.iter().collect();
 

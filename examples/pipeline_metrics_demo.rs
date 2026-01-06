@@ -60,7 +60,10 @@ fn demo_stage_tracker() {
     );
     println!("Wall time: {:.2}s", metrics.wall_time.as_secs_f64());
     println!("Active time: {:.2}s", metrics.active_time().as_secs_f64());
-    println!("Throughput: {:.0} items/s", metrics.throughput());
+    match metrics.throughput() {
+        Some(t) => println!("Throughput: {t:.0} items/s"),
+        None => println!("Throughput: - (too fast to measure)"),
+    }
     println!("Input wait: {:.3}s", metrics.input_wait.as_secs_f64());
     println!("Output wait: {:.3}s", metrics.output_wait.as_secs_f64());
     println!();

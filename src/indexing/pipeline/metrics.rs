@@ -31,12 +31,14 @@ pub struct StageMetrics {
 
 impl StageMetrics {
     /// Calculate throughput (items per second).
-    pub fn throughput(&self) -> f64 {
+    /// Returns None if wall time is too short for meaningful measurement (<10ms).
+    pub fn throughput(&self) -> Option<f64> {
         let secs = self.wall_time.as_secs_f64();
-        if secs > 0.0 {
-            self.items_processed as f64 / secs
+        // Require at least 10ms for meaningful throughput calculation
+        if secs >= 0.01 {
+            Some(self.items_processed as f64 / secs)
         } else {
-            0.0
+            None
         }
     }
 
@@ -244,10 +246,9 @@ impl PipelineReport {
         tracing::info!(target: "pipeline", "{}", "-".repeat(60));
 
         for stage in &self.stages {
-            let throughput = if stage.items_processed > 0 {
-                format!("{:.0}/s", stage.throughput())
-            } else {
-                "-".to_string()
+            let throughput = match stage.throughput() {
+                Some(t) => format!("{t:.0}/s"),
+                None => "-".to_string(),
             };
 
             let wait = stage.input_wait + stage.output_wait;

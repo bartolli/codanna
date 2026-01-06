@@ -842,7 +842,8 @@ impl Display for DualProgressBar {
         } else {
             self.bar2.start_time.elapsed().as_secs_f64()
         };
-        let elapsed = elapsed1.max(elapsed2);
+        // Use max for overall progress, but each bar shows its own elapsed for accuracy
+        let _elapsed = elapsed1.max(elapsed2);
 
         // Bar 1 (EMBED) - uses dynamic total from COLLECT
         let current1 = self.bar1.current.load(Ordering::Relaxed);
@@ -890,7 +891,8 @@ impl Display for DualProgressBar {
             0.0
         };
 
-        // Format: LABEL: [bar] pct%  current/total unit | rate/s
+        // Format: LABEL: [bar] pct%  current/total unit | rate/s | elapsed
+        // Each bar shows its own elapsed time (frozen when complete)
         writeln!(
             f,
             "{:>5}: [{}] {:3}%  {}/{} {} | {:.0}/s",
@@ -899,7 +901,7 @@ impl Display for DualProgressBar {
         write!(
             f,
             "{:>5}: [{}] {:3}%  {}/{} {} | {:.0}/s | {:.1}s",
-            self.labels.1, bar2_str, pct2, current2, total2, self.bar2.labels.0, rate2, elapsed
+            self.labels.1, bar2_str, pct2, current2, total2, self.bar2.labels.0, rate2, elapsed2
         )
     }
 }
