@@ -75,3 +75,8 @@ index.db
 index.db-*
 index.scip
 vendors/fastembed-rs
+
+/scripts/*
+!/scripts/
+!/scripts/install.sh
+!/scripts/install.ps1
