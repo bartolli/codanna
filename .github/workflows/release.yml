@@ -198,3 +198,16 @@ jobs:
             *.sha512
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-homebrew:
+    needs: [upload, info]
+    name: Update Homebrew tap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger formula update
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.HOMEBREW_TAP_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/bartolli/homebrew-codanna/dispatches \
+            -d '{"event_type":"update-formula","client_payload":{"version":"${{ needs.info.outputs.version }}"}}'

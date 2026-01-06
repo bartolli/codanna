@@ -27,18 +27,34 @@ Give your code assistant the ability to see through your codebase—understandin
 
 ## Quick Start
 
-```bash
-# Install
-cargo install codanna --all-features
+### Install (macOS, Linux, WSL)
 
-# Initialize and index
+```bash
+curl -fsSL --proto '=https' --tlsv1.2 https://install.codanna.sh | sh
+```
+
+### Or via Homebrew
+
+```bash
+brew install bartolli/codanna/codanna
+```
+
+### Initialize and index
+
+```bash
 codanna init
 codanna index src --progress
+```
 
-# Ask questions
+### Search code
+
+```bash
 codanna mcp semantic_search_with_context query:"where do we handle errors" limit:3
+```
 
-# Index documentation for RAG
+### Search documentation (RAG)
+
+```bash
 codanna documents add-collection docs ./docs
 codanna documents index
 codanna mcp search_documents query:"authentication flow"
@@ -149,11 +165,8 @@ See [Document Search](docs/user-guide/documents.md).
 
 ## Requirements
 
-- Rust 1.85+ (for building from source)
 - ~150MB for embedding model (downloaded on first use)
-
-**Linux:** `sudo apt install pkg-config libssl-dev`
-**macOS:** No additional dependencies
+- **Build from source:** Rust 1.85+, Linux needs `pkg-config libssl-dev`
 
 ## Status
 

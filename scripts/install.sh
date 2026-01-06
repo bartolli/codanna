@@ -6,8 +6,20 @@ set -eu
 REPO="bartolli/codanna"
 INSTALL_DIR="${CODANNA_INSTALL_DIR:-$HOME/.local/bin}"
 
-say() { echo "codanna: $1"; }
-err() { say "ERROR: $1" >&2; exit 1; }
+# Colors (respects NO_COLOR and non-terminal output)
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    YELLOW='\033[0;33m'
+    RED='\033[0;31m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    GREEN='' BLUE='' YELLOW='' RED='' BOLD='' RESET=''
+fi
+
+say() { printf "%b\n" "${BLUE}codanna:${RESET} $1"; }
+err() { printf "%b\n" "${RED}codanna: ERROR:${RESET} $1" >&2; exit 1; }
 
 # Detect platform
 detect_platform() {
@@ -35,12 +47,24 @@ get_latest_version() {
         | grep '"tag_name"' | head -1 | cut -d'"' -f4
 }
 
+# Check for existing installation
+check_existing() {
+    ver="${version#v}"  # strip 'v' prefix for display
+    if command -v codanna >/dev/null 2>&1; then
+        current=$(codanna --version 2>/dev/null | cut -d' ' -f2 | sed 's/^v//' || echo "unknown")
+        say "updating ${BOLD}$current${RESET} -> ${GREEN}$ver${RESET}"
+    else
+        say "installing ${GREEN}$ver${RESET}"
+    fi
+}
+
 # Main
 main() {
     platform=$(detect_platform)
     version="${CODANNA_VERSION:-$(get_latest_version)}"
 
-    say "installing codanna $version for $platform"
+    check_existing
+    say "platform: $platform"
 
     # Fetch manifest
     manifest_url="https://github.com/$REPO/releases/download/$version/dist-manifest.json"
@@ -98,12 +122,12 @@ main() {
     cp "$binary" "$INSTALL_DIR/"
     chmod +x "$INSTALL_DIR/codanna" 2>/dev/null || true
 
-    say "installed to $INSTALL_DIR/codanna"
+    say "${GREEN}installed${RESET} to $INSTALL_DIR/codanna"
 
     # PATH check
     case ":$PATH:" in
         *":$INSTALL_DIR:"*) ;;
-        *) say "note: add $INSTALL_DIR to your PATH" ;;
+        *) say "${YELLOW}note:${RESET} add $INSTALL_DIR to your PATH" ;;
     esac
 }
 

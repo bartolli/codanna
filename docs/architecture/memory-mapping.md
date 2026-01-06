@@ -2,16 +2,13 @@
 
 Codanna uses memory-mapped files for instant loading and high-performance access.
 
-## Two-Cache Architecture
+## Storage Architecture
 
-Different access patterns require different cache designs:
-
-### Symbol Cache (`symbol_cache.bin`)
-- **Purpose**: Fast symbol lookups by name
-- **Hash**: FNV-1a for distribution
+### Symbol Index (Tantivy)
+- **Purpose**: Fast symbol lookups and full-text search
 - **Access**: <10ms response time
-- **Size**: ~100 bytes per symbol
-- **Storage**: Compact symbol representation
+- **Features**: Fuzzy matching, exact match, full-text search
+- **Location**: `.codanna/index/tantivy/`
 
 ### Vector Cache (`segment_0.vec`)
 - **Purpose**: Semantic similarity search
@@ -40,22 +37,6 @@ Different access patterns require different cache designs:
 - Atomic writes prevent corruption
 - File system handles durability
 
-## Symbol Cache Structure
-
-```rust
-struct CompactSymbol {
-    id: NonZeroU32,           // 4 bytes
-    kind: u8,                 // 1 byte
-    file_id: NonZeroU32,      // 4 bytes
-    range: CompactRange,      // 8 bytes (start/end)
-    name_hash: u64,           // 8 bytes (FNV-1a)
-    flags: u8,                // 1 byte
-    // Total: 26 bytes + padding = 32 bytes (cache-line aligned)
-}
-```
-
-**Cache-line alignment**: 32 bytes per symbol, 2 symbols fit per 64-byte cache line.
-
 ## Vector Cache Structure
 
 ```
@@ -74,7 +55,7 @@ segment_0.vec:
     └── ...
 ```
 
-**Storage format**: Binary-packed f32 arrays using bincode for serialization.
+**Storage format**: Binary-packed f32 arrays.
 
 ## IVFFlat Clustering
 
@@ -102,11 +83,10 @@ Warm cache: <1μs (already in RAM)
 
 ## Write Operations
 
-### Symbol Cache Updates
-1. Build new symbol cache in memory
-2. Write to temporary file
-3. Atomic rename to `symbol_cache.bin`
-4. OS remaps memory on next access
+### Symbol Index Updates
+1. Batch commits every 100 files for throughput
+2. RwLock-based concurrent writes
+3. Tantivy handles segment management
 
 ### Vector Cache Updates
 1. Generate new embeddings
@@ -121,25 +101,26 @@ Warm cache: <1μs (already in RAM)
 
 ```
 .codanna/index/
-├── symbol_cache.bin        # FNV-1a hashed symbols
-└── vectors/
-    ├── segment_0.vec       # Vector data
-    ├── segment_1.vec       # (if needed)
-    ├── metadata.bin        # Index metadata
-    └── clusters.bin        # Cluster information
+├── tantivy/                # Symbol index
+│   └── ...                 # Tantivy segment files
+├── semantic/               # Code vector storage
+│   ├── segment_0.vec       # Vector data
+│   ├── metadata.bin        # Index metadata
+│   └── clusters.bin        # Cluster information
+├── documents/              # Document collections (RAG)
+│   ├── tantivy/            # Document metadata index
+│   └── vectors/            # Document embeddings
+└── resolvers/              # Path resolution rules
 ```
 
 ## Memory Requirements
 
 For a project with 100,000 symbols:
 
-**Symbol cache:**
-- 100,000 symbols × 32 bytes = 3.2 MB
-
 **Vector cache (384-dim model):**
 - 100,000 vectors × 384 floats × 4 bytes = 153.6 MB
 
-**Total:** ~157 MB (plus OS overhead)
+**Tantivy index:** Variable, typically 10-50 MB depending on symbol metadata.
 
 ## Scalability
 
@@ -152,24 +133,15 @@ Memory-mapped files scale to:
 ## Performance Characteristics
 
 ### Read Performance
-- Symbol lookup: O(1) with FNV-1a hash
+- Symbol lookup: <10ms via Tantivy
 - Vector search: O(sqrt(N)) with IVFFlat
-- No serialization overhead
-- Cache-line aligned access
+- Memory-mapped access
 
 ### Write Performance
 - Batch updates preferred
 - Atomic file replacement
 - No locking for readers
 - Background re-clustering
-
-## Zero-Copy Deserialization
-
-Using `rkyv` for zero-copy:
-- No parsing on load
-- Direct memory access
-- Type-safe operations
-- Instant availability
 
 ## Troubleshooting
 

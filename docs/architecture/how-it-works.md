@@ -14,11 +14,9 @@ Codanna's architecture for fast, accurate code intelligence.
 
 - **tree-sitter**: Multi-language parsing
 - **tantivy**: Full-text search with integrated vector capabilities
-- **fastembed**: High-performance embedding generation
+- **fastembed**: Embedding generation with configurable model instances
 - **linfa**: K-means clustering for IVFFlat vector indexing
 - **memmap2**: Memory-mapped storage for vector data
-- **bincode**: Efficient serialization for vector storage
-- **rkyv**: Zero-copy serialization for performance
 - **DashMap**: Lock-free concurrent data structures
 - **tokio**: Async runtime
 - **thiserror**: Structured error handling
@@ -27,19 +25,25 @@ Codanna's architecture for fast, accurate code intelligence.
 
 ### Indexing Pipeline
 
+5-stage parallel pipeline with bounded channels:
+
 ```
-Source Files
-    ↓
-Tree-sitter Parser
-    ↓
-Symbol Extraction
-    ↓
-Relationship Analysis
-    ↓
-Doc Comment Embedding
-    ↓
-Tantivy Index + Vector Store
+DISCOVER -> READ -> PARSE -> COLLECT -+-> INDEX (Tantivy)
+                                      |
+                                      +-> EMBED (batches of 64)
+
+Pipeline completes when both branches finish.
 ```
+
+**Stage parallelism** (derived from `indexing.parallelism` setting):
+- DISCOVER: 10% of parallelism - filesystem walking
+- READ: 20% of parallelism - file I/O
+- PARSE: 60% of parallelism - tree-sitter AST parsing
+- COLLECT: single thread - batches symbols (5000 per batch)
+- INDEX: Tantivy writer with RwLock
+- EMBED: EmbeddingPool with N model instances (~86MB each), rayon parallelism
+
+Stages run concurrently. Files flow through bounded channels, providing natural backpressure.
 
 ### Query Pipeline
 
@@ -94,11 +98,11 @@ Response (JSON/Text)
 
 ## Performance Architecture
 
-### Symbol Cache
-- FNV-1a hashed lookups
-- Memory-mapped for instant loading
+### Symbol Index (Tantivy)
+- Full-text and exact match queries
 - <10ms response time
-- ~100 bytes per symbol
+- Batch commits for throughput (every 100 files)
+- RwLock-based concurrent writes
 
 ### Vector Cache
 - Configurable dimensions (384/768/1024 based on model)
@@ -117,12 +121,14 @@ Response (JSON/Text)
 .codanna/
 ├── settings.toml           # Configuration
 ├── index/
-│   ├── tantivy/           # Full-text search index
-│   ├── vectors/           # Memory-mapped vector storage
+│   ├── tantivy/           # Full-text search index (symbols + metadata)
+│   ├── semantic/          # Memory-mapped vector storage
 │   │   ├── segment_0.vec  # Vector data
 │   │   └── metadata.bin   # Vector metadata
-│   ├── resolvers/         # Path resolution rules
-│   └── symbol_cache.bin   # FNV-1a hashed symbols
+│   ├── documents/         # Document collections (RAG)
+│   │   ├── tantivy/       # Document metadata index
+│   │   └── vectors/       # Document embeddings
+│   └── resolvers/         # Path resolution rules
 └── plugins/
     └── lockfile.json      # Plugin installation tracking
 ```
@@ -141,9 +147,9 @@ Embeddings track source language, enabling filtering before similarity computati
 ## Hot Reload
 
 File watcher with 500ms debounce triggers re-indexing of changed files only. Changes detected by:
-- File modification timestamps
-- Content hashing
-- Symbol-level change detection
+- File modification timestamps (mtime fast path)
+- Incremental file-level change detection
+- Document auto-sync with mtime-based detection
 
 ## See Also
 

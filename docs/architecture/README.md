@@ -23,15 +23,16 @@ High-performance code intelligence system in Rust. Indexes code, tracks relation
 
 ## Architecture Highlights
 
-**Memory-mapped storage**: Two caches for different access patterns:
-- `symbol_cache.bin` - FNV-1a hashed symbol lookups, <10ms response time
+**Parallel indexing pipeline**: 5-stage architecture (DISCOVER → READ → PARSE → COLLECT → INDEX) with work-stealing queues. Phase 2 runs EmbeddingPool for parallel embedding generation.
+
+**Memory-mapped storage**: Vector cache for semantic search:
 - `segment_0.vec` - 384-dimensional vectors, <1μs access after OS page cache warm-up
 
 **Embedding lifecycle management**: Old embeddings deleted when files are re-indexed to prevent accumulation.
 
-**Lock-free concurrency**: DashMap for concurrent symbol reads, write coordination via single writer lock.
+**Lock-free concurrency**: DashMap for concurrent reads, RwLock for Tantivy writes.
 
-**Single-pass indexing**: Symbols, relationships, and embeddings extracted in one AST traversal.
+**IndexFacade**: Unified interface wrapping DocumentIndex, Pipeline, and SemanticSearch.
 
 **Language-aware semantic search**: Embeddings track source language, enabling filtering before similarity computation. No score redistribution - identical docs produce identical scores regardless of filtering.
 
