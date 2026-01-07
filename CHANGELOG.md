@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.10] - 2026-01-07
+
+### Changed
+
+- Bump version to 0.9.10
+- Update serde_json from 1.0.148 to 1.0.149
+- Disable ort dev-dependency (commented out)
+
+### Fixed
+
+- Pipeline wall_time tracking (aa01269)
+- Add EMBED to pipeline metrics (aa01269)
+
+### Documentation
+
+- Fix JSON examples in MCP tools
+- Add lang parameter to tools documentation
+- Update architecture for v0.9.0
+- Add install methods documentation
+
+### CI
+
+- Add standalone brew-update workflow
+
 ## [0.9.0] - 2026-01-05
 
 ### Added

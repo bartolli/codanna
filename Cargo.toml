@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.9.0"
+version = "0.9.10"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -51,7 +51,7 @@ parking_lot = "0.12.5"
 rayon = "1.11.0"
 rmcp = { version = "0.12.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 sha2 = "0.10"
 tantivy = "0.25.0"
 thiserror = "2.0.17"
@@ -100,7 +100,7 @@ sysinfo = "0.37.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-ort = { version = "=2.0.0-rc.10", default-features = false }
+# ort = { version = "=2.0.0-rc.10", default-features = false }
 testcontainers = "0.26.3"
 thread-id = "5.0.0"
 

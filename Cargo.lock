@@ -747,7 +747,7 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "codanna"
-version = "0.9.0"
+version = "0.9.10"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -772,7 +772,6 @@ dependencies = [
  "memmap2",
  "notify",
  "num_cpus",
- "ort",
  "owo-colors",
  "parking_lot",
  "rand 0.9.2",
@@ -4137,9 +4136,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.148"
+version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3084b546a1dd6289475996f182a22aba973866ea8e8b02c51d9f46b1336a22da"
+checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
  "indexmap 2.12.1",
  "itoa",
