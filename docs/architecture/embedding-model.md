@@ -23,7 +23,7 @@ model = "AllMiniLML6V2"  # Default
 
 **Note:** Changing models requires re-indexing:
 ```bash
-codanna index . --force --progress
+codanna index . --force 
 ```
 
 ## Embedding Generation

@@ -137,7 +137,7 @@ model = "MultilingualE5Small"
 
 **Note:** Changing models requires re-indexing:
 ```bash
-codanna index . --force --progress
+codanna index . --force 
 ```
 
 ## Agent Guidance Templates
@@ -342,7 +342,7 @@ codanna config | grep config_files
 
 **Re-index after config changes:**
 ```bash
-codanna index . --force --progress
+codanna index . --force 
 ```
 
 ### Monorepo Issues

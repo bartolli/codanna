@@ -118,13 +118,13 @@ codanna mcp semantic_search_with_context query:"parser" --json
 
 ```bash
 # Extract symbol_id from results
-codanna mcp semantic_search_with_context query:"config" --json | jq '.[0].symbol_id'
+codanna mcp semantic_search_with_context query:"config" --json | jq '.data[0].symbol.id'
 
 # Get just file paths
-codanna mcp search_symbols query:"test" --json | jq -r '.[].file_path'
+codanna mcp search_symbols query:"test" --json | jq -r '.data[].file_path'
 
 # Filter by score threshold
-codanna mcp semantic_search_with_context query:"auth" --json | jq '.[] | select(.score > 0.7)'
+codanna mcp semantic_search_with_context query:"config" --json | jq '.data[] | select(.score > 0.7)'
 ```
 
 ## Agent Workflows
@@ -172,7 +172,7 @@ codanna mcp get_calls symbol_id:1234
 
 ### Context Over Names
 
-`semantic_search_with_context` returns symbols WITH their relationships, dependencies, and impact radius. `search_symbols` returns just names. Starting with context means fewer round trips and better understanding.
+`semantic_search_with_context` returns symbols with their relationships, dependencies, and impact radius. `search_symbols` returns just names. Starting with context means fewer round trips and better understanding.
 
 ### Conceptual Links
 

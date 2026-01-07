@@ -38,10 +38,10 @@ codanna index src --dry-run
 
 ```bash
 # Index entire project (respects .gitignore and .codannaignore)
-codanna index . --progress
+codanna index . 
 
 # Index specific directory
-codanna index src --progress
+codanna index src 
 
 # Index a single file
 codanna index src/main.rs

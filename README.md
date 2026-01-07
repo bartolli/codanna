@@ -43,7 +43,7 @@ brew install bartolli/codanna/codanna
 
 ```bash
 codanna init
-codanna index src --progress
+codanna index src
 ```
 
 ### Search code
@@ -153,7 +153,7 @@ See [Profile Documentation](docs/profiles/).
 ```bash
 codanna documents add-collection docs docs/
 codanna documents add-collection guides examples/
-codanna documents index --progress
+codanna documents index
 codanna documents search "error handling" --collection docs
 ```
 

@@ -94,7 +94,7 @@ codanna mcp semantic_search_docs query:"authentication" threshold:0.5
 codanna mcp search_symbols query:parse kind:function --json | \
 jq -r '.data[].name' | \
 xargs -I {} codanna mcp find_callers {} --json | \
-jq -r '.data[].name' | sort -u
+jq -r '.data[][0].name' | sort -u
 ```
 
 ### Building Context

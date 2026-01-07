@@ -48,20 +48,19 @@ Build searchable index from codebase
 **Options:**
 - `-t, --threads <THREADS>` - Number of threads to use (overrides config)
 - `-f, --force` - Force re-indexing even if index exists
-- `-p, --progress` - Show progress during indexing
 - `--dry-run` - Dry run - show what would be indexed without indexing
 - `--max-files <MAX_FILES>` - Maximum number of files to index
 
 **Examples:**
 ```bash
 # Index a single directory
-codanna index src --progress
+codanna index src 
 
 # Index multiple directories at once
-codanna index src lib tests --progress
+codanna index src lib tests 
 
 # Use configured indexed paths
-codanna index --progress
+codanna index 
 ```
 
 **Behavior:**
@@ -140,15 +139,16 @@ Query indexed symbols, relationships, and dependencies
 **Subcommands:**
 | Subcommand | Description |
 |------------|-------------|
-| `retrieve symbol` | Find a symbol by name or `symbol_id:ID` |
+| `retrieve symbol` | Find a symbol (accepts `<name>` or `symbol_id:ID`) |
 | `retrieve calls` | Show what functions a given function calls (accepts `<name>` or `symbol_id:ID`) |
 | `retrieve callers` | Show what functions call a given function (accepts `<name>` or `symbol_id:ID`) |
-| `retrieve implementations` | Show what types implement a given trait |
-| `retrieve search` | Search for symbols using full-text search |
-| `retrieve describe` | Show information about a symbol (accepts `<name>` or `symbol_id:ID`) |
+| `retrieve implementations` | Show what types implement a given trait (accepts `<trait_name>` or `trait:NAME`) |
+| `retrieve search` | Search for symbols using full-text search (accepts `query:TEXT` with optional `kind:`, `limit:`, `module:`) |
+| `retrieve describe` | Show symbol signature, location, documentation, dependencies, and relationships (accepts `<name>` or `symbol_id:ID`) |
 
 **All retrieve subcommands support:**
 - `--json` - Output in JSON format
+- `lang:LANGUAGE` - Filter results by language (e.g., `lang:rust`, `lang:typescript`)
 
 **Using symbol_id:**
 ```bash
@@ -256,7 +256,6 @@ Index documents from all configured collections
 
 **Options:**
 - `--collection <NAME>` - Index only this collection
-- `-p, --progress` - Show progress during indexing
 - `-f, --force` - Force re-indexing even if documents haven't changed
 
 `documents search <QUERY>`
@@ -305,7 +304,7 @@ Install a plugin from a marketplace repository
 - `-f, --force` - Force installation even if conflicts exist
 - `--dry-run` - Perform a dry run without making changes
 
-#`plugin remove <PLUGIN_NAME>`
+`plugin remove <PLUGIN_NAME>`
 Remove an installed plugin and clean up its files
 
 **Arguments:**

@@ -22,7 +22,7 @@ cargo install codanna --all-features
 codanna init
 
 # Index your code
-codanna index src --progress
+codanna index src 
 
 # Ask real questions
 codanna mcp semantic_search_docs query:"where do we resolve symbol references" limit:3

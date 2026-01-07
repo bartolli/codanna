@@ -27,7 +27,7 @@ Build a searchable index from your codebase:
 codanna index src --dry-run
 
 # Index your code
-codanna index src --progress
+codanna index src 
 ```
 
 ## Ask Real Questions

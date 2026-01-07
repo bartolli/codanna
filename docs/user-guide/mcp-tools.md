@@ -29,11 +29,12 @@ Find a symbol by exact name.
 
 **Parameters:**
 - `name` (required) - Exact symbol name to find
+- `lang` - Filter by programming language (e.g., "rust", "typescript")
 
 **Example:**
 ```bash
 codanna mcp find_symbol main
-codanna mcp find_symbol Parser --json
+codanna mcp find_symbol Parser lang:rust --json
 ```
 
 **Returns:** Symbol information including file path, line number, kind, and signature.
@@ -47,11 +48,12 @@ Search symbols with full-text fuzzy matching.
 - `limit` - Maximum number of results (default: 10)
 - `kind` - Filter by symbol kind (e.g., "Function", "Struct", "Trait")
 - `module` - Filter by module path
+- `lang` - Filter by programming language (e.g., "rust", "typescript")
 
 **Example:**
 ```bash
 codanna mcp search_symbols query:parse kind:function limit:10
-codanna mcp search_symbols query:Parser --json
+codanna mcp search_symbols query:Parser lang:rust --json
 ```
 
 **Returns:** List of matching symbols with relevance ranking.
@@ -102,12 +104,13 @@ Show functions called by a given function.
 
 **Parameters:**
 - `function_name` OR `symbol_id` (one required) - Function name or symbol ID
+- `lang` - Filter by programming language (e.g., "rust", "typescript")
 
 **Example:**
 ```bash
 codanna mcp get_calls process_file
 codanna mcp get_calls symbol_id:1883
-codanna mcp get_calls main --json
+codanna mcp get_calls main lang:rust --json
 ```
 
 **Returns:** List of functions that the specified function calls. Each result includes `[symbol_id:123]` for follow-up queries.
@@ -118,12 +121,13 @@ Show functions that call a given function.
 
 **Parameters:**
 - `function_name` OR `symbol_id` (one required) - Function name or symbol ID
+- `lang` - Filter by programming language (e.g., "rust", "typescript")
 
 **Example:**
 ```bash
 codanna mcp find_callers init
 codanna mcp find_callers symbol_id:1883
-codanna mcp find_callers parse_file --json
+codanna mcp find_callers parse_file lang:rust --json
 ```
 
 **Returns:** List of functions that call the specified function. Each result includes `[symbol_id:123]` for follow-up queries.
@@ -135,12 +139,13 @@ Analyze the impact radius of symbol changes.
 **Parameters:**
 - `symbol_name` OR `symbol_id` (one required) - Symbol name or symbol ID
 - `max_depth` - Maximum depth to search (default: 3)
+- `lang` - Filter by programming language (e.g., "rust", "typescript")
 
 **Example:**
 ```bash
 codanna mcp analyze_impact Parser
 codanna mcp analyze_impact symbol_id:1883
-codanna mcp analyze_impact SimpleIndexer --json
+codanna mcp analyze_impact SimpleIndexer lang:rust --json
 ```
 
 **Returns:** Complete dependency graph showing:

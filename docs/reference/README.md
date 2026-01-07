@@ -17,8 +17,6 @@ Quick reference documentation for Codanna.
 
 - `--config`, `-c`: Path to custom settings.toml file
 - `--force`, `-f`: Force operation (overwrite, re-index, etc.)
-- `--progress`, `-p`: Show progress during operations
-- `--threads`, `-t`: Number of threads to use
 - `--dry-run`: Show what would happen without executing
 - `--json`: Structured output for piping (exit code 3 when not found)
 

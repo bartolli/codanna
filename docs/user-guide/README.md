@@ -19,7 +19,7 @@ Complete documentation for using Codanna effectively.
 | Command | Description | Example |
 |---------|-------------|---------|
 | `codanna init` | Set up .codanna directory with default configuration | `codanna init --force` |
-| `codanna index <PATH>` | Build searchable index from your codebase | `codanna index src --progress` |
+| `codanna index <PATH>` | Build searchable index from your codebase | `codanna index src ` |
 | `codanna config` | Display active settings | `codanna config` |
 | `codanna serve` | Start MCP server for AI assistants | `codanna serve --watch` |
 
