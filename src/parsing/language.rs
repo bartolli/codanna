@@ -21,6 +21,7 @@ pub enum Language {
     Java,
     Kotlin,
     Swift,
+    Clojure,
 }
 
 impl Language {
@@ -44,6 +45,7 @@ impl Language {
             Language::Java => super::LanguageId::new("java"),
             Language::Kotlin => super::LanguageId::new("kotlin"),
             Language::Swift => super::LanguageId::new("swift"),
+            Language::Clojure => super::LanguageId::new("clojure"),
         }
     }
 
@@ -66,6 +68,7 @@ impl Language {
             "java" => Some(Language::Java),
             "kotlin" => Some(Language::Kotlin),
             "swift" => Some(Language::Swift),
+            "clojure" => Some(Language::Clojure),
             _ => None,
         }
     }
@@ -103,6 +106,7 @@ impl Language {
             "java" => Some(Language::Java),
             "kt" | "kts" => Some(Language::Kotlin),
             "swift" => Some(Language::Swift),
+            "clj" | "cljc" | "cljs" | "edn" => Some(Language::Clojure),
             _ => None,
         }
     }
@@ -132,6 +136,7 @@ impl Language {
             Language::Java => &["java"],
             Language::Kotlin => &["kt", "kts"],
             Language::Swift => &["swift"],
+            Language::Clojure => &["clj", "cljc", "cljs", "edn"],
         }
     }
 
@@ -151,6 +156,7 @@ impl Language {
             Language::Java => "java",
             Language::Kotlin => "kotlin",
             Language::Swift => "swift",
+            Language::Clojure => "clojure",
         }
     }
 
@@ -170,6 +176,7 @@ impl Language {
             Language::Java => "Java",
             Language::Kotlin => "Kotlin",
             Language::Swift => "Swift",
+            Language::Clojure => "Clojure",
         }
     }
 }
