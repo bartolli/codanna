@@ -80,3 +80,4 @@ vendors/fastembed-rs
 !/scripts/
 !/scripts/install.sh
 !/scripts/install.ps1
+docs/

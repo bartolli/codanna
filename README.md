@@ -2,14 +2,14 @@
 
 <h1 align="center">Codanna</h1>
 
-[![Claude](https://img.shields.io/badge/Claude-✓%20Copmatible-grey?logo=claude&logoColor=fff&labelColor=D97757)](#)
+[![Claude](https://img.shields.io/badge/Claude-✓%20Compatible-grey?logo=claude&logoColor=fff&labelColor=D97757)](#)
 [![Google Gemini](https://img.shields.io/badge/Gemini-✓%20Compatible-grey?logo=googlegemini&logoColor=fff&labelColor=8E75B2)](#)
 [![OpenAI Codex](https://img.shields.io/badge/Codex-✓%20Compatible-grey?logo=openai&logoColor=fff&labelColor=10A37F)](#)
 [![Rust](https://img.shields.io/badge/Rust-CE412B?logo=rust&logoColor=white)](#)
 [![Crates.io Total Downloads](https://img.shields.io/crates/d/codanna?logo=rust&labelColor=CE412B&color=grey)](#)
 
 <p align="center">
-  <a href="https://github.com/bartolli/codanna/tree/main/docs">Documentation</a>
+  <a href="https://docs.codanna.sh/" target="_blank">Documentation</a>
   ·
   <a href="https://github.com/bartolli/codanna/issues">Report Bug</a>
   ·
@@ -21,6 +21,8 @@
 **X-ray vision for your agent.**
 
 Give your code assistant the ability to see through your codebase—understanding functions, tracing relationships, and finding implementations with surgical precision. Context-first coding. No grep-and-hope loops. No endless back-and-forth. Just smarter engineering in fewer keystrokes.
+
+Built for rapid R&D and pair programming—instant answers when LSP is too slow. [Learn more](https://docs.codanna.sh/)
 </div>
 
 <h3 align="left"></h3>
@@ -36,8 +38,10 @@ curl -fsSL --proto '=https' --tlsv1.2 https://install.codanna.sh | sh
 ### Or via Homebrew
 
 ```bash
-brew install bartolli/codanna/codanna
+brew install codanna
 ```
+
+See [Installation Guide](https://docs.codanna.sh/installation) for Cargo and other options.
 
 ### Initialize and index
 
@@ -74,104 +78,26 @@ The difference: Codanna understands code structure. It knows `parseConfig` is a 
 
 | Feature | Description |
 |---------|-------------|
-| **[Semantic Search](docs/user-guide/search-guide.md)** | Natural language queries against code and documentation. Finds functions by what they do, not just their names. |
-| **[Relationship Tracking](docs/user-guide/mcp-tools.md)** | Call graphs, implementations, and dependencies. Trace how code connects across files. |
-| **[Document Search](docs/user-guide/documents.md)** | Index markdown and text files for RAG workflows. Query project docs alongside code. |
-| **[MCP Protocol](docs/integrations/)** | Native integration with Claude, Gemini, Codex, and other AI assistants. |
-| **[Profiles](docs/profiles/)** | Package hooks, commands, and agents for different project types. |
-| **[Plugins](docs/plugins/)** | Claude Code manifest format for project-scoped workflows. |
+| **[Semantic Search](https://docs.codanna.sh/features/semantic-search)** | Natural language queries against code and documentation. Finds functions by what they do, not just their names. |
+| **[Relationship Tracking](https://docs.codanna.sh/features/relationships)** | Call graphs, implementations, and dependencies. Trace how code connects across files. |
+| **[Document Search](https://docs.codanna.sh/features/document-search)** | Index markdown and text files for RAG workflows. Query project docs alongside code. |
+| **[MCP Protocol](https://docs.codanna.sh/reference/mcp-quick)** | Native integration with Claude, Gemini, Codex, and other AI assistants. |
+| **[Profiles](https://docs.codanna.sh/features/collaboration)** | Package hooks, commands, and agents for different project types. |
 
-**Performance:** Sub-10ms symbol lookups with memory-mapped caches.
+**Performance:** Sub-10ms lookups, 75,000+ symbols/second parsing.
 
 **Languages:** Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Swift, GDScript.
 
 ## Integration
 
-Standard CLI and MCP protocol. Works with Claude, Codex, and any MCP-compatible client.
-HTTP/HTTPS servers available for network access.
+MCP protocol for AI assistants. Works with Claude Code, Cursor, Windsurf, and any MCP-compatible client. Supports stdio, HTTP, and HTTPS transports.
 
-### Claude Code
-
-```json
-{
-  "mcpServers": {
-    "codanna": {
-      "command": "codanna",
-      "args": ["serve", "--watch"]
-    }
-  }
-}
-```
-
-### HTTP Server
-
-```bash
-codanna serve --http --watch
-codanna serve --https --watch  # With TLS
-```
-
-### Unix Pipes
-
-```bash
-codanna mcp find_callers index_file --json | \
-jq -r '.data[]?[0] | "\(.name) - \(.file_path)"'
-```
-
-See [Integrations](docs/integrations/) for detailed setup guides.
-
-## Documentation
-
-- **[Getting Started](docs/getting-started/)** - Installation and first steps
-- **[User Guide](docs/user-guide/)** - CLI commands, tools, configuration
-- **[CLI Reference](docs/user-guide/cli-reference.md)** - All commands and options
-- **[MCP Tools](docs/user-guide/mcp-tools.md)** - Available tools for AI assistants
-- **[Architecture](docs/architecture/)** - How it works under the hood
-
-[View all documentation](docs/)
-
-## Advanced Features
-
-<details>
-<summary><strong>Profiles</strong> - Package reusable configurations</summary>
-
-```bash
-codanna init --force
-codanna profile provider add bartolli/codanna-profiles
-codanna profile install claude@codanna-profiles
-npm --prefix .claude/hooks/codanna install
-```
-
-The `claude` profile includes Research-Agent, `/codanna:x-ray` and `/codanna:symbol` commands, and hooks for skill suggestions.
-
-See [Profile Documentation](docs/profiles/).
-
-</details>
-
-<details>
-<summary><strong>Document Collections</strong> - RAG-ready documentation search</summary>
-
-```bash
-codanna documents add-collection docs docs/
-codanna documents add-collection guides examples/
-codanna documents index
-codanna documents search "error handling" --collection docs
-```
-
-Chunks documents, generates embeddings, and provides semantic search over your markdown files.
-
-See [Document Search](docs/user-guide/documents.md).
-
-</details>
+See [Integration Guides](https://docs.codanna.sh/reference/mcp-quick) for setup instructions.
 
 ## Requirements
 
 - ~150MB for embedding model (downloaded on first use)
 - **Build from source:** Rust 1.85+, Linux needs `pkg-config libssl-dev`
-
-## Status
-
-- Sub-10ms symbol lookups
-- 75,000+ symbols/second parsing
 - Windows support is experimental
 
 ## Contributing
