@@ -39,6 +39,7 @@ bin-dir = "{ name }-{ version }-windows-x64/{ bin }{ binary-ext }"
 anyhow = "1.0.100"
 bitflags = "2.10.0"
 clap = { version = "4.5.54", features = ["derive", "color", "env"] }
+clap_complete = "4.5.54"
 crossbeam-channel = "0.5.15"
 dashmap = "6.1.0"
 dirs = "6.0.0"

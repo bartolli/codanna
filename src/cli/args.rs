@@ -3,7 +3,7 @@
 //! Contains the Cli struct, Commands enum, and all subcommand enums.
 
 use clap::{
-    Parser, Subcommand,
+    Parser, Subcommand, ValueEnum,
     builder::styling::{AnsiColor, Effects, Styles},
 };
 use std::path::PathBuf;
@@ -63,6 +63,7 @@ fn create_custom_help() -> String {
     help.push_str("  retrieve      Query symbols, relationships, and dependencies\n");
     help.push_str("  serve         Start MCP server\n");
     help.push_str("  config        Display active settings\n");
+    help.push_str("  install-completion  Install shell completions\n");
     help.push_str("  mcp-test      Test MCP connection\n");
     help.push_str("  mcp           Execute MCP tools directly\n");
     help.push_str("  benchmark     Benchmark parser performance\n");
@@ -93,6 +94,21 @@ fn create_custom_help() -> String {
     help.push_str("  GitHub: https://github.com/bartolli/codanna");
 
     help
+}
+
+/// Supported shells for completion installation
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CompletionShell {
+    #[value(name = "bash")]
+    Bash,
+    #[value(name = "zsh")]
+    Zsh,
+    #[value(name = "fish")]
+    Fish,
+    #[value(name = "powershell", alias = "pwsh")]
+    PowerShell,
+    #[value(name = "elvish")]
+    Elvish,
 }
 
 /// Code intelligence system
@@ -190,6 +206,19 @@ pub enum Commands {
     /// Show current configuration settings
     #[command(about = "Display active settings from .codanna/settings.toml")]
     Config,
+
+    /// Install shell completions
+    #[command(
+        name = "install-completion",
+        about = "Install shell completions for codanna",
+        long_about = "Install shell completion scripts for codanna into the standard user directory for the selected shell.\nIf no shell is provided, codanna will try to detect your current shell.",
+        after_help = "Examples:\n  codanna install-completion\n  codanna install-completion zsh\n  codanna install-completion fish"
+    )]
+    InstallCompletion {
+        /// Shell to install completions for (defaults to current shell)
+        #[arg(value_enum, value_name = "SHELL")]
+        shell: Option<CompletionShell>,
+    },
 
     /// Start MCP server
     #[command(

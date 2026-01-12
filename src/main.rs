@@ -196,7 +196,11 @@ async fn main() {
                 }
             }
         }
-    } else if !matches!(cli.command, Commands::Init { .. }) && cli.config.is_none() {
+    } else if !matches!(
+        cli.command,
+        Commands::Init { .. } | Commands::InstallCompletion { .. }
+    ) && cli.config.is_none()
+    {
         // For other commands without --config flag, just warn
         if let Err(warning) = Settings::check_init() {
             eprintln!("Warning: {warning}");
@@ -244,7 +248,10 @@ async fn main() {
     // - Full: Index + providers (Retrieve, Mcp, Serve, Index)
     let needs_providers = !matches!(
         &cli.command,
-        Commands::Parse { .. } | Commands::McpTest { .. } | Commands::Benchmark { .. }
+        Commands::Parse { .. }
+            | Commands::McpTest { .. }
+            | Commands::Benchmark { .. }
+            | Commands::InstallCompletion { .. }
     );
 
     let needs_indexer = !matches!(
@@ -261,6 +268,7 @@ async fn main() {
             | Commands::Documents { .. }
             | Commands::Profile { .. }
             | Commands::IndexParallel { .. }
+            | Commands::InstallCompletion { .. }
     );
 
     // Initialize project resolution providers (only if needed)
@@ -552,6 +560,10 @@ async fn main() {
 
         Commands::Config => {
             codanna::cli::commands::init::run_config(&config);
+        }
+
+        Commands::InstallCompletion { shell } => {
+            codanna::cli::commands::completions::run_install_completion(shell);
         }
 
         Commands::Parse {
