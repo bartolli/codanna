@@ -56,10 +56,14 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     // Create cancellation token for graceful shutdown
     let ct = CancellationToken::new();
 
+    // Load document store once (shared between MCP server and watcher)
+    let document_store_arc = crate::documents::load_from_settings(&config);
+    if document_store_arc.is_some() {
+        tracing::debug!(target: "mcp", "document store loaded for MCP server");
+    }
+
     // Start unified file watcher if enabled
     if watch || config.file_watch.enabled {
-        use crate::documents::DocumentStore;
-        use crate::vector::{EmbeddingGenerator, FastEmbedGenerator};
         use crate::watcher::UnifiedWatcher;
         use crate::watcher::handlers::{CodeFileHandler, ConfigFileHandler, DocumentFileHandler};
 
@@ -95,28 +99,16 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
             }
         }
 
-        // Add document handler if documents are enabled
-        if config.documents.enabled {
-            let doc_path = config.index_path.join("documents");
-            if doc_path.exists() {
-                if let Ok(generator) =
-                    FastEmbedGenerator::from_settings(&config.semantic_search.model, false)
-                {
-                    let dimension = generator.dimension();
-                    if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
-                        if let Ok(store_with_emb) = store.with_embeddings(Box::new(generator)) {
-                            let store_arc = Arc::new(RwLock::new(store_with_emb));
-                            builder = builder
-                                .document_store(store_arc.clone())
-                                .chunking_config(config.documents.defaults.clone())
-                                .handler(DocumentFileHandler::new(
-                                    store_arc,
-                                    workspace_root.clone(),
-                                ));
-                        }
-                    }
-                }
-            }
+        // Add document handler using shared document store
+        if let Some(ref store_arc) = document_store_arc {
+            tracing::debug!(target: "mcp", "adding document handler to watcher");
+            builder = builder
+                .document_store(store_arc.clone())
+                .chunking_config(config.documents.defaults.clone())
+                .handler(DocumentFileHandler::new(
+                    store_arc.clone(),
+                    workspace_root.clone(),
+                ));
         }
 
         // Build and start the unified watcher
@@ -190,6 +182,14 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     // Create a shared service instance that all connections will use
     let shared_service =
         CodeIntelligenceServer::new_with_facade(indexer_for_service, config_for_service);
+
+    // Attach document store if available
+    let shared_service = if let Some(store_arc) = document_store_arc {
+        tracing::debug!(target: "mcp", "attaching document store to MCP server");
+        shared_service.with_document_store_arc(store_arc)
+    } else {
+        shared_service
+    };
 
     // Start notification listener to forward file change events to MCP clients
     let notification_receiver = broadcaster.subscribe();

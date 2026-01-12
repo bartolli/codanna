@@ -1,6 +1,6 @@
 # Kotlin Parser Symbol Extraction Coverage Report
 
-*Generated: 2026-01-05 15:18:21 UTC*
+*Generated: 2026-01-12 21:49:41 UTC*
 
 ## Summary
 - Key nodes: 17/17 (100%)

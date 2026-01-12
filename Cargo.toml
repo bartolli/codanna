@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.9.10"
+version = "0.9.11"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -70,19 +70,19 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
-fastembed = "5.6.0"
+fastembed = "=5.6.0"
 rand = "0.9.2"
 indicatif = "0.18.3"
 comfy-table = "7.2.1"
 console = "0.16.2"
 owo-colors = "4.2.3"
 axum = { version = "0.8.8", optional = true }
-tower = { version = "0.5.2", optional = true }
+tower = { version = "0.5.3", optional = true }
 tower-http = { version = "0.6.8", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
 tokio-util = "0.7.18"
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
-rustls = { version = "0.23.35", default-features = false, features = ["ring"], optional = true }
+rustls = { version = "0.23.36", default-features = false, features = ["ring"], optional = true }
 rcgen = { version = "0.14.6", optional = true }
 is-terminal = "0.4.17"
 regex = "1.12.2"
@@ -100,9 +100,9 @@ sysinfo = "0.37.2"
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
-# ort = { version = "=2.0.0-rc.10", default-features = false }
+ort = { version = "=2.0.0-rc.10", default-features = false }
 testcontainers = "0.26.3"
-thread-id = "5.0.0"
+thread-id = "5.1.0"
 
 [features]
 default = ["http-server"]

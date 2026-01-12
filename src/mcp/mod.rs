@@ -233,6 +233,12 @@ impl CodeIntelligenceServer {
         self
     }
 
+    /// Add document store from existing Arc (for sharing with watcher)
+    pub fn with_document_store_arc(mut self, store: Arc<RwLock<DocumentStore>>) -> Self {
+        self.document_store = Some(store);
+        self
+    }
+
     /// Get a reference to the facade Arc for external management (e.g., hot-reload)
     pub fn get_facade_arc(&self) -> Arc<RwLock<IndexFacade>> {
         self.facade.clone()

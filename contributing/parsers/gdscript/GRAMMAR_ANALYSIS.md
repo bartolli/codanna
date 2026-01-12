@@ -1,6 +1,6 @@
 # GDScript Grammar Analysis
 
-*Generated: 2026-01-05 15:18:21 UTC*
+*Generated: 2026-01-12 21:49:41 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 91

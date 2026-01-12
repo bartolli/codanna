@@ -658,29 +658,14 @@ pub async fn run(
     // Embedded mode - use already loaded facade directly
     // Try to load DocumentStore for search_documents tool
     let server = {
-        let mut server = crate::mcp::CodeIntelligenceServer::new(facade);
+        let server = crate::mcp::CodeIntelligenceServer::new(facade);
 
         // Add DocumentStore if documents are enabled and indexed
-        if config.documents.enabled && config.semantic_search.enabled {
-            let doc_path = config.index_path.join("documents");
-            if doc_path.exists() {
-                use crate::documents::DocumentStore;
-                use crate::vector::{EmbeddingGenerator, FastEmbedGenerator};
-
-                // Create generator first to get dimension from model
-                if let Ok(generator) =
-                    FastEmbedGenerator::from_settings(&config.semantic_search.model, false)
-                {
-                    let dimension = generator.dimension();
-                    if let Ok(store) = DocumentStore::new(&doc_path, dimension) {
-                        if let Ok(store_with_emb) = store.with_embeddings(Box::new(generator)) {
-                            server = server.with_document_store(store_with_emb);
-                        }
-                    }
-                }
-            }
+        if let Some(store_arc) = crate::documents::load_from_settings(config) {
+            server.with_document_store_arc(store_arc)
+        } else {
+            server
         }
-        server
     };
 
     // Call the tool directly
