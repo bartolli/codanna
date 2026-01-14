@@ -302,6 +302,17 @@ async fn main() {
             | Commands::Serve { .. }
     );
 
+    // Determine if we need semantic search (ML model loading)
+    // Retrieve commands use Tantivy text search only - no ML model needed
+    let needs_semantic_search = match &cli.command {
+        Commands::Mcp { tool, .. } => {
+            // Only these MCP tools need semantic search
+            ["semantic_search_docs", "semantic_search_with_context"].contains(&tool.as_str())
+        }
+        Commands::Index { .. } | Commands::Serve { .. } => true,
+        _ => false,
+    };
+
     // Load existing index or create new one (only if command needs it)
     let settings = Arc::new(config.clone());
     let mut indexer: Option<IndexFacade> = if !needs_indexer {
@@ -318,7 +329,15 @@ async fn main() {
                     tracing::debug!(target: "cli", "using lazy initialization (skipping trait resolver)");
                 }
 
-                match persistence.load_facade(settings.clone()) {
+                // Use lite loading for commands that don't need semantic search
+                let load_result = if needs_semantic_search {
+                    persistence.load_facade(settings.clone())
+                } else {
+                    tracing::debug!(target: "cli", "using lite loading (skipping semantic search)");
+                    persistence.load_facade_lite(settings.clone())
+                };
+
+                match load_result {
                     Ok(loaded) => {
                         tracing::debug!(target: "cli", "successfully loaded index from disk");
                         if cli.info {
@@ -370,7 +389,8 @@ async fn main() {
     };
 
     if let Some(ref mut idx) = indexer {
-        if config.semantic_search.enabled && !idx.has_semantic_search() {
+        // Only enable semantic search for commands that need it
+        if needs_semantic_search && config.semantic_search.enabled && !idx.has_semantic_search() {
             if let Err(e) = idx.enable_semantic_search() {
                 eprintln!("Warning: Failed to enable semantic search: {e}");
             } else {

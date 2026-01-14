@@ -9,7 +9,7 @@ use crate::retrieve;
 /// Run the retrieve command.
 pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
     match query {
-        RetrieveQuery::Symbol { args, json } => {
+        RetrieveQuery::Symbol { args, json, fields } => {
             use crate::io::args::parse_positional_args;
 
             // Parse positional arguments for symbol name and key:value pairs
@@ -31,9 +31,9 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             let language = params.get("lang").map(|s| s.as_str());
 
             let format = OutputFormat::from_json_flag(json);
-            retrieve::retrieve_symbol(indexer, &final_name, language, format)
+            retrieve::retrieve_symbol(indexer, &final_name, language, format, fields)
         }
-        RetrieveQuery::Callers { args, json } => {
+        RetrieveQuery::Callers { args, json, fields } => {
             use crate::io::args::parse_positional_args;
 
             // Parse positional arguments for function name and key:value pairs
@@ -55,9 +55,9 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             let language = params.get("lang").map(|s| s.as_str());
 
             let format = OutputFormat::from_json_flag(json);
-            retrieve::retrieve_callers(indexer, &final_function, language, format)
+            retrieve::retrieve_callers(indexer, &final_function, language, format, fields)
         }
-        RetrieveQuery::Calls { args, json } => {
+        RetrieveQuery::Calls { args, json, fields } => {
             use crate::io::args::parse_positional_args;
 
             // Parse positional arguments for function name and key:value pairs
@@ -79,9 +79,9 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             let language = params.get("lang").map(|s| s.as_str());
 
             let format = OutputFormat::from_json_flag(json);
-            retrieve::retrieve_calls(indexer, &final_function, language, format)
+            retrieve::retrieve_calls(indexer, &final_function, language, format, fields)
         }
-        RetrieveQuery::Implementations { args, json } => {
+        RetrieveQuery::Implementations { args, json, fields } => {
             use crate::io::args::parse_positional_args;
 
             // Parse positional arguments for trait name and key:value pairs
@@ -101,7 +101,7 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             let language = params.get("lang").map(|s| s.as_str());
 
             let format = OutputFormat::from_json_flag(json);
-            retrieve::retrieve_implementations(indexer, &final_trait, language, format)
+            retrieve::retrieve_implementations(indexer, &final_trait, language, format, fields)
         }
         RetrieveQuery::Search {
             args,
@@ -109,6 +109,7 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             json,
             kind,
             module,
+            fields,
         } => {
             use crate::io::args::parse_positional_args;
 
@@ -149,9 +150,10 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
                 final_module.as_deref(),
                 language,
                 format,
+                fields,
             )
         }
-        RetrieveQuery::Describe { args, json } => {
+        RetrieveQuery::Describe { args, json, fields } => {
             use crate::io::args::parse_positional_args;
 
             // Parse positional arguments for symbol name and key:value pairs
@@ -173,7 +175,7 @@ pub fn run(query: RetrieveQuery, indexer: &IndexFacade) -> ExitCode {
             let language = params.get("lang").map(|s| s.as_str());
 
             let format = OutputFormat::from_json_flag(json);
-            retrieve::retrieve_describe(indexer, &final_symbol, language, format)
+            retrieve::retrieve_describe(indexer, &final_symbol, language, format, fields)
         }
     }
 }

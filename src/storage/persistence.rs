@@ -33,6 +33,23 @@ impl IndexPersistence {
     /// Load an IndexFacade from disk
     #[must_use = "Load errors should be handled appropriately"]
     pub fn load_facade(&self, settings: Arc<Settings>) -> IndexResult<IndexFacade> {
+        self.load_facade_impl(settings, true)
+    }
+
+    /// Load an IndexFacade without semantic search (faster for text-only queries)
+    ///
+    /// Use this for commands that only need Tantivy text search (e.g., retrieve).
+    #[must_use = "Load errors should be handled appropriately"]
+    pub fn load_facade_lite(&self, settings: Arc<Settings>) -> IndexResult<IndexFacade> {
+        self.load_facade_impl(settings, false)
+    }
+
+    /// Internal implementation with configurable semantic search loading
+    fn load_facade_impl(
+        &self,
+        settings: Arc<Settings>,
+        load_semantic: bool,
+    ) -> IndexResult<IndexFacade> {
         // Load metadata to understand data sources
         let metadata = IndexMetadata::load(&self.base_path).ok();
 
@@ -75,22 +92,26 @@ impl IndexPersistence {
             );
         }
 
-        // Load semantic search if available
-        let semantic_path = self.semantic_path();
-        tracing::debug!(
-            "[persistence] semantic path computed as: {}",
-            semantic_path.display()
-        );
-        match facade.load_semantic_search(&semantic_path) {
-            Ok(true) => {
-                tracing::debug!("[persistence] loaded semantic search for facade");
+        // Load semantic search if available and requested
+        if load_semantic {
+            let semantic_path = self.semantic_path();
+            tracing::debug!(
+                "[persistence] semantic path computed as: {}",
+                semantic_path.display()
+            );
+            match facade.load_semantic_search(&semantic_path) {
+                Ok(true) => {
+                    tracing::debug!("[persistence] loaded semantic search for facade");
+                }
+                Ok(false) => {
+                    tracing::debug!("[persistence] no semantic data found (this is optional)");
+                }
+                Err(e) => {
+                    tracing::warn!("[persistence] failed to load semantic search: {e}");
+                }
             }
-            Ok(false) => {
-                tracing::debug!("[persistence] no semantic data found (this is optional)");
-            }
-            Err(e) => {
-                tracing::warn!("[persistence] failed to load semantic search: {e}");
-            }
+        } else {
+            tracing::debug!("[persistence] skipping semantic search (lite mode)");
         }
 
         // Restore indexed_paths from metadata

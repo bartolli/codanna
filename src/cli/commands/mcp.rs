@@ -1107,12 +1107,20 @@ pub async fn run(
                         .and_then(|m| m.get("name"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
+                    let language = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("lang"))
+                        .and_then(|v| v.as_str());
 
                     if symbol_contexts.is_empty() {
                         let mut envelope: Envelope<()> =
                             Envelope::not_found(format!("Symbol '{name}' not found"))
                                 .with_entity_type(EntityType::Symbol)
                                 .with_query(name);
+
+                        if let Some(lang) = language {
+                            envelope = envelope.with_lang(lang);
+                        }
 
                         if let Some(hint) = generate_guidance_from_config(
                             &guidance_config,
@@ -1133,6 +1141,10 @@ pub async fn run(
                             .with_count(count)
                             .with_query(name)
                             .with_message(format!("Found {count} symbol(s)"));
+
+                        if let Some(lang) = language {
+                            envelope = envelope.with_lang(lang);
+                        }
 
                         if let Some(hint) = generate_guidance_from_config(
                             &guidance_config,
@@ -1168,6 +1180,10 @@ pub async fn run(
                         .unwrap_or("unknown")
                         .to_string()
                 };
+                let language = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str());
 
                 if let Some(calls) = get_calls_data {
                     let count = calls.len();
@@ -1176,6 +1192,10 @@ pub async fn run(
                         .with_count(count)
                         .with_query(&identifier)
                         .with_message(format!("Calls {count} function(s)"));
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
@@ -1196,6 +1216,10 @@ pub async fn run(
                         Envelope::not_found(format!("Function '{identifier}' not found"))
                             .with_entity_type(EntityType::Calls)
                             .with_query(&identifier);
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
@@ -1227,6 +1251,10 @@ pub async fn run(
                         .unwrap_or("unknown")
                         .to_string()
                 };
+                let language = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str());
 
                 if let Some(callers) = find_callers_data {
                     let count = callers.len();
@@ -1235,6 +1263,10 @@ pub async fn run(
                         .with_count(count)
                         .with_query(&identifier)
                         .with_message(format!("Called by {count} function(s)"));
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
@@ -1255,6 +1287,10 @@ pub async fn run(
                         Envelope::not_found(format!("Function '{identifier}' not found"))
                             .with_entity_type(EntityType::Callers)
                             .with_query(&identifier);
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
@@ -1345,6 +1381,10 @@ pub async fn run(
                     .and_then(|m| m.get("query"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
+                let language = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str());
 
                 if let Some(results) = search_symbols_data {
                     // Transform to consistent nested symbol shape
@@ -1365,6 +1405,10 @@ pub async fn run(
                             .with_query(query)
                             .with_message(format!("Found {count} symbol(s)"))
                     };
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
@@ -1401,6 +1445,10 @@ pub async fn run(
                     .and_then(|m| m.get("query"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
+                let language = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str());
 
                 if let Some(results) = semantic_search_docs_data {
                     let count = results.len();
@@ -1418,6 +1466,10 @@ pub async fn run(
                             .with_query(query)
                             .with_message(format!("Found {count} similar symbol(s)"))
                     };
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
@@ -1465,6 +1517,10 @@ pub async fn run(
                     .and_then(|m| m.get("query"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
+                let language = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str());
 
                 if let Some(results) = semantic_search_with_context_data {
                     let count = results.len();
@@ -1482,6 +1538,10 @@ pub async fn run(
                             .with_query(query)
                             .with_message(format!("Found {count} symbol(s) with context"))
                     };
+
+                    if let Some(lang) = language {
+                        envelope = envelope.with_lang(lang);
+                    }
 
                     if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,

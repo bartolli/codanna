@@ -148,6 +148,10 @@ pub struct Meta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
 
+    /// Language filter applied (e.g., "rust", "python")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
+
     /// Execution time in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
@@ -168,6 +172,7 @@ impl Default for Meta {
             entity_type: None,
             count: None,
             query: None,
+            lang: None,
             duration_ms: None,
             truncated: None,
             depth: None,
@@ -248,6 +253,12 @@ impl<T> Envelope<T> {
     /// Set query in metadata.
     pub fn with_query(mut self, query: impl Into<String>) -> Self {
         self.meta.query = Some(query.into());
+        self
+    }
+
+    /// Set language filter in metadata.
+    pub fn with_lang(mut self, lang: impl Into<String>) -> Self {
+        self.meta.lang = Some(lang.into());
         self
     }
 

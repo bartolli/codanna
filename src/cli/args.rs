@@ -586,7 +586,7 @@ pub enum DocumentAction {
 pub enum RetrieveQuery {
     /// Find a symbol by name
     #[command(
-        after_help = "Examples:\n  codanna retrieve symbol main\n  codanna retrieve symbol symbol_id:1771\n  codanna retrieve symbol name:main --json\n  codanna retrieve symbol MyStruct --json | jq '.file'"
+        after_help = "Examples:\n  codanna retrieve symbol main\n  codanna retrieve symbol symbol_id:1771\n  codanna retrieve symbol name:main --json\n  codanna retrieve symbol MyStruct --json | jq '.file'\n  codanna retrieve symbol main --json --fields=id,name,file_path"
     )]
     Symbol {
         /// Positional arguments (symbol name and/or key:value pairs)
@@ -595,11 +595,14 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 
     /// Show what functions a given function calls
     #[command(
-        after_help = "Examples:\n  codanna retrieve calls process_file\n  codanna retrieve calls symbol_id:1771\n  codanna retrieve calls function:process_file --json"
+        after_help = "Examples:\n  codanna retrieve calls process_file\n  codanna retrieve calls symbol_id:1771\n  codanna retrieve calls function:process_file --json\n  codanna retrieve calls main --json --fields=name,file_path"
     )]
     Calls {
         /// Positional arguments (function name and/or key:value pairs)
@@ -608,11 +611,14 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 
     /// Show what functions call a given function
     #[command(
-        after_help = "Examples:\n  codanna retrieve callers main\n  codanna retrieve callers symbol_id:1771\n  codanna retrieve callers function:main --json"
+        after_help = "Examples:\n  codanna retrieve callers main\n  codanna retrieve callers symbol_id:1771\n  codanna retrieve callers function:main --json\n  codanna retrieve callers main --json --fields=name,file_path"
     )]
     Callers {
         /// Positional arguments (function name and/or key:value pairs)
@@ -621,11 +627,14 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 
     /// Show what types implement a given trait
     #[command(
-        after_help = "Examples:\n  codanna retrieve implementations Parser\n  codanna retrieve implementations trait:Parser --json"
+        after_help = "Examples:\n  codanna retrieve implementations Parser\n  codanna retrieve implementations trait:Parser --json\n  codanna retrieve implementations Parser --json --fields=name,file_path"
     )]
     Implementations {
         /// Positional arguments (trait name and/or key:value pairs)
@@ -634,11 +643,14 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 
     /// Search for symbols using full-text search
     #[command(
-        after_help = "Examples:\n  # Traditional flag format\n  codanna retrieve search \"parse\" --limit 5 --kind function\n  \n  # Key:value format (Unix-style)\n  codanna retrieve search query:parse limit:5 kind:function\n  \n  # Mixed format\n  codanna retrieve search \"parse\" limit:5 --json"
+        after_help = "Examples:\n  # Traditional flag format\n  codanna retrieve search \"parse\" --limit 5 --kind function\n  \n  # Key:value format (Unix-style)\n  codanna retrieve search query:parse limit:5 kind:function\n  \n  # Mixed format\n  codanna retrieve search \"parse\" limit:5 --json\n  codanna retrieve search \"parse\" --json --fields=name,file_path"
     )]
     Search {
         /// Positional arguments (query and/or key:value pairs)
@@ -660,11 +672,15 @@ pub enum RetrieveQuery {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 
     /// Show information about a symbol
     #[command(
-        after_help = "Examples:\n  codanna retrieve describe SimpleIndexer\n  codanna retrieve describe symbol:SimpleIndexer --json"
+        after_help = "Examples:\n  codanna retrieve describe SimpleIndexer\n  codanna retrieve describe symbol:SimpleIndexer --json\n  codanna retrieve describe main --json --fields=name,kind,calls"
     )]
     Describe {
         /// Positional arguments (symbol name and/or key:value pairs)
@@ -673,5 +689,8 @@ pub enum RetrieveQuery {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 }
