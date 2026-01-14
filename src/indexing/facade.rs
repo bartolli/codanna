@@ -205,27 +205,14 @@ impl IndexFacade {
 
     /// Load semantic search data from disk.
     ///
-    /// Also initializes the embedding pool for incremental updates.
+    /// This only loads pre-computed embeddings for querying.
+    /// Embedding pool for generating new embeddings is initialized lazily.
     pub fn load_semantic_search(&mut self, path: &Path) -> FacadeResult<bool> {
         if path.join("metadata.json").exists() {
             match SimpleSemanticSearch::load(path) {
                 Ok(semantic) => {
                     self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
-
-                    // Initialize embedding pool for incremental updates (watcher reindexing)
-                    if self.embedding_pool.is_none() {
-                        let model = &self.settings.semantic_search.model;
-                        let pool_size = self.settings.semantic_search.embedding_threads;
-                        if let Ok(embedding_model) = crate::vector::parse_embedding_model(model) {
-                            if let Ok(pool) = EmbeddingPool::new(pool_size, embedding_model) {
-                                self.embedding_pool = Some(Arc::new(pool));
-                                tracing::debug!(
-                                    "Initialized embedding pool for incremental updates"
-                                );
-                            }
-                        }
-                    }
-
+                    // Embedding pool is initialized lazily when needed
                     return Ok(true);
                 }
                 Err(e) => {
@@ -234,6 +221,24 @@ impl IndexFacade {
             }
         }
         Ok(false)
+    }
+
+    /// Ensure embedding pool is initialized for generating new embeddings.
+    ///
+    /// Called lazily by methods that need to compute embeddings (reindexing, watcher).
+    pub fn ensure_embedding_pool(&mut self) -> FacadeResult<()> {
+        if self.embedding_pool.is_some() {
+            return Ok(());
+        }
+
+        let model = &self.settings.semantic_search.model;
+        let pool_size = self.settings.semantic_search.embedding_threads;
+        let embedding_model = crate::vector::parse_embedding_model(model)
+            .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
+        let pool = EmbeddingPool::new(pool_size, embedding_model)?;
+        self.embedding_pool = Some(Arc::new(pool));
+        tracing::debug!("Initialized embedding pool for incremental updates");
+        Ok(())
     }
 
     /// Get semantic search embedding count.

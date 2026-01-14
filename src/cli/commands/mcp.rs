@@ -713,6 +713,15 @@ pub async fn run(
     // Check semantic search status before moving indexer
     let has_semantic_search = facade.has_semantic_search();
 
+    // Only load document store for tools that need it (search_documents)
+    // This is expensive (~1s to load ML model) so we skip it for other tools
+    let needs_document_store = tool == "search_documents";
+    let document_store = if needs_document_store {
+        crate::documents::load_from_settings(config)
+    } else {
+        None
+    };
+
     // If we need JSON output for get_index_info, collect data before moving indexer
     let index_info_data = if json && tool == "get_index_info" {
         let symbol_count = facade.symbol_count();
@@ -751,35 +760,10 @@ pub async fn run(
             }
         };
 
-        // Get document collections info
-        let documents = if let Some(store_arc) = crate::documents::load_from_settings(config) {
-            let store = store_arc.read().await;
-            let collection_names = store.list_collections();
-            let collections: Vec<CollectionInfo> = collection_names
-                .iter()
-                .filter_map(|name| {
-                    store
-                        .collection_stats(name)
-                        .ok()
-                        .map(|stats| CollectionInfo {
-                            name: stats.name,
-                            chunk_count: stats.chunk_count,
-                            file_count: stats.file_count,
-                        })
-                })
-                .collect();
-
-            Some(DocumentsInfo {
-                enabled: true,
-                collections: if collections.is_empty() {
-                    None
-                } else {
-                    Some(collections)
-                },
-            })
-        } else {
-            None
-        };
+        // Document collections info is skipped for performance
+        // Loading DocumentStore requires ML model (~1s) which defeats fast index info
+        // TODO: Add fast stats-only document store loader
+        let documents: Option<DocumentsInfo> = None;
 
         Some(IndexInfo {
             symbol_count,
@@ -799,12 +783,11 @@ pub async fn run(
     };
 
     // Embedded mode - use already loaded facade directly
-    // Try to load DocumentStore for search_documents tool
     let server = {
         let server = crate::mcp::CodeIntelligenceServer::new(facade);
 
         // Add DocumentStore if documents are enabled and indexed
-        if let Some(store_arc) = crate::documents::load_from_settings(config) {
+        if let Some(store_arc) = document_store {
             server.with_document_store_arc(store_arc)
         } else {
             server
