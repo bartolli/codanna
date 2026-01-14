@@ -277,6 +277,10 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
 
+        /// Filter output to specific fields (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
+
         /// Check for file changes and reindex before running tool
         #[arg(long)]
         watch: bool,
@@ -499,7 +503,7 @@ pub enum DocumentAction {
     /// Search documents
     #[command(
         about = "Search indexed documents using natural language",
-        after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5"
+        after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents search \"auth\" --json --fields source_path,similarity"
     )]
     Search {
         /// Search query text
@@ -516,6 +520,10 @@ pub enum DocumentAction {
         /// Output in JSON format
         #[arg(long)]
         json: bool,
+
+        /// Select specific fields in JSON output (comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
     },
 
     /// List collections

@@ -222,20 +222,8 @@ async fn main() {
     };
 
     // Initialize logging with config (supports RUST_LOG env var override)
-    // Use stderr for: MCP stdio mode (JSON-RPC protocol) and mcp --json (clean JSON output)
-    let use_stderr_logging = matches!(
-        &cli.command,
-        Commands::Serve {
-            http: false,
-            https: false,
-            ..
-        } | Commands::Mcp { json: true, .. }
-    );
-    if use_stderr_logging {
-        codanna::logging::init_with_config_stderr(&config.logging);
-    } else {
-        codanna::logging::init_with_config(&config.logging);
-    }
+    // All logging goes to stderr to avoid polluting stdout (JSON output, piping)
+    codanna::logging::init_with_config(&config.logging);
 
     // Determine resource requirements based on command type
     // Commands are categorized by what infrastructure they need:
@@ -665,6 +653,7 @@ async fn main() {
             positional,
             args,
             json,
+            fields,
             watch,
         } => {
             let mut indexer = indexer.expect("mcp requires indexer");
@@ -699,7 +688,10 @@ async fn main() {
                 }
             }
 
-            codanna::cli::commands::mcp::run(tool, positional, args, json, indexer, &config).await;
+            codanna::cli::commands::mcp::run(
+                tool, positional, args, json, fields, indexer, &config,
+            )
+            .await;
         }
 
         Commands::Benchmark { language, file } => {

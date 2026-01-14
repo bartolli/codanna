@@ -80,6 +80,7 @@ pub fn init_with_config(config: &LoggingConfig) {
         };
 
         let fmt_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
             .with_target(true) // Show target for filtering visibility
             .with_timer(CompactTime)
             .with_level(true)
@@ -91,34 +92,14 @@ pub fn init_with_config(config: &LoggingConfig) {
 
 /// Initialize logging to stderr (for MCP stdio mode).
 ///
-/// MCP stdio protocol requires stdout for JSON-RPC only.
-/// All logging must go to stderr to avoid breaking the protocol.
+/// Deprecated: All logging now goes to stderr by default.
+/// Use `init_with_config()` instead.
+#[deprecated(
+    since = "0.9.12",
+    note = "Use init_with_config() instead - all logging now goes to stderr"
+)]
 pub fn init_with_config_stderr(config: &LoggingConfig) {
-    INIT.call_once(|| {
-        let filter = if std::env::var("RUST_LOG").is_ok() {
-            EnvFilter::from_default_env()
-        } else {
-            let mut filter_str = config.default.clone();
-            for (module, level) in &config.modules {
-                let target = if EXTERNAL_TARGETS.contains(&module.as_str()) {
-                    module.clone()
-                } else {
-                    format!("codanna::{module}")
-                };
-                filter_str.push_str(&format!(",{target}={level}"));
-            }
-            EnvFilter::new(&filter_str)
-        };
-
-        let fmt_layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            .with_target(true)
-            .with_timer(CompactTime)
-            .with_level(true)
-            .with_filter(filter);
-
-        tracing_subscriber::registry().with(fmt_layer).init();
-    });
+    init_with_config(config);
 }
 
 /// Initialize logging with default configuration.

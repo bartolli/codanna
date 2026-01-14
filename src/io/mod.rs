@@ -6,6 +6,7 @@
 //! - Future: JSON-RPC 2.0 support for IDE integration
 
 pub mod args;
+pub mod envelope;
 pub mod exit_code;
 pub mod format;
 pub mod guidance;
@@ -18,6 +19,10 @@ pub mod status_line;
 #[cfg(test)]
 mod test;
 
+pub use envelope::{
+    EntityType as EnvelopeEntityType, Envelope, ErrorDetails as EnvelopeErrorDetails, MessageType,
+    Meta, ResultCode, SCHEMA_VERSION, Status,
+};
 pub use exit_code::ExitCode;
 pub use format::{ErrorDetails, JsonResponse, OutputFormat, ResponseMeta};
 pub use output::OutputManager;

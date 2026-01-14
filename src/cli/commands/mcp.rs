@@ -14,6 +14,22 @@ struct IndexInfo {
     relationship_count: usize,
     symbol_kinds: SymbolKindBreakdown,
     semantic_search: SemanticSearchInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documents: Option<DocumentsInfo>,
+}
+
+#[derive(Debug, Serialize)]
+struct DocumentsInfo {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    collections: Option<Vec<CollectionInfo>>,
+}
+
+#[derive(Debug, Serialize)]
+struct CollectionInfo {
+    name: String,
+    chunk_count: usize,
+    file_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,12 +50,76 @@ struct SemanticSearchInfo {
     updated: Option<String>,
 }
 
+/// Flattened call/caller info combining symbol with call site metadata.
+/// Avoids tuple waste like `[[symbol, null], ...]` in JSON output.
+#[derive(Debug, Serialize)]
+struct CallRelation {
+    #[serde(flatten)]
+    symbol: Symbol,
+    /// Line number of the call site (1-indexed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_line: Option<u32>,
+    /// Column of the call site
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_column: Option<u16>,
+}
+
+/// Symbol info extracted from search result for consistent JSON shape.
+/// Matches the nested `symbol: {...}` pattern used by semantic_search_docs.
+#[derive(Debug, Serialize)]
+struct SymbolInfo {
+    id: crate::types::SymbolId,
+    name: String,
+    kind: crate::types::SymbolKind,
+    file_path: String,
+    line: u32,
+    column: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    doc_comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
+    module_path: String,
+}
+
+/// Search result with nested symbol for consistent JSON output.
+/// Standardizes on `symbol: {...}` rather than flat `symbol_id: ...`.
+#[derive(Debug, Serialize)]
+struct SearchSymbolResult {
+    symbol: SymbolInfo,
+    score: f32,
+    highlights: Vec<crate::storage::tantivy::TextHighlight>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<String>,
+}
+
+impl From<crate::storage::tantivy::SearchResult> for SearchSymbolResult {
+    fn from(sr: crate::storage::tantivy::SearchResult) -> Self {
+        Self {
+            symbol: SymbolInfo {
+                id: sr.symbol_id,
+                name: sr.name,
+                kind: sr.kind,
+                file_path: sr.file_path,
+                line: sr.line,
+                column: sr.column,
+                doc_comment: sr.doc_comment,
+                signature: sr.signature,
+                module_path: sr.module_path,
+            },
+            score: sr.score,
+            highlights: sr.highlights,
+            context: sr.context,
+        }
+    }
+}
+
 /// Run the MCP direct tool invocation command.
 pub async fn run(
     tool: String,
     positional: Vec<String>,
     args: Option<String>,
     json: bool,
+    fields: Option<Vec<String>>,
     facade: IndexFacade,
     config: &Settings,
 ) {
@@ -223,7 +303,11 @@ pub async fn run(
                 if let Some(ctx) = context {
                     if let Some(calls) = ctx.relationships.calls {
                         for (called, metadata) in calls {
-                            all_calls.push((called, metadata));
+                            all_calls.push(CallRelation {
+                                symbol: called,
+                                call_line: metadata.as_ref().and_then(|m| m.line).map(|l| l + 1),
+                                call_column: metadata.as_ref().and_then(|m| m.column),
+                            });
                         }
                     }
                 }
@@ -262,7 +346,14 @@ pub async fn run(
                             for (called, metadata) in calls {
                                 // Deduplicate by symbol ID
                                 if seen_ids.insert(called.id) {
-                                    all_calls.push((called, metadata));
+                                    all_calls.push(CallRelation {
+                                        symbol: called,
+                                        call_line: metadata
+                                            .as_ref()
+                                            .and_then(|m| m.line)
+                                            .map(|l| l + 1),
+                                        call_column: metadata.as_ref().and_then(|m| m.column),
+                                    });
                                 }
                             }
                         }
@@ -298,7 +389,14 @@ pub async fn run(
             // Direct lookup by symbol ID
             if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
                 let callers = facade.get_calling_functions_with_metadata(symbol.id);
-                let all_callers: Vec<_> = callers.into_iter().collect();
+                let all_callers: Vec<_> = callers
+                    .into_iter()
+                    .map(|(caller, metadata)| CallRelation {
+                        symbol: caller,
+                        call_line: metadata.as_ref().and_then(|m| m.line).map(|l| l + 1),
+                        call_column: metadata.as_ref().and_then(|m| m.column),
+                    })
+                    .collect();
                 Some(all_callers)
             } else {
                 None // Symbol not found
@@ -318,7 +416,11 @@ pub async fn run(
                     for (caller, metadata) in callers {
                         // Deduplicate by symbol ID
                         if seen_ids.insert(caller.id) {
-                            all_callers.push((caller, metadata));
+                            all_callers.push(CallRelation {
+                                symbol: caller,
+                                call_line: metadata.as_ref().and_then(|m| m.line).map(|l| l + 1),
+                                call_column: metadata.as_ref().and_then(|m| m.column),
+                            });
                         }
                     }
                 }
@@ -469,11 +571,18 @@ pub async fn run(
         score: f32,
     }
 
+    /// Context without the symbol (avoids duplication since symbol is at top level)
+    #[derive(serde::Serialize)]
+    struct ContextWithoutSymbol {
+        file_path: String,
+        relationships: crate::symbol::context::SymbolRelationships,
+    }
+
     #[derive(serde::Serialize)]
     struct SemanticSearchWithContextResult {
         symbol: Symbol,
         score: f32,
-        context: crate::symbol::context::SymbolContext,
+        context: ContextWithoutSymbol,
     }
 
     // Get guidance config before moving indexer
@@ -582,7 +691,10 @@ pub async fn run(
                                 context.map(|ctx| SemanticSearchWithContextResult {
                                     symbol,
                                     score,
-                                    context: ctx,
+                                    context: ContextWithoutSymbol {
+                                        file_path: ctx.file_path,
+                                        relationships: ctx.relationships,
+                                    },
                                 })
                             })
                             .collect();
@@ -639,6 +751,36 @@ pub async fn run(
             }
         };
 
+        // Get document collections info
+        let documents = if let Some(store_arc) = crate::documents::load_from_settings(config) {
+            let store = store_arc.read().await;
+            let collection_names = store.list_collections();
+            let collections: Vec<CollectionInfo> = collection_names
+                .iter()
+                .filter_map(|name| {
+                    store
+                        .collection_stats(name)
+                        .ok()
+                        .map(|stats| CollectionInfo {
+                            name: stats.name,
+                            chunk_count: stats.chunk_count,
+                            file_count: stats.file_count,
+                        })
+                })
+                .collect();
+
+            Some(DocumentsInfo {
+                enabled: true,
+                collections: if collections.is_empty() {
+                    None
+                } else {
+                    Some(collections)
+                },
+            })
+        } else {
+            None
+        };
+
         Some(IndexInfo {
             symbol_count,
             file_count: file_count as usize,
@@ -650,6 +792,7 @@ pub async fn run(
                 traits,
             },
             semantic_search,
+            documents,
         })
     } else {
         None
@@ -951,465 +1094,447 @@ pub async fn run(
     match result {
         Ok(call_result) => {
             if json && tool == "get_index_info" {
-                // Use pre-collected data for JSON output
-                if let Some(index_info) = index_info_data {
-                    use crate::io::format::JsonResponse;
-                    use crate::io::guidance_engine::generate_guidance_from_config;
-                    let mut response = JsonResponse::success(index_info);
+                use crate::io::envelope::Envelope;
+                use crate::io::guidance_engine::generate_guidance_from_config;
 
-                    // Add system guidance (using single_result template since this returns stats)
-                    if let Some(guidance) =
+                if let Some(index_info) = index_info_data {
+                    let mut envelope =
+                        Envelope::success(index_info).with_message("Index statistics");
+
+                    if let Some(hint) =
                         generate_guidance_from_config(&guidance_config, "get_index_info", None, 1)
                     {
-                        // Use 1 to trigger single_result template
-                        response = response.with_system_message(&guidance);
+                        envelope = envelope.with_hint(hint);
                     }
 
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
+                    };
+                    println!("{}", output.expect("envelope serialization"));
                 }
             } else if json && tool == "find_symbol" {
                 // Use pre-collected data for JSON output
                 if let Some(symbol_contexts) = find_symbol_data {
-                    use crate::io::format::JsonResponse;
-                    if symbol_contexts.is_empty() {
-                        let name = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        let response = JsonResponse::not_found("Symbol", name);
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
-                        std::process::exit(3);
-                    } else {
-                        use crate::io::guidance_engine::generate_guidance_from_config;
-                        let mut response = JsonResponse::success(symbol_contexts);
+                    use crate::io::envelope::{EntityType, Envelope};
+                    use crate::io::guidance_engine::generate_guidance_from_config;
 
-                        // Add system guidance
-                        let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                        if let Some(guidance) = generate_guidance_from_config(
+                    let name = arguments
+                        .as_ref()
+                        .and_then(|m| m.get("name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+
+                    if symbol_contexts.is_empty() {
+                        let mut envelope: Envelope<()> =
+                            Envelope::not_found(format!("Symbol '{name}' not found"))
+                                .with_entity_type(EntityType::Symbol)
+                                .with_query(name);
+
+                        if let Some(hint) = generate_guidance_from_config(
                             &guidance_config,
                             "find_symbol",
-                            arguments
-                                .as_ref()
-                                .and_then(|m| m.get("name"))
-                                .and_then(|v| v.as_str()),
-                            result_count,
+                            Some(name),
+                            0,
                         ) {
-                            response = response.with_system_message(&guidance);
+                            envelope = envelope.with_hint(hint);
                         }
 
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                        // Envelope serialization is infallible for simple types
+                        println!("{}", envelope.to_json().expect("envelope serialization"));
+                        std::process::exit(3);
+                    } else {
+                        let count = symbol_contexts.len();
+                        let mut envelope = Envelope::success(symbol_contexts)
+                            .with_entity_type(EntityType::Symbol)
+                            .with_count(count)
+                            .with_query(name)
+                            .with_message(format!("Found {count} symbol(s)"));
+
+                        if let Some(hint) = generate_guidance_from_config(
+                            &guidance_config,
+                            "find_symbol",
+                            Some(name),
+                            count,
+                        ) {
+                            envelope = envelope.with_hint(hint);
+                        }
+
+                        let output = match &fields {
+                            Some(f) => envelope.to_json_with_fields(f),
+                            None => envelope.to_json(),
+                        };
+                        println!("{}", output.expect("envelope serialization"));
                     }
                 }
             } else if json && tool == "get_calls" {
-                // Use pre-collected data for JSON output
-                if let Some(calls) = get_calls_data {
-                    use crate::io::format::JsonResponse;
-                    use crate::io::guidance_engine::generate_guidance_from_config;
-                    let mut response = JsonResponse::success(calls);
+                use crate::io::envelope::{EntityType, Envelope};
+                use crate::io::guidance_engine::generate_guidance_from_config;
 
-                    // Add system guidance
-                    let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                    if let Some(guidance) = generate_guidance_from_config(
+                let identifier = if let Some(id) = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                {
+                    format!("symbol_id:{id}")
+                } else {
+                    arguments
+                        .as_ref()
+                        .and_then(|m| m.get("function_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                };
+
+                if let Some(calls) = get_calls_data {
+                    let count = calls.len();
+                    let mut envelope = Envelope::success(calls)
+                        .with_entity_type(EntityType::Calls)
+                        .with_count(count)
+                        .with_query(&identifier)
+                        .with_message(format!("Calls {count} function(s)"));
+
+                    if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
                         "get_calls",
-                        arguments
-                            .as_ref()
-                            .and_then(|m| m.get("function_name"))
-                            .and_then(|v| v.as_str()),
-                        result_count,
+                        Some(&identifier),
+                        count,
                     ) {
-                        response = response.with_system_message(&guidance);
+                        envelope = envelope.with_hint(hint);
                     }
 
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
-                } else {
-                    // Function not found
-                    use crate::io::format::JsonResponse;
-                    let response = if let Some(id) = arguments
-                        .as_ref()
-                        .and_then(|m| m.get("symbol_id"))
-                        .and_then(|v| v.as_u64())
-                    {
-                        JsonResponse::not_found("Symbol", &format!("symbol_id:{id}"))
-                    } else {
-                        let name = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("function_name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        JsonResponse::not_found("Function", name)
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
                     };
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    println!("{}", output.expect("envelope serialization"));
+                } else {
+                    let mut envelope: Envelope<()> =
+                        Envelope::not_found(format!("Function '{identifier}' not found"))
+                            .with_entity_type(EntityType::Calls)
+                            .with_query(&identifier);
+
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "get_calls",
+                        Some(&identifier),
+                        0,
+                    ) {
+                        envelope = envelope.with_hint(hint);
+                    }
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(3);
                 }
             } else if json && tool == "find_callers" {
-                // Use pre-collected data for JSON output
-                if let Some(callers) = find_callers_data {
-                    use crate::io::format::JsonResponse;
-                    use crate::io::guidance_engine::generate_guidance_from_config;
-                    let mut response = JsonResponse::success(callers);
+                use crate::io::envelope::{EntityType, Envelope};
+                use crate::io::guidance_engine::generate_guidance_from_config;
 
-                    // Add system guidance
-                    let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                    if let Some(guidance) = generate_guidance_from_config(
+                let identifier = if let Some(id) = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                {
+                    format!("symbol_id:{id}")
+                } else {
+                    arguments
+                        .as_ref()
+                        .and_then(|m| m.get("function_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                };
+
+                if let Some(callers) = find_callers_data {
+                    let count = callers.len();
+                    let mut envelope = Envelope::success(callers)
+                        .with_entity_type(EntityType::Callers)
+                        .with_count(count)
+                        .with_query(&identifier)
+                        .with_message(format!("Called by {count} function(s)"));
+
+                    if let Some(hint) = generate_guidance_from_config(
                         &guidance_config,
                         "find_callers",
-                        arguments
-                            .as_ref()
-                            .and_then(|m| m.get("function_name"))
-                            .and_then(|v| v.as_str()),
-                        result_count,
+                        Some(&identifier),
+                        count,
                     ) {
-                        response = response.with_system_message(&guidance);
+                        envelope = envelope.with_hint(hint);
                     }
 
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
-                } else {
-                    // Function not found
-                    use crate::io::format::JsonResponse;
-                    let response = if let Some(id) = arguments
-                        .as_ref()
-                        .and_then(|m| m.get("symbol_id"))
-                        .and_then(|v| v.as_u64())
-                    {
-                        JsonResponse::not_found("Symbol", &format!("symbol_id:{id}"))
-                    } else {
-                        let name = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("function_name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        JsonResponse::not_found("Function", name)
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
                     };
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    println!("{}", output.expect("envelope serialization"));
+                } else {
+                    let mut envelope: Envelope<()> =
+                        Envelope::not_found(format!("Function '{identifier}' not found"))
+                            .with_entity_type(EntityType::Callers)
+                            .with_query(&identifier);
+
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "find_callers",
+                        Some(&identifier),
+                        0,
+                    ) {
+                        envelope = envelope.with_hint(hint);
+                    }
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(3);
                 }
             } else if json && tool == "analyze_impact" {
-                // Use pre-collected data for JSON output
+                use crate::io::envelope::{EntityType, Envelope};
+                use crate::io::guidance_engine::generate_guidance_from_config;
+
+                // Get identifier for messages
+                let identifier = if let Some(id) = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                {
+                    format!("symbol_id:{id}")
+                } else {
+                    arguments
+                        .as_ref()
+                        .and_then(|m| m.get("symbol_name"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                };
+
+                let max_depth = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("max_depth"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(3) as u32;
+
                 if let Some(impacted) = analyze_impact_data {
-                    use crate::io::format::JsonResponse;
-                    if impacted.is_empty() {
-                        // No symbols would be impacted
-                        let identifier = if let Some(id) = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("symbol_id"))
-                            .and_then(|v| v.as_u64())
-                        {
-                            format!("symbol_id:{id}")
-                        } else {
-                            arguments
-                                .as_ref()
-                                .and_then(|m| m.get("symbol_name"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown")
-                                .to_string()
-                        };
-                        use crate::io::guidance_engine::generate_guidance_from_config;
+                    let count = impacted.len();
+                    let mut envelope = Envelope::success(impacted)
+                        .with_entity_type(EntityType::ImpactGraph)
+                        .with_count(count)
+                        .with_query(&identifier)
+                        .with_depth(max_depth)
+                        .with_message(format!("{count} symbol(s) would be impacted"));
 
-                        // Create a proper struct for the empty case
-                        #[derive(serde::Serialize)]
-                        struct EmptyImpactResult {
-                            symbol: String,
-                            impacted_count: usize,
-                            impacted_symbols: Vec<String>,
-                            message: String,
-                        }
-
-                        let impact_result = EmptyImpactResult {
-                            symbol: identifier.clone(),
-                            impacted_count: 0,
-                            impacted_symbols: vec![],
-                            message: "No symbols would be impacted by changes to this symbol"
-                                .to_string(),
-                        };
-
-                        let mut response = JsonResponse::success(impact_result);
-
-                        // Add guidance for no results case
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "analyze_impact",
-                            Some(&identifier),
-                            0,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
-                    } else {
-                        use crate::io::guidance_engine::generate_guidance_from_config;
-                        let mut response = JsonResponse::success(impacted);
-
-                        // Add system guidance
-                        let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "analyze_impact",
-                            arguments
-                                .as_ref()
-                                .and_then(|m| m.get("symbol_name"))
-                                .and_then(|v| v.as_str()),
-                            result_count,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "analyze_impact",
+                        Some(&identifier),
+                        count,
+                    ) {
+                        envelope = envelope.with_hint(hint);
                     }
+
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
+                    };
+                    println!("{}", output.expect("envelope serialization"));
                 } else {
                     // Symbol not found
-                    use crate::io::format::JsonResponse;
-                    let response = if let Some(id) = arguments
-                        .as_ref()
-                        .and_then(|m| m.get("symbol_id"))
-                        .and_then(|v| v.as_u64())
-                    {
-                        JsonResponse::not_found("Symbol", &format!("symbol_id:{id}"))
-                    } else {
-                        let name = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("symbol_name"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-                        JsonResponse::not_found("Symbol", name)
-                    };
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let mut envelope: Envelope<()> =
+                        Envelope::not_found(format!("Symbol '{identifier}' not found"))
+                            .with_entity_type(EntityType::ImpactGraph)
+                            .with_query(&identifier);
+
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "analyze_impact",
+                        Some(&identifier),
+                        0,
+                    ) {
+                        envelope = envelope.with_hint(hint);
+                    }
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(3);
                 }
             } else if json && tool == "search_symbols" {
-                // Use pre-collected data for JSON output
+                use crate::io::envelope::{EntityType, Envelope, ResultCode};
+                use crate::io::guidance_engine::generate_guidance_from_config;
+
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
                 if let Some(results) = search_symbols_data {
-                    use crate::io::format::JsonResponse;
-                    use crate::io::guidance_engine::generate_guidance_from_config;
-                    if results.is_empty() {
-                        // Create proper struct for empty search results
-                        #[derive(serde::Serialize)]
-                        struct EmptySearchResult {
-                            query: String,
-                            result_count: usize,
-                            results: Vec<String>,
-                            message: String,
-                        }
+                    // Transform to consistent nested symbol shape
+                    let transformed: Vec<SearchSymbolResult> =
+                        results.into_iter().map(Into::into).collect();
+                    let count = transformed.len();
 
-                        let query = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("query"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-
-                        let search_result = EmptySearchResult {
-                            query: query.to_string(),
-                            result_count: 0,
-                            results: vec![],
-                            message: "No results found for query".to_string(),
-                        };
-
-                        let mut response = JsonResponse::success(search_result);
-
-                        // Add guidance for no results
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "search_symbols",
-                            Some(query),
-                            0,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let mut envelope = if count == 0 {
+                        Envelope::<Vec<SearchSymbolResult>>::not_found(format!(
+                            "No symbols found for '{query}'"
+                        ))
+                        .with_entity_type(EntityType::SearchResult)
+                        .with_query(query)
                     } else {
-                        use crate::io::guidance_engine::generate_guidance_from_config;
-                        let mut response = JsonResponse::success(results);
+                        Envelope::success(transformed)
+                            .with_entity_type(EntityType::SearchResult)
+                            .with_count(count)
+                            .with_query(query)
+                            .with_message(format!("Found {count} symbol(s)"))
+                    };
 
-                        // Add system guidance
-                        let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "search_symbols",
-                            arguments
-                                .as_ref()
-                                .and_then(|m| m.get("query"))
-                                .and_then(|v| v.as_str()),
-                            result_count,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "search_symbols",
+                        Some(query),
+                        count,
+                    ) {
+                        envelope = envelope.with_hint(hint);
                     }
+
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
+                    };
+                    println!("{}", output.expect("envelope serialization"));
                 } else {
-                    use crate::io::exit_code::ExitCode;
-                    use crate::io::format::JsonResponse;
-                    let response = JsonResponse::error(
-                        ExitCode::GeneralError,
-                        "Failed to execute search",
-                        vec!["Check query syntax"],
-                    );
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let envelope: Envelope<()> = Envelope::error(
+                        ResultCode::InvalidQuery,
+                        format!("Failed to search for '{query}'"),
+                    )
+                    .with_entity_type(EntityType::SearchResult)
+                    .with_query(query)
+                    .with_hint("Check query syntax");
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(1);
                 }
             } else if json && tool == "semantic_search_docs" {
-                // Use pre-collected data for JSON output
+                use crate::io::envelope::{EntityType, Envelope, ResultCode};
+                use crate::io::guidance_engine::generate_guidance_from_config;
+
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
                 if let Some(results) = semantic_search_docs_data {
-                    use crate::io::format::JsonResponse;
-                    use crate::io::guidance_engine::generate_guidance_from_config;
-                    if results.is_empty() {
-                        // Create proper struct for empty semantic search
-                        #[derive(serde::Serialize)]
-                        struct EmptySemanticResult {
-                            query: String,
-                            result_count: usize,
-                            results: Vec<String>,
-                            message: String,
-                        }
+                    let count = results.len();
 
-                        let query = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("query"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-
-                        let semantic_result = EmptySemanticResult {
-                            query: query.to_string(),
-                            result_count: 0,
-                            results: vec![],
-                            message: "No semantically similar documentation found".to_string(),
-                        };
-
-                        let mut response = JsonResponse::success(semantic_result);
-
-                        // Add guidance for no results
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "semantic_search_docs",
-                            Some(query),
-                            0,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let mut envelope = if count == 0 {
+                        Envelope::<Vec<SemanticSearchResult>>::not_found(format!(
+                            "No similar documentation found for '{query}'"
+                        ))
+                        .with_entity_type(EntityType::Symbol)
+                        .with_query(query)
                     } else {
-                        let mut response = JsonResponse::success(results);
+                        Envelope::success(results)
+                            .with_entity_type(EntityType::Symbol)
+                            .with_count(count)
+                            .with_query(query)
+                            .with_message(format!("Found {count} similar symbol(s)"))
+                    };
 
-                        // Add system guidance for AI assistants
-                        let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "semantic_search_docs",
-                            arguments
-                                .as_ref()
-                                .and_then(|m| m.get("query"))
-                                .and_then(|v| v.as_str()),
-                            result_count,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "semantic_search_docs",
+                        Some(query),
+                        count,
+                    ) {
+                        envelope = envelope.with_hint(hint);
                     }
+
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
+                    };
+                    println!("{}", output.expect("envelope serialization"));
                 } else if !has_semantic_search {
-                    use crate::io::exit_code::ExitCode;
-                    use crate::io::format::JsonResponse;
-                    let response = JsonResponse::error(
-                        ExitCode::GeneralError,
-                        "Semantic search is not enabled",
-                        vec!["Enable semantic search in settings.toml and rebuild the index"],
-                    );
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let envelope: Envelope<()> =
+                        Envelope::error(ResultCode::IndexError, "Semantic search is not enabled")
+                            .with_entity_type(EntityType::Symbol)
+                            .with_query(query)
+                            .with_hint(
+                                "Enable semantic search in settings.toml and rebuild the index",
+                            );
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(1);
                 } else {
-                    use crate::io::exit_code::ExitCode;
-                    use crate::io::format::JsonResponse;
-                    let response = JsonResponse::error(
-                        ExitCode::GeneralError,
-                        "Failed to execute semantic search",
-                        vec!["Check query syntax"],
-                    );
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let envelope: Envelope<()> = Envelope::error(
+                        ResultCode::InvalidQuery,
+                        format!("Failed to search for '{query}'"),
+                    )
+                    .with_entity_type(EntityType::Symbol)
+                    .with_query(query)
+                    .with_hint("Check query syntax");
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(1);
                 }
             } else if json && tool == "semantic_search_with_context" {
-                // Use pre-collected data for JSON output
+                use crate::io::envelope::{EntityType, Envelope, ResultCode};
+                use crate::io::guidance_engine::generate_guidance_from_config;
+
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
                 if let Some(results) = semantic_search_with_context_data {
-                    use crate::io::format::JsonResponse;
-                    use crate::io::guidance_engine::generate_guidance_from_config;
-                    if results.is_empty() {
-                        // Create proper struct for empty semantic search with context
-                        #[derive(serde::Serialize)]
-                        struct EmptyContextResult {
-                            query: String,
-                            result_count: usize,
-                            results: Vec<String>,
-                            message: String,
-                        }
+                    let count = results.len();
 
-                        let query = arguments
-                            .as_ref()
-                            .and_then(|m| m.get("query"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("unknown");
-
-                        let context_result = EmptyContextResult {
-                            query: query.to_string(),
-                            result_count: 0,
-                            results: vec![],
-                            message: "No semantically similar documentation found".to_string(),
-                        };
-
-                        let mut response = JsonResponse::success(context_result);
-
-                        // Add guidance for no results
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "semantic_search_with_context",
-                            Some(query),
-                            0,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let mut envelope = if count == 0 {
+                        Envelope::<Vec<SemanticSearchWithContextResult>>::not_found(format!(
+                            "No similar symbols found for '{query}'"
+                        ))
+                        .with_entity_type(EntityType::Symbol)
+                        .with_query(query)
                     } else {
-                        use crate::io::guidance_engine::generate_guidance_from_config;
-                        let mut response = JsonResponse::success(results);
+                        Envelope::success(results)
+                            .with_entity_type(EntityType::Symbol)
+                            .with_count(count)
+                            .with_query(query)
+                            .with_message(format!("Found {count} symbol(s) with context"))
+                    };
 
-                        // Add system guidance
-                        let result_count = response.data.as_ref().map(|d| d.len()).unwrap_or(0);
-                        if let Some(guidance) = generate_guidance_from_config(
-                            &guidance_config,
-                            "semantic_search_with_context",
-                            arguments
-                                .as_ref()
-                                .and_then(|m| m.get("query"))
-                                .and_then(|v| v.as_str()),
-                            result_count,
-                        ) {
-                            response = response.with_system_message(&guidance);
-                        }
-
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    if let Some(hint) = generate_guidance_from_config(
+                        &guidance_config,
+                        "semantic_search_with_context",
+                        Some(query),
+                        count,
+                    ) {
+                        envelope = envelope.with_hint(hint);
                     }
+
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
+                    };
+                    println!("{}", output.expect("envelope serialization"));
                 } else if !has_semantic_search {
-                    use crate::io::exit_code::ExitCode;
-                    use crate::io::format::JsonResponse;
-                    let response = JsonResponse::error(
-                        ExitCode::GeneralError,
-                        "Semantic search is not enabled",
-                        vec!["Enable semantic search in settings.toml and rebuild the index"],
-                    );
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let envelope: Envelope<()> =
+                        Envelope::error(ResultCode::IndexError, "Semantic search is not enabled")
+                            .with_entity_type(EntityType::Symbol)
+                            .with_query(query)
+                            .with_hint(
+                                "Enable semantic search in settings.toml and rebuild the index",
+                            );
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(1);
                 } else {
-                    use crate::io::exit_code::ExitCode;
-                    use crate::io::format::JsonResponse;
-                    let response = JsonResponse::error(
-                        ExitCode::GeneralError,
-                        "Failed to execute semantic search with context",
-                        vec!["Check query syntax"],
-                    );
-                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                    let envelope: Envelope<()> = Envelope::error(
+                        ResultCode::InvalidQuery,
+                        format!("Failed to search for '{query}'"),
+                    )
+                    .with_entity_type(EntityType::Symbol)
+                    .with_query(query)
+                    .with_hint("Check query syntax");
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(1);
                 }
             } else {
@@ -1428,14 +1553,12 @@ pub async fn run(
         }
         Err(e) => {
             if json {
-                use crate::io::exit_code::ExitCode;
-                use crate::io::format::JsonResponse;
-                let response = JsonResponse::error(
-                    ExitCode::GeneralError,
-                    &e.message,
-                    vec!["Check the tool name and arguments"],
-                );
-                println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                use crate::io::envelope::{Envelope, ResultCode};
+                let envelope: Envelope<()> =
+                    Envelope::error(ResultCode::InternalError, e.message.to_string())
+                        .with_hint("Check the tool name and arguments");
+
+                println!("{}", envelope.to_json().expect("envelope serialization"));
                 std::process::exit(1);
             } else {
                 eprintln!("Error calling tool: {}", e.message);
