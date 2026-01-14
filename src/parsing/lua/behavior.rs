@@ -86,15 +86,27 @@ impl LanguageBehavior for LuaBehavior {
             return Visibility::Private;
         }
 
-        // Extract symbol name and check underscore prefix
+        // Extract the actual symbol name and check underscore prefix
         let name = if signature.starts_with("function ") {
-            signature
-                .trim_start_matches("function ")
-                .split(['(', ' ', '.', ':'])
-                .next()
+            // For "function M.process()" or "function Foo:bar()", extract the last identifier
+            let after_function = signature.trim_start_matches("function ");
+            // First, get everything before the parameters
+            let before_params = after_function.split('(').next().unwrap_or("");
+            // Then get the last part after . or :
+            before_params
+                .split(['.', ':'])
+                .next_back()
                 .unwrap_or("")
+                .trim()
         } else {
-            signature.split(['=', ' ']).next().unwrap_or("")
+            // For assignments like "M.field = value", get the last identifier
+            let before_equals = signature.split('=').next().unwrap_or("");
+            before_equals
+                .split(['.', ' '])
+                .filter(|s| !s.is_empty())
+                .next_back()
+                .unwrap_or("")
+                .trim()
         };
 
         if name.starts_with('_') {
@@ -351,6 +363,32 @@ mod tests {
         assert_eq!(
             behavior.parse_visibility("GLOBAL_CONST = 100"),
             Visibility::Public
+        );
+        // Module function patterns
+        assert_eq!(
+            behavior.parse_visibility("function M.process()"),
+            Visibility::Public
+        );
+        assert_eq!(
+            behavior.parse_visibility("function M._internal()"),
+            Visibility::Private
+        );
+        assert_eq!(
+            behavior.parse_visibility("function MyClass:method()"),
+            Visibility::Public
+        );
+        assert_eq!(
+            behavior.parse_visibility("function MyClass:_privateMethod()"),
+            Visibility::Private
+        );
+        // Field assignments
+        assert_eq!(
+            behavior.parse_visibility("M.VERSION"),
+            Visibility::Public
+        );
+        assert_eq!(
+            behavior.parse_visibility("M._config"),
+            Visibility::Private
         );
     }
 

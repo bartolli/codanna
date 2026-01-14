@@ -12,13 +12,10 @@ use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
 use std::any::Any;
 use tree_sitter::{Node, Parser, Tree};
 
-use super::resolution::LuaResolutionContext;
-
 /// Lua language parser
 pub struct LuaParser {
     parser: Parser,
     context: ParserContext,
-    resolution_context: Option<LuaResolutionContext>,
     node_tracker: NodeTrackingState,
 }
 
@@ -45,7 +42,6 @@ impl LuaParser {
         symbol_counter: &mut SymbolCounter,
     ) -> Vec<Symbol> {
         self.context = ParserContext::new();
-        self.resolution_context = Some(LuaResolutionContext::new(file_id));
         let mut symbols = Vec::new();
 
         if let Some(tree) = self.parser.parse(code, None) {
@@ -104,7 +100,6 @@ impl LuaParser {
         Ok(Self {
             parser,
             context: ParserContext::new(),
-            resolution_context: None,
             node_tracker: NodeTrackingState::new(),
         })
     }
@@ -212,7 +207,7 @@ impl LuaParser {
                     symbols.push(symbol);
                 }
             }
-            "for_statement" | "for_in_statement" | "while_statement" | "repeat_statement" => {
+            "for_statement" | "while_statement" | "repeat_statement" => {
                 self.register_handled_node(node.kind(), node.kind_id());
                 self.context.enter_scope(ScopeType::Block);
                 for child in node.children(&mut node.walk()) {
@@ -749,6 +744,104 @@ fn extract_method_calls_recursive(node: &Node, code: &str, calls: &mut Vec<Metho
     }
 }
 
+fn extract_imports_recursive(node: &Node, code: &str, file_id: FileId, imports: &mut Vec<Import>) {
+    // Look for variable_declaration containing require() calls
+    // Pattern: local foo = require("module")
+    if node.kind() == "variable_declaration" {
+        let mut alias: Option<String> = None;
+        let mut require_call: Option<Node> = None;
+
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "assignment_statement" {
+                for assign_child in child.children(&mut child.walk()) {
+                    if assign_child.kind() == "variable_list" {
+                        // Get the variable name (alias)
+                        for var_child in assign_child.children(&mut assign_child.walk()) {
+                            if var_child.kind() == "identifier" {
+                                alias = Some(code[var_child.byte_range()].to_string());
+                                break;
+                            }
+                        }
+                    } else if assign_child.kind() == "expression_list" {
+                        // Check if value is a require() call
+                        for expr_child in assign_child.children(&mut assign_child.walk()) {
+                            if expr_child.kind() == "function_call" {
+                                require_call = Some(expr_child);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(call_node) = require_call {
+            if let Some(import) = try_extract_require_call(&call_node, code, file_id, alias) {
+                imports.push(import);
+                return; // Don't recurse into this node again
+            }
+        }
+    }
+
+    // Also check for standalone require() calls (without assignment)
+    if node.kind() == "function_call" {
+        if let Some(import) = try_extract_require_call(node, code, file_id, None) {
+            imports.push(import);
+            return; // Found a require call, don't recurse
+        }
+    }
+
+    for child in node.children(&mut node.walk()) {
+        extract_imports_recursive(&child, code, file_id, imports);
+    }
+}
+
+fn try_extract_require_call(
+    node: &Node,
+    code: &str,
+    file_id: FileId,
+    alias: Option<String>,
+) -> Option<Import> {
+    if node.kind() != "function_call" {
+        return None;
+    }
+
+    let name_node = node.child_by_field_name("name")?;
+    let func_name = &code[name_node.byte_range()];
+
+    if func_name != "require" {
+        return None;
+    }
+
+    let args_node = node.child_by_field_name("arguments")?;
+
+    // Find the string argument inside the arguments
+    for arg_child in args_node.children(&mut args_node.walk()) {
+        if arg_child.kind() == "string" {
+            // Extract string content (remove quotes)
+            let full_string = &code[arg_child.byte_range()];
+            let module_path = full_string
+                .trim_start_matches('"')
+                .trim_start_matches('\'')
+                .trim_end_matches('"')
+                .trim_end_matches('\'')
+                .to_string();
+
+            if !module_path.is_empty() {
+                return Some(Import {
+                    path: module_path,
+                    alias,
+                    file_id,
+                    is_glob: false,
+                    is_type_only: false,
+                });
+            }
+        }
+    }
+
+    None
+}
+
 impl NodeTracker for LuaParser {
     fn get_handled_nodes(&self) -> &std::collections::HashSet<HandledNode> {
         self.node_tracker.get_handled_nodes()
@@ -821,8 +914,21 @@ impl LanguageParser for LuaParser {
         Vec::new()
     }
 
-    fn find_imports(&mut self, _code: &str, _file_id: FileId) -> Vec<Import> {
-        Vec::new()
+    /// Extract require() imports from Lua source code
+    ///
+    /// Parses patterns like:
+    /// - `local foo = require("path.to.module")`
+    /// - `local bar = require('module')`
+    /// - `require("module")` (without assignment)
+    fn find_imports(&mut self, code: &str, file_id: FileId) -> Vec<Import> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut imports = Vec::new();
+        extract_imports_recursive(&tree.root_node(), code, file_id, &mut imports);
+        imports
     }
 
     fn language(&self) -> crate::parsing::Language {
@@ -908,5 +1014,63 @@ end
         let method = symbols.iter().find(|s| s.name.as_ref() == "greet");
         assert!(method.is_some());
         assert_eq!(method.unwrap().kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_find_imports_with_alias() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+local json = require("cjson")
+local utils = require("myapp.utils")
+"#;
+
+        let file_id = FileId::new(1).unwrap();
+        let imports = parser.find_imports(code, file_id);
+
+        assert_eq!(imports.len(), 2);
+
+        let json_import = imports.iter().find(|i| i.path == "cjson");
+        assert!(json_import.is_some());
+        assert_eq!(json_import.unwrap().alias, Some("json".to_string()));
+
+        let utils_import = imports.iter().find(|i| i.path == "myapp.utils");
+        assert!(utils_import.is_some());
+        assert_eq!(utils_import.unwrap().alias, Some("utils".to_string()));
+    }
+
+    #[test]
+    fn test_find_imports_single_quotes() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+local foo = require('single.quoted')
+"#;
+
+        let file_id = FileId::new(1).unwrap();
+        let imports = parser.find_imports(code, file_id);
+
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "single.quoted");
+        assert_eq!(imports[0].alias, Some("foo".to_string()));
+    }
+
+    #[test]
+    fn test_find_imports_standalone() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+require("some.module")
+"#;
+
+        let file_id = FileId::new(1).unwrap();
+        let imports = parser.find_imports(code, file_id);
+
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "some.module");
+        assert_eq!(imports[0].alias, None);
     }
 }
