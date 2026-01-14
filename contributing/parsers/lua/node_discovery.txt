@@ -1,0 +1,52 @@
+=== Lua Language COMPREHENSIVE NODE MAPPING ===
+  Generated: 2026-01-14 03:17:09 UTC
+  ABI Version: 14
+  Node kind count: 75
+
+== FUNCTION NODES ==
+✓ function_declaration (ID: 92)
+✓ function_definition (ID: 110)
+✓ function_call (ID: 118)
+✓ parameters (ID: 112)
+✓ return_statement (ID: 75)
+
+== VARIABLE NODES ==
+✓ variable_declaration (ID: 98)
+✓ assignment_statement (ID: 77)
+✓ variable_list (ID: 78)
+✓ expression_list (ID: 79)
+✓ identifier (ID: 1)
+
+== TABLE NODES ==
+✓ table_constructor (ID: 122)
+✓ field (ID: 125)
+✓ dot_index_expression (ID: 117)
+✓ bracket_index_expression (ID: 116)
+✓ method_index_expression (ID: 119)
+
+== CONTROL FLOW NODES ==
+✓ if_statement (ID: 85)
+✓ elseif_statement (ID: 86)
+✓ else_statement (ID: 87)
+✓ for_statement (ID: 88)
+✗ for_in_statement (not found)
+✓ while_statement (ID: 83)
+✓ repeat_statement (ID: 84)
+✓ do_statement (ID: 82)
+✓ block (ID: 73)
+
+== EXPRESSION NODES ==
+✓ binary_expression (ID: 126)
+✓ unary_expression (ID: 127)
+✗ parenthesized_expression (not found)
+✓ string (ID: 105)
+✓ number (ID: 30)
+✓ true (ID: 29)
+✓ false (ID: 28)
+✓ nil (ID: 27)
+
+== COMMENT NODES ==
+✓ comment (ID: 128)
+
+
+Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar

@@ -7,8 +7,9 @@ use super::{
     CBehavior, CParser, CSharpBehavior, CSharpParser, CppBehavior, CppParser, GdscriptBehavior,
     GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser, JavaScriptBehavior,
     JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior, LanguageId,
-    LanguageParser, PhpBehavior, PhpParser, PythonBehavior, PythonParser, RustBehavior, RustParser,
-    SwiftBehavior, SwiftParser, TypeScriptBehavior, TypeScriptParser, get_registry,
+    LanguageParser, LuaBehavior, LuaParser, PhpBehavior, PhpParser, PythonBehavior, PythonParser,
+    RustBehavior, RustParser, SwiftBehavior, SwiftParser, TypeScriptBehavior, TypeScriptParser,
+    get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -176,6 +177,10 @@ impl ParserFactory {
                 let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Lua => {
+                let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
             Language::Swift => {
                 let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
@@ -302,6 +307,13 @@ impl ParserFactory {
                 ParserWithBehavior {
                     parser: Box::new(parser),
                     behavior: Box::new(KotlinBehavior::new()),
+                }
+            }
+            Language::Lua => {
+                let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(LuaBehavior::new()),
                 }
             }
             Language::Swift => {
