@@ -176,6 +176,14 @@ impl LanguageBehavior for GdscriptBehavior {
         "/"
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            Some("res://".to_string())
+        } else {
+            Some(format!("res://{}", components.join("/")))
+        }
+    }
+
     fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
         let relative = file_path.strip_prefix(project_root).ok()?;
         let mut path = relative.to_string_lossy().replace('\\', "/");

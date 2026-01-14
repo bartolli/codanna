@@ -80,6 +80,14 @@ impl LanguageBehavior for JavaBehavior {
         "." // Java uses dot separation for packages
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
     /// Java supports interfaces (similar to traits)
     fn supports_traits(&self) -> bool {
         true

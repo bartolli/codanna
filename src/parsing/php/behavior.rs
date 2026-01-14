@@ -83,6 +83,15 @@ impl LanguageBehavior for PhpBehavior {
         false // PHP methods are always in classes/traits
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            // PHP uses backslash for namespaces with leading backslash
+            Some(format!("\\{}", components.join("\\")))
+        }
+    }
+
     fn get_language(&self) -> Language {
         self.language.clone()
     }

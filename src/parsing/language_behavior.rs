@@ -58,6 +58,8 @@
 //! 4. (Future) Register in the language registry for auto-discovery
 
 use crate::parsing::MethodCall;
+use crate::parsing::paths::{strip_extension, strip_source_root};
+use crate::parsing::registry::get_registry;
 use crate::parsing::resolution::{
     GenericInheritanceResolver, GenericResolutionContext, ImportBinding, ImportOrigin,
     InheritanceResolver, PipelineSymbolCache, ResolutionScope, ScopeLevel,
@@ -130,6 +132,34 @@ pub trait LanguageBehavior: Send + Sync {
     /// - Go: `"/"`
     fn module_separator(&self) -> &'static str;
 
+    /// Get the source root directories for this language
+    ///
+    /// These directories are stripped when computing module paths.
+    /// Default implementation returns common source directories.
+    ///
+    /// # Examples
+    /// - Rust: `&["src"]`
+    /// - Python: `&["src", "lib", "app"]`
+    /// - PHP: `&["src", "app", "lib", "classes"]`
+    fn source_roots(&self) -> &'static [&'static str] {
+        &["src"]
+    }
+
+    /// Format path components as a module path
+    ///
+    /// Converts path segments into language-specific module path format.
+    /// This is the core language-specific formatting logic.
+    ///
+    /// # Arguments
+    /// * `components` - Path segments (e.g., `["foo", "bar", "baz"]`)
+    ///
+    /// # Examples
+    /// - Rust: `["foo", "bar"]` → `"crate::foo::bar"`
+    /// - Python: `["foo", "bar"]` → `"foo.bar"`
+    /// - PHP: `["Foo", "Bar"]` → `"\\Foo\\Bar"`
+    /// - Go: `["foo", "bar"]` → `"foo/bar"`
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String>;
+
     /// Check if this language supports trait/interface concepts
     fn supports_traits(&self) -> bool {
         false
@@ -193,10 +223,34 @@ pub trait LanguageBehavior: Send + Sync {
     /// - Go: `"src/module/submodule.go"` → `"module/submodule"`
     ///
     /// # Default Implementation
-    /// Returns None by default. Languages should override this if they have
-    /// specific module path conventions.
-    fn module_path_from_file(&self, _file_path: &Path, _project_root: &Path) -> Option<String> {
-        None
+    /// Uses `source_roots()` and `format_path_as_module()` to compute the module path.
+    /// Extension stripping uses the registry's extension list to handle compound extensions
+    /// like `.d.ts`, `.class.php`, etc.
+    fn module_path_from_file(&self, file_path: &Path, workspace_root: &Path) -> Option<String> {
+        // Step 1: Get relative path from workspace root
+        let relative_path = file_path.strip_prefix(workspace_root).ok()?;
+
+        // Step 2: Strip source root directories (OS-agnostic)
+        let path_without_src = strip_source_root(relative_path, self.source_roots());
+
+        // Step 3: Get extensions from registry for proper compound extension handling
+        let path_str = path_without_src.to_str()?;
+        let path_without_ext = {
+            let registry = get_registry();
+            let registry_guard = registry.lock().ok()?;
+            let definition = registry_guard.get(self.language_id())?;
+            let extensions = definition.extensions();
+            strip_extension(path_str, extensions)
+        };
+
+        // Step 4: Split into components using OS path separator
+        let components: Vec<&str> = path_without_ext
+            .split(std::path::MAIN_SEPARATOR)
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        // Step 5: Format using language-specific rules
+        self.format_path_as_module(&components)
     }
 
     /// Resolve an import path to a symbol ID using language-specific conventions
@@ -1301,6 +1355,14 @@ mod tests {
 
         fn module_separator(&self) -> &'static str {
             "."
+        }
+
+        fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+            if components.is_empty() {
+                None
+            } else {
+                Some(components.join("."))
+            }
         }
 
         fn get_language(&self) -> tree_sitter::Language {

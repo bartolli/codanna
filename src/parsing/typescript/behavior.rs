@@ -190,6 +190,14 @@ impl LanguageBehavior for TypeScriptBehavior {
         true // TypeScript has class methods
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
     // TypeScript-specific resolution overrides
 
     fn create_resolution_context(&self, file_id: FileId) -> Box<dyn ResolutionScope> {

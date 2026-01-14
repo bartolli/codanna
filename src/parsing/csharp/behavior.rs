@@ -116,6 +116,14 @@ impl LanguageBehavior for CSharpBehavior {
         tree_sitter_c_sharp::LANGUAGE.into()
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
     fn module_separator(&self) -> &'static str {
         "." // C# uses dots for namespace separation
     }

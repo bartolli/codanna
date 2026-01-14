@@ -14,6 +14,7 @@ pub mod language;
 pub mod language_behavior;
 pub mod method_call;
 pub mod parser;
+pub mod paths;
 pub mod php;
 pub mod python;
 pub mod registry;
@@ -41,6 +42,9 @@ pub use method_call::{MethodCall, MethodCallResolver};
 pub use parser::{
     HandledNode, LanguageParser, NodeTracker, NodeTrackingState, safe_substring_window,
     safe_truncate_str, truncate_for_display,
+};
+pub use paths::{
+    normalize_for_module_path, strip_extension, strip_source_root, strip_source_root_owned,
 };
 pub use php::{PhpBehavior, PhpParser};
 pub use python::{PythonBehavior, PythonParser};

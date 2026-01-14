@@ -56,6 +56,15 @@ impl LanguageBehavior for GoBehavior {
         "/"
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            Some(".".to_string())
+        } else {
+            Some(components.join("/"))
+        }
+    }
+
+    // Go uses directory-based packages, needs custom handling
     fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
         // Convert file path to Go package path relative to project root
         // e.g., pkg/utils/helpers.go -> pkg/utils

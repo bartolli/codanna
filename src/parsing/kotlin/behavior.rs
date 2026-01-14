@@ -186,6 +186,14 @@ impl LanguageBehavior for KotlinBehavior {
         "."
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
     fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
         let relative = file_path.strip_prefix(project_root).ok()?;
         let mut path = relative.to_string_lossy().replace('\\', "/");

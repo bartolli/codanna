@@ -5,7 +5,7 @@ use crate::FileId;
 use crate::Visibility;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::{LanguageBehavior, ResolutionScope};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tree_sitter::Language;
 
 /// C language behavior implementation
@@ -68,33 +68,12 @@ impl LanguageBehavior for CBehavior {
         self.language.clone()
     }
 
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
-        // Get relative path from project root
-        let relative_path = file_path.strip_prefix(project_root).ok()?;
-
-        // Remove the file extension
-        let path_str = relative_path.to_str()?;
-        let mut path_without_ext = path_str.to_string();
-
-        // Remove extension
-        for ext in &["c", "h"] {
-            if let Some(stripped) = path_str.strip_suffix(&format!(".{ext}")) {
-                path_without_ext = stripped.to_string();
-                break;
-            }
-        }
-
-        // Convert path separators to module separators
-        let module_path = path_without_ext.replace('/', "::");
-
-        // Handle empty paths
-        let module_path = if module_path.is_empty() {
-            "root".to_string()
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            Some("root".to_string())
         } else {
-            module_path
-        };
-
-        Some(module_path)
+            Some(components.join("::"))
+        }
     }
 
     fn create_resolution_context(&self, file_id: FileId) -> Box<dyn ResolutionScope> {

@@ -7,7 +7,7 @@ use crate::Settings;
 use crate::indexing::pipeline::types::{
     FileContent, ParsedFile, PipelineError, PipelineResult, RawImport, RawRelationship, RawSymbol,
 };
-use crate::parsing::{LanguageId, LanguageParser, get_registry};
+use crate::parsing::{LanguageId, LanguageParser, get_registry, normalize_for_module_path};
 use crate::types::{FileId, SymbolCounter};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -222,12 +222,16 @@ fn compute_module_path(
     let definition = registry_guard.get(language_id)?;
     let behavior = definition.create_behavior();
 
-    let project_root = settings
+    let workspace_root = settings
         .workspace_root
         .as_deref()
         .unwrap_or_else(|| Path::new("."));
 
-    behavior.module_path_from_file(file_path, project_root)
+    // Normalize path to absolute for consistent behavior across languages
+    // Language behaviors expect absolute paths to strip_prefix(workspace_root)
+    let normalized_path = normalize_for_module_path(file_path, workspace_root);
+
+    behavior.module_path_from_file(&normalized_path, workspace_root)
 }
 
 /// Extract relationships from parsed content.

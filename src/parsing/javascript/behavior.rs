@@ -127,6 +127,15 @@ impl LanguageBehavior for JavaScriptBehavior {
         "."
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
+    // JavaScript uses jsconfig for module resolution, needs custom handling
     fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
         // Use jsconfig infrastructure to compute canonical module paths
         // This ensures symbols use the SAME path format as enhanced imports

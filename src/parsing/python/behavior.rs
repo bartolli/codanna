@@ -156,6 +156,14 @@ impl LanguageBehavior for PythonBehavior {
         false // Python methods are always on classes, not separate
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
     fn get_language(&self) -> Language {
         self.language.clone()
     }

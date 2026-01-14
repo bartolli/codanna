@@ -231,6 +231,14 @@ impl LanguageBehavior for SwiftBehavior {
         false // Swift methods are defined in class/struct body, not separate impl blocks
     }
 
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+
     // Import tracking methods using state
     fn register_file(&self, path: PathBuf, file_id: FileId, module_path: String) {
         self.register_file_with_state(path, file_id, module_path);

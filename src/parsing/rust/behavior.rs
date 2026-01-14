@@ -5,7 +5,7 @@ use crate::FileId;
 use crate::Visibility;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::{InheritanceResolver, LanguageBehavior, ResolutionScope};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tree_sitter::Language;
 
@@ -77,37 +77,28 @@ impl LanguageBehavior for RustBehavior {
         self.language.clone()
     }
 
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
-        // Get relative path from project root
-        let relative_path = file_path.strip_prefix(project_root).ok()?;
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        // Handle empty path
+        if components.is_empty() {
+            return Some("crate".to_string());
+        }
 
-        // Remove the "src/" prefix if present
-        let path_without_src = relative_path.strip_prefix("src/").unwrap_or(relative_path);
-
-        // Remove the file extension
-        let path_str = path_without_src.to_str()?;
-        let path_without_ext = path_str.strip_suffix(".rs").unwrap_or(path_str);
-
-        // Handle special cases for mod.rs files BEFORE converting separators
-        let module_path = if let Some(stripped) = path_without_ext.strip_suffix("/mod") {
-            // foo/mod.rs -> foo
-            stripped.to_string()
+        // Handle mod.rs: ["foo", "mod"] -> ["foo"]
+        let components: Vec<&str> = if components.last() == Some(&"mod") {
+            components[..components.len() - 1].to_vec()
         } else {
-            path_without_ext.to_string()
+            components.to_vec()
         };
 
-        // Convert path separators to module separators
-        let module_path = module_path.replace('/', "::");
-
-        // Handle special cases - main, lib, and empty paths all map to crate root
-        let module_path = if module_path == "main" || module_path == "lib" || module_path.is_empty()
+        // Handle main.rs, lib.rs, or empty (after mod.rs stripping)
+        if components.is_empty()
+            || (components.len() == 1 && (components[0] == "main" || components[0] == "lib"))
         {
-            "crate".to_string()
-        } else {
-            format!("crate::{module_path}")
-        };
+            return Some("crate".to_string());
+        }
 
-        Some(module_path)
+        // Normal case: join with :: and prepend crate::
+        Some(format!("crate::{}", components.join("::")))
     }
 
     // Override resolution methods to use Rust-specific implementations
@@ -598,49 +589,48 @@ mod tests {
     }
 
     #[test]
-    fn test_module_path_from_file() {
+    fn test_format_path_as_module() {
         let behavior = RustBehavior::new();
-        let root = Path::new("/project");
 
-        // Test main.rs
-        let main_path = Path::new("/project/src/main.rs");
+        // Empty path → crate
         assert_eq!(
-            behavior.module_path_from_file(main_path, root),
+            behavior.format_path_as_module(&[]),
             Some("crate".to_string())
         );
 
-        // Test lib.rs
-        let lib_path = Path::new("/project/src/lib.rs");
+        // main.rs → crate
         assert_eq!(
-            behavior.module_path_from_file(lib_path, root),
+            behavior.format_path_as_module(&["main"]),
             Some("crate".to_string())
         );
 
-        // Test regular module
-        let module_path = Path::new("/project/src/foo/bar.rs");
+        // lib.rs → crate
         assert_eq!(
-            behavior.module_path_from_file(module_path, root),
+            behavior.format_path_as_module(&["lib"]),
+            Some("crate".to_string())
+        );
+
+        // foo/bar.rs → crate::foo::bar
+        assert_eq!(
+            behavior.format_path_as_module(&["foo", "bar"]),
             Some("crate::foo::bar".to_string())
         );
 
-        // Test mod.rs
-        let mod_path = Path::new("/project/src/foo/mod.rs");
+        // foo/mod.rs → crate::foo (mod.rs stripped)
         assert_eq!(
-            behavior.module_path_from_file(mod_path, root),
+            behavior.format_path_as_module(&["foo", "mod"]),
             Some("crate::foo".to_string())
         );
 
-        // Test nested module
-        let nested_path = Path::new("/project/src/a/b/c.rs");
+        // a/b/c.rs → crate::a::b::c
         assert_eq!(
-            behavior.module_path_from_file(nested_path, root),
+            behavior.format_path_as_module(&["a", "b", "c"]),
             Some("crate::a::b::c".to_string())
         );
 
-        // Test file outside src
-        let outside_path = Path::new("/project/tests/integration.rs");
+        // tests/integration.rs → crate::tests::integration
         assert_eq!(
-            behavior.module_path_from_file(outside_path, root),
+            behavior.format_path_as_module(&["tests", "integration"]),
             Some("crate::tests::integration".to_string())
         );
     }
