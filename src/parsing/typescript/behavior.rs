@@ -2,9 +2,9 @@
 
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
+use crate::parsing::paths::strip_extension;
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
 use crate::project_resolver::persist::{ResolutionPersistence, ResolutionRules};
-use crate::storage::DocumentIndex;
 use crate::types::FileId;
 use crate::{SymbolId, Visibility};
 use std::cell::RefCell;
@@ -116,7 +116,12 @@ impl LanguageBehavior for TypeScriptBehavior {
         "."
     }
 
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
+    fn module_path_from_file(
+        &self,
+        file_path: &Path,
+        project_root: &Path,
+        extensions: &[&str],
+    ) -> Option<String> {
         // Use tsconfig infrastructure to compute canonical module paths
         // This ensures symbols use the SAME path format as enhanced imports
 
@@ -144,16 +149,11 @@ impl LanguageBehavior for TypeScriptBehavior {
         let relative_path = file_path.strip_prefix(&tsconfig_dir).ok()?;
         let path = relative_path.to_str()?;
 
-        // Remove file extensions but KEEP directory structure
-        // This matches how tsconfig-enhanced imports are normalized
-        let module_path = path
-            .trim_start_matches("./")
-            .trim_end_matches(".ts")
-            .trim_end_matches(".tsx")
-            .trim_end_matches(".mts")
-            .trim_end_matches(".cts")
-            .trim_end_matches(".d.ts")
-            .trim_end_matches("/index");
+        // Remove file extensions using the provided extensions list
+        let path_without_ext = strip_extension(path.trim_start_matches("./"), extensions);
+
+        // Handle /index suffix (directory imports)
+        let module_path = path_without_ext.trim_end_matches("/index");
 
         // Replace path separators with module separators
         let result = module_path.replace('/', ".");
@@ -250,410 +250,6 @@ impl LanguageBehavior for TypeScriptBehavior {
         self.get_imports_from_state(file_id)
     }
 
-    fn resolve_external_call_target(
-        &self,
-        to_name: &str,
-        from_file: FileId,
-    ) -> Option<(String, String)> {
-        // Use tracked imports and module path to map unresolved calls to externals.
-        tracing::debug!(
-            "[typescript] resolve_external_call_target to='{to_name}' file_id={from_file:?}"
-        );
-        // Cases:
-        // - Namespace import: `import * as React from 'react'` -> React.useState
-        // - Default import:  `import React from 'react'` -> React.useState
-        // - Named import:    `import { useState } from 'react'` -> useState
-
-        let imports = self.get_imports_for_file(from_file);
-        if imports.is_empty() {
-            tracing::debug!("[typescript] no imports tracked for file {from_file:?}");
-            return None;
-        }
-
-        // Helper: normalize TS import path relative to importing module
-        fn parent_module(m: &str) -> String {
-            let mut parts: Vec<&str> = if m.is_empty() {
-                Vec::new()
-            } else {
-                m.split('.').collect()
-            };
-            if !parts.is_empty() {
-                parts.pop();
-            }
-            parts.join(".")
-        }
-        fn normalize_ts_import(import_path: &str, importing_mod: &str) -> String {
-            if import_path.starts_with("./") {
-                let base_owned = parent_module(importing_mod);
-                let base = base_owned.as_str();
-                let rel = import_path.trim_start_matches("./").replace('/', ".");
-                if base.is_empty() {
-                    rel
-                } else {
-                    format!("{base}.{rel}")
-                }
-            } else if import_path.starts_with("../") {
-                let base_owned = parent_module(importing_mod);
-                let mut parts: Vec<&str> = base_owned.split('.').collect();
-                let mut rest = import_path;
-                while rest.starts_with("../") {
-                    if !parts.is_empty() {
-                        parts.pop();
-                    }
-                    rest = &rest[3..];
-                }
-                let rest = rest.trim_start_matches("./").replace('/', ".");
-                let mut combined = parts.join(".");
-                if !rest.is_empty() {
-                    combined = if combined.is_empty() {
-                        rest
-                    } else {
-                        format!("{combined}.{rest}")
-                    };
-                }
-                combined
-            } else {
-                import_path.replace('/', ".")
-            }
-        }
-
-        let importing_module = self.get_module_path_for_file(from_file).unwrap_or_default();
-        tracing::debug!(
-            "[typescript] importing_module='{importing_module}', imports={}",
-            imports.len()
-        );
-        for imp in &imports {
-            tracing::debug!(
-                "[typescript]   import path='{}' alias={:?} glob={} type_only={}",
-                imp.path,
-                imp.alias,
-                imp.is_glob,
-                imp.is_type_only
-            );
-        }
-
-        // Namespace form only: Alias.member from `import * as Alias from 'module'`
-        if let Some((alias, member)) = to_name.split_once('.') {
-            for import in &imports {
-                // Guard: only namespace imports (is_glob == true)
-                if import.is_glob {
-                    if let Some(a) = &import.alias {
-                        if a == alias {
-                            let module_path = normalize_ts_import(&import.path, &importing_module);
-                            tracing::debug!(
-                                "[typescript] mapped namespace alias.member: {alias}.{member} -> module '{module_path}'"
-                            );
-                            return Some((module_path, member.to_string()));
-                        }
-                    }
-                }
-            }
-        } else {
-            // Named import form only (is_glob == false): e.g., import { useState } from 'react'
-            for import in &imports {
-                if !import.is_glob {
-                    if let Some(a) = &import.alias {
-                        if a == to_name {
-                            let module_path = normalize_ts_import(&import.path, &importing_module);
-                            tracing::debug!(
-                                "[typescript] mapped named import: {to_name} -> module '{module_path}'"
-                            );
-                            return Some((module_path, to_name.to_string()));
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn create_external_symbol(
-        &self,
-        document_index: &mut crate::storage::DocumentIndex,
-        module_path: &str,
-        symbol_name: &str,
-        language_id: crate::parsing::LanguageId,
-    ) -> crate::IndexResult<crate::SymbolId> {
-        use crate::storage::MetadataKey;
-        use crate::{IndexError, Symbol, SymbolId, SymbolKind, Visibility};
-
-        // If symbol already exists with same name and module_path, reuse it
-        if let Ok(cands) = document_index.find_symbols_by_name(symbol_name, None) {
-            tracing::debug!(
-                "[typescript] found {} existing symbols with name '{symbol_name}'",
-                cands.len()
-            );
-            for s in cands {
-                if let Some(mp) = &s.module_path {
-                    tracing::debug!(
-                        "[typescript] checking symbol '{}' module '{}' vs '{module_path}' (ID: {:?})",
-                        s.name,
-                        mp.as_ref(),
-                        s.id
-                    );
-                    if mp.as_ref() == module_path {
-                        tracing::debug!(
-                            "[typescript] reusing existing external symbol '{symbol_name}' in module '{module_path}' with ID {:?}",
-                            s.id
-                        );
-                        return Ok(s.id);
-                    }
-                }
-            }
-        }
-
-        // Compute virtual file path
-        let mut path_buf = String::from(".codanna/external/");
-        path_buf.push_str(&module_path.replace('.', "/"));
-        path_buf.push_str(".d.ts");
-        let path_str = path_buf;
-
-        // Ensure file_info exists
-        let file_id = if let Ok(Some((fid, _, _))) = document_index.get_file_info(&path_str) {
-            fid
-        } else {
-            let next_file_id =
-                document_index
-                    .get_next_file_id()
-                    .map_err(|e| IndexError::TantivyError {
-                        operation: "get_next_file_id".to_string(),
-                        cause: e.to_string(),
-                    })?;
-            let file_id = crate::FileId::new(next_file_id).ok_or(IndexError::FileIdExhausted)?;
-            let hash = format!("external:{module_path}");
-            let ts = crate::indexing::get_utc_timestamp();
-            document_index
-                .store_file_info(file_id, &path_str, &hash, ts)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "store_file_info".to_string(),
-                    cause: e.to_string(),
-                })?;
-            file_id
-        };
-
-        // Allocate a new symbol id
-        let next_id =
-            document_index
-                .get_next_symbol_id()
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "get_next_symbol_id".to_string(),
-                    cause: e.to_string(),
-                })?;
-        let symbol_id = SymbolId::new(next_id).ok_or(IndexError::SymbolIdExhausted)?;
-
-        // Build and index the stub symbol
-        let mut symbol = Symbol::new(
-            symbol_id,
-            symbol_name.to_string(),
-            SymbolKind::Function,
-            file_id,
-            crate::Range::new(0, 0, 0, 0),
-        )
-        .with_visibility(Visibility::Public);
-        symbol.module_path = Some(module_path.to_string().into());
-        symbol.scope_context = Some(crate::symbol::ScopeContext::Global);
-        symbol.language_id = Some(language_id);
-
-        document_index
-            .index_symbol(&symbol, &path_str)
-            .map_err(|e| IndexError::TantivyError {
-                operation: "index_symbol".to_string(),
-                cause: e.to_string(),
-            })?;
-
-        // Update the symbol counter metadata
-        document_index
-            .store_metadata(MetadataKey::SymbolCounter, symbol_id.value() as u64)
-            .map_err(|e| IndexError::TantivyError {
-                operation: "store_metadata(SymbolCounter)".to_string(),
-                cause: e.to_string(),
-            })?;
-
-        tracing::debug!(
-            "[typescript] created new external symbol '{symbol_name}' in module '{module_path}' with ID {symbol_id:?}"
-        );
-
-        Ok(symbol_id)
-    }
-
-    fn build_resolution_context(
-        &self,
-        file_id: FileId,
-        document_index: &DocumentIndex,
-    ) -> crate::error::IndexResult<Box<dyn ResolutionScope>> {
-        use crate::error::IndexError;
-
-        // Create TypeScript-specific resolution context
-        let mut context = TypeScriptResolutionContext::new(file_id);
-
-        // 1. Add imported symbols (using behavior's tracked imports)
-        let imports = self.get_imports_for_file(file_id);
-        // Collect namespace imports for qualified-name precomputation
-        let mut namespace_imports: Vec<(String, String)> = Vec::new(); // (alias, normalized_module)
-
-        for import in imports {
-            if let Some(symbol_id) = self.resolve_import(&import, document_index) {
-                // Use alias if provided, otherwise use the last segment of the path
-                let name = if let Some(alias) = &import.alias {
-                    alias.clone()
-                } else {
-                    import
-                        .path
-                        .split(self.module_separator())
-                        .last()
-                        .unwrap_or(&import.path)
-                        .to_string()
-                };
-
-                // Use the is_type_only field to determine where to place the import
-                context.add_import_symbol(name, symbol_id, import.is_type_only);
-            } else if import.is_glob {
-                // Namespace import that didn't resolve to a concrete symbol set.
-                // Record alias -> target module mapping for qualified-name resolution.
-                if let Some(alias) = &import.alias {
-                    // Normalize target module relative to current file's module path
-                    let importing_module =
-                        self.get_module_path_for_file(file_id).unwrap_or_default();
-                    let normalized = {
-                        // Reuse normalize helper from resolve_import
-                        fn parent_module(m: &str) -> String {
-                            let mut parts: Vec<&str> = if m.is_empty() {
-                                Vec::new()
-                            } else {
-                                m.split('.').collect()
-                            };
-                            if !parts.is_empty() {
-                                parts.pop();
-                            }
-                            parts.join(".")
-                        }
-                        let p = &import.path;
-                        if p.starts_with("./") {
-                            let base = parent_module(&importing_module);
-                            let rel = p.trim_start_matches("./").replace('/', ".");
-                            if base.is_empty() {
-                                rel
-                            } else {
-                                format!("{base}.{rel}")
-                            }
-                        } else if p.starts_with("../") {
-                            let base_owned = parent_module(&importing_module);
-                            let mut parts: Vec<&str> = base_owned.split('.').collect();
-                            let mut rest = p.as_str();
-                            while rest.starts_with("../") {
-                                if !parts.is_empty() {
-                                    parts.pop();
-                                }
-                                rest = &rest[3..];
-                            }
-                            let rest = rest.trim_start_matches("./").replace('/', ".");
-                            let mut combined = parts.join(".");
-                            if !rest.is_empty() {
-                                combined = if combined.is_empty() {
-                                    rest
-                                } else {
-                                    format!("{combined}.{rest}")
-                                };
-                            }
-                            combined
-                        } else {
-                            p.replace('/', ".")
-                        }
-                    };
-                    namespace_imports.push((alias.clone(), normalized));
-                }
-            }
-        }
-
-        // 2. Add file's module-level symbols with proper scope context
-        let file_symbols =
-            document_index
-                .find_symbols_by_file(file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_file".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-        for symbol in file_symbols {
-            if self.is_resolvable_symbol(&symbol) {
-                // Use the new method that respects scope_context for hoisting
-                context.add_symbol_with_context(
-                    symbol.name.to_string(),
-                    symbol.id,
-                    symbol.scope_context.as_ref(),
-                );
-
-                // CRITICAL: Also add by module_path for cross-module resolution
-                // This allows imports to resolve symbols by their full module path
-                if let Some(ref module_path) = symbol.module_path {
-                    context.add_symbol(
-                        module_path.to_string(),
-                        symbol.id,
-                        crate::parsing::ScopeLevel::Global,
-                    );
-                }
-            }
-        }
-
-        // 3. Add visible symbols from other files (public/exported symbols)
-        // Note: This is expensive, so we limit to a reasonable number
-        let all_symbols =
-            document_index
-                .get_all_symbols(10000)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "get_all_symbols".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-        let mut public_symbols: Vec<crate::Symbol> = Vec::new();
-        for symbol in all_symbols {
-            // Only add if visible from this file
-            if symbol.file_id != file_id && self.is_symbol_visible_from_file(&symbol, file_id) {
-                // Global symbols go to global scope, others to module scope
-                let scope_level = match symbol.visibility {
-                    Visibility::Public => crate::parsing::ScopeLevel::Global,
-                    _ => crate::parsing::ScopeLevel::Module,
-                };
-
-                context.add_symbol(symbol.name.to_string(), symbol.id, scope_level);
-
-                // CRITICAL: Also add by module_path for cross-module resolution
-                if let Some(ref module_path) = symbol.module_path {
-                    context.add_symbol(
-                        module_path.to_string(),
-                        symbol.id,
-                        crate::parsing::ScopeLevel::Global,
-                    );
-                }
-
-                public_symbols.push(symbol);
-            }
-        }
-
-        // 3.1 Precompute qualified names for namespace imports against visible symbols
-        if !namespace_imports.is_empty() {
-            // Downcast to access TypeScript-specific API
-            if let Some(ts_ctx) = context
-                .as_any_mut()
-                .downcast_mut::<TypeScriptResolutionContext>()
-            {
-                for (alias, target_module) in namespace_imports {
-                    ts_ctx.add_namespace_alias(alias.clone(), target_module.clone());
-                    for sym in &public_symbols {
-                        if let Some(mod_path) = &sym.module_path {
-                            if mod_path.as_ref() == target_module {
-                                ts_ctx.add_qualified_name(format!("{alias}.{}", sym.name), sym.id);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(Box::new(context))
-    }
-
     /// Build resolution context for parallel pipeline (no Tantivy).
     ///
     /// Uses tsconfig path aliases via TypeScriptProjectEnhancer.
@@ -663,10 +259,13 @@ impl LanguageBehavior for TypeScriptBehavior {
         file_id: FileId,
         imports: &[crate::parsing::Import],
         cache: &dyn crate::parsing::PipelineSymbolCache,
+        extensions: &[&str],
     ) -> (
         Box<dyn crate::parsing::ResolutionScope>,
         Vec<crate::parsing::Import>,
     ) {
+        // Extensions available for stripping from import paths
+        let _ = extensions;
         use crate::parsing::ScopeLevel;
         use crate::parsing::resolution::{ImportBinding, ImportOrigin, ProjectResolutionEnhancer};
 
@@ -833,149 +432,6 @@ impl LanguageBehavior for TypeScriptBehavior {
                 symbol.kind,
                 SymbolKind::TypeAlias | SymbolKind::Constant | SymbolKind::Variable
             )
-        }
-    }
-
-    // TypeScript-specific: Handle ES module imports
-    fn resolve_import(
-        &self,
-        import: &crate::parsing::Import,
-        document_index: &DocumentIndex,
-    ) -> Option<SymbolId> {
-        tracing::debug!(
-            "[typescript] resolve_import path='{}' alias={:?} file_id={:?}",
-            import.path,
-            import.alias,
-            import.file_id
-        );
-
-        tracing::debug!(
-            "[typescript] resolving import path='{}' alias={:?} file_id={:?}",
-            import.path,
-            import.alias,
-            import.file_id
-        );
-
-        // Note: Import paths are already enhanced in add_import(), so we use them directly
-        let enhanced_path = import.path.clone();
-        let was_enhanced = import.path.starts_with("./") && import.path.contains("/src/");
-
-        // Prefer resolving by the imported local name when available (named/default imports)
-        let importing_module = self
-            .get_module_path_for_file(import.file_id)
-            .unwrap_or_default();
-
-        // Normalize import path to module path (relative to importing module)
-        fn normalize_ts_import(import_path: &str, importing_mod: &str) -> String {
-            fn parent_module(m: &str) -> String {
-                let mut parts: Vec<&str> = if m.is_empty() {
-                    Vec::new()
-                } else {
-                    m.split('.').collect()
-                };
-                if !parts.is_empty() {
-                    parts.pop();
-                }
-                parts.join(".")
-            }
-            if import_path.starts_with("./") {
-                let base_owned = parent_module(importing_mod);
-                let base = base_owned.as_str();
-                let rel = import_path.trim_start_matches("./").replace('/', ".");
-                if base.is_empty() {
-                    rel
-                } else {
-                    format!("{base}.{rel}")
-                }
-            } else if import_path.starts_with("../") {
-                let base_owned = parent_module(importing_mod);
-                let mut parts: Vec<&str> = base_owned.split('.').collect();
-                let mut rest = import_path;
-                while rest.starts_with("../") {
-                    if !parts.is_empty() {
-                        parts.pop();
-                    }
-                    rest = &rest[3..];
-                }
-                let rest = rest.trim_start_matches("./").replace('/', ".");
-                let mut combined = parts.join(".");
-                if !rest.is_empty() {
-                    combined = if combined.is_empty() {
-                        rest
-                    } else {
-                        format!("{combined}.{rest}")
-                    };
-                }
-                combined
-            } else {
-                import_path.replace('/', ".")
-            }
-        }
-
-        // If the path was enhanced by tsconfig resolution, it's already project-relative
-        // and should be converted directly to a module path, not resolved relative to the importing module
-        let target_module = if was_enhanced {
-            // Enhanced paths like "./src/components/Button" should become module paths
-            // relative to the tsconfig project root (NOT workspace root)
-            // For example: "./src/components/Button" -> "src.components.Button"
-            //
-            // This matches how symbols are computed in module_path_from_file() which also
-            // uses paths relative to the tsconfig directory
-
-            // Convert the enhanced path to a module path
-            let result = enhanced_path
-                .trim_start_matches("./")
-                .trim_start_matches("/")
-                .replace('/', ".");
-
-            tracing::debug!(
-                "[typescript] module path computation: importing_module={importing_module}, enhanced_path={enhanced_path}, target_module={result}"
-            );
-
-            result
-        } else {
-            // Normal path resolution relative to importing module
-            let normal = normalize_ts_import(&enhanced_path, &importing_module);
-            tracing::debug!("[typescript] normal resolution: {enhanced_path} -> {normal}");
-            normal
-        };
-
-        if let Some(local_name) = &import.alias {
-            tracing::debug!("[typescript] looking up symbol by alias: {local_name}");
-            if let Ok(cands) = document_index.find_symbols_by_name(local_name, None) {
-                tracing::debug!(
-                    "[typescript] found {} candidates with name '{local_name}'",
-                    cands.len()
-                );
-
-                // Always print first few candidates for debugging
-                let mut checked = 0;
-                for s in cands {
-                    if let Some(module_path) = &s.module_path {
-                        if checked < 3 {
-                            tracing::debug!(
-                                "[typescript] resolve candidate module: {} vs target: {target_module}",
-                                module_path.as_ref()
-                            );
-                            checked += 1;
-                        }
-                        if module_path.as_ref() == target_module {
-                            tracing::debug!("[typescript] resolved: found symbol {:?}", s.id);
-                            return Some(s.id);
-                        }
-                    }
-                }
-                if checked > 0 {
-                    tracing::debug!(
-                        "[typescript] resolve failed: no match for target '{target_module}'"
-                    );
-                }
-            }
-            None
-        } else {
-            // Namespace or side-effect import: cannot map to a single symbol reliably
-            tracing::debug!("[typescript] no alias - namespace or side-effect import");
-            None
         }
     }
 

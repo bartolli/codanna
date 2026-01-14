@@ -3,6 +3,7 @@
 use crate::parsing::LanguageBehavior;
 use crate::parsing::ResolutionScope;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
+use crate::parsing::paths::strip_extension;
 use crate::parsing::{Import, InheritanceResolver};
 use crate::symbol::ScopeContext;
 use crate::types::compact_string;
@@ -194,20 +195,21 @@ impl LanguageBehavior for KotlinBehavior {
         }
     }
 
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
+    fn module_path_from_file(
+        &self,
+        file_path: &Path,
+        project_root: &Path,
+        extensions: &[&str],
+    ) -> Option<String> {
         let relative = file_path.strip_prefix(project_root).ok()?;
-        let mut path = relative.to_string_lossy().replace('\\', "/");
+        let path = relative.to_string_lossy().replace('\\', "/");
 
-        // Remove .kt or .kts extension
-        if path.ends_with(".kt") {
-            path.truncate(path.len() - 3);
-        } else if path.ends_with(".kts") {
-            path.truncate(path.len() - 4);
-        }
+        // Strip file extension using the provided extensions list
+        let path_without_ext = strip_extension(&path, extensions);
 
         // Convert path to package notation: src/main/kotlin/com/example/MyClass -> com.example.MyClass
         // Strip common Kotlin source directories
-        let path = path
+        let path_stripped = path_without_ext
             .trim_start_matches("src/main/kotlin/")
             .trim_start_matches("src/main/java/")
             .trim_start_matches("src/test/kotlin/")
@@ -215,7 +217,7 @@ impl LanguageBehavior for KotlinBehavior {
             .trim_start_matches("src/");
 
         // Convert path separators to dots
-        let module_path = path.replace('/', ".");
+        let module_path = path_stripped.replace('/', ".");
 
         Some(module_path)
     }

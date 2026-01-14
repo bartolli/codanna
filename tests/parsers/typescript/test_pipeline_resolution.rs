@@ -107,8 +107,9 @@ fn test_behavior_pipeline_cache_local_symbols() {
     cache.insert(sym);
 
     // Build resolution context (no imports) - returns (scope, enhanced_imports)
+    let extensions = &["ts", "tsx", "js", "jsx"];
     let (scope, _enhanced_imports) =
-        behavior.build_resolution_context_with_pipeline_cache(file_id, &[], &cache);
+        behavior.build_resolution_context_with_pipeline_cache(file_id, &[], &cache, extensions);
 
     // Should resolve local symbol
     let resolved = scope.resolve("localHelper");
@@ -325,7 +326,8 @@ fn test_behavior_pipeline_cache_isolated() {
     let symbols = parser.parse(&source, button_file, &mut counter);
 
     // Compute module path using the API
-    let module_path = behavior.module_path_from_file(&button_path, temp_path);
+    let extensions = &["ts", "tsx", "js", "jsx"];
+    let module_path = behavior.module_path_from_file(&button_path, temp_path, extensions);
     assert!(
         module_path.is_some(),
         "module_path_from_file should return a path for Button.ts"
@@ -353,8 +355,9 @@ fn test_behavior_pipeline_cache_isolated() {
         is_type_only: false,
     }];
 
-    let (scope, enhanced_imports) =
-        behavior.build_resolution_context_with_pipeline_cache(app_file, &imports, &cache);
+    let extensions = &["ts", "tsx", "js", "jsx"];
+    let (scope, enhanced_imports) = behavior
+        .build_resolution_context_with_pipeline_cache(app_file, &imports, &cache, extensions);
 
     // Verify the enhanced imports have the path alias resolved
     assert!(!enhanced_imports.is_empty(), "Should have enhanced imports");

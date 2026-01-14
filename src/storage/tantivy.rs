@@ -2290,39 +2290,9 @@ impl DocumentIndex {
         )
     }
 
-    /// Store file information
-    pub(crate) fn store_file_info(
-        &self,
-        file_id: FileId,
-        path: &str,
-        hash: &str,
-        timestamp: u64,
-    ) -> StorageResult<()> {
-        let writer_lock = match self.writer.read() {
-            Ok(lock) => lock,
-            Err(poisoned) => {
-                eprintln!("Warning: Recovering from poisoned writer rwlock in store_file_info");
-                poisoned.into_inner()
-            }
-        };
-        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
-
-        let mut doc = Document::new();
-        doc.add_text(self.schema.doc_type, "file_info");
-        doc.add_u64(self.schema.file_id, file_id.value() as u64);
-        doc.add_text(self.schema.file_path, path);
-        doc.add_text(self.schema.file_hash, hash);
-        doc.add_u64(self.schema.file_timestamp, timestamp);
-
-        writer.add_document(doc)?;
-        Ok(())
-    }
-
-    /// Store file registration from parallel pipeline.
+    /// Store file registration from the indexing pipeline.
     ///
-    /// [PIPELINE API] This method is part of the new parallel indexing pipeline.
-    /// It takes FileRegistration directly and handles all field conversions.
-    /// Old methods like store_file_info will be retired once pipeline is complete.
+    /// Takes FileRegistration directly and handles all field conversions.
     pub fn store_file_registration(
         &self,
         registration: &crate::indexing::pipeline::FileRegistration,
@@ -2738,6 +2708,9 @@ impl DocumentIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexing::pipeline::FileRegistration;
+    use crate::parsing::registry::LanguageId;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -2940,9 +2913,15 @@ mod tests {
         index.start_batch().unwrap();
 
         let file_id = crate::FileId::new(1).unwrap();
-        index
-            .store_file_info(file_id, "src/main.rs", "abc123", 1234567890)
-            .unwrap();
+        let registration = FileRegistration {
+            path: PathBuf::from("src/main.rs"),
+            file_id,
+            content_hash: "abc123".to_string(),
+            language_id: LanguageId::new("rust"),
+            timestamp: 1234567890,
+            mtime: 0,
+        };
+        index.store_file_registration(&registration).unwrap();
 
         // Commit batch
         index.commit_batch().unwrap();
@@ -2987,9 +2966,15 @@ mod tests {
 
         for (id, path, hash) in &test_files {
             let file_id = crate::FileId::new(*id).unwrap();
-            index
-                .store_file_info(file_id, path, hash, 1234567890)
-                .unwrap();
+            let registration = FileRegistration {
+                path: PathBuf::from(*path),
+                file_id,
+                content_hash: hash.to_string(),
+                language_id: LanguageId::new("rust"),
+                timestamp: 1234567890,
+                mtime: 0,
+            };
+            index.store_file_registration(&registration).unwrap();
             println!("  - Added: {path}");
         }
 
@@ -4293,10 +4278,16 @@ mod tests {
 
             let file_id = FileId::new(1).unwrap();
 
-            // Store file info
-            index
-                .store_file_info(file_id, "src/main.rs", "hash123", 1234567890)
-                .unwrap();
+            // Store file registration
+            let registration = FileRegistration {
+                path: PathBuf::from("src/main.rs"),
+                file_id,
+                content_hash: "hash123".to_string(),
+                language_id: LanguageId::new("rust"),
+                timestamp: 1234567890,
+                mtime: 0,
+            };
+            index.store_file_registration(&registration).unwrap();
 
             // Store external imports (the data we're testing persistence for)
             let import1 = crate::parsing::Import {
@@ -4366,10 +4357,16 @@ mod tests {
 
         let file_id = FileId::new(1).unwrap();
 
-        // Store file and import
-        index
-            .store_file_info(file_id, "src/main.rs", "hash123", 1234567890)
-            .unwrap();
+        // Store file registration and import
+        let registration = FileRegistration {
+            path: PathBuf::from("src/main.rs"),
+            file_id,
+            content_hash: "hash123".to_string(),
+            language_id: LanguageId::new("rust"),
+            timestamp: 1234567890,
+            mtime: 0,
+        };
+        index.store_file_registration(&registration).unwrap();
 
         let import = crate::parsing::Import {
             path: "std::collections::HashMap".to_string(),

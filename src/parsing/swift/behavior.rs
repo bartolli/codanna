@@ -1,6 +1,7 @@
 //! Swift-specific language behavior implementation
 
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
+use crate::parsing::paths::strip_extension;
 use crate::parsing::{Import, InheritanceResolver, LanguageBehavior, ResolutionScope};
 use crate::types::compact_string;
 use crate::{FileId, Symbol, SymbolKind, Visibility};
@@ -131,7 +132,12 @@ impl LanguageBehavior for SwiftBehavior {
     ///
     /// Uses cached resolution rules from SwiftProvider to map file paths to modules.
     /// Falls back to convention-based path stripping if no cache is available.
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
+    fn module_path_from_file(
+        &self,
+        file_path: &Path,
+        project_root: &Path,
+        extensions: &[&str],
+    ) -> Option<String> {
         use crate::project_resolver::persist::ResolutionPersistence;
         use std::cell::RefCell;
         use std::time::{Duration, Instant};
@@ -199,22 +205,20 @@ impl LanguageBehavior for SwiftBehavior {
 
         // Fallback: convention-based path stripping
         let relative = file_path.strip_prefix(project_root).ok()?;
-        let mut path = relative.to_string_lossy().replace('\\', "/");
+        let path = relative.to_string_lossy().replace('\\', "/");
 
-        // Remove .swift extension
-        if path.ends_with(".swift") {
-            path.truncate(path.len() - 6);
-        }
+        // Strip file extension using the provided extensions list
+        let path_without_ext = strip_extension(&path, extensions);
 
         // Strip common Swift source directories
-        let path = path
+        let path_stripped = path_without_ext
             .trim_start_matches("Sources/")
             .trim_start_matches("Source/")
             .trim_start_matches("src/")
             .trim_start_matches("Tests/");
 
         // Convert path separators to dots
-        let module_path = path.replace('/', ".");
+        let module_path = path_stripped.replace('/', ".");
 
         Some(module_path)
     }
@@ -272,6 +276,7 @@ impl LanguageBehavior for SwiftBehavior {
         file_id: FileId,
         imports: &[crate::parsing::Import],
         cache: &dyn crate::parsing::PipelineSymbolCache,
+        extensions: &[&str],
     ) -> (
         Box<dyn crate::parsing::ResolutionScope>,
         Vec<crate::parsing::Import>,
@@ -287,7 +292,7 @@ impl LanguageBehavior for SwiftBehavior {
         let compute_module_path = |file_path: &str| -> Option<String> {
             let path = PathBuf::from(file_path);
             // project_root is unused by Swift's module_path_from_file (uses rules instead)
-            self.module_path_from_file(&path, &PathBuf::new())
+            self.module_path_from_file(&path, &PathBuf::new(), extensions)
         };
 
         // Build enhanced imports (Swift imports are already module-level, no transformation)

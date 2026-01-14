@@ -96,24 +96,26 @@ fn test_module_path_from_file() {
     let behavior = GdscriptBehavior::new();
     let root = Path::new("/project");
 
+    let extensions = &["gd"];
+
     // Test regular script
     let script_path = Path::new("/project/scripts/player.gd");
     assert_eq!(
-        behavior.module_path_from_file(script_path, root),
+        behavior.module_path_from_file(script_path, root, extensions),
         Some("res://scripts/player".to_string())
     );
 
     // Test nested script
     let nested_path = Path::new("/project/scenes/levels/level1.gd");
     assert_eq!(
-        behavior.module_path_from_file(nested_path, root),
+        behavior.module_path_from_file(nested_path, root, extensions),
         Some("res://scenes/levels/level1".to_string())
     );
 
     // Test root script
     let root_script = Path::new("/project/main.gd");
     assert_eq!(
-        behavior.module_path_from_file(root_script, root),
+        behavior.module_path_from_file(root_script, root, extensions),
         Some("res://main".to_string())
     );
 }

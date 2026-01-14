@@ -2,8 +2,7 @@
 
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
-use crate::storage::DocumentIndex;
-use crate::{FileId, SymbolId, Visibility};
+use crate::{FileId, Visibility};
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
 
@@ -96,7 +95,14 @@ impl LanguageBehavior for PhpBehavior {
         self.language.clone()
     }
 
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
+    fn module_path_from_file(
+        &self,
+        file_path: &Path,
+        project_root: &Path,
+        extensions: &[&str],
+    ) -> Option<String> {
+        use crate::parsing::paths::strip_extension;
+
         // Get relative path from project root
         let relative_path = file_path.strip_prefix(project_root).ok()?;
 
@@ -111,12 +117,8 @@ impl LanguageBehavior for PhpBehavior {
             .or_else(|| path_str.strip_prefix("classes/"))
             .unwrap_or(path_str);
 
-        // Remove the .php extension (check .class.php first since it's longer)
-        let path_without_ext = path_without_src
-            .strip_suffix(".class.php")
-            .or_else(|| path_without_src.strip_suffix(".php"))
-            .or_else(|| path_without_src.strip_suffix(".inc"))
-            .unwrap_or(path_without_src);
+        // Remove extension using passed extensions from settings.toml
+        let path_without_ext = strip_extension(path_without_src, extensions);
 
         // Skip special files that aren't typically namespaced
         if path_without_ext == "index"
@@ -216,64 +218,6 @@ impl LanguageBehavior for PhpBehavior {
         false
     }
 
-    fn resolve_import_path_with_context(
-        &self,
-        import_path: &str,
-        importing_module: Option<&str>,
-        document_index: &DocumentIndex,
-    ) -> Option<SymbolId> {
-        // Split the path using PHP's namespace separator
-        let separator = self.module_separator();
-        let segments: Vec<&str> = import_path.split(separator).collect();
-
-        if segments.is_empty() {
-            return None;
-        }
-
-        // The symbol name is the last segment
-        let symbol_name = segments.last()?;
-
-        // Find symbols with this name (using index for performance)
-        let candidates = document_index
-            .find_symbols_by_name(symbol_name, None)
-            .ok()?;
-
-        // Find the one with matching module path using PHP-specific rules
-        for candidate in &candidates {
-            if let Some(module_path) = &candidate.module_path {
-                if self.import_matches_symbol(import_path, module_path.as_ref(), importing_module) {
-                    return Some(candidate.id);
-                }
-            }
-        }
-
-        None
-    }
-
-    // PHP-specific: Handle PHP use statements and namespace imports
-    fn resolve_import(
-        &self,
-        import: &crate::parsing::Import,
-        document_index: &DocumentIndex,
-    ) -> Option<SymbolId> {
-        // PHP imports can be:
-        // 1. Use statements: use App\Controllers\UserController;
-        // 2. Aliased use: use App\Models\User as UserModel;
-        // 3. Function/const imports: use function array_map;
-        // 4. Grouped imports: use App\{Model, Controller};
-
-        // Get the importing module path for context
-        let importing_module = self.get_module_path_for_file(import.file_id);
-
-        // Use enhanced resolution with module context
-        // This will use our import_matches_symbol method for PHP-specific matching
-        self.resolve_import_path_with_context(
-            &import.path,
-            importing_module.as_deref(),
-            document_index,
-        )
-    }
-
     // PHP-specific: Check visibility based on access modifiers
     fn is_symbol_visible_from_file(&self, symbol: &crate::Symbol, from_file: FileId) -> bool {
         // Same file: always visible
@@ -363,47 +307,54 @@ mod tests {
     fn test_module_path_from_file() {
         let behavior = PhpBehavior::new();
         let root = Path::new("/project");
+        let extensions = &["class.php", "php"];
 
         // Test PSR-4 style namespace
         let class_path = Path::new("/project/src/App/Controllers/UserController.php");
         assert_eq!(
-            behavior.module_path_from_file(class_path, root),
+            behavior.module_path_from_file(class_path, root, extensions),
             Some("\\App\\Controllers\\UserController".to_string())
         );
 
         // Test without src directory
         let no_src_path = Path::new("/project/Models/User.php");
         assert_eq!(
-            behavior.module_path_from_file(no_src_path, root),
+            behavior.module_path_from_file(no_src_path, root, extensions),
             Some("\\Models\\User".to_string())
         );
 
         // Test nested namespace
         let nested_path = Path::new("/project/src/App/Http/Middleware/Auth.php");
         assert_eq!(
-            behavior.module_path_from_file(nested_path, root),
+            behavior.module_path_from_file(nested_path, root, extensions),
             Some("\\App\\Http\\Middleware\\Auth".to_string())
         );
 
         // Test index.php (should return None)
         let index_path = Path::new("/project/index.php");
-        assert_eq!(behavior.module_path_from_file(index_path, root), None);
+        assert_eq!(
+            behavior.module_path_from_file(index_path, root, extensions),
+            None
+        );
 
         // Test config.php (should return None)
         let config_path = Path::new("/project/config.php");
-        assert_eq!(behavior.module_path_from_file(config_path, root), None);
+        assert_eq!(
+            behavior.module_path_from_file(config_path, root, extensions),
+            None
+        );
 
         // Test class.php extension
         let class_ext_path = Path::new("/project/src/MyClass.class.php");
         assert_eq!(
-            behavior.module_path_from_file(class_ext_path, root),
+            behavior.module_path_from_file(class_ext_path, root, extensions),
             Some("\\MyClass".to_string())
         );
 
         // Test app directory
         let app_path = Path::new("/project/app/Services/PaymentService.php");
         assert_eq!(
-            behavior.module_path_from_file(app_path, root),
+            behavior.module_path_from_file(app_path, root, extensions),
             Some("\\Services\\PaymentService".to_string())
         );
     }

@@ -715,8 +715,12 @@ impl Pipeline {
 
         // Create stages
         let factory = Arc::new(ParserFactory::new(Arc::clone(&self.settings)));
-        let context_stage =
-            ContextStage::new(Arc::clone(&symbol_cache), Arc::clone(&index), factory);
+        let context_stage = ContextStage::new(
+            Arc::clone(&symbol_cache),
+            Arc::clone(&index),
+            factory,
+            Arc::clone(&self.settings),
+        );
         let mut write_stage = WriteStage::new(Arc::clone(&index));
 
         // Split relationships by kind

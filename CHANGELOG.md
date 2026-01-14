@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.12] - 2026-01-14
+
+### Added
+
+- Unified JSON envelope format (Envelope type) with schema_version, status, code, exit_code, message, hint, data, meta
+- `--fields` flag for JSON field filtering on data payload (mcp and retrieve commands)
+- QueryContext abstraction for symbol resolution and error handling in retrieve commands
+- `lang` field to Meta struct with `with_lang()` builder method
+- `paths.rs` module with normalize_for_module_path, strip_source_root, strip_extension helpers
+- `format_path_as_module` as required trait method for language-specific path formatting
+- Document collections info to get_index_info output
+
+### Changed
+
+- Migrated all 9 MCP tool commands to unified Envelope format for --json output
+- Migrated retrieve symbol/callers/calls/describe/search/implementations to Envelope format
+- Lazy load ML model for embedding generation (deferred until first semantic search)
+- Flattened tuple output in get_calls/find_callers to avoid nested array waste
+- Standardized search_symbols output with nested symbol object
+- Unified logging to stderr for all commands
+- Skip embedding pool loading for retrieve commands via load_facade_lite()
+- `module_path_from_file` now accepts `extensions: &[&str]` parameter (fixes deadlock when registry lock held)
+
+### Removed
+
+- `file_extensions()` method from LanguageBehavior trait (duplicated LanguageDefinition::extensions())
+- `file_extensions()` implementations from all 12 language behaviors
+- `init_with_config_stderr` function (replaced by unified init_with_config)
+- Tantivy-based resolution methods from trait: `resolve_import`, `build_resolution_context`, `resolve_import_path`, `classify_import_origin`, `resolve_import_path_with_context`
+- Dead Go behavior methods: `get_current_package_path_for_file`, `get_project_root_for_file`
+- `store_file_info` from DocumentIndex (replaced by `store_file_registration`)
+
+### Breaking
+
+- `--json` output format changed for mcp and retrieve commands (now uses Envelope schema)
+
 ## [0.9.11] - 2026-01-12
 
 ### Fixed

@@ -7,6 +7,7 @@
 use crate::parsing::{
     Import, InheritanceResolver, LanguageBehavior, ResolutionScope,
     behavior_state::{BehaviorState, StatefulBehavior},
+    paths::strip_extension,
 };
 use crate::symbol::ScopeContext;
 use crate::{FileId, Symbol, SymbolKind, Visibility};
@@ -176,10 +177,20 @@ impl LanguageBehavior for JavaBehavior {
     ///
     /// Uses cached resolution rules to map file paths to Java packages.
     /// Requires that JavaProvider.rebuild_cache() has been called with project settings.
-    fn module_path_from_file(&self, file_path: &Path, _project_root: &Path) -> Option<String> {
+    // Rule-based resolution: uses pre-computed mappings from JavaProvider.rebuild_cache()
+    fn module_path_from_file(
+        &self,
+        file_path: &Path,
+        project_root: &Path,
+        extensions: &[&str],
+    ) -> Option<String> {
         use crate::project_resolver::persist::ResolutionPersistence;
         use std::cell::RefCell;
         use std::time::{Duration, Instant};
+
+        // Validate file has a valid Java extension
+        let file_name = file_path.to_str()?;
+        let _ = strip_extension(file_name, extensions);
 
         // Thread-local cache with 1-second TTL (per TypeScript pattern)
         thread_local! {
@@ -224,8 +235,9 @@ impl LanguageBehavior for JavaBehavior {
 
                     if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
                         // Convert path to package: com/example/Foo.java → com.example
+                        // Use parent() to get directory (strips file name including extension)
                         let package_path = relative
-                            .parent()? // Remove Foo.java
+                            .parent()?
                             .to_string_lossy()
                             .replace(['/', '\\'], ".");
 
@@ -234,7 +246,14 @@ impl LanguageBehavior for JavaBehavior {
                 }
             }
 
-            None
+            // Fallback: use project_root-based resolution
+            let relative = file_path.strip_prefix(project_root).ok()?;
+            let package_path = relative
+                .parent()?
+                .to_string_lossy()
+                .replace(['/', '\\'], ".");
+
+            Some(package_path)
         })
     }
 
@@ -266,6 +285,7 @@ impl LanguageBehavior for JavaBehavior {
         file_id: FileId,
         imports: &[crate::parsing::Import],
         cache: &dyn crate::parsing::PipelineSymbolCache,
+        extensions: &[&str],
     ) -> (
         Box<dyn crate::parsing::ResolutionScope>,
         Vec<crate::parsing::Import>,
@@ -281,7 +301,7 @@ impl LanguageBehavior for JavaBehavior {
         let compute_module_path = |file_path: &str| -> Option<String> {
             let path = PathBuf::from(file_path);
             // project_root is unused by Java's module_path_from_file (uses rules instead)
-            self.module_path_from_file(&path, &PathBuf::new())
+            self.module_path_from_file(&path, &PathBuf::new(), extensions)
         };
 
         // Compute importing module from current file
@@ -971,7 +991,8 @@ config_files = ["{}"]
 
         // When calling module_path_from_file() (must run while cwd is still temp_dir)
         let behavior = JavaBehavior::new();
-        let module_path = behavior.module_path_from_file(&java_file, temp_dir.path());
+        let extensions = &["java"];
+        let module_path = behavior.module_path_from_file(&java_file, temp_dir.path(), extensions);
 
         // Then it should return the package from JavaProvider
         assert_eq!(
@@ -1124,7 +1145,8 @@ config_files = ["{}"]
             "test_monorepos/spring-petclinic/src/main/java/org/springframework/samples/petclinic/owner/Owner.java",
         );
 
-        let module_path = behavior.module_path_from_file(&owner_path, Path::new("."));
+        let extensions = &["java"];
+        let module_path = behavior.module_path_from_file(&owner_path, Path::new("."), extensions);
 
         // Should return package path, not file path
         assert_eq!(

@@ -9,6 +9,7 @@
 //! - Uses: ParserFactory to get LanguageBehavior per language_id (language-agnostic)
 //! - Outputs: `Vec<ResolutionContext>` for RESOLVE stage
 
+use crate::config::Settings;
 use crate::indexing::pipeline::types::{
     ResolutionContext, SymbolLookupCache, UnresolvedRelationship,
 };
@@ -26,6 +27,7 @@ pub struct ContextStage {
     symbol_cache: Arc<SymbolLookupCache>,
     index: Arc<DocumentIndex>,
     factory: Arc<ParserFactory>,
+    settings: Arc<Settings>,
     /// Cached behaviors by language_id (created on demand)
     behaviors: std::sync::RwLock<HashMap<LanguageId, Arc<dyn LanguageBehavior>>>,
 }
@@ -36,11 +38,13 @@ impl ContextStage {
         symbol_cache: Arc<SymbolLookupCache>,
         index: Arc<DocumentIndex>,
         factory: Arc<ParserFactory>,
+        settings: Arc<Settings>,
     ) -> Self {
         Self {
             symbol_cache,
             index,
             factory,
+            settings,
             behaviors: std::sync::RwLock::new(HashMap::new()),
         }
     }
@@ -131,12 +135,21 @@ impl ContextStage {
         // Get raw imports from Tantivy
         let raw_imports = self.index.get_imports_for_file(file_id).unwrap_or_default();
 
+        // Get extensions from settings.toml (single source of truth)
+        let extensions: Vec<&str> = self
+            .settings
+            .languages
+            .get(language_id.as_str())
+            .map(|config| config.extensions.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+
         // Build ResolutionScope via behavior - returns (scope, enhanced_imports)
         // Enhanced imports have path aliases resolved (e.g., @/components → src.components)
         let (scope, enhanced_imports) = behavior.build_resolution_context_with_pipeline_cache(
             file_id,
             &raw_imports,
             self.symbol_cache.as_ref(),
+            &extensions,
         );
 
         ResolutionContext {
@@ -217,7 +230,7 @@ mod tests {
     #[test]
     fn test_context_groups_by_file() {
         let temp_dir = TempDir::new().unwrap();
-        let settings = Settings::default();
+        let settings = Arc::new(Settings::default());
         let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
         let factory = make_factory();
 
@@ -234,7 +247,7 @@ mod tests {
             make_unresolved("baz", "helper3", 2),
         ];
 
-        let stage = ContextStage::new(cache, index, factory);
+        let stage = ContextStage::new(cache, index, factory, settings);
         let contexts = stage.build_contexts(unresolved);
 
         assert_eq!(contexts.len(), 2, "Expected 2 file contexts");
@@ -265,12 +278,12 @@ mod tests {
     #[test]
     fn test_context_empty_input() {
         let temp_dir = TempDir::new().unwrap();
-        let settings = Settings::default();
+        let settings = Arc::new(Settings::default());
         let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
         let cache = Arc::new(SymbolLookupCache::new());
         let factory = make_factory();
 
-        let stage = ContextStage::new(cache, index, factory);
+        let stage = ContextStage::new(cache, index, factory, settings);
         let contexts = stage.build_contexts(vec![]);
 
         assert!(contexts.is_empty());
@@ -279,7 +292,7 @@ mod tests {
     #[test]
     fn test_context_stats() {
         let temp_dir = TempDir::new().unwrap();
-        let settings = Settings::default();
+        let settings = Arc::new(Settings::default());
         let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
         let factory = make_factory();
 
@@ -294,7 +307,7 @@ mod tests {
             make_unresolved("baz", "helper3", 2),
         ];
 
-        let stage = ContextStage::new(cache, index, factory);
+        let stage = ContextStage::new(cache, index, factory, settings);
         let contexts = stage.build_contexts(unresolved);
         let stats = stage.stats(&contexts);
 
@@ -306,7 +319,7 @@ mod tests {
     #[test]
     fn test_context_preserves_relationship_data() {
         let temp_dir = TempDir::new().unwrap();
-        let settings = Settings::default();
+        let settings = Arc::new(Settings::default());
         let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
         let cache = Arc::new(SymbolLookupCache::new());
         let factory = make_factory();
@@ -325,7 +338,7 @@ mod tests {
             to_range: Some(to_range),
         };
 
-        let stage = ContextStage::new(cache, index, factory);
+        let stage = ContextStage::new(cache, index, factory, settings);
         let contexts = stage.build_contexts(vec![rel]);
 
         assert_eq!(contexts.len(), 1);
@@ -342,7 +355,7 @@ mod tests {
     #[test]
     fn test_context_caches_behaviors_per_language() {
         let temp_dir = TempDir::new().unwrap();
-        let settings = Settings::default();
+        let settings = Arc::new(Settings::default());
         let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
         let factory = make_factory();
 
@@ -356,7 +369,7 @@ mod tests {
             make_unresolved("bar", "helper2", 2),
         ];
 
-        let stage = ContextStage::new(cache, index, factory);
+        let stage = ContextStage::new(cache, index, factory, settings);
         let _contexts = stage.build_contexts(unresolved);
 
         // Check behaviors are cached

@@ -222,6 +222,13 @@ fn compute_module_path(
     let definition = registry_guard.get(language_id)?;
     let behavior = definition.create_behavior();
 
+    // Get extensions from settings.toml (single source of truth)
+    let extensions: Vec<&str> = settings
+        .languages
+        .get(language_id.as_str())
+        .map(|config| config.extensions.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
     let workspace_root = settings
         .workspace_root
         .as_deref()
@@ -231,7 +238,7 @@ fn compute_module_path(
     // Language behaviors expect absolute paths to strip_prefix(workspace_root)
     let normalized_path = normalize_for_module_path(file_path, workspace_root);
 
-    behavior.module_path_from_file(&normalized_path, workspace_root)
+    behavior.module_path_from_file(&normalized_path, workspace_root, &extensions)
 }
 
 /// Extract relationships from parsed content.
