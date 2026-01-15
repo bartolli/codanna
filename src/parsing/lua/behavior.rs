@@ -382,14 +382,8 @@ mod tests {
             Visibility::Private
         );
         // Field assignments
-        assert_eq!(
-            behavior.parse_visibility("M.VERSION"),
-            Visibility::Public
-        );
-        assert_eq!(
-            behavior.parse_visibility("M._config"),
-            Visibility::Private
-        );
+        assert_eq!(behavior.parse_visibility("M.VERSION"), Visibility::Public);
+        assert_eq!(behavior.parse_visibility("M._config"), Visibility::Private);
     }
 
     #[test]
