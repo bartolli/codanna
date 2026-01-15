@@ -503,19 +503,20 @@ pub enum DocumentAction {
     /// Search documents
     #[command(
         about = "Search indexed documents using natural language",
-        after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents search \"auth\" --json --fields source_path,similarity"
+        after_help = "Examples:\n  codanna documents search \"error handling\"\n  codanna documents search \"authentication\" --collection docs --limit 5\n  codanna documents search query:\"auth\" limit:3 --json"
     )]
     Search {
-        /// Search query text
-        query: String,
+        /// Positional arguments (query and/or key:value pairs like limit:5)
+        #[arg(num_args = 0..)]
+        args: Vec<String>,
 
         /// Filter by collection name
         #[arg(long)]
         collection: Option<String>,
 
         /// Maximum results to return
-        #[arg(short, long, default_value = "10")]
-        limit: usize,
+        #[arg(short, long)]
+        limit: Option<usize>,
 
         /// Output in JSON format
         #[arg(long)]

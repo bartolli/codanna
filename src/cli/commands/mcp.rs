@@ -782,6 +782,46 @@ pub async fn run(
         None
     };
 
+    // Pre-collect search_documents data for JSON output
+    let search_documents_data = if json && tool == "search_documents" {
+        if let Some(ref store_arc) = document_store {
+            let query = arguments
+                .as_ref()
+                .and_then(|m| m.get("query"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let collection = arguments
+                .as_ref()
+                .and_then(|m| m.get("collection"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let limit = arguments
+                .as_ref()
+                .and_then(|m| m.get("limit"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5) as usize;
+
+            let mut store = store_arc.write().await;
+            let search_query = crate::documents::SearchQuery {
+                text: query.clone(),
+                collection,
+                document: None,
+                limit,
+                preview_config: Some(config.documents.search.clone()),
+            };
+
+            match store.search(search_query) {
+                Ok(results) => Some((query, results)),
+                Err(_) => Some((query, Vec::new())),
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Embedded mode - use already loaded facade directly
     let server = {
         let server = crate::mcp::CodeIntelligenceServer::new(facade);
@@ -1576,6 +1616,72 @@ pub async fn run(
                     .with_entity_type(EntityType::Symbol)
                     .with_query(query)
                     .with_hint("Check query syntax");
+
+                    println!("{}", envelope.to_json().expect("envelope serialization"));
+                    std::process::exit(1);
+                }
+            } else if json && tool == "search_documents" {
+                use crate::io::envelope::{EntityType, Envelope};
+
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                if let Some((query_text, results)) = search_documents_data {
+                    let count = results.len();
+
+                    // Convert to serializable format
+                    let data: Vec<_> = results
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "chunk_id": r.chunk_id,
+                                "collection": r.collection,
+                                "source_path": r.source_path,
+                                "heading_context": r.heading_context,
+                                "content_preview": r.content_preview,
+                                "byte_range": r.byte_range,
+                                "similarity": r.similarity
+                            })
+                        })
+                        .collect();
+
+                    let envelope = if count == 0 {
+                        Envelope::<Vec<serde_json::Value>>::not_found(format!(
+                            "No documents found for '{query_text}'"
+                        ))
+                        .with_entity_type(EntityType::Document)
+                        .with_query(&query_text)
+                    } else {
+                        Envelope::success(data)
+                            .with_entity_type(EntityType::Document)
+                            .with_count(count)
+                            .with_query(&query_text)
+                            .with_message(format!("Found {count} matching documents"))
+                            .with_hint(
+                                "Use the file paths and byte ranges to read specific sections",
+                            )
+                    };
+
+                    let output = match &fields {
+                        Some(f) => envelope.to_json_with_fields(f),
+                        None => envelope.to_json(),
+                    };
+                    println!("{}", output.expect("envelope serialization"));
+
+                    if count == 0 {
+                        std::process::exit(1);
+                    }
+                } else {
+                    let envelope: Envelope<()> = Envelope::error(
+                        crate::io::envelope::ResultCode::IndexError,
+                        "Document search not available",
+                    )
+                    .with_entity_type(EntityType::Document)
+                    .with_query(query)
+                    .with_hint("Run 'codanna documents index' to create the index");
 
                     println!("{}", envelope.to_json().expect("envelope serialization"));
                     std::process::exit(1);

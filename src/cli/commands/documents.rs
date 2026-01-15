@@ -64,12 +64,38 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
         }
 
         DocumentAction::Search {
-            query,
+            args,
             collection,
             limit,
             json,
             fields,
         } => {
+            use crate::io::args::parse_positional_args;
+
+            // Parse positional arguments for query and key:value pairs
+            let (positional_query, params) = parse_positional_args(&args);
+
+            // Determine query source (priority: positional > key:value)
+            let final_query = positional_query
+                .or_else(|| params.get("query").cloned())
+                .unwrap_or_else(|| {
+                    eprintln!("Error: search requires a query");
+                    eprintln!("Usage: codanna documents search \"query\" [options]");
+                    eprintln!("   or: codanna documents search query:\"search text\" [options]");
+                    std::process::exit(1);
+                });
+
+            // Merge parameters (flags take precedence over key:value)
+            let final_limit = limit.unwrap_or_else(|| {
+                params
+                    .get("limit")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(10)
+            });
+
+            // Collection can come from --collection flag or collection:name
+            let final_collection = collection.or_else(|| params.get("collection").cloned());
+
             let mut store = match create_store_with_embeddings() {
                 Ok(s) => s,
                 Err(e) => {
@@ -84,12 +110,12 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
                 }
             };
 
-            let query_text = query.clone();
+            let query_text = final_query.clone();
             let search_query = SearchQuery {
-                text: query,
-                collection,
+                text: final_query,
+                collection: final_collection,
                 document: None,
-                limit,
+                limit: final_limit,
                 preview_config: Some(config.documents.search.clone()),
             };
 
