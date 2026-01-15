@@ -1,11 +1,10 @@
 //! Lua-specific language behavior implementation
 
+use crate::Visibility;
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
-use crate::storage::DocumentIndex;
 use crate::types::FileId;
-use crate::{SymbolId, Visibility};
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
 
@@ -54,7 +53,22 @@ impl LanguageBehavior for LuaBehavior {
         "."
     }
 
-    fn module_path_from_file(&self, file_path: &Path, project_root: &Path) -> Option<String> {
+    fn format_path_as_module(&self, components: &[&str]) -> Option<String> {
+        if components.is_empty() {
+            Some(".".to_string())
+        } else {
+            Some(components.join("."))
+        }
+    }
+
+    fn module_path_from_file(
+        &self,
+        file_path: &Path,
+        project_root: &Path,
+        extensions: &[&str],
+    ) -> Option<String> {
+        use crate::parsing::paths::strip_extension;
+
         let relative_path = file_path
             .strip_prefix(project_root)
             .ok()
@@ -62,7 +76,8 @@ impl LanguageBehavior for LuaBehavior {
             .unwrap_or(file_path);
 
         let path = relative_path.to_str()?;
-        let module_path = path.trim_start_matches("./").trim_end_matches(".lua");
+        let path_clean = path.trim_start_matches("./");
+        let module_path = strip_extension(path_clean, extensions);
 
         // Convert path separators to dots (Lua module convention)
         let module_path = module_path.replace(['/', '\\'], ".");
@@ -160,76 +175,6 @@ impl LanguageBehavior for LuaBehavior {
         self.get_imports_from_state(file_id)
     }
 
-    fn build_resolution_context(
-        &self,
-        file_id: FileId,
-        document_index: &DocumentIndex,
-    ) -> crate::error::IndexResult<Box<dyn ResolutionScope>> {
-        use crate::error::IndexError;
-
-        let mut context = LuaResolutionContext::new(file_id);
-
-        // Add imported symbols
-        let imports = self.get_imports_for_file(file_id);
-        for import in imports {
-            if let Some(symbol_id) = self.resolve_import(&import, document_index) {
-                let name = if let Some(alias) = &import.alias {
-                    alias.clone()
-                } else {
-                    import
-                        .path
-                        .split(self.module_separator())
-                        .last()
-                        .unwrap_or(&import.path)
-                        .to_string()
-                };
-
-                context.add_import_symbol(name, symbol_id, import.is_type_only);
-            }
-        }
-
-        // Add file's symbols
-        let file_symbols =
-            document_index
-                .find_symbols_by_file(file_id)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "find_symbols_by_file".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-        for symbol in file_symbols {
-            if self.is_resolvable_symbol(&symbol) {
-                context.add_symbol_with_context(
-                    symbol.name.to_string(),
-                    symbol.id,
-                    symbol.scope_context.as_ref(),
-                );
-            }
-        }
-
-        // Add visible symbols from other files
-        let all_symbols =
-            document_index
-                .get_all_symbols(10000)
-                .map_err(|e| IndexError::TantivyError {
-                    operation: "get_all_symbols".to_string(),
-                    cause: e.to_string(),
-                })?;
-
-        for symbol in all_symbols {
-            if symbol.file_id != file_id && self.is_symbol_visible_from_file(&symbol, file_id) {
-                let scope_level = match symbol.visibility {
-                    Visibility::Public => crate::parsing::ScopeLevel::Global,
-                    _ => crate::parsing::ScopeLevel::Module,
-                };
-
-                context.add_symbol(symbol.name.to_string(), symbol.id, scope_level);
-            }
-        }
-
-        Ok(Box::new(context))
-    }
-
     fn is_resolvable_symbol(&self, symbol: &crate::Symbol) -> bool {
         use crate::SymbolKind;
         use crate::symbol::ScopeContext;
@@ -258,16 +203,6 @@ impl LanguageBehavior for LuaBehavior {
         } else {
             matches!(symbol.kind, SymbolKind::Variable)
         }
-    }
-
-    fn resolve_import(
-        &self,
-        import: &crate::parsing::Import,
-        document_index: &DocumentIndex,
-    ) -> Option<SymbolId> {
-        // Lua require paths use dots as separators
-        // e.g., require("mymodule.submodule") -> mymodule/submodule.lua
-        self.resolve_import_path(&import.path, document_index)
     }
 
     fn get_module_path_for_file(&self, file_id: FileId) -> Option<String> {
@@ -326,16 +261,17 @@ mod tests {
     fn test_module_path_from_file() {
         let behavior = LuaBehavior::new();
         let project_root = Path::new("/home/user/project");
+        let extensions = &["lua"];
 
         let file_path = Path::new("/home/user/project/lib/utils.lua");
         assert_eq!(
-            behavior.module_path_from_file(file_path, project_root),
+            behavior.module_path_from_file(file_path, project_root, extensions),
             Some("lib.utils".to_string())
         );
 
         let file_path = Path::new("/home/user/project/main.lua");
         assert_eq!(
-            behavior.module_path_from_file(file_path, project_root),
+            behavior.module_path_from_file(file_path, project_root, extensions),
             Some("main".to_string())
         );
     }
