@@ -8,7 +8,7 @@ use codanna::cli::{Cli, Commands, RetrieveQuery};
 use codanna::indexing::facade::IndexFacade;
 use codanna::project_resolver::{
     providers::{
-        java::JavaProvider, javascript::JavaScriptProvider, swift::SwiftProvider,
+        go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider, swift::SwiftProvider,
         typescript::TypeScriptProvider,
     },
     registry::SimpleProviderRegistry,
@@ -36,6 +36,9 @@ fn create_provider_registry() -> SimpleProviderRegistry {
 
     // Add Swift provider for Package.swift resolution
     registry.add(Arc::new(SwiftProvider::new()));
+
+    // Add Go provider for go.mod resolution
+    registry.add(Arc::new(GoProvider::new()));
 
     registry
 }

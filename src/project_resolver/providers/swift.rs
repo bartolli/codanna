@@ -9,10 +9,10 @@ use std::path::{Path, PathBuf};
 use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
+    helpers::{compute_config_shas, extract_language_config_paths, is_language_enabled},
     memo::ResolutionMemo,
     persist::{ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
-    sha::compute_file_sha,
 };
 
 /// Swift-specific project configuration path (Package.swift)
@@ -53,35 +53,11 @@ impl SwiftProvider {
         }
     }
 
-    /// Extract project config paths from Swift language settings
-    fn extract_config_paths(&self, settings: &Settings) -> Vec<SwiftPackagePath> {
-        settings
-            .languages
-            .get("swift")
-            .map(|config| {
-                config
-                    .config_files
-                    .iter()
-                    .map(|path| SwiftPackagePath::new(path.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Check if Swift is enabled in language settings
-    fn is_swift_enabled(&self, settings: &Settings) -> bool {
-        settings
-            .languages
-            .get("swift")
-            .map(|config| config.enabled)
-            .unwrap_or(true) // Default to enabled
-    }
-
     /// Get module path for a Swift source file
     ///
     /// Converts file path to module notation by stripping source root prefix.
     /// Example: /project/Sources/MyModule/Types/User.swift -> MyModule.Types
-    pub fn module_for_file(&self, file_path: &Path) -> Option<String> {
+    pub fn module_path_for_file(&self, file_path: &Path) -> Option<String> {
         // Load cached resolution rules
         let codanna_dir = Path::new(crate::init::local_dir_name());
         let persistence = ResolutionPersistence::new(codanna_dir);
@@ -197,23 +173,15 @@ impl ProjectResolutionProvider for SwiftProvider {
     }
 
     fn is_enabled(&self, settings: &Settings) -> bool {
-        self.is_swift_enabled(settings)
+        is_language_enabled(settings, "swift")
     }
 
     fn config_paths(&self, settings: &Settings) -> Vec<PathBuf> {
-        self.extract_config_paths(settings)
-            .into_iter()
-            .map(|p| p.0)
-            .collect()
+        extract_language_config_paths(settings, "swift")
     }
 
     fn compute_shas(&self, configs: &[PathBuf]) -> ResolutionResult<HashMap<PathBuf, Sha256Hash>> {
-        let mut shas = HashMap::with_capacity(configs.len());
-        for config in configs {
-            let sha = compute_file_sha(config)?;
-            shas.insert(config.clone(), sha);
-        }
-        Ok(shas)
+        compute_config_shas(configs)
     }
 
     fn rebuild_cache(&self, settings: &Settings) -> ResolutionResult<()> {

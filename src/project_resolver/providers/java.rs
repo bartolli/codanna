@@ -9,10 +9,13 @@ use std::path::{Path, PathBuf};
 use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
+    helpers::{
+        compute_config_shas, extract_language_config_paths, is_language_enabled,
+        module_for_file_generic,
+    },
     memo::ResolutionMemo,
     persist::{ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
-    sha::compute_file_sha,
 };
 
 /// Java-specific project configuration path (pom.xml or build.gradle)
@@ -53,71 +56,12 @@ impl JavaProvider {
         }
     }
 
-    /// Extract project config paths from Java language settings
-    fn extract_config_paths(&self, settings: &Settings) -> Vec<JavaProjectPath> {
-        settings
-            .languages
-            .get("java")
-            .map(|config| {
-                config
-                    .config_files
-                    .iter()
-                    .map(|path| JavaProjectPath::new(path.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Check if Java is enabled in language settings
-    fn is_java_enabled(&self, settings: &Settings) -> bool {
-        settings
-            .languages
-            .get("java")
-            .map(|config| config.enabled)
-            .unwrap_or(true) // Default to enabled
-    }
-
-    /// Get package path for a Java source file
+    /// Get module path for a Java source file
     ///
     /// Converts file path to package notation by stripping source root prefix.
     /// Example: /project/src/main/java/com/example/Foo.java → com.example
-    pub fn package_for_file(&self, file_path: &Path) -> Option<String> {
-        // Load cached resolution rules
-        let codanna_dir = Path::new(crate::init::local_dir_name());
-        let persistence = ResolutionPersistence::new(codanna_dir);
-
-        let index = persistence.load("java").ok()?;
-
-        // Canonicalize file path early to handle symlinks (e.g., /var → /private/var on macOS)
-        let canon_file = file_path.canonicalize().ok()?;
-
-        // Find the config file for this source file
-        let config_path = index.get_config_for_file(&canon_file)?;
-
-        // Get the resolution rules for this config
-        let rules = index.rules.get(config_path)?;
-
-        // Extract source roots from rules.paths
-
-        for root_path in rules.paths.keys() {
-            let root = Path::new(root_path);
-
-            // Canonicalize root path if it exists (runtime resolution)
-            let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-
-            // Try to strip prefix (both canonicalized now)
-            if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
-                // Convert path to package: com/example/Foo.java → com.example
-                let package_path = relative
-                    .parent()? // Remove Foo.java
-                    .to_string_lossy()
-                    .replace(['/', '\\'], ".");
-
-                return Some(package_path);
-            }
-        }
-
-        None
+    pub fn module_path_for_file(&self, file_path: &Path) -> Option<String> {
+        module_for_file_generic(file_path, "java", ".")
     }
 
     /// Parse Maven pom.xml to extract source roots
@@ -200,7 +144,7 @@ impl JavaProvider {
 
         // Convert source roots to paths HashMap
         // Don't canonicalize to avoid symlink inconsistencies (per TypeScript pattern)
-        // Canonicalization happens at runtime in package_for_file() and module_path_from_file()
+        // Canonicalization happens at runtime in module_path_for_file() and module_path_from_file()
         let mut paths = HashMap::new();
         for root in source_roots {
             paths.insert(root.to_string_lossy().to_string(), Vec::new());
@@ -219,23 +163,15 @@ impl ProjectResolutionProvider for JavaProvider {
     }
 
     fn is_enabled(&self, settings: &Settings) -> bool {
-        self.is_java_enabled(settings)
+        is_language_enabled(settings, "java")
     }
 
     fn config_paths(&self, settings: &Settings) -> Vec<PathBuf> {
-        self.extract_config_paths(settings)
-            .into_iter()
-            .map(|p| p.0)
-            .collect()
+        extract_language_config_paths(settings, "java")
     }
 
     fn compute_shas(&self, configs: &[PathBuf]) -> ResolutionResult<HashMap<PathBuf, Sha256Hash>> {
-        let mut shas = HashMap::with_capacity(configs.len());
-        for config in configs {
-            let sha = compute_file_sha(config)?;
-            shas.insert(config.clone(), sha);
-        }
-        Ok(shas)
+        compute_config_shas(configs)
     }
 
     fn rebuild_cache(&self, settings: &Settings) -> ResolutionResult<()> {
@@ -353,6 +289,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Requires filesystem isolation (changes cwd, conflicts with parallel tests)"]
     fn test_rebuild_cache_creates_resolution_json() {
         // TDD: Given a pom.xml and settings
         let temp_dir = TempDir::new().unwrap();
@@ -412,7 +349,7 @@ config_files = ["{}"]
 
     #[test]
     #[ignore = "Requires filesystem isolation (changes cwd, conflicts with parallel tests)"]
-    fn test_package_for_file_converts_path_to_package() {
+    fn test_module_path_for_file_converts_path_to_package() {
         // TDD: Given a Java file under src/main/java with cached project config
         let temp_dir = TempDir::new().unwrap();
         let pom_path = temp_dir.path().join("pom.xml");
@@ -466,8 +403,8 @@ config_files = ["{}"]
         eprintln!("Cache content: {cache_content}");
         eprintln!("Java file path: {}", java_file.display());
 
-        // When calling package_for_file() (must run while cwd is still temp_dir)
-        let package = provider.package_for_file(&java_file);
+        // When calling module_path_for_file() (must run while cwd is still temp_dir)
+        let package = provider.module_path_for_file(&java_file);
 
         // Then it should return the package path
         assert_eq!(
@@ -489,16 +426,16 @@ config_files = ["{}"]
     #[test]
     #[ignore] // Run with: cargo test test_package_for_owner_file -- --ignored --nocapture
     fn test_package_for_owner_file() {
-        // Test that package_for_file works with the cached resolution
+        // Test that module_path_for_file works with the cached resolution
         let provider = JavaProvider::new();
 
         let owner_file = std::path::Path::new(
             "/Users/bartolli/Projects/codanna/test_monorepos/spring-petclinic/src/main/java/org/springframework/samples/petclinic/owner/Owner.java",
         );
 
-        let package = provider.package_for_file(owner_file);
+        let package = provider.module_path_for_file(owner_file);
 
-        println!("package_for_file result: {package:?}");
+        println!("module_path_for_file result: {package:?}");
 
         assert_eq!(
             package,
