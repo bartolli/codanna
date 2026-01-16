@@ -226,6 +226,7 @@ mod tests {
             extensions: vec!["ts".to_string(), "tsx".to_string()],
             parser_options: HashMap::new(),
             config_files,
+            projects: Vec::new(),
         };
         settings
             .languages
@@ -261,6 +262,7 @@ mod tests {
             extensions: vec!["ts".to_string(), "tsx".to_string()],
             parser_options: HashMap::new(),
             config_files: vec![],
+            projects: Vec::new(),
         };
         settings
             .languages

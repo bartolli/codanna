@@ -25,6 +25,7 @@ fn create_test_settings(config_files: Vec<PathBuf>, index_path: PathBuf) -> Sett
         config_files,
         extensions: vec!["ts".to_string(), "tsx".to_string()],
         parser_options: HashMap::new(),
+        projects: Vec::new(),
     };
 
     settings
@@ -311,6 +312,7 @@ fn test_provider_not_active_when_disabled() {
         config_files: vec![PathBuf::from("tsconfig.json")],
         extensions: vec!["ts".to_string()],
         parser_options: HashMap::new(),
+        projects: Vec::new(),
     };
 
     settings

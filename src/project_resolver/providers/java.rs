@@ -11,7 +11,7 @@ use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
     helpers::{
         compute_config_shas, extract_language_config_paths, is_language_enabled,
-        module_for_file_generic,
+        module_for_file_generic, parse_gradle_source_roots,
     },
     memo::ResolutionMemo,
     persist::{ResolutionPersistence, ResolutionRules},
@@ -103,26 +103,8 @@ impl JavaProvider {
 
     /// Parse Gradle build.gradle to extract source roots
     fn parse_gradle_config(&self, gradle_path: &Path) -> ResolutionResult<Vec<PathBuf>> {
-        use std::fs;
-
-        let content = fs::read_to_string(gradle_path).map_err(|e| {
-            crate::project_resolver::ResolutionError::IoError {
-                path: gradle_path.to_path_buf(),
-                cause: e.to_string(),
-            }
-        })?;
-
-        let mut source_roots = Vec::new();
-        let project_dir = gradle_path.parent().unwrap_or(Path::new("."));
-
-        // Default Gradle source roots
-        if !content.contains("srcDirs") {
-            source_roots.push(project_dir.join("src/main/java"));
-            source_roots.push(project_dir.join("src/test/java"));
-        }
-        // TODO: Parse custom srcDirs from build.gradle
-
-        Ok(source_roots)
+        // Java always uses JVM layout (auto-detect is sufficient)
+        parse_gradle_source_roots(gradle_path, "java", None)
     }
 
     /// Build resolution rules from project config file

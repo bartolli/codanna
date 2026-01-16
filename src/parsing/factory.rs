@@ -458,11 +458,12 @@ mod tests {
     #[test]
     fn test_create_parser_with_behavior() {
         use crate::config::LanguageConfig;
+        use indexmap::IndexMap;
         use std::collections::HashMap;
 
         // Create settings with all languages enabled
         let mut settings = Settings::default();
-        let mut languages = HashMap::new();
+        let mut languages = IndexMap::new();
 
         // Enable Rust (already enabled by default, but be explicit)
         languages.insert(
@@ -472,6 +473,7 @@ mod tests {
                 extensions: vec!["rs".to_string()],
                 parser_options: HashMap::new(),
                 config_files: Vec::new(),
+                projects: Vec::new(),
             },
         );
 
@@ -483,6 +485,7 @@ mod tests {
                 extensions: vec!["py".to_string()],
                 parser_options: HashMap::new(),
                 config_files: Vec::new(),
+                projects: Vec::new(),
             },
         );
 
@@ -494,6 +497,7 @@ mod tests {
                 extensions: vec!["php".to_string()],
                 parser_options: HashMap::new(),
                 config_files: Vec::new(),
+                projects: Vec::new(),
             },
         );
 
@@ -505,6 +509,7 @@ mod tests {
                 extensions: vec!["gd".to_string()],
                 parser_options: HashMap::new(),
                 config_files: Vec::new(),
+                projects: Vec::new(),
             },
         );
 
@@ -609,10 +614,11 @@ mod tests {
     #[test]
     fn test_create_python_parser() {
         use crate::config::LanguageConfig;
+        use indexmap::IndexMap;
         use std::collections::HashMap;
 
         let mut settings = Settings::default();
-        let mut languages = HashMap::new();
+        let mut languages = IndexMap::new();
         languages.insert(
             "python".to_string(),
             LanguageConfig {
@@ -620,6 +626,7 @@ mod tests {
                 extensions: vec!["py".to_string()],
                 parser_options: HashMap::new(),
                 config_files: Vec::new(),
+                projects: Vec::new(),
             },
         );
         settings.languages = languages;

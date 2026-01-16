@@ -236,6 +236,7 @@ mod tests {
             ],
             extensions: vec![".ts".to_string(), ".tsx".to_string()],
             parser_options: Default::default(),
+            projects: Vec::new(),
         };
         settings
             .languages

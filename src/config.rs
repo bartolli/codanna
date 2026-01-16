@@ -20,6 +20,7 @@ use figment::{
     Figment,
     providers::{Env, Format, Serialized, Toml},
 };
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -46,9 +47,9 @@ pub struct Settings {
     #[serde(skip)]
     pub indexed_paths_cache: Vec<PathBuf>,
 
-    /// Language-specific settings
+    /// Language-specific settings (IndexMap preserves insertion order)
     #[serde(default)]
-    pub languages: HashMap<String, LanguageConfig>,
+    pub languages: IndexMap<String, LanguageConfig>,
 
     /// MCP server settings
     #[serde(default)]
@@ -129,6 +130,31 @@ pub struct IndexingConfig {
     pub show_progress: bool,
 }
 
+/// Source layout for project resolution
+/// Determines how source roots are discovered from build configuration files
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceLayout {
+    /// Standard JVM layout: src/main/{lang}, src/test/{lang}
+    #[default]
+    Jvm,
+    /// Standard Kotlin Multiplatform: src/commonMain/kotlin, src/jvmMain/kotlin, etc.
+    StandardKmp,
+    /// Flat KMP layout (ktor-style): common/src/, jvm/src/, posix/src/
+    FlatKmp,
+}
+
+/// Per-project configuration with explicit source layout
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ProjectConfig {
+    /// Path to the project configuration file (e.g., build.gradle.kts)
+    pub config_file: PathBuf,
+
+    /// Source layout for this project
+    #[serde(default)]
+    pub source_layout: SourceLayout,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct LanguageConfig {
     /// Whether this language is enabled
@@ -145,8 +171,14 @@ pub struct LanguageConfig {
 
     /// Project configuration files to monitor (e.g., tsconfig.json, pyproject.toml)
     /// Empty by default - project resolution is opt-in
+    /// For simple cases where auto-detection works
     #[serde(default)]
     pub config_files: Vec<PathBuf>,
+
+    /// Per-project configuration with explicit source layout
+    /// Use when auto-detection fails (e.g., custom build plugins)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<ProjectConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -208,10 +240,10 @@ pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
     pub default: String,
 
-    /// Per-module log level overrides
+    /// Per-module log level overrides (IndexMap preserves insertion order)
     /// Example: { "tantivy" = "warn", "watcher" = "debug" }
     #[serde(default)]
-    pub modules: HashMap<String, String>,
+    pub modules: IndexMap<String, String>,
 }
 
 impl Default for LoggingConfig {
@@ -227,8 +259,8 @@ fn default_log_level() -> String {
     "warn".to_string() // Quiet by default, use RUST_LOG=info for normal output
 }
 
-fn default_logging_modules() -> HashMap<String, String> {
-    let mut modules = HashMap::new();
+fn default_logging_modules() -> IndexMap<String, String> {
+    let mut modules = IndexMap::new();
     // Suppress verbose Tantivy internal logs by default
     modules.insert("tantivy".to_string(), "warn".to_string());
     // Pipeline logs at warn by default (use "info" to see progress)
@@ -525,24 +557,32 @@ fn default_guidance_variables() -> HashMap<String, String> {
 
 /// Generate language defaults from the registry
 /// This queries the language registry to get all registered languages
-/// and their default configurations
-fn generate_language_defaults() -> HashMap<String, LanguageConfig> {
+/// and their default configurations (sorted alphabetically)
+fn generate_language_defaults() -> IndexMap<String, LanguageConfig> {
     // Try to get languages from the registry
     if let Ok(registry) = crate::parsing::get_registry().lock() {
-        let mut configs = HashMap::new();
+        // Collect to Vec for sorting
+        let mut entries: Vec<_> = registry
+            .iter_all()
+            .map(|def| {
+                (
+                    def.id().as_str().to_string(),
+                    LanguageConfig {
+                        enabled: def.default_enabled(),
+                        extensions: def.extensions().iter().map(|s| s.to_string()).collect(),
+                        parser_options: HashMap::new(),
+                        config_files: Vec::new(),
+                        projects: Vec::new(),
+                    },
+                )
+            })
+            .collect();
 
-        // Iterate through all registered languages
-        for def in registry.iter_all() {
-            configs.insert(
-                def.id().as_str().to_string(),
-                LanguageConfig {
-                    enabled: def.default_enabled(),
-                    extensions: def.extensions().iter().map(|s| s.to_string()).collect(),
-                    parser_options: HashMap::new(),
-                    config_files: Vec::new(), // Empty by default - opt-in feature
-                },
-            );
-        }
+        // Sort alphabetically by language name
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Build IndexMap from sorted entries (preserves order)
+        let configs: IndexMap<_, _> = entries.into_iter().collect();
 
         // Return registry-generated configs if we got any
         if !configs.is_empty() {
@@ -557,8 +597,8 @@ fn generate_language_defaults() -> HashMap<String, LanguageConfig> {
 
 /// Minimal fallback language configuration
 /// Used only when registry is completely unavailable
-fn fallback_minimal_languages() -> HashMap<String, LanguageConfig> {
-    let mut langs = HashMap::new();
+fn fallback_minimal_languages() -> IndexMap<String, LanguageConfig> {
+    let mut langs = IndexMap::new();
 
     // Include only Rust as the minimal working configuration
     langs.insert(
@@ -568,6 +608,7 @@ fn fallback_minimal_languages() -> HashMap<String, LanguageConfig> {
             extensions: vec!["rs".to_string()],
             parser_options: HashMap::new(),
             config_files: Vec::new(),
+            projects: Vec::new(),
         },
     );
 
@@ -997,6 +1038,85 @@ impl Settings {
                     in_languages_section = true;
                 }
                 result.push('\n');
+
+                // Add project resolver documentation for supported languages
+                if line == "[languages.go]" {
+                    result.push_str(line);
+                    result.push_str("\n# Module path resolution via go.mod\n");
+                    result.push_str(
+                        "# Resolves imports like github.com/gin-gonic/gin, internal/handlers\n",
+                    );
+                    result.push_str("# config_files = [\"/path/to/project/go.mod\"]\n");
+                    continue;
+                } else if line == "[languages.java]" {
+                    result.push_str(line);
+                    result.push_str("\n# Package path resolution via build.gradle or pom.xml\n");
+                    result.push_str(
+                        "# Resolves imports like com.example.service, org.company.utils\n",
+                    );
+                    result.push_str(
+                        "# If both exist, specify the one you use for building (typically Gradle)\n",
+                    );
+                    result.push_str("# config_files = [\"/path/to/project/build.gradle\"]\n");
+                    result.push_str("# For custom source layouts:\n");
+                    result.push_str("# [[languages.java.projects]]\n");
+                    result.push_str("# config_file = \"/path/to/project/build.gradle\"\n");
+                    result.push_str("# source_layout = \"jvm\"  # jvm | standard-kmp | flat-kmp\n");
+                    continue;
+                } else if line == "[languages.javascript]" {
+                    result.push_str(line);
+                    result.push_str(
+                        "\n# Path alias resolution via jsconfig.json (CRA, Next.js, Vite)\n",
+                    );
+                    result
+                        .push_str("# Resolves imports like @components/Button, @/utils/helpers\n");
+                    result.push_str("# config_files = [\"/path/to/project/jsconfig.json\"]\n");
+                    continue;
+                } else if line == "[languages.kotlin]" {
+                    result.push_str(line);
+                    result.push_str("\n# Source root resolution via build.gradle.kts\n");
+                    result
+                        .push_str("# Resolves imports like com.example.shared, io.ktor.network\n");
+                    result.push_str("# config_files = [\"/path/to/project/build.gradle.kts\"]\n");
+                    result.push_str("# For Kotlin Multiplatform with custom layouts:\n");
+                    result.push_str("# [[languages.kotlin.projects]]\n");
+                    result.push_str("# config_file = \"/path/to/project/build.gradle.kts\"\n");
+                    result.push_str(
+                        "# source_layout = \"flat-kmp\"  # jvm | standard-kmp | flat-kmp\n",
+                    );
+                    continue;
+                } else if line == "[languages.python]" {
+                    result.push_str(line);
+                    result.push_str(
+                        "\n# Module resolution via pyproject.toml (Poetry, Hatch, Maturin, setuptools)\n",
+                    );
+                    result.push_str("# Resolves imports like mypackage.utils, src.models\n");
+                    result.push_str("# config_files = [\"/path/to/project/pyproject.toml\"]\n");
+                    continue;
+                } else if line == "[languages.swift]" {
+                    result.push_str(line);
+                    result.push_str(
+                        "\n# Module resolution via Package.swift (Swift Package Manager)\n",
+                    );
+                    result
+                        .push_str("# Resolves imports like MyLibrary.Models, PackageName.Utils\n");
+                    result.push_str("# config_files = [\"/path/to/project/Package.swift\"]\n");
+                    continue;
+                } else if line == "[languages.typescript]" {
+                    result.push_str(line);
+                    result
+                        .push_str("\n# Path alias resolution via tsconfig.json (baseUrl, paths)\n");
+                    result.push_str(
+                        "# Resolves imports like @components/Button, @utils/helpers, @/types\n",
+                    );
+                    result.push_str("# config_files = [\"/path/to/project/tsconfig.json\"]\n");
+                    result.push_str("# For monorepos with multiple tsconfigs:\n");
+                    result.push_str("# config_files = [\n");
+                    result.push_str("#     \"/path/to/project/tsconfig.json\",\n");
+                    result.push_str("#     \"/path/to/project/packages/web/tsconfig.json\",\n");
+                    result.push_str("# ]\n");
+                    continue;
+                }
             }
 
             result.push_str(line);

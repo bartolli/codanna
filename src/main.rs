@@ -8,8 +8,8 @@ use codanna::cli::{Cli, Commands, RetrieveQuery};
 use codanna::indexing::facade::IndexFacade;
 use codanna::project_resolver::{
     providers::{
-        go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider, python::PythonProvider,
-        swift::SwiftProvider, typescript::TypeScriptProvider,
+        go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider, kotlin::KotlinProvider,
+        python::PythonProvider, swift::SwiftProvider, typescript::TypeScriptProvider,
     },
     registry::SimpleProviderRegistry,
 };
@@ -42,6 +42,9 @@ fn create_provider_registry() -> SimpleProviderRegistry {
 
     // Add Python provider for pyproject.toml resolution
     registry.add(Arc::new(PythonProvider::new()));
+
+    // Add Kotlin provider for build.gradle.kts resolution
+    registry.add(Arc::new(KotlinProvider::new()));
 
     registry
 }
