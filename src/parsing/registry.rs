@@ -382,6 +382,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::gdscript::register(registry);
     super::java::register(registry);
     super::kotlin::register(registry);
+    super::lua::register(registry);
     super::swift::register(registry);
 }
 
