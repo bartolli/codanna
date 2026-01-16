@@ -1,9 +1,9 @@
 # PHP Parser Coverage Report
 
-*Generated: 2026-01-12 21:49:41 UTC*
+*Generated: 2026-01-16 15:39:46 UTC*
 
 ## Summary
-- Key nodes: 18/18 (100%)
+- Key nodes: 21/21 (100%)
 - Symbol kinds extracted: 8
 
 > **Note:** Key nodes are symbol-producing constructs (classes, functions, traits).
@@ -30,6 +30,9 @@
 | attribute_list | 357 | ✅ implemented |
 | attribute_group | 356 | ✅ implemented |
 | attribute | 358 | ✅ implemented |
+| function_call_expression | 338 | ✅ implemented |
+| member_call_expression | 347 | ✅ implemented |
+| scoped_call_expression | 340 | ✅ implemented |
 
 ## Legend
 

@@ -1003,7 +1003,7 @@ impl LanguageParser for PhpParser {
 // Helper methods for PhpParser
 impl PhpParser {
     fn extract_calls_from_node<'a>(
-        &self,
+        &mut self,
         node: Node,
         code: &'a str,
         current_context: Option<&'a str>,
@@ -1011,6 +1011,7 @@ impl PhpParser {
     ) {
         match node.kind() {
             "function_call_expression" => {
+                self.register_handled_node(node.kind(), node.kind_id());
                 if let Some(function_node) = node.child_by_field_name("function") {
                     let function_name = &code[function_node.byte_range()];
                     let range = self.node_to_range(node);
@@ -1025,9 +1026,34 @@ impl PhpParser {
                 }
             }
             "member_call_expression" => {
+                self.register_handled_node(node.kind(), node.kind_id());
                 // Method calls like $obj->method() or $this->method()
-                // Should NOT be tracked by find_calls, only by find_method_calls
-                // Just recurse to check for nested function calls within arguments
+                // Extract the method name from the "name" field
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let method_name = &code[name_node.byte_range()];
+                    let range = self.node_to_range(node);
+                    if let Some(context) = current_context {
+                        calls.push((context, method_name, range));
+                    }
+                }
+                // Also recurse to find nested calls in arguments
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.extract_calls_from_node(child, code, current_context, calls);
+                }
+            }
+            "scoped_call_expression" => {
+                self.register_handled_node(node.kind(), node.kind_id());
+                // Static method calls like ClassName::method() or self::method()
+                // Extract the method name from the "name" field
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let method_name = &code[name_node.byte_range()];
+                    let range = self.node_to_range(node);
+                    if let Some(context) = current_context {
+                        calls.push((context, method_name, range));
+                    }
+                }
+                // Also recurse to find nested calls in arguments
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     self.extract_calls_from_node(child, code, current_context, calls);

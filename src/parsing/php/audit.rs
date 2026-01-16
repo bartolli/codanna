@@ -92,6 +92,7 @@ impl PhpParserAudit {
 
         // Key nodes we care about for symbol extraction
         let key_nodes = vec![
+            // Symbol-producing nodes
             "namespace_definition",
             "namespace_use_declaration",
             "class_declaration",
@@ -110,6 +111,10 @@ impl PhpParserAudit {
             "attribute_list",
             "attribute_group",
             "attribute",
+            // Call-related nodes (for relationship tracking)
+            "function_call_expression",
+            "member_call_expression",
+            "scoped_call_expression",
         ];
 
         // Count key nodes coverage

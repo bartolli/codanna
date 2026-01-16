@@ -9,7 +9,8 @@ use codanna::indexing::facade::IndexFacade;
 use codanna::project_resolver::{
     providers::{
         go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider, kotlin::KotlinProvider,
-        python::PythonProvider, swift::SwiftProvider, typescript::TypeScriptProvider,
+        php::PhpProvider, python::PythonProvider, swift::SwiftProvider,
+        typescript::TypeScriptProvider,
     },
     registry::SimpleProviderRegistry,
 };
@@ -45,6 +46,9 @@ fn create_provider_registry() -> SimpleProviderRegistry {
 
     // Add Kotlin provider for build.gradle.kts resolution
     registry.add(Arc::new(KotlinProvider::new()));
+
+    // Add PHP provider for composer.json resolution
+    registry.add(Arc::new(PhpProvider::new()));
 
     registry
 }
