@@ -734,7 +734,8 @@ impl CSharpParser {
                 let caller = function_context.unwrap_or("");
                 let callee = match expression_node.kind() {
                     "member_access_expression" => {
-                        // obj.Method() - get method name
+                        // obj.Method() - extract just method name for resolution
+                        // The receiver info is captured by find_method_calls() for richer context
                         expression_node
                             .child_by_field_name("name")
                             .map(|n| &code[n.byte_range()])
@@ -2097,7 +2098,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "find_imports implementation needs to be completed - currently returns empty"]
     fn test_csharp_using_directive_extraction() {
         let mut parser = CSharpParser::new().unwrap();
         let code = r#"

@@ -134,10 +134,89 @@ impl LanguageBehavior for CSharpBehavior {
         project_root: &Path,
         extensions: &[&str],
     ) -> Option<String> {
-        // Convert file path to namespace path relative to project root
-        // e.g., src/Services/UserService.cs -> MyApp.Services.UserService
+        use crate::project_resolver::persist::ResolutionPersistence;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
 
-        // Get relative path from project root
+        // Thread-local cache with 1-second TTL (per Go/Python/TypeScript pattern)
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
+
+        // Try cached resolution first
+        let cached_result = RULES_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+
+            // Check if cache needs reload (>1 second old or empty)
+            let needs_reload = cache_ref
+                .as_ref()
+                .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
+                .unwrap_or(true);
+
+            // Load from disk if needed
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(std::path::Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load("csharp") {
+                    *cache_ref = Some((Instant::now(), index));
+                } else {
+                    *cache_ref = None;
+                }
+            }
+
+            // Get module path from cached rules
+            if let Some((_, ref index)) = *cache_ref {
+                // Canonicalize file path for matching
+                if let Ok(canon_file) = file_path.canonicalize() {
+                    // Find config that applies to this file
+                    if let Some(config_path) = index.get_config_for_file(&canon_file) {
+                        if let Some(rules) = index.rules.get(config_path) {
+                            // Get baseUrl (RootNamespace from .csproj)
+                            if let Some(ref base_url) = rules.base_url {
+                                // Find matching source root
+                                for root_path in rules.paths.keys() {
+                                    let root = std::path::Path::new(root_path);
+                                    let canon_root =
+                                        root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+                                    if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
+                                        // Get directory path (C# namespaces follow folder structure)
+                                        let relative_str = relative.to_str()?;
+                                        let path_without_ext =
+                                            strip_extension(relative_str, extensions);
+                                        let dir_path = if let Some(parent) =
+                                            Path::new(path_without_ext).parent()
+                                        {
+                                            parent.to_str().unwrap_or("")
+                                        } else {
+                                            ""
+                                        };
+
+                                        // Combine baseUrl with relative directory (dots for C#)
+                                        if dir_path.is_empty() {
+                                            return Some(base_url.clone());
+                                        } else {
+                                            let namespace_suffix =
+                                                dir_path.replace(['/', '\\'], ".");
+                                            return Some(format!("{base_url}.{namespace_suffix}"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            None
+        });
+
+        // Return cached result if found
+        if cached_result.is_some() {
+            return cached_result;
+        }
+
+        // Fallback: directory-based path (original behavior)
         let relative_path = file_path
             .strip_prefix(project_root)
             .ok()
@@ -145,22 +224,14 @@ impl LanguageBehavior for CSharpBehavior {
             .unwrap_or(file_path);
 
         let path = relative_path.to_str()?;
-
-        // Remove common directory prefixes
         let path_without_prefix = path
             .trim_start_matches("./")
             .trim_start_matches("src/")
             .trim_start_matches("lib/");
 
-        // Strip file extension using the provided extensions list
         let module_path = strip_extension(path_without_prefix, extensions);
-
-        // Replace path separators with namespace separators
-        // Remove the filename part to get the directory-based namespace
         let namespace_path = module_path.replace(['/', '\\'], ".");
 
-        // For C#, we typically want the directory structure as namespace
-        // but we might need to extract from actual namespace declarations in the file
         Some(namespace_path)
     }
 

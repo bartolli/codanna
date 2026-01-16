@@ -8,8 +8,8 @@ use codanna::cli::{Cli, Commands, RetrieveQuery};
 use codanna::indexing::facade::IndexFacade;
 use codanna::project_resolver::{
     providers::{
-        go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider, kotlin::KotlinProvider,
-        php::PhpProvider, python::PythonProvider, swift::SwiftProvider,
+        csharp::CSharpProvider, go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider,
+        kotlin::KotlinProvider, php::PhpProvider, python::PythonProvider, swift::SwiftProvider,
         typescript::TypeScriptProvider,
     },
     registry::SimpleProviderRegistry,
@@ -49,6 +49,9 @@ fn create_provider_registry() -> SimpleProviderRegistry {
 
     // Add PHP provider for composer.json resolution
     registry.add(Arc::new(PhpProvider::new()));
+
+    // Add C# provider for .csproj resolution
+    registry.add(Arc::new(CSharpProvider::new()));
 
     registry
 }

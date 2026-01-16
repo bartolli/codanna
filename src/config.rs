@@ -1040,7 +1040,15 @@ impl Settings {
                 result.push('\n');
 
                 // Add project resolver documentation for supported languages
-                if line == "[languages.go]" {
+                if line == "[languages.csharp]" {
+                    result.push_str(line);
+                    result.push_str("\n# Namespace resolution via .csproj (RootNamespace)\n");
+                    result.push_str(
+                        "# Resolves namespaces like MyCompany.MyApp.Controllers, Microsoft.EntityFrameworkCore\n",
+                    );
+                    result.push_str("# config_files = [\"/path/to/project/MyProject.csproj\"]\n");
+                    continue;
+                } else if line == "[languages.go]" {
                     result.push_str(line);
                     result.push_str("\n# Module path resolution via go.mod\n");
                     result.push_str(
@@ -1084,6 +1092,16 @@ impl Settings {
                     result.push_str(
                         "# source_layout = \"flat-kmp\"  # jvm | standard-kmp | flat-kmp\n",
                     );
+                    continue;
+                } else if line == "[languages.php]" {
+                    result.push_str(line);
+                    result.push_str(
+                        "\n# PSR-4 namespace resolution via composer.json autoload section\n",
+                    );
+                    result.push_str(
+                        "# Resolves namespaces like App\\Controllers\\UserController, Tests\\Unit\n",
+                    );
+                    result.push_str("# config_files = [\"/path/to/project/composer.json\"]\n");
                     continue;
                 } else if line == "[languages.python]" {
                     result.push_str(line);
