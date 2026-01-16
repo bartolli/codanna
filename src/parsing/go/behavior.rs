@@ -63,7 +63,10 @@ impl LanguageBehavior for GoBehavior {
         }
     }
 
-    // Go uses directory-based packages, needs custom handling
+    /// Get module path for a Go file using resolution rules from go.mod.
+    ///
+    /// Uses cached resolution rules from GoProvider to construct proper Go module paths.
+    /// Falls back to directory-based path if no rules are available.
     fn module_path_from_file(
         &self,
         file_path: &Path,
@@ -71,11 +74,87 @@ impl LanguageBehavior for GoBehavior {
         extensions: &[&str],
     ) -> Option<String> {
         use crate::parsing::paths::strip_extension;
+        use crate::project_resolver::persist::ResolutionPersistence;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
 
-        // Convert file path to Go package path relative to project root
-        // e.g., pkg/utils/helpers.go -> pkg/utils
+        // Thread-local cache with 1-second TTL (per Python/TypeScript pattern)
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
 
-        // Get relative path from project root
+        // Try cached resolution first
+        let cached_result = RULES_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+
+            // Check if cache needs reload (>1 second old or empty)
+            let needs_reload = cache_ref
+                .as_ref()
+                .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
+                .unwrap_or(true);
+
+            // Load from disk if needed
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(std::path::Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load("go") {
+                    *cache_ref = Some((Instant::now(), index));
+                } else {
+                    *cache_ref = None;
+                }
+            }
+
+            // Get module path from cached rules
+            if let Some((_, ref index)) = *cache_ref {
+                // Canonicalize file path for matching
+                if let Ok(canon_file) = file_path.canonicalize() {
+                    // Find config that applies to this file
+                    if let Some(config_path) = index.get_config_for_file(&canon_file) {
+                        if let Some(rules) = index.rules.get(config_path) {
+                            // Get baseUrl (Go module name from go.mod)
+                            if let Some(ref base_url) = rules.base_url {
+                                // Find matching source root
+                                for root_path in rules.paths.keys() {
+                                    let root = std::path::Path::new(root_path);
+                                    let canon_root =
+                                        root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+                                    if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
+                                        // Get directory path (Go packages are directories)
+                                        let relative_str = relative.to_str()?;
+                                        let path_without_ext =
+                                            strip_extension(relative_str, extensions);
+                                        let dir_path = if let Some(parent) =
+                                            Path::new(path_without_ext).parent()
+                                        {
+                                            parent.to_str().unwrap_or("")
+                                        } else {
+                                            ""
+                                        };
+
+                                        // Combine baseUrl with relative directory
+                                        if dir_path.is_empty() {
+                                            return Some(base_url.clone());
+                                        } else {
+                                            return Some(format!("{base_url}/{dir_path}"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            None
+        });
+
+        // Return cached result if found
+        if cached_result.is_some() {
+            return cached_result;
+        }
+
+        // Fallback: directory-based path (original behavior)
         let relative_path = file_path
             .strip_prefix(project_root)
             .ok()
@@ -83,19 +162,15 @@ impl LanguageBehavior for GoBehavior {
             .unwrap_or(file_path);
 
         let path = relative_path.to_str()?;
-
-        // Remove Go file extension using passed extensions and get directory
         let path_clean = path.trim_start_matches("./");
         let module_path = strip_extension(path_clean, extensions);
 
-        // Get directory path (Go packages are directories)
         let dir_path = if let Some(parent) = Path::new(module_path).parent() {
             parent.to_str().unwrap_or("")
         } else {
-            "" // Root package
+            ""
         };
 
-        // Convert empty path to current directory marker
         if dir_path.is_empty() {
             Some(".".to_string())
         } else {

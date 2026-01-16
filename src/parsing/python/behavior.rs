@@ -185,6 +185,10 @@ impl LanguageBehavior for PythonBehavior {
         }
     }
 
+    /// Compute Python module path from file path using resolution cache.
+    ///
+    /// Uses cached resolution rules from PythonProvider to map file paths to modules.
+    /// Falls back to convention-based path stripping if no cache is available.
     fn module_path_from_file(
         &self,
         file_path: &Path,
@@ -192,11 +196,107 @@ impl LanguageBehavior for PythonBehavior {
         extensions: &[&str],
     ) -> Option<String> {
         use crate::parsing::paths::strip_extension;
+        use crate::project_resolver::persist::ResolutionPersistence;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
 
-        // Get relative path from project root
-        let relative_path = file_path.strip_prefix(project_root).ok()?;
+        // Thread-local cache with 1-second TTL (per Java/Swift pattern)
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
 
-        // Convert path to string
+        // Try cached resolution first
+        let cached_result = RULES_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+
+            // Check if cache needs reload (>1 second old or empty)
+            let needs_reload = cache_ref
+                .as_ref()
+                .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
+                .unwrap_or(true);
+
+            // Load from disk if needed
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(std::path::Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load("python") {
+                    *cache_ref = Some((Instant::now(), index));
+                } else {
+                    *cache_ref = None;
+                }
+            }
+
+            // Get module path from cached rules
+            // Returns: (module_path, fallback_project_dir)
+            if let Some((_, ref index)) = *cache_ref {
+                // Canonicalize file path for matching
+                if let Ok(canon_file) = file_path.canonicalize() {
+                    // Find config that applies to this file
+                    if let Some(config_path) = index.get_config_for_file(&canon_file) {
+                        // Get project directory (parent of config file) for fallback
+                        let project_dir = config_path.parent().map(|p| p.to_path_buf());
+
+                        if let Some(rules) = index.rules.get(config_path) {
+                            // Sort source roots by length (longest first) for proper prefix matching
+                            let mut roots: Vec<_> = rules.paths.keys().collect();
+                            roots.sort_by_key(|k| std::cmp::Reverse(k.len()));
+
+                            // Extract module from file path using source roots
+                            for root_path in roots {
+                                let root = std::path::Path::new(root_path);
+                                let canon_root =
+                                    root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+                                if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
+                                    // Convert to module path
+                                    let Some(path_str) = relative.to_str() else {
+                                        continue;
+                                    };
+                                    let path_without_ext = strip_extension(path_str, extensions);
+
+                                    // Handle __init__.py - it represents the package itself
+                                    let module_path = if path_without_ext.ends_with("/__init__") {
+                                        path_without_ext
+                                            .strip_suffix("/__init__")
+                                            .unwrap_or(path_without_ext)
+                                    } else {
+                                        path_without_ext
+                                    };
+
+                                    // Convert path separators to dots
+                                    let module_path = module_path.replace(['/', '\\'], ".");
+
+                                    // Handle special cases
+                                    if module_path.is_empty() || module_path == "__init__" {
+                                        return (None, project_dir);
+                                    } else if module_path == "__main__" || module_path == "main" {
+                                        return (Some("__main__".to_string()), None);
+                                    } else {
+                                        return (Some(module_path), None);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Config matched but no source root matched - return project dir for fallback
+                        return (None, project_dir);
+                    }
+                }
+            }
+
+            (None, None)
+        });
+
+        // Return cached result if found
+        if let (Some(module_path), _) = &cached_result {
+            return Some(module_path.clone());
+        }
+
+        // Use project directory from config if available, otherwise workspace root
+        let fallback_root = cached_result.1.as_deref().unwrap_or(project_root);
+
+        // Fallback: convention-based path stripping
+        let relative_path = file_path.strip_prefix(fallback_root).ok()?;
         let path_str = relative_path.to_str()?;
 
         // Remove common Python source directories if present
@@ -204,6 +304,7 @@ impl LanguageBehavior for PythonBehavior {
             .strip_prefix("src/")
             .or_else(|| path_str.strip_prefix("lib/"))
             .or_else(|| path_str.strip_prefix("app/"))
+            .or_else(|| path_str.strip_prefix("python/"))
             .unwrap_or(path_str);
 
         // Remove extension using passed extensions from settings.toml
@@ -211,7 +312,6 @@ impl LanguageBehavior for PythonBehavior {
 
         // Handle __init__.py - it represents the package itself
         let module_path = if path_without_ext.ends_with("/__init__") {
-            // Remove /__init__ to get the package path
             path_without_ext
                 .strip_suffix("/__init__")
                 .unwrap_or(path_without_ext)
@@ -225,10 +325,8 @@ impl LanguageBehavior for PythonBehavior {
 
         // Handle special cases
         if module_path.is_empty() || module_path == "__init__" {
-            // Root __init__.py or empty path
             None
         } else if module_path == "__main__" || module_path == "main" {
-            // __main__.py is the entry point
             Some("__main__".to_string())
         } else {
             Some(module_path)
@@ -252,6 +350,155 @@ impl LanguageBehavior for PythonBehavior {
     fn get_module_path_for_file(&self, file_id: FileId) -> Option<String> {
         // Use the BehaviorState to get module path (O(1) lookup)
         self.state.get_module_path(file_id)
+    }
+
+    /// Build resolution context for parallel pipeline.
+    ///
+    /// Python-specific: handles `from X import Y` by extracting module portion
+    /// and matching against symbol module_path.
+    fn build_resolution_context_with_pipeline_cache(
+        &self,
+        file_id: FileId,
+        imports: &[crate::parsing::Import],
+        cache: &dyn crate::parsing::PipelineSymbolCache,
+        extensions: &[&str],
+    ) -> (
+        Box<dyn crate::parsing::ResolutionScope>,
+        Vec<crate::parsing::Import>,
+    ) {
+        use crate::SymbolId;
+        use crate::parsing::ScopeLevel;
+        use crate::parsing::resolution::{ImportBinding, ImportOrigin};
+
+        let _ = extensions; // Available for future use
+
+        let mut context = super::resolution::PythonResolutionContext::new(file_id);
+        let importing_module = self.get_module_path_for_file(file_id);
+
+        let mut enhanced_imports = Vec::with_capacity(imports.len());
+
+        for import in imports {
+            // 1. Extract module and symbol from import path
+            // For "from pydantic.v1.error_wrappers import ValidationError":
+            //   module_part = "pydantic.v1.error_wrappers"
+            //   symbol_name = "ValidationError"
+            let (module_part, symbol_name) = if let Some(pos) = import.path.rfind('.') {
+                (
+                    import.path[..pos].to_string(),
+                    import.path[pos + 1..].to_string(),
+                )
+            } else {
+                // Simple import like "import os"
+                (String::new(), import.path.clone())
+            };
+
+            // 2. Get local name (alias or symbol_name)
+            let local_name = import.alias.clone().unwrap_or_else(|| symbol_name.clone());
+
+            // 3. Resolve relative imports or use module portion
+            let target_module = if import.path.starts_with('.') {
+                // Relative import: resolve against importing module
+                self.resolve_python_relative_import(
+                    &import.path,
+                    importing_module.as_deref().unwrap_or(""),
+                )
+            } else {
+                // Absolute import: use extracted module portion (NOT full path)
+                module_part.clone()
+            };
+
+            // 4. Collect enhanced import - keep full path for Tier 2 matching
+            // Python includes symbol name in path: "module.symbol"
+            enhanced_imports.push(crate::parsing::Import {
+                path: import.path.clone(),
+                file_id: import.file_id,
+                alias: import.alias.clone(),
+                is_glob: import.is_glob,
+                is_type_only: import.is_type_only,
+            });
+
+            // 5. Lookup candidates by symbol name and match by module_path
+            let mut resolved_symbol: Option<SymbolId> = None;
+            let candidates = cache.lookup_candidates(&symbol_name);
+
+            for id in candidates {
+                if let Some(symbol) = cache.get(id) {
+                    if let Some(ref sym_module) = symbol.module_path {
+                        let sym_mod = sym_module.as_ref();
+
+                        // Python match: exact module match preferred
+                        // For "from pydantic.v1.error_wrappers import ValidationError":
+                        //   target_module = "pydantic.v1.error_wrappers"
+                        //   sym_module should equal "pydantic.v1.error_wrappers"
+                        if sym_mod == target_module {
+                            // Exact match - best
+                            resolved_symbol = Some(id);
+                            break;
+                        }
+
+                        // Handle suffix matches for relative/short imports
+                        if !target_module.is_empty() {
+                            // target_module ends with sym_module (relative import resolved)
+                            if target_module.ends_with(sym_mod)
+                                && (target_module.len() == sym_mod.len()
+                                    || target_module
+                                        .chars()
+                                        .nth(target_module.len() - sym_mod.len() - 1)
+                                        == Some('.'))
+                            {
+                                resolved_symbol = Some(id);
+                                break;
+                            }
+
+                            // sym_module ends with target_module (short import)
+                            if sym_mod.ends_with(&target_module)
+                                && (sym_mod.len() == target_module.len()
+                                    || sym_mod.chars().nth(sym_mod.len() - target_module.len() - 1)
+                                        == Some('.'))
+                            {
+                                resolved_symbol = Some(id);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 6. Register binding
+            let origin = if resolved_symbol.is_some() {
+                ImportOrigin::Internal
+            } else {
+                ImportOrigin::External
+            };
+
+            context.register_import_binding(ImportBinding {
+                import: import.clone(),
+                exposed_name: local_name.clone(),
+                origin,
+                resolved_symbol,
+            });
+
+            if let Some(symbol_id) = resolved_symbol {
+                context.add_symbol(local_name, symbol_id, ScopeLevel::Package);
+            }
+        }
+
+        // 7. Populate context with enhanced imports
+        context.populate_imports(&enhanced_imports);
+
+        // 8. Add local symbols from this file
+        for sym_id in cache.symbols_in_file(file_id) {
+            if let Some(symbol) = cache.get(sym_id) {
+                if self.is_resolvable_symbol(&symbol) {
+                    context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
+                    if let Some(ref module_path) = symbol.module_path {
+                        context.add_symbol(module_path.to_string(), symbol.id, ScopeLevel::Global);
+                    }
+                }
+            }
+        }
+
+        (Box::new(context), enhanced_imports)
     }
 
     fn import_matches_symbol(
@@ -279,17 +526,31 @@ impl LanguageBehavior for PythonBehavior {
                 }
             }
 
-            // Handle absolute imports that might be partial
-            // e.g., "module.func" might match "package.module.func"
-            if !import_path.contains('.') {
-                // Simple module name, might be imported directly
-                if symbol_module_path.ends_with(&format!(".{import_path}")) {
+            // Handle Python "from X import Y" pattern
+            // import_path = "X.Y" (full path including symbol name)
+            // symbol_module_path = "X" (just the module where symbol is defined)
+            //
+            // Check: import_path starts with symbol_module_path + "."
+            // AND the remaining part is just the symbol name (no more dots)
+            let prefix = format!("{symbol_module_path}.");
+            if import_path.starts_with(&prefix) {
+                let remainder = &import_path[prefix.len()..];
+                // remainder should be just the symbol name (no dots)
+                if !remainder.contains('.') {
+                    tracing::trace!(
+                        target: "pipeline",
+                        "[python] module prefix match: {import_path} starts with {prefix}, symbol={remainder}"
+                    );
                     return true;
                 }
-            } else {
-                // Multi-part import path
-                // Check if it's a suffix of the symbol path
-                if symbol_module_path.ends_with(import_path) {
+            }
+
+            // Handle short imports (just symbol name)
+            if !import_path.contains('.') {
+                // Simple name, might match if it's the last segment of symbol path
+                if symbol_module_path.ends_with(&format!(".{import_path}"))
+                    || symbol_module_path == import_path
+                {
                     return true;
                 }
             }

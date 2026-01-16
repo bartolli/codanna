@@ -132,7 +132,18 @@ impl ResolveStage {
             })
             .unwrap_or_else(|| CallerContext::from_file(context.file_id, context.language_id));
 
-        // Use cache.resolve() with CallerContext (imports enhanced by behavior)
+        // First try context.resolve() which uses language-specific resolution
+        // with pre-resolved import bindings from build_resolution_context_with_pipeline_cache()
+        if let Some(to_id) = context.resolve(&unresolved.to_name) {
+            return Some(ResolvedRelationship {
+                from_id,
+                to_id,
+                kind: unresolved.kind,
+                metadata: unresolved.metadata.clone(),
+            });
+        }
+
+        // Fall back to cache.resolve() with CallerContext (imports enhanced by behavior)
         let result = self.symbol_cache.resolve(
             &unresolved.to_name,
             &caller,
