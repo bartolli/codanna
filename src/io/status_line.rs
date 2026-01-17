@@ -826,6 +826,9 @@ impl DualProgressBar {
     }
 }
 
+/// Braille spinner frames for preparing state.
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 impl Display for DualProgressBar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Use frozen elapsed time if completed, otherwise use live elapsed
@@ -845,8 +848,19 @@ impl Display for DualProgressBar {
         // Use max for overall progress, but each bar shows its own elapsed for accuracy
         let _elapsed = elapsed1.max(elapsed2);
 
-        // Bar 1 (EMBED) - uses dynamic total from COLLECT
+        // Show preparing message with spinner when both bars are at 0%
         let current1 = self.bar1.current.load(Ordering::Relaxed);
+        let current2 = self.bar2.current.load(Ordering::Relaxed);
+        if current1 == 0 && current2 == 0 {
+            let elapsed_ms = self.bar2.start_time.elapsed().as_millis() as u64;
+            let frame_idx = (elapsed_ms / 100) as usize % SPINNER_FRAMES.len();
+            let spinner = SPINNER_FRAMES[frame_idx];
+            let total = self.bar2.total;
+            return write!(f, " {spinner} Preparing: {total} files, parsing...");
+        }
+
+        // Bar 1 (EMBED) - uses dynamic total from COLLECT
+        // Note: current1 already loaded above for the 0% check
         let total1 = self.bar1_dynamic_total.load(Ordering::Relaxed);
         let ratio1 = if total1 > 0 {
             (current1 as f64 / total1 as f64).clamp(0.0, 1.0)
@@ -869,7 +883,7 @@ impl Display for DualProgressBar {
         };
 
         // Bar 2 (INDEX)
-        let current2 = self.bar2.current.load(Ordering::Relaxed);
+        // Note: current2 already loaded above for the 0% check
         let total2 = self.bar2.total;
         let ratio2 = if total2 > 0 {
             (current2 as f64 / total2 as f64).clamp(0.0, 1.0)

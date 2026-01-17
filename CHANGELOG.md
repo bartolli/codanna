@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.13] - 2026-01-16
+
+### Added
+
+- Go project resolver provider for go.mod parsing and module path resolution
+- Python project resolver with multi-backend support (Poetry, Hatch, Maturin, Setuptools, PDM, Flit)
+- Kotlin project resolver with source layout config (jvm, standard-kmp, flat-kmp)
+- PHP PSR-4 provider for composer.json autoload namespace resolution
+- C# project resolver for .csproj SDK-style projects (RootNamespace, AssemblyName extraction)
+- Shared helper functions in helpers.rs for provider implementations
+- `[[languages.X.projects]]` config block for per-project source layout override
+- PHP method call tracking (member_call_expression, scoped_call_expression)
+- Animated spinner during pipeline warmup phase (DISCOVER/READ/PARSE/COLLECT)
+
+### Changed
+
+- Settings.languages uses IndexMap for alphabetical ordering in init output
+- LoggingConfig.modules uses IndexMap for consistent ordering
+- Empty indexes now auto-trigger force mode for dual EMBED+INDEX progress bars
+- DualProgressBar shows preparing spinner when both bars at 0%
+
+### Fixed
+
+- Languages without providers no longer show empty config_files in settings.toml
+- Rustdoc invalid-html-tags error in C# provider doc comments
+
 ## [0.9.12] - 2026-01-14
 
 ### Added

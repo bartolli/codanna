@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.9.12"
+version = "0.9.13"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -60,7 +60,7 @@ toml = { version = "0.9.8", features = ["preserve_order"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 tree-sitter = "0.26.3"
-tree-sitter-go = "0.25.0" # Upgraded to ABI-15
+tree-sitter-go = "0.25.0"
 tree-sitter-gdscript = "6.1.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"

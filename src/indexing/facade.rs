@@ -979,6 +979,9 @@ impl IndexFacade {
             return Ok(stats);
         }
 
+        // Auto-force mode for empty indexes (clean index behaves like --force)
+        let force = force || self.document_count().unwrap_or(0) == 0;
+
         // Use Pipeline for indexing with progress flag
         // The pipeline manages progress bars internally for clean sequential display
         let pipeline_stats = self.pipeline.index_incremental_with_progress_flag(
