@@ -32,10 +32,10 @@ impl CsprojPath {
 /// Information extracted from .csproj file
 #[derive(Debug, Clone, Default)]
 pub struct CsprojInfo {
-    /// RootNamespace from <RootNamespace> element (if specified)
+    /// RootNamespace from `<RootNamespace>` element (if specified)
     pub root_namespace: Option<String>,
 
-    /// AssemblyName from <AssemblyName> element (if specified)
+    /// AssemblyName from `<AssemblyName>` element (if specified)
     pub assembly_name: Option<String>,
 
     /// Whether this is an SDK-style project (has Sdk attribute on Project element)

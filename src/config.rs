@@ -172,7 +172,7 @@ pub struct LanguageConfig {
     /// Project configuration files to monitor (e.g., tsconfig.json, pyproject.toml)
     /// Empty by default - project resolution is opt-in
     /// For simple cases where auto-detection works
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_files: Vec<PathBuf>,
 
     /// Per-project configuration with explicit source layout
