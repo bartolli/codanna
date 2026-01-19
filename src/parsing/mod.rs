@@ -1,5 +1,6 @@
 pub mod behavior_state;
 pub mod c;
+pub mod clojure;
 pub mod context;
 pub mod cpp;
 pub mod csharp;
@@ -24,6 +25,7 @@ pub mod swift;
 pub mod typescript;
 
 pub use c::{CBehavior, CParser};
+pub use clojure::{ClojureBehavior, ClojureParser};
 pub use context::{ParserContext, ScopeType};
 pub use cpp::{CppBehavior, CppParser};
 pub use csharp::{CSharpBehavior, CSharpParser};

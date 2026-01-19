@@ -383,6 +383,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::java::register(registry);
     super::kotlin::register(registry);
     super::swift::register(registry);
+    super::clojure::register(registry);
 }
 
 /// Get the global registry

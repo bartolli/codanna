@@ -263,6 +263,7 @@ pub fn execute_parse(
         Language::Java => tree_sitter_java::LANGUAGE.into(),
         Language::Kotlin => tree_sitter_kotlin::language(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::Clojure => tree_sitter_clojure_orchard::LANGUAGE.into(),
     };
 
     parser
