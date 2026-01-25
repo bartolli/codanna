@@ -13,7 +13,6 @@ pub struct LuaResolutionContext {
     imports: HashMap<String, SymbolId>,
     global_symbols: HashMap<String, SymbolId>,
     module_symbols: HashMap<String, SymbolId>,
-    local_symbols: HashMap<String, SymbolId>,
 }
 
 #[derive(Debug)]
@@ -33,7 +32,6 @@ impl Default for LuaResolutionContext {
             imports: HashMap::new(),
             global_symbols: HashMap::new(),
             module_symbols: HashMap::new(),
-            local_symbols: HashMap::new(),
         }
     }
 }
@@ -48,7 +46,6 @@ impl LuaResolutionContext {
             imports: HashMap::new(),
             global_symbols: HashMap::new(),
             module_symbols: HashMap::new(),
-            local_symbols: HashMap::new(),
         }
     }
 
@@ -86,7 +83,6 @@ impl ResolutionScope for LuaResolutionContext {
                 self.module_symbols.insert(name, symbol_id);
             }
             ScopeLevel::Local => {
-                self.local_symbols.insert(name.clone(), symbol_id);
                 if let Some(current_scope) = self.scope_stack.last_mut() {
                     current_scope.symbols.insert(name, symbol_id);
                 }
@@ -117,7 +113,6 @@ impl ResolutionScope for LuaResolutionContext {
     }
 
     fn clear_local_scope(&mut self) {
-        self.local_symbols.clear();
         if let Some(scope) = self.scope_stack.last_mut() {
             scope.symbols.clear();
         }
@@ -139,8 +134,10 @@ impl ResolutionScope for LuaResolutionContext {
     fn symbols_in_scope(&self) -> Vec<(String, SymbolId, ScopeLevel)> {
         let mut result = Vec::new();
 
-        for (name, id) in &self.local_symbols {
-            result.push((name.clone(), *id, ScopeLevel::Local));
+        for scope in &self.scope_stack {
+            for (name, id) in &scope.symbols {
+                result.push((name.clone(), *id, ScopeLevel::Local));
+            }
         }
 
         for (name, id) in &self.module_symbols {
@@ -184,16 +181,23 @@ impl InheritanceResolver for LuaInheritanceResolver {
     }
 
     fn resolve_method(&self, type_name: &str, method: &str) -> Option<String> {
-        if let Some(methods) = self.type_methods.get(type_name) {
-            if methods.contains(&method.to_string()) {
-                return Some(type_name.to_string());
-            }
-        }
+        let mut to_visit = vec![type_name.to_string()];
+        let mut visited = std::collections::HashSet::new();
 
-        if let Some(parents) = self.inheritance.get(type_name) {
-            for (parent, _kind) in parents {
-                if let Some(result) = self.resolve_method(parent, method) {
-                    return Some(result);
+        while let Some(current) = to_visit.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+
+            if let Some(methods) = self.type_methods.get(&current) {
+                if methods.iter().any(|m| m == method) {
+                    return Some(current);
+                }
+            }
+
+            if let Some(parents) = self.inheritance.get(&current) {
+                for (parent, _kind) in parents {
+                    to_visit.push(parent.clone());
                 }
             }
         }

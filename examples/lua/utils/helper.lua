@@ -21,15 +21,27 @@ end
 
 --- Deep copy a table
 --- @param original table The table to copy
+--- @param seen table|nil Optional memoization table to handle cycles
 --- @return table
-function M.deepCopy(original)
+function M.deepCopy(original, seen)
     if type(original) ~= "table" then
         return original
     end
 
+    -- Initialize seen table for cycle detection
+    seen = seen or {}
+    
+    -- Return memoized copy if we've already seen this table
+    if seen[original] then
+        return seen[original]
+    end
+
     local copy = {}
+    -- Memoize before recursing to handle self-references
+    seen[original] = copy
+    
     for key, value in pairs(original) do
-        copy[M.deepCopy(key)] = M.deepCopy(value)
+        copy[M.deepCopy(key, seen)] = M.deepCopy(value, seen)
     end
     return setmetatable(copy, getmetatable(original))
 end
@@ -62,8 +74,17 @@ end
 --- @param delimiter string The delimiter
 --- @return table
 function M.split(s, delimiter)
+    -- Guard against nil or empty delimiter
+    if not delimiter or delimiter == "" then
+        return {s}
+    end
+    
+    -- Escape pattern-magic characters in delimiter
+    -- Escapes: . * + ? ^ $ ( ) [ ] % -
+    local escaped_delimiter = delimiter:gsub("([%.%*%+%?%^%$%(%)%[%]%%%-])", "%%%1")
+    
     local result = {}
-    for match in (s .. delimiter):gmatch("(.-)" .. delimiter) do
+    for match in (s .. delimiter):gmatch("(.-)" .. escaped_delimiter) do
         table.insert(result, match)
     end
     return result

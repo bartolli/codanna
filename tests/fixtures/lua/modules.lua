@@ -6,6 +6,11 @@ local M = {}
 M.VERSION = "2.0.0"
 M.AUTHOR = "Test Author"
 
+-- Private helper (underscore prefix convention)
+local function _privateHelper(data)
+    return data
+end
+
 -- Public function
 function M.process(data)
     return _privateHelper(data)
@@ -13,6 +18,9 @@ end
 
 -- Another public function
 function M.validate(input)
+    if input == nil then
+        return false, "Input cannot be nil"
+    end
     if type(input) ~= "string" then
         return false, "Expected string"
     end
@@ -24,16 +32,6 @@ function M.formatOutput(result)
     return string.format("Result: %s", tostring(result))
 end
 
--- Private helper (underscore prefix convention)
-local function _privateHelper(data)
-    return data
-end
-
--- Private validator
-local function _validateInput(input)
-    return input ~= nil
-end
-
 -- Nested module structure
 M.utils = {}
 
@@ -42,8 +40,17 @@ function M.utils.trim(s)
 end
 
 function M.utils.split(s, sep)
+    if sep == "" then
+        local result = {}
+        for i = 1, #s do
+            result[i] = s:sub(i, i)
+        end
+        return result
+    end
+
+    local escaped_sep = sep:gsub("([%.%+%-%*%?%[%]%^%$%(%)%%])", "%%%1")
     local result = {}
-    for match in (s .. sep):gmatch("(.-)" .. sep) do
+    for match in (s .. sep):gmatch("(.-)" .. escaped_sep) do
         table.insert(result, match)
     end
     return result

@@ -350,15 +350,20 @@ impl ParserFactory {
     /// Filters all supported languages against settings.languages map.
     pub fn enabled_languages(&self) -> Vec<Language> {
         vec![
-            Language::Rust,
-            Language::Python,
-            Language::JavaScript,
-            Language::TypeScript,
-            Language::Php,
-            Language::Go,
             Language::C,
             Language::Cpp,
+            Language::CSharp,
             Language::Gdscript,
+            Language::Go,
+            Language::Java,
+            Language::JavaScript,
+            Language::Kotlin,
+            Language::Lua,
+            Language::Php,
+            Language::Python,
+            Language::Rust,
+            Language::Swift,
+            Language::TypeScript,
         ]
         .into_iter()
         .filter(|&lang| self.is_language_enabled(lang))

@@ -182,11 +182,17 @@ impl LuaParserAudit {
 }
 
 fn discover_nodes(node: Node, registry: &mut HashMap<String, u16>) {
-    registry.insert(node.kind().to_string(), node.kind_id());
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        discover_nodes(child, registry);
+    // Use iterative traversal with an explicit stack to avoid stack overflow on large ASTs
+    let mut stack = vec![node];
+    
+    while let Some(current_node) = stack.pop() {
+        registry.insert(current_node.kind().to_string(), current_node.kind_id());
+        
+        let mut cursor = current_node.walk();
+        // Push children onto the stack for processing
+        for child in current_node.children(&mut cursor) {
+            stack.push(child);
+        }
     }
 }
 

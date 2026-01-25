@@ -209,8 +209,10 @@ mod tests {
         assert_eq!(Language::from_extension("go"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.mod"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.sum"), Some(Language::Go));
-        assert_eq!(Language::from_extension("txt"), None);
         assert_eq!(Language::from_extension("gd"), Some(Language::Gdscript));
+        assert_eq!(Language::from_extension("lua"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("LUA"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("txt"), None);
     }
 
     #[test]
@@ -264,6 +266,10 @@ mod tests {
             Language::from_path(Path::new("player.gd")),
             Some(Language::Gdscript)
         );
+        assert_eq!(
+            Language::from_path(Path::new("script.lua")),
+            Some(Language::Lua)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -280,5 +286,6 @@ mod tests {
         assert!(Language::Go.extensions().contains(&"go.mod"));
         assert!(Language::Go.extensions().contains(&"go.sum"));
         assert!(Language::Gdscript.extensions().contains(&"gd"));
+        assert!(Language::Lua.extensions().contains(&"lua"));
     }
 }

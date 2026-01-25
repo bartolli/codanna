@@ -72,7 +72,7 @@ impl LanguageDefinition for LuaLanguage {
     fn is_enabled(&self, settings: &Settings) -> bool {
         settings
             .languages
-            .get("Lua")
+            .get(self.id().as_str())
             .map(|config| config.enabled)
             .unwrap_or(self.default_enabled())
     }

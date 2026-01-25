@@ -182,9 +182,9 @@ end
 function M.withLogging(f)
     return function(...)
         print("Calling function with args:", ...)
-        local result = f(...)
-        print("Function returned:", result)
-        return result
+        local results = table.pack(f(...))
+        print("Function returned:", table.unpack(results, 1, results.n))
+        return table.unpack(results, 1, results.n)
     end
 end
 
@@ -329,8 +329,9 @@ function M.getLazyValue()
 end
 
 --- Error handling pattern
+--- Wraps a function call in pcall and returns an Ok/Err table
 --- @param fn function The function to call safely
---- @return boolean, any
+--- @return table # Ok(result) table on success, or Err(error) table on failure
 function M.pcallWrapper(fn, ...)
     local ok, result = pcall(fn, ...)
     if ok then

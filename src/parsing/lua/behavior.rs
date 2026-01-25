@@ -72,8 +72,7 @@ impl LanguageBehavior for LuaBehavior {
         let relative_path = file_path
             .strip_prefix(project_root)
             .ok()
-            .or_else(|| file_path.strip_prefix("./").ok())
-            .unwrap_or(file_path);
+            .or_else(|| file_path.strip_prefix("./").ok())?;
 
         let path = relative_path.to_str()?;
         let path_clean = path.trim_start_matches("./");
@@ -201,7 +200,7 @@ impl LanguageBehavior for LuaBehavior {
                 }
             }
         } else {
-            matches!(symbol.kind, SymbolKind::Variable)
+            false
         }
     }
 

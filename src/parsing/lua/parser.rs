@@ -23,9 +23,9 @@ fn range_from_node(node: &Node) -> Range {
     let start = node.start_position();
     let end = node.end_position();
     Range::new(
-        start.row as u32 + 1,
+        start.row as u32,
         start.column as u16,
-        end.row as u32 + 1,
+        end.row as u32,
         end.column as u16,
     )
 }
@@ -329,7 +329,7 @@ impl LuaParser {
         let (name, kind, visibility) = if name_text.contains(':') {
             let parts: Vec<&str> = name_text.split(':').collect();
             let method_name = parts.last().unwrap_or(&name_text).to_string();
-            let vis = if is_local {
+            let vis = if is_local || method_name.starts_with('_') {
                 Visibility::Private
             } else {
                 Visibility::Public
@@ -385,39 +385,57 @@ impl LuaParser {
     ) {
         for child in node.children(&mut node.walk()) {
             if child.kind() == "assignment_statement" {
+                let mut var_names = Vec::new();
+                let mut expr_kinds = Vec::new();
+
                 for assign_child in child.children(&mut child.walk()) {
                     if assign_child.kind() == "variable_list" {
                         for var_child in assign_child.children(&mut assign_child.walk()) {
                             if var_child.kind() == "identifier" {
-                                let name = code[var_child.byte_range()].to_string();
-                                let range = range_from_node(&var_child);
-
-                                let kind = if name.chars().all(|c| c.is_uppercase() || c == '_')
-                                    && name.contains('_')
-                                {
-                                    SymbolKind::Constant
-                                } else {
-                                    SymbolKind::Variable
-                                };
-
-                                let signature = format!("local {name}");
-                                let doc_comment = self.extract_lua_doc_comment(&node, code);
-
-                                let symbol = self.create_symbol(
-                                    counter.next_id(),
-                                    name,
-                                    kind,
-                                    file_id,
-                                    range,
-                                    Some(signature),
-                                    doc_comment,
-                                    module_path,
-                                    Visibility::Private,
-                                );
-                                symbols.push(symbol);
+                                var_names.push(var_child);
                             }
                         }
+                    } else if assign_child.kind() == "expression_list" {
+                        for expr_child in assign_child.children(&mut assign_child.walk()) {
+                            expr_kinds.push(expr_child.kind() == "function_definition");
+                        }
                     }
+                }
+
+                for (i, var_node) in var_names.iter().enumerate() {
+                    let name = code[var_node.byte_range()].to_string();
+                    let range = range_from_node(var_node);
+                    let is_function = expr_kinds.get(i).copied().unwrap_or(false);
+
+                    let kind = if is_function {
+                        SymbolKind::Function
+                    } else if name.chars().all(|c| c.is_uppercase() || c == '_')
+                        && name.contains('_')
+                    {
+                        SymbolKind::Constant
+                    } else {
+                        SymbolKind::Variable
+                    };
+
+                    let signature = if is_function {
+                        format!("local function {name}")
+                    } else {
+                        format!("local {name}")
+                    };
+                    let doc_comment = self.extract_lua_doc_comment(&node, code);
+
+                    let symbol = self.create_symbol(
+                        counter.next_id(),
+                        name,
+                        kind,
+                        file_id,
+                        range,
+                        Some(signature),
+                        doc_comment,
+                        module_path,
+                        Visibility::Private,
+                    );
+                    symbols.push(symbol);
                 }
             }
         }
@@ -678,10 +696,6 @@ impl LuaParser {
                     let content = comment_text.trim_start_matches("---").trim();
                     doc_lines.insert(0, content.to_string());
                     current = sibling.prev_sibling();
-                } else if comment_text.starts_with("--") && !comment_text.starts_with("--[[") {
-                    let content = comment_text.trim_start_matches("--").trim();
-                    doc_lines.insert(0, content.to_string());
-                    current = sibling.prev_sibling();
                 } else if comment_text.starts_with("--[[") {
                     let content = comment_text
                         .trim_start_matches("--[[")
@@ -690,6 +704,7 @@ impl LuaParser {
                     doc_lines.insert(0, content.to_string());
                     break;
                 } else {
+                    // Stop on first non-doc comment (regular -- comments)
                     break;
                 }
             } else {

@@ -325,7 +325,44 @@ mod tests {
     fn comprehensive_lua_analysis() {
         println!("=== Lua Comprehensive Grammar Analysis ===\n");
 
-        // Run the parser audit to get everything at once
+        fs::create_dir_all("contributing/parsers/lua")
+            .expect("Failed to create Lua parser output directory");
+
+        let grammar_path = "contributing/parsers/lua/node-types.json";
+        let mut all_grammar_nodes = HashSet::new();
+        let mut grammar_warning = None;
+
+        match fs::read_to_string(grammar_path) {
+            Ok(json) => match serde_json::from_str::<Value>(&json) {
+                Ok(Value::Array(nodes)) => {
+                    for node in nodes {
+                        if let (Some(Value::Bool(true)), Some(Value::String(node_type))) =
+                            (node.get("named"), node.get("type"))
+                        {
+                            all_grammar_nodes.insert(node_type.clone());
+                        }
+                    }
+                }
+                Ok(_) => {
+                    grammar_warning =
+                        Some("Unexpected grammar JSON structure for Lua.".to_string());
+                }
+                Err(err) => {
+                    grammar_warning = Some(format!(
+                        "Failed to parse Lua grammar JSON: {err}. \
+Run `tree-sitter generate` and copy node-types.json to {grammar_path}."
+                    ));
+                }
+            },
+            Err(err) => {
+                grammar_warning = Some(format!(
+                    "Missing node-types.json for Lua ({err}). \
+Run `./contributing/tree-sitter/scripts/setup.sh lua` and copy \
+tree-sitter-lua/src/node-types.json to {grammar_path}."
+                ));
+            }
+        }
+
         let audit = match LuaParserAudit::audit_file("examples/lua/comprehensive.lua") {
             Ok(audit) => audit,
             Err(e) => {
@@ -340,16 +377,18 @@ mod tests {
 
         let example_nodes: HashSet<String> = audit.grammar_nodes.keys().cloned().collect();
 
-        // Save the audit report
         let report = audit.generate_report();
         fs::write("contributing/parsers/lua/AUDIT_REPORT.md", &report)
             .expect("Failed to write Lua audit report");
 
-        // Generate comprehensive analysis
         let mut analysis = String::new();
         analysis.push_str("# Lua Grammar Analysis\n\n");
         analysis.push_str(&format!("*Generated: {}*\n\n", get_formatted_timestamp()));
         analysis.push_str("## Statistics\n");
+        analysis.push_str(&format!(
+            "- Total nodes in grammar JSON: {}\n",
+            all_grammar_nodes.len()
+        ));
         analysis.push_str(&format!(
             "- Nodes found in comprehensive.lua: {}\n",
             example_nodes.len()
@@ -364,7 +403,13 @@ mod tests {
         ));
         analysis.push('\n');
 
-        // Categorize nodes
+        if let Some(warning) = &grammar_warning {
+            analysis.push_str("## Warning\n");
+            analysis.push_str(warning);
+            analysis.push_str("\n\n");
+        }
+
+        let mut in_grammar_only: Vec<_> = all_grammar_nodes.difference(&example_nodes).collect();
         let mut in_example_not_handled: Vec<_> = example_nodes
             .iter()
             .filter(|n| !audit.implemented_nodes.contains(n.as_str()))
@@ -375,12 +420,12 @@ mod tests {
             .filter(|n| example_nodes.contains(n.as_str()))
             .collect();
 
+        in_grammar_only.sort();
         in_example_not_handled.sort();
         handled_well.sort();
 
         if !handled_well.is_empty() {
             analysis.push_str("## ✅ Successfully Handled Nodes\n");
-            analysis.push_str("These nodes are in examples and handled by parser:\n");
             for node in &handled_well {
                 analysis.push_str(&format!("- {node}\n"));
             }
@@ -389,15 +434,22 @@ mod tests {
 
         if !in_example_not_handled.is_empty() {
             analysis.push_str("## ⚠️ Implementation Gaps\n");
-            analysis.push_str("These nodes appear in comprehensive.lua but aren't handled:\n");
             for node in &in_example_not_handled {
                 analysis.push_str(&format!("- {node}\n"));
             }
             analysis.push('\n');
         }
 
+        if !in_grammar_only.is_empty() {
+            analysis.push_str("## ⭕ Missing from Examples\n");
+            for node in &in_grammar_only {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
         if !audit.extracted_symbol_kinds.is_empty() {
-            analysis.push_str("## 🎯 Symbol Kinds Extracted\n");
+            analysis.push_str("## 🔍 Symbol Kinds Extracted\n");
             let mut kinds: Vec<_> = audit.extracted_symbol_kinds.iter().collect();
             kinds.sort();
             for kind in kinds {
@@ -406,10 +458,12 @@ mod tests {
             analysis.push('\n');
         }
 
-        fs::write("contributing/parsers/lua/GRAMMAR_ANALYSIS.md", &analysis)
-            .expect("Failed to write Lua grammar analysis");
+        fs::write(
+            "contributing/parsers/lua/GRAMMAR_ANALYSIS.md",
+            &analysis,
+        )
+        .expect("Failed to write Lua grammar analysis");
 
-        // Also generate node_discovery.txt
         let node_discovery = generate_lua_node_discovery();
         fs::write(
             "contributing/parsers/lua/node_discovery.txt",
@@ -417,7 +471,8 @@ mod tests {
         )
         .expect("Failed to write Lua node discovery");
 
-        println!("📄 Lua Analysis:");
+        println!("✅ Lua Analysis:");
+        println!("  - Grammar nodes: {}", all_grammar_nodes.len());
         println!("  - Example nodes: {}", example_nodes.len());
         println!("  - Handled nodes: {}", audit.implemented_nodes.len());
         println!("  - Symbol kinds: {:?}", audit.extracted_symbol_kinds);

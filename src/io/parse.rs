@@ -15,7 +15,7 @@ pub enum ParseError {
     FileNotFound { path: String },
 
     #[error(
-        "Unable to detect language from file extension: {extension}\nSuggestion: Use a supported file extension (rs, py, ts, tsx, js, jsx, php, go, c, cpp)"
+        "Unable to detect language from file extension: {extension}\nSuggestion: Use a supported file extension (rs, py, ts, tsx, js, jsx, php, go, c, cpp, cs, gd, java, kt, lua, swift)"
     )]
     UnsupportedLanguage { extension: String },
 
