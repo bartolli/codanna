@@ -875,6 +875,118 @@ impl LuaParser {
             self.register_node_recursively(child);
         }
     }
+
+    fn find_calls_in_node<'a>(
+        &mut self,
+        node: Node,
+        code: &'a str,
+        calls: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: &mut Option<&'a str>,
+    ) {
+        match node.kind() {
+            "function_declaration" => {
+                self.register_handled_node(node.kind(), node.kind_id());
+                self.process_function_for_calls(node, code, calls, current_function);
+            }
+            "function_call" => {
+                self.register_handled_node(node.kind(), node.kind_id());
+                self.process_call(node, code, calls, current_function);
+            }
+            "function_definition" => {
+                // Anonymous function - process body with current context
+                self.register_handled_node(node.kind(), node.kind_id());
+                self.process_children_for_calls(node, code, calls, current_function);
+            }
+            _ => {
+                self.process_children_for_calls(node, code, calls, current_function);
+            }
+        }
+    }
+
+    fn process_function_for_calls<'a>(
+        &mut self,
+        node: Node,
+        code: &'a str,
+        calls: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: &mut Option<&'a str>,
+    ) {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let name_text = &code[name_node.byte_range()];
+
+            // Extract simple function name (strip Table: or Table. prefix)
+            let simple_name = if let Some(colon_pos) = name_text.rfind(':') {
+                &name_text[colon_pos + 1..]
+            } else if let Some(dot_pos) = name_text.rfind('.') {
+                &name_text[dot_pos + 1..]
+            } else {
+                name_text
+            };
+
+            let old_function = *current_function;
+            *current_function = Some(simple_name);
+
+            self.process_children_for_calls(node, code, calls, current_function);
+
+            *current_function = old_function;
+        } else {
+            // No name (shouldn't happen), process children without context change
+            self.process_children_for_calls(node, code, calls, current_function);
+        }
+    }
+
+    fn process_call<'a>(
+        &mut self,
+        node: Node,
+        code: &'a str,
+        calls: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: &mut Option<&'a str>,
+    ) {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            let callee = match name_node.kind() {
+                "identifier" => {
+                    // Direct call: func()
+                    &code[name_node.byte_range()]
+                }
+                "method_index_expression" => {
+                    // Method call: obj:method()
+                    if let Some(method_node) = name_node.child_by_field_name("method") {
+                        &code[method_node.byte_range()]
+                    } else {
+                        return; // Can't extract method name
+                    }
+                }
+                "dot_index_expression" => {
+                    // Dot call: table.insert() or math.sqrt()
+                    if let Some(field_node) = name_node.child_by_field_name("field") {
+                        &code[field_node.byte_range()]
+                    } else {
+                        // Fallback to full expression
+                        &code[name_node.byte_range()]
+                    }
+                }
+                _ => return, // Unknown call pattern
+            };
+
+            let range = range_from_node(&node);
+            let caller = (*current_function).unwrap_or("<module>");
+            calls.push((caller, callee, range));
+        }
+
+        // Process children to catch nested calls in arguments
+        self.process_children_for_calls(node, code, calls, current_function);
+    }
+
+    fn process_children_for_calls<'a>(
+        &mut self,
+        node: Node,
+        code: &'a str,
+        calls: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: &mut Option<&'a str>,
+    ) {
+        for child in node.children(&mut node.walk()) {
+            self.find_calls_in_node(child, code, calls, current_function);
+        }
+    }
 }
 
 impl LanguageParser for LuaParser {
@@ -895,8 +1007,18 @@ impl LanguageParser for LuaParser {
         self.extract_lua_doc_comment(node, code)
     }
 
-    fn find_calls<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        Vec::new()
+    fn find_calls<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut calls = Vec::new();
+        let root_node = tree.root_node();
+        let mut current_function: Option<&'a str> = None;
+
+        self.find_calls_in_node(root_node, code, &mut calls, &mut current_function);
+        calls
     }
 
     /// Extract method calls from Lua source code
@@ -1087,5 +1209,108 @@ require("some.module")
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].path, "some.module");
         assert_eq!(imports[0].alias, None);
+    }
+
+    #[test]
+    fn test_find_calls_basic() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+function foo()
+    bar()
+    baz()
+end
+
+function test()
+    foo()
+end
+"#;
+
+        let calls = parser.find_calls(code);
+
+        assert_eq!(calls.len(), 3);
+
+        // Check that foo calls bar and baz
+        let foo_calls: Vec<_> = calls.iter().filter(|(c, _, _)| *c == "foo").collect();
+        assert_eq!(foo_calls.len(), 2);
+        assert!(foo_calls.iter().any(|(_, callee, _)| *callee == "bar"));
+        assert!(foo_calls.iter().any(|(_, callee, _)| *callee == "baz"));
+
+        // Check that test calls foo
+        let test_calls: Vec<_> = calls.iter().filter(|(c, _, _)| *c == "test").collect();
+        assert_eq!(test_calls.len(), 1);
+        assert_eq!(test_calls[0].1, "foo");
+    }
+
+    #[test]
+    fn test_find_calls_method_syntax() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+function MyClass:new()
+    self:init()
+    return self
+end
+
+function MyClass:init()
+    self.value = 0
+end
+"#;
+
+        let calls = parser.find_calls(code);
+
+        // new should call init
+        let new_calls: Vec<_> = calls.iter().filter(|(c, _, _)| *c == "new").collect();
+        assert_eq!(new_calls.len(), 1);
+        assert_eq!(new_calls[0].1, "init");
+    }
+
+    #[test]
+    fn test_find_calls_module_level() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+local config = require("config")
+print("Starting...")
+
+function main()
+    print("In main")
+end
+"#;
+
+        let calls = parser.find_calls(code);
+
+        // Module-level calls should use "<module>" as caller
+        let module_calls: Vec<_> = calls.iter().filter(|(c, _, _)| *c == "<module>").collect();
+        assert_eq!(module_calls.len(), 2);
+        assert!(module_calls.iter().any(|(_, callee, _)| *callee == "require"));
+        assert!(module_calls.iter().any(|(_, callee, _)| *callee == "print"));
+
+        // main should call print
+        let main_calls: Vec<_> = calls.iter().filter(|(c, _, _)| *c == "main").collect();
+        assert_eq!(main_calls.len(), 1);
+        assert_eq!(main_calls[0].1, "print");
+    }
+
+    #[test]
+    fn test_find_calls_dot_notation() {
+        use crate::parsing::LanguageParser;
+
+        let mut parser = LuaParser::new().unwrap();
+        let code = r#"
+function process()
+    table.insert(items, 1)
+    math.sqrt(25)
+end
+"#;
+
+        let calls = parser.find_calls(code);
+
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().any(|(c, callee, _)| *c == "process" && *callee == "insert"));
+        assert!(calls.iter().any(|(c, callee, _)| *c == "process" && *callee == "sqrt"));
     }
 }
