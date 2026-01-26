@@ -111,7 +111,7 @@ end
     println!("Module-level calls:");
     for (caller, callee, _) in &calls {
         if caller == &"<module>" {
-            println!("  <module> -> {}", callee);
+            println!("  <module> -> {callee}");
         }
     }
 

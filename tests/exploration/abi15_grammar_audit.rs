@@ -458,11 +458,8 @@ tree-sitter-lua/src/node-types.json to {grammar_path}."
             analysis.push('\n');
         }
 
-        fs::write(
-            "contributing/parsers/lua/GRAMMAR_ANALYSIS.md",
-            &analysis,
-        )
-        .expect("Failed to write Lua grammar analysis");
+        fs::write("contributing/parsers/lua/GRAMMAR_ANALYSIS.md", &analysis)
+            .expect("Failed to write Lua grammar analysis");
 
         let node_discovery = generate_lua_node_discovery();
         fs::write(

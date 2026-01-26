@@ -473,10 +473,8 @@ impl LuaParser {
                             }
 
                             let range = range_from_node(&var_child);
-                            let is_function = function_value_flags
-                                .get(index)
-                                .copied()
-                                .unwrap_or(false);
+                            let is_function =
+                                function_value_flags.get(index).copied().unwrap_or(false);
                             let kind = if is_function {
                                 SymbolKind::Function
                             } else if name.chars().all(|c| c.is_uppercase() || c == '_')
@@ -509,10 +507,8 @@ impl LuaParser {
                             symbols.push(symbol);
                         }
                         "dot_index_expression" => {
-                            let is_function = function_value_flags
-                                .get(index)
-                                .copied()
-                                .unwrap_or(false);
+                            let is_function =
+                                function_value_flags.get(index).copied().unwrap_or(false);
                             self.process_dot_index_assignment(
                                 var_child,
                                 node,
@@ -1315,7 +1311,11 @@ end
         // Module-level calls should use "<module>" as caller
         let module_calls: Vec<_> = calls.iter().filter(|(c, _, _)| *c == "<module>").collect();
         assert_eq!(module_calls.len(), 2);
-        assert!(module_calls.iter().any(|(_, callee, _)| *callee == "require"));
+        assert!(
+            module_calls
+                .iter()
+                .any(|(_, callee, _)| *callee == "require")
+        );
         assert!(module_calls.iter().any(|(_, callee, _)| *callee == "print"));
 
         // main should call print
@@ -1339,7 +1339,15 @@ end
         let calls = parser.find_calls(code);
 
         assert_eq!(calls.len(), 2);
-        assert!(calls.iter().any(|(c, callee, _)| *c == "process" && *callee == "insert"));
-        assert!(calls.iter().any(|(c, callee, _)| *c == "process" && *callee == "sqrt"));
+        assert!(
+            calls
+                .iter()
+                .any(|(c, callee, _)| *c == "process" && *callee == "insert")
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(c, callee, _)| *c == "process" && *callee == "sqrt")
+        );
     }
 }
