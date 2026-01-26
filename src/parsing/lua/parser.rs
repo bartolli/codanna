@@ -451,21 +451,19 @@ impl LuaParser {
         module_path: &str,
         depth: usize,
     ) {
-        let mut has_function_value = false;
+        // Build position-aligned Vec<bool> for each expression value
+        let mut function_value_flags = Vec::new();
         for child in node.children(&mut node.walk()) {
             if child.kind() == "expression_list" {
                 for expr_child in child.children(&mut child.walk()) {
-                    if expr_child.kind() == "function_definition" {
-                        has_function_value = true;
-                        break;
-                    }
+                    function_value_flags.push(expr_child.kind() == "function_definition");
                 }
             }
         }
 
         for child in node.children(&mut node.walk()) {
             if child.kind() == "variable_list" {
-                for var_child in child.children(&mut child.walk()) {
+                for (index, var_child) in child.children(&mut child.walk()).enumerate() {
                     match var_child.kind() {
                         "identifier" => {
                             let name = code[var_child.byte_range()].to_string();
@@ -475,7 +473,11 @@ impl LuaParser {
                             }
 
                             let range = range_from_node(&var_child);
-                            let kind = if has_function_value {
+                            let is_function = function_value_flags
+                                .get(index)
+                                .copied()
+                                .unwrap_or(false);
+                            let kind = if is_function {
                                 SymbolKind::Function
                             } else if name.chars().all(|c| c.is_uppercase() || c == '_')
                                 && name.contains('_')
@@ -507,6 +509,10 @@ impl LuaParser {
                             symbols.push(symbol);
                         }
                         "dot_index_expression" => {
+                            let is_function = function_value_flags
+                                .get(index)
+                                .copied()
+                                .unwrap_or(false);
                             self.process_dot_index_assignment(
                                 var_child,
                                 node,
@@ -515,7 +521,7 @@ impl LuaParser {
                                 counter,
                                 symbols,
                                 module_path,
-                                has_function_value,
+                                is_function,
                             );
                         }
                         _ => {}
@@ -730,84 +736,97 @@ impl LuaParser {
 }
 
 fn extract_method_calls_recursive(node: &Node, code: &str, calls: &mut Vec<MethodCall>) {
-    if node.kind() == "function_call" {
-        if let Some(name_node) = node.child_by_field_name("name") {
-            if name_node.kind() == "method_index_expression" {
-                if let Some(method_node) = name_node.child_by_field_name("method") {
-                    let method_name = code[method_node.byte_range()].to_string();
-                    let range = range_from_node(node);
+    let mut stack = vec![*node];
 
-                    let receiver = name_node
-                        .child_by_field_name("table")
-                        .map(|n| code[n.byte_range()].to_string());
+    while let Some(current_node) = stack.pop() {
+        if current_node.kind() == "function_call" {
+            if let Some(name_node) = current_node.child_by_field_name("name") {
+                if name_node.kind() == "method_index_expression" {
+                    if let Some(method_node) = name_node.child_by_field_name("method") {
+                        let method_name = code[method_node.byte_range()].to_string();
+                        let range = range_from_node(&current_node);
 
-                    calls.push(MethodCall {
-                        caller: String::new(),
-                        method_name,
-                        receiver,
-                        is_static: false,
-                        range,
-                        caller_range: Some(range),
-                    });
-                }
-            }
-        }
-    }
+                        let receiver = name_node
+                            .child_by_field_name("table")
+                            .map(|n| code[n.byte_range()].to_string());
 
-    for child in node.children(&mut node.walk()) {
-        extract_method_calls_recursive(&child, code, calls);
-    }
-}
-
-fn extract_imports_recursive(node: &Node, code: &str, file_id: FileId, imports: &mut Vec<Import>) {
-    // Look for variable_declaration containing require() calls
-    // Pattern: local foo = require("module")
-    if node.kind() == "variable_declaration" {
-        let mut alias: Option<String> = None;
-        let mut require_call: Option<Node> = None;
-
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "assignment_statement" {
-                for assign_child in child.children(&mut child.walk()) {
-                    if assign_child.kind() == "variable_list" {
-                        // Get the variable name (alias)
-                        for var_child in assign_child.children(&mut assign_child.walk()) {
-                            if var_child.kind() == "identifier" {
-                                alias = Some(code[var_child.byte_range()].to_string());
-                                break;
-                            }
-                        }
-                    } else if assign_child.kind() == "expression_list" {
-                        // Check if value is a require() call
-                        for expr_child in assign_child.children(&mut assign_child.walk()) {
-                            if expr_child.kind() == "function_call" {
-                                require_call = Some(expr_child);
-                                break;
-                            }
-                        }
+                        calls.push(MethodCall {
+                            caller: String::new(),
+                            method_name,
+                            receiver,
+                            is_static: false,
+                            range,
+                            caller_range: Some(range),
+                        });
                     }
                 }
             }
         }
 
-        if let Some(call_node) = require_call {
-            if let Some(import) = try_extract_require_call(&call_node, code, file_id, alias) {
-                imports.push(import);
-                return; // Don't recurse into this node again
+        for child in current_node.children(&mut current_node.walk()) {
+            stack.push(child);
+        }
+    }
+}
+
+fn extract_imports_recursive(node: &Node, code: &str, file_id: FileId, imports: &mut Vec<Import>) {
+    let mut stack = vec![*node];
+
+    while let Some(current_node) = stack.pop() {
+        let mut found_import = false;
+
+        // Look for variable_declaration containing require() calls
+        // Pattern: local foo = require("module")
+        if current_node.kind() == "variable_declaration" {
+            let mut alias: Option<String> = None;
+            let mut require_call: Option<Node> = None;
+
+            for child in current_node.children(&mut current_node.walk()) {
+                if child.kind() == "assignment_statement" {
+                    for assign_child in child.children(&mut child.walk()) {
+                        if assign_child.kind() == "variable_list" {
+                            // Get the variable name (alias)
+                            for var_child in assign_child.children(&mut assign_child.walk()) {
+                                if var_child.kind() == "identifier" {
+                                    alias = Some(code[var_child.byte_range()].to_string());
+                                    break;
+                                }
+                            }
+                        } else if assign_child.kind() == "expression_list" {
+                            // Check if value is a require() call
+                            for expr_child in assign_child.children(&mut assign_child.walk()) {
+                                if expr_child.kind() == "function_call" {
+                                    require_call = Some(expr_child);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(call_node) = require_call {
+                if let Some(import) = try_extract_require_call(&call_node, code, file_id, alias) {
+                    imports.push(import);
+                    found_import = true;
+                }
             }
         }
-    }
 
-    // Also check for standalone require() calls (without assignment)
-    if node.kind() == "function_call" {
-        if let Some(import) = try_extract_require_call(node, code, file_id, None) {
-            imports.push(import);
-            return; // Found a require call, don't recurse
+        // Also check for standalone require() calls (without assignment)
+        if !found_import && current_node.kind() == "function_call" {
+            if let Some(import) = try_extract_require_call(&current_node, code, file_id, None) {
+                imports.push(import);
+                found_import = true;
+            }
         }
-    }
 
-    for child in node.children(&mut node.walk()) {
-        extract_imports_recursive(&child, code, file_id, imports);
+        // Only push children if we didn't find an import (preserve skip behavior)
+        if !found_import {
+            for child in current_node.children(&mut current_node.walk()) {
+                stack.push(child);
+            }
+        }
     }
 }
 
@@ -869,10 +888,20 @@ impl NodeTracker for LuaParser {
 
 impl LuaParser {
     fn register_node_recursively(&mut self, node: Node) {
-        self.node_tracker
-            .register_handled_node(node.kind(), node.kind_id());
-        for child in node.children(&mut node.walk()) {
-            self.register_node_recursively(child);
+        let mut stack = vec![(node, 0)]; // (node, depth)
+        const MAX_DEPTH: usize = 1000;
+
+        while let Some((current_node, depth)) = stack.pop() {
+            if depth > MAX_DEPTH {
+                continue; // Skip nodes that are too deep
+            }
+
+            self.node_tracker
+                .register_handled_node(current_node.kind(), current_node.kind_id());
+
+            for child in current_node.children(&mut current_node.walk()) {
+                stack.push((child, depth + 1));
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 # Lua Parser Symbol Extraction Coverage Report
 
-*Generated: 2026-01-14 03:17:09 UTC*
+*Generated: 2026-01-25 22:44:47 UTC*
 
 ## Summary
 - Key nodes: 21/21 (100%)

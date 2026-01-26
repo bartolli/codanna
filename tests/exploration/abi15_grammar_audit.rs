@@ -1474,7 +1474,7 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
         }
 
         if !audit.extracted_symbol_kinds.is_empty() {
-            analysis.push_str("## 🔍 Symbol Kinds Extracted\n");
+            analysis.push_str("## 🎯 Symbol Kinds Extracted\n");
             let mut kinds: Vec<_> = audit.extracted_symbol_kinds.iter().collect();
             kinds.sort();
             for kind in kinds {

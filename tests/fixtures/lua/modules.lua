@@ -40,7 +40,7 @@ function M.utils.trim(s)
 end
 
 function M.utils.split(s, sep)
-    if sep == "" then
+    if not sep or sep == "" then
         local result = {}
         for i = 1, #s do
             result[i] = s:sub(i, i)

@@ -69,10 +69,13 @@ impl LanguageBehavior for LuaBehavior {
     ) -> Option<String> {
         use crate::parsing::paths::strip_extension;
 
-        let relative_path = file_path
-            .strip_prefix(project_root)
-            .ok()
-            .or_else(|| file_path.strip_prefix("./").ok())?;
+        let relative_path = if file_path.is_absolute() {
+            // For absolute paths, must be within project_root
+            file_path.strip_prefix(project_root).ok()?
+        } else {
+            // For relative paths, use as-is
+            file_path
+        };
 
         let path = relative_path.to_str()?;
         let path_clean = path.trim_start_matches("./");

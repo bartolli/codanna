@@ -38,15 +38,7 @@ impl Default for LuaResolutionContext {
 
 impl LuaResolutionContext {
     pub fn new(_file_id: FileId) -> Self {
-        Self {
-            scope_stack: vec![LuaScope {
-                symbols: HashMap::new(),
-                scope_type: ScopeType::Module,
-            }],
-            imports: HashMap::new(),
-            global_symbols: HashMap::new(),
-            module_symbols: HashMap::new(),
-        }
+        Self::default()
     }
 
     pub fn add_import_symbol(&mut self, name: String, symbol_id: SymbolId, _is_type_only: bool) {
@@ -133,19 +125,28 @@ impl ResolutionScope for LuaResolutionContext {
 
     fn symbols_in_scope(&self) -> Vec<(String, SymbolId, ScopeLevel)> {
         let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
 
-        for scope in &self.scope_stack {
+        // Iterate scopes in reverse (innermost first) to handle shadowing
+        for scope in self.scope_stack.iter().rev() {
             for (name, id) in &scope.symbols {
-                result.push((name.clone(), *id, ScopeLevel::Local));
+                if seen.insert(name.clone()) {
+                    result.push((name.clone(), *id, ScopeLevel::Local));
+                }
             }
         }
 
+        // Module and global symbols are only included if not shadowed by locals
         for (name, id) in &self.module_symbols {
-            result.push((name.clone(), *id, ScopeLevel::Module));
+            if seen.insert(name.clone()) {
+                result.push((name.clone(), *id, ScopeLevel::Module));
+            }
         }
 
         for (name, id) in &self.global_symbols {
-            result.push((name.clone(), *id, ScopeLevel::Global));
+            if seen.insert(name.clone()) {
+                result.push((name.clone(), *id, ScopeLevel::Global));
+            }
         }
 
         result
@@ -241,12 +242,13 @@ impl InheritanceResolver for LuaInheritanceResolver {
 
     fn get_all_methods(&self, type_name: &str) -> Vec<String> {
         let mut methods = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         let chain = self.get_inheritance_chain(type_name);
 
         for ancestor in chain {
             if let Some(type_methods) = self.type_methods.get(&ancestor) {
                 for method in type_methods {
-                    if !methods.contains(method) {
+                    if seen.insert(method.clone()) {
                         methods.push(method.clone());
                     }
                 }

@@ -1,6 +1,6 @@
 === Lua Language COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-01-14 03:17:09 UTC
-  ABI Version: 14
+  Generated: 2026-01-25 22:44:47 UTC
+  ABI Version: 15
   Node kind count: 75
 
 == FUNCTION NODES ==
