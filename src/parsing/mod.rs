@@ -12,6 +12,7 @@ pub mod javascript;
 pub mod kotlin;
 pub mod language;
 pub mod language_behavior;
+pub mod lua;
 pub mod method_call;
 pub mod parser;
 pub mod paths;
@@ -38,6 +39,7 @@ pub use language::Language;
 pub use language_behavior::{
     LanguageBehavior, LanguageMetadata, RelationRole, default_relationship_compatibility,
 };
+pub use lua::{LuaBehavior, LuaParser};
 pub use method_call::{MethodCall, MethodCallResolver};
 pub use parser::{
     HandledNode, LanguageParser, NodeTracker, NodeTrackingState, safe_substring_window,

@@ -18,6 +18,7 @@ get_repo_url() {
         java) echo "https://github.com/tree-sitter/tree-sitter-java" ;;
         javascript) echo "https://github.com/tree-sitter/tree-sitter-javascript" ;;
         kotlin) echo "https://github.com/bartolli/tree-sitter-kotlin" ;;
+        lua) echo "https://github.com/tree-sitter-grammars/tree-sitter-lua" ;;
         php) echo "https://github.com/tree-sitter/tree-sitter-php" ;;
         python) echo "https://github.com/tree-sitter/tree-sitter-python" ;;
         rust) echo "https://github.com/tree-sitter/tree-sitter-rust" ;;
@@ -27,7 +28,7 @@ get_repo_url() {
 }
 
 # Supported languages
-LANGUAGES="c cpp csharp gdscript go java javascript kotlin php python rust swift typescript"
+LANGUAGES="c cpp csharp gdscript go java javascript kotlin lua php python rust swift typescript"
 
 echo "🔍 Checking grammar versions..."
 echo ""

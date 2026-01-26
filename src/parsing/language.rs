@@ -20,6 +20,7 @@ pub enum Language {
     Gdscript,
     Java,
     Kotlin,
+    Lua,
     Swift,
 }
 
@@ -43,6 +44,7 @@ impl Language {
             Language::Gdscript => super::LanguageId::new("gdscript"),
             Language::Java => super::LanguageId::new("java"),
             Language::Kotlin => super::LanguageId::new("kotlin"),
+            Language::Lua => super::LanguageId::new("lua"),
             Language::Swift => super::LanguageId::new("swift"),
         }
     }
@@ -65,6 +67,7 @@ impl Language {
             "gdscript" => Some(Language::Gdscript),
             "java" => Some(Language::Java),
             "kotlin" => Some(Language::Kotlin),
+            "lua" => Some(Language::Lua),
             "swift" => Some(Language::Swift),
             _ => None,
         }
@@ -102,6 +105,7 @@ impl Language {
             "gd" => Some(Language::Gdscript),
             "java" => Some(Language::Java),
             "kt" | "kts" => Some(Language::Kotlin),
+            "lua" => Some(Language::Lua),
             "swift" => Some(Language::Swift),
             _ => None,
         }
@@ -131,6 +135,7 @@ impl Language {
             Language::Gdscript => &["gd"],
             Language::Java => &["java"],
             Language::Kotlin => &["kt", "kts"],
+            Language::Lua => &["lua"],
             Language::Swift => &["swift"],
         }
     }
@@ -150,6 +155,7 @@ impl Language {
             Language::Gdscript => "gdscript",
             Language::Java => "java",
             Language::Kotlin => "kotlin",
+            Language::Lua => "lua",
             Language::Swift => "swift",
         }
     }
@@ -169,6 +175,7 @@ impl Language {
             Language::Gdscript => "GDScript",
             Language::Java => "Java",
             Language::Kotlin => "Kotlin",
+            Language::Lua => "Lua",
             Language::Swift => "Swift",
         }
     }
@@ -202,8 +209,10 @@ mod tests {
         assert_eq!(Language::from_extension("go"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.mod"), Some(Language::Go));
         assert_eq!(Language::from_extension("go.sum"), Some(Language::Go));
-        assert_eq!(Language::from_extension("txt"), None);
         assert_eq!(Language::from_extension("gd"), Some(Language::Gdscript));
+        assert_eq!(Language::from_extension("lua"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("LUA"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("txt"), None);
     }
 
     #[test]
@@ -257,6 +266,10 @@ mod tests {
             Language::from_path(Path::new("player.gd")),
             Some(Language::Gdscript)
         );
+        assert_eq!(
+            Language::from_path(Path::new("script.lua")),
+            Some(Language::Lua)
+        );
         assert_eq!(Language::from_path(Path::new("README.md")), None);
     }
 
@@ -273,5 +286,6 @@ mod tests {
         assert!(Language::Go.extensions().contains(&"go.mod"));
         assert!(Language::Go.extensions().contains(&"go.sum"));
         assert!(Language::Gdscript.extensions().contains(&"gd"));
+        assert!(Language::Lua.extensions().contains(&"lua"));
     }
 }
