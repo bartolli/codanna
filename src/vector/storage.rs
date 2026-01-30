@@ -419,11 +419,12 @@ impl MmapVectorStorage {
     fn ensure_mapped(&mut self) -> Result<(), VectorStorageError> {
         if self.mmap.is_none() {
             let file = File::open(&self.path)?;
-            self.mmap = Some(unsafe { MmapOptions::new().map(&file)? });
+            let mmap = unsafe { MmapOptions::new().map(&file)? };
 
             // Update vector count from file
-            let (_, _, count) = Self::read_header(self.mmap.as_ref().unwrap())?;
+            let (_, _, count) = Self::read_header(&mmap)?;
             self.vector_count = count;
+            self.mmap = Some(mmap);
         }
         Ok(())
     }
