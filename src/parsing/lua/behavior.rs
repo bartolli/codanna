@@ -119,7 +119,8 @@ impl LanguageBehavior for LuaBehavior {
             // For assignments like "M.field = value", get the last identifier
             let before_equals = signature.split('=').next().unwrap_or("");
             before_equals
-                .split(['.', ' ']).rfind(|s| !s.is_empty())
+                .split(['.', ' '])
+                .rfind(|s| !s.is_empty())
                 .unwrap_or("")
                 .trim()
         };
