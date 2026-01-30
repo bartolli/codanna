@@ -219,6 +219,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         StreamableHttpServerConfig {
             cancellation_token: ct.child_token(),
             sse_keep_alive: Some(Duration::from_secs(15)),
+            sse_retry: None,
             stateful_mode: true,
         },
     );

@@ -16,7 +16,7 @@ impl CodeIntelligenceClient {
         delay_before_tool_secs: Option<u64>,
     ) -> Result<()> {
         use rmcp::{
-            model::{CallToolRequestParam, ClientRequest, CustomRequest, JsonObject},
+            model::{CallToolRequestParams, ClientRequest, CustomRequest, JsonObject},
             service::ServiceExt,
             transport::{ConfigureCommandExt, TokioChildProcess},
         };
@@ -57,9 +57,11 @@ impl CodeIntelligenceClient {
         // Always call get_index_info first to verify semantic availability
         println!("\nCalling get_index_info tool...");
         let get_info_result = client
-            .call_tool(CallToolRequestParam {
+            .call_tool(CallToolRequestParams {
+                meta: None,
                 name: "get_index_info".into(),
                 arguments: None,
+                task: None,
             })
             .await?;
         Self::print_tool_output(&get_info_result);
@@ -92,9 +94,11 @@ impl CodeIntelligenceClient {
             };
 
             let tool_result = client
-                .call_tool(CallToolRequestParam {
+                .call_tool(CallToolRequestParams {
+                    meta: None,
                     name: tool_name.into(),
                     arguments: parsed_args,
+                    task: None,
                 })
                 .await?;
             Self::print_tool_output(&tool_result);
