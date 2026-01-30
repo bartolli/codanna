@@ -1906,7 +1906,7 @@ impl ServerHandler for CodeIntelligenceServer {
 
     async fn initialize(
         &self,
-        request: InitializeRequestParam,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, McpError> {
         // Register client capabilities (required for MCP handshake)

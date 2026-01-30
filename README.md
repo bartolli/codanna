@@ -91,7 +91,7 @@ The difference: Codanna understands code structure. It knows `parseConfig` is a 
 
 **Performance:** Sub-10ms lookups, 75,000+ symbols/second parsing.
 
-**Languages:** Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Swift, GDScript.
+**Languages:** Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Lua, Swift, GDScript.
 
 ## Integration
 

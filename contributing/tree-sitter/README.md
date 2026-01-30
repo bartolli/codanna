@@ -38,7 +38,7 @@ The setup script configures tree-sitter and installs grammars on-demand:
 ./contributing/tree-sitter/scripts/setup.sh go
 ```
 
-Supported languages: typescript, javascript, python, rust, go, php, c, cpp, csharp, java, kotlin, swift, gdscript
+Supported languages: typescript, javascript, python, rust, go, php, c, cpp, csharp, java, kotlin, lua, swift, gdscript
 
 ## Available Scripts
 

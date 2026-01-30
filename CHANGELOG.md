@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.14] - 2026-01-29
+
+### Added
+
+- Lua language support: parser, behavior, definition, resolution modules
+- Lua test fixtures and comprehensive examples
+- Lua grammar analysis and audit report documentation
+
+### Changed
+
+- Updated rmcp to 0.14.0 (CallToolRequestParams, InitializeRequestParams, StreamableHttpServerConfig API)
+- Updated clap to 4.5.56, chrono to 0.4.43, thiserror to 2.0.18, rcgen to 0.14.7, sysinfo to 0.38.0
+
+### Fixed
+
+- Vector storage clippy panicking_unwrap false positive
+
 ## [0.9.13] - 2026-01-16
 
 ### Added
