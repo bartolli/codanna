@@ -90,7 +90,6 @@ tree-sitter-c = "0.24.1"
 tree-sitter-c-sharp = "0.23.1"
 tree-sitter-cpp = "0.23.4"
 chrono = "0.4.43"
-git2 = { version = "0.20.3", features = ["vendored-openssl"] }
 tempfile = "3.24.0"
 serde_json5 = "0.2.1"
 tree-sitter-swift = "0.7.1"
@@ -99,6 +98,13 @@ glob = "0.3.3"
 async-trait = "0.1.89"
 sysinfo = "0.38.0"
 indexmap = { version = "2.13.0", features = ["serde"] }
+
+# For Linux/Mac: Keep building OpenSSL so the binary runs on any distro
+[target.'cfg(unix)'.dependencies]
+git2 = { version = "0.20.3", features = ["vendored-openssl"] }
+# For Windows: Use native Windows APIs (Schannel). No C++ OpenSSL build needed!
+[target.'cfg(windows)'.dependencies]
+git2 = { version = "0.20.3", default-features = false, features = ["https", "ssh"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }

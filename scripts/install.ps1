@@ -11,11 +11,15 @@ function Err($msg) { Write-Host "codanna: ERROR: $msg" -ForegroundColor Red; exi
 
 # Detect platform
 function Get-Platform {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-    switch ($arch) {
-        "X64" { return "windows-x64" }
-        default { Err "unsupported architecture: $arch (only x64 is supported)" }
+    if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
+        return "windows-x64"
     }
+    # Fallback check for 64-bit PowerShell
+    if ([Environment]::Is64BitOperatingSystem) {
+        return "windows-x64"
+    }
+    
+    Err "unsupported architecture: $env:PROCESSOR_ARCHITECTURE (only x64 is supported)"
 }
 
 # Get latest release tag
