@@ -75,14 +75,20 @@ impl<'de> Deserialize<'de> for LanguageId {
         // Convert to a static string by matching known languages
         // This is necessary because LanguageId requires &'static str
         let static_str = match s.as_str() {
-            "rust" => "rust",
-            "python" => "python",
-            "javascript" => "javascript",
-            "typescript" => "typescript",
-            "php" => "php",
-            "go" => "go",
+            "c" => "c",
+            "cpp" => "cpp",
             "csharp" => "csharp",
+            "gdscript" => "gdscript",
+            "go" => "go",
+            "java" => "java",
+            "javascript" => "javascript",
             "kotlin" => "kotlin",
+            "lua" => "lua",
+            "php" => "php",
+            "python" => "python",
+            "rust" => "rust",
+            "swift" => "swift",
+            "typescript" => "typescript",
             // For unknown languages, we leak the string to get 'static lifetime
             // This is safe because language identifiers are typically created once
             // at startup and live for the entire program
@@ -382,6 +388,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::gdscript::register(registry);
     super::java::register(registry);
     super::kotlin::register(registry);
+    super::lua::register(registry);
     super::swift::register(registry);
 }
 

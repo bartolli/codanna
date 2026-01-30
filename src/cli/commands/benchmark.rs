@@ -6,7 +6,8 @@ use std::time::Instant;
 use crate::display::tables::create_benchmark_table;
 use crate::display::theme::Theme;
 use crate::parsing::{
-    CSharpParser, GoParser, LanguageParser, PhpParser, PythonParser, RustParser, TypeScriptParser,
+    CSharpParser, GoParser, LanguageParser, LuaParser, PhpParser, PythonParser, RustParser,
+    TypeScriptParser,
 };
 use crate::types::{FileId, SymbolCounter};
 use console::style;
@@ -29,23 +30,26 @@ pub fn run(language: &str, custom_file: Option<PathBuf>) {
         "php" => benchmark_php_parser(custom_file),
         "typescript" | "ts" => benchmark_typescript_parser(custom_file),
         "go" => benchmark_go_parser(custom_file),
+        "lua" => benchmark_lua_parser(custom_file),
         "csharp" | "c#" | "cs" => benchmark_csharp_parser(custom_file),
         "all" => {
-            benchmark_rust_parser(None);
-            println!();
-            benchmark_python_parser(None);
-            println!();
-            benchmark_php_parser(None);
-            println!();
-            benchmark_typescript_parser(None);
+            benchmark_csharp_parser(None);
             println!();
             benchmark_go_parser(None);
             println!();
-            benchmark_csharp_parser(None);
+            benchmark_lua_parser(None);
+            println!();
+            benchmark_php_parser(None);
+            println!();
+            benchmark_python_parser(None);
+            println!();
+            benchmark_rust_parser(None);
+            println!();
+            benchmark_typescript_parser(None);
         }
         _ => {
             eprintln!("Unknown language: {language}");
-            eprintln!("Available languages: rust, python, php, typescript, go, csharp, all");
+            eprintln!("Available languages: csharp, go, lua, php, python, rust, typescript, all");
             std::process::exit(1);
         }
     }
@@ -144,6 +148,21 @@ fn benchmark_go_parser(custom_file: Option<PathBuf>) {
 
     let mut parser = GoParser::new().expect("Failed to create Go parser");
     benchmark_parser("Go", &mut parser, &code, file_path);
+}
+
+fn benchmark_lua_parser(custom_file: Option<PathBuf>) {
+    let (code, file_path) = if let Some(path) = custom_file {
+        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("Failed to read {}: {e}", path.display());
+            std::process::exit(1);
+        });
+        (content, Some(path))
+    } else {
+        (generate_lua_benchmark_code(), None)
+    };
+
+    let mut parser = LuaParser::new().expect("Failed to create Lua parser");
+    benchmark_parser("Lua", &mut parser, &code, file_path);
 }
 
 fn benchmark_csharp_parser(custom_file: Option<PathBuf>) {
@@ -564,6 +583,77 @@ func main() {
 "#,
     );
 
+    code
+}
+
+fn generate_lua_benchmark_code() -> String {
+    let mut code = String::from("-- Lua benchmark file\n\nlocal M = {}\n\n");
+
+    // Generate 500 functions
+    for i in 0..500 {
+        code.push_str(&format!(
+            r#"--- Function {i} documentation
+--- @param param1 number The first parameter
+--- @param param2 string The second parameter
+--- @return boolean
+function M.function_{i}(param1, param2)
+    local result = param1 * 2
+    return result > 0 and #param2 > 0
+end
+
+"#
+        ));
+    }
+
+    // Generate 50 "classes" (table-based OOP)
+    for i in 0..50 {
+        code.push_str(&format!(
+            r#"--- Class {i} documentation
+local Class{i} = {{}}
+Class{i}.__index = Class{i}
+
+function Class{i}:new(value)
+    local instance = setmetatable({{}}, self)
+    instance.value = value
+    return instance
+end
+
+function Class{i}:methodA()
+    return self.value * 2
+end
+
+function Class{i}:methodB(param)
+    return string.upper(param)
+end
+
+M.Class{i} = Class{i}
+
+"#
+        ));
+    }
+
+    // Generate 25 local helper functions
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"local function _helper_{i}(data)
+    return data * {i}
+end
+
+"#
+        ));
+    }
+
+    // Generate some module-level variables and constants
+    for i in 0..25 {
+        code.push_str(&format!(
+            r#"local CONSTANT_{i} = {i}
+local variable_{i} = "value_{i}"
+
+"#
+        ));
+    }
+
+    code.push_str("return M\n");
     code
 }
 
