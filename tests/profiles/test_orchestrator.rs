@@ -263,3 +263,121 @@ fn test_install_profile_conflict_creates_sidecar() {
     let content_b = fs::read_to_string(&sidecar_path).unwrap();
     assert_eq!(content_b, "# Profile B");
 }
+
+#[cfg(unix)]
+#[test]
+fn test_install_profile_supports_symlinked_directory() {
+    let temp = tempdir().unwrap();
+
+    let profiles_dir = temp.path().join("profiles");
+    let profile_dir = profiles_dir.join("symlink-profile");
+    fs::create_dir_all(profile_dir.join("skills")).unwrap();
+
+    fs::write(
+        profile_dir.join("profile.json"),
+        r#"{"name": "symlink-profile", "version": "1.0.0", "files": []}"#,
+    )
+    .unwrap();
+
+    let shared_skill_dir = temp.path().join("shared-skills").join("sample-skill");
+    fs::create_dir_all(&shared_skill_dir).unwrap();
+    fs::write(shared_skill_dir.join("SKILL.md"), "# Sample Skill").unwrap();
+
+    std::os::unix::fs::symlink(
+        &shared_skill_dir,
+        profile_dir.join("skills").join("sample-skill"),
+    )
+    .unwrap();
+
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    install_profile(
+        "symlink-profile",
+        &profiles_dir,
+        &workspace,
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let installed_skill = workspace.join("skills/sample-skill/SKILL.md");
+    assert!(installed_skill.exists());
+    assert_eq!(
+        fs::read_to_string(installed_skill).unwrap(),
+        "# Sample Skill"
+    );
+
+    let lockfile = ProfileLockfile::load(&workspace.join(".codanna/profiles.lock.json")).unwrap();
+    let entry = lockfile.get_profile("symlink-profile").unwrap();
+    assert!(
+        entry
+            .files
+            .contains(&"skills/sample-skill/SKILL.md".to_string())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_force_reinstall_symlinked_directory_overwrites_owned_files() {
+    let temp = tempdir().unwrap();
+
+    let profiles_dir = temp.path().join("profiles");
+    let profile_dir = profiles_dir.join("symlink-profile");
+    fs::create_dir_all(profile_dir.join("skills")).unwrap();
+
+    fs::write(
+        profile_dir.join("profile.json"),
+        r#"{"name": "symlink-profile", "version": "1.0.0", "files": []}"#,
+    )
+    .unwrap();
+
+    let shared_skill_dir = temp.path().join("shared-skills").join("sample-skill");
+    fs::create_dir_all(&shared_skill_dir).unwrap();
+    let skill_file = shared_skill_dir.join("SKILL.md");
+    fs::write(&skill_file, "# V1").unwrap();
+
+    std::os::unix::fs::symlink(
+        &shared_skill_dir,
+        profile_dir.join("skills").join("sample-skill"),
+    )
+    .unwrap();
+
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+
+    install_profile(
+        "symlink-profile",
+        &profiles_dir,
+        &workspace,
+        false,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    fs::write(&skill_file, "# V2").unwrap();
+    install_profile(
+        "symlink-profile",
+        &profiles_dir,
+        &workspace,
+        true,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(workspace.join("skills/sample-skill/SKILL.md")).unwrap(),
+        "# V2"
+    );
+    assert!(
+        !workspace
+            .join("skills/sample-skill.symlink-profile/SKILL.md")
+            .exists()
+    );
+}

@@ -5,6 +5,7 @@
 use super::error::{ProfileError, ProfileResult};
 use super::lockfile::ProfileLockfile;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 /// Installation result: (installed files, sidecar files)
 /// - installed: List of relative file paths that were installed
@@ -204,15 +205,19 @@ impl ProfileInstaller {
                         true
                     }
                     None => {
-                        // Unknown owner
-                        if !force {
+                        if path_owned_by_profile(lockfile, profile_name, file_path) {
+                            // Directory path owned through tracked child files.
+                            false
+                        } else if !force {
+                            // Unknown owner
                             return Err(ProfileError::FileConflict {
                                 path: file_path.clone(),
                                 owner: "unknown".to_string(),
                             });
+                        } else {
+                            // Force enabled - use sidecar
+                            true
                         }
-                        // Force enabled - use sidecar
-                        true
                     }
                 }
             } else {
@@ -233,15 +238,13 @@ impl ProfileInstaller {
                 std::fs::create_dir_all(parent)?;
             }
 
-            // Copy file
-            std::fs::copy(&source_path, &final_path)?;
+            let copied_files =
+                copy_source_entry(&source_path, &final_path, Path::new(&relative_path))?;
 
             if use_sidecar {
-                sidecars.push((file_path.clone(), relative_path.clone()));
-                installed.push(relative_path);
-            } else {
-                installed.push(file_path.clone());
+                sidecars.push((file_path.clone(), relative_path));
             }
+            installed.extend(copied_files);
         }
 
         Ok((installed, sidecars))
@@ -252,4 +255,77 @@ impl Default for ProfileInstaller {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn path_owned_by_profile(lockfile: &ProfileLockfile, profile_name: &str, path: &str) -> bool {
+    let Some(entry) = lockfile.get_profile(profile_name) else {
+        return false;
+    };
+
+    let prefix = format!("{}/", path.trim_end_matches('/'));
+    entry
+        .files
+        .iter()
+        .any(|tracked| tracked == path || tracked.starts_with(&prefix))
+}
+
+fn copy_source_entry(
+    source_path: &Path,
+    dest_path: &Path,
+    relative_base: &Path,
+) -> ProfileResult<Vec<String>> {
+    if source_path.is_dir() {
+        return copy_directory_contents(source_path, dest_path, relative_base);
+    }
+
+    std::fs::copy(source_path, dest_path)?;
+    Ok(vec![normalize_path(relative_base)])
+}
+
+fn copy_directory_contents(
+    source_dir: &Path,
+    dest_dir: &Path,
+    relative_base: &Path,
+) -> ProfileResult<Vec<String>> {
+    let mut copied_files = Vec::new();
+    std::fs::create_dir_all(dest_dir)?;
+
+    for entry in WalkDir::new(source_dir).follow_links(true) {
+        let entry = entry.map_err(|e| ProfileError::IoError(std::io::Error::other(e)))?;
+        let entry_path = entry.path();
+        let relative = entry_path.strip_prefix(source_dir).map_err(|_| {
+            ProfileError::IoError(std::io::Error::other(format!(
+                "walkdir entry '{}' is outside source '{}'",
+                entry_path.display(),
+                source_dir.display()
+            )))
+        })?;
+
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+
+        if relative.components().any(|c| c.as_os_str() == ".git") {
+            continue;
+        }
+
+        let destination = dest_dir.join(relative);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&destination)?;
+            continue;
+        }
+
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        std::fs::copy(entry_path, &destination)?;
+        copied_files.push(normalize_path(&relative_base.join(relative)));
+    }
+
+    Ok(copied_files)
+}
+
+fn normalize_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
