@@ -99,10 +99,10 @@ async-trait = "0.1.89"
 sysinfo = "0.38.0"
 indexmap = { version = "2.13.0", features = ["serde"] }
 
-# For Linux/Mac: Keep building OpenSSL so the binary runs on any distro
+# Unix: vendored OpenSSL for portable binaries
 [target.'cfg(unix)'.dependencies]
 git2 = { version = "0.20.3", features = ["vendored-openssl"] }
-# For Windows: Use native Windows APIs (Schannel). No C++ OpenSSL build needed!
+# Windows: native TLS (Schannel) instead of OpenSSL
 [target.'cfg(windows)'.dependencies]
 git2 = { version = "0.20.3", default-features = false, features = ["https", "ssh"] }
 
