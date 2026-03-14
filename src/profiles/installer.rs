@@ -79,6 +79,10 @@ pub fn check_all_conflicts(
                     // Force enabled - will use sidecar
                 }
                 None => {
+                    if path_owned_by_profile(lockfile, profile_name, file_path) {
+                        // Directory path owned through tracked child files
+                        continue;
+                    }
                     // File exists but unknown owner (user's file or orphaned)
                     if !force {
                         conflicts.push((file_path.clone(), "unknown".to_string()));
