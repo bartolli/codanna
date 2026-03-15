@@ -1,6 +1,6 @@
 # Python Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 129
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 135
 - Symbol kinds extracted: 6
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - %
 - (
@@ -146,11 +146,11 @@ These nodes are in examples and handled by parser:
 - {
 - }
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
 These nodes appear in comprehensive.py but aren't handled:
 - expression_statement
 
-## 📝 Missing from Examples
+## Missing from Examples
 These grammar nodes aren't in comprehensive.py:
 - _compound_statement
 - _simple_statement
@@ -199,7 +199,7 @@ These grammar nodes aren't in comprehensive.py:
 - union_type
 - wildcard_import
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Class
 - Constant
 - Function

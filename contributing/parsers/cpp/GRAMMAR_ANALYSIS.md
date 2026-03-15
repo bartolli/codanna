@@ -1,6 +1,6 @@
 # C++ Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 223
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 154
 - Symbol kinds extracted: 5
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - !=
 - "
@@ -165,7 +165,7 @@ These nodes are in examples and handled by parser:
 - }
 - ~
 
-## 📝 Missing from Examples
+## Missing from Examples
 These grammar nodes aren't in comprehensive.cpp:
 - _abstract_declarator
 - _declarator
@@ -297,7 +297,7 @@ These grammar nodes aren't in comprehensive.cpp:
 - variadic_type_parameter_declaration
 - while_statement
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Class
 - Enum
 - Function

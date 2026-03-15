@@ -1,6 +1,6 @@
 # Lua Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 0
@@ -9,9 +9,10 @@
 - Symbol kinds extracted: 6
 
 ## Warning
-Missing node-types.json for Lua (No such file or directory (os error 2)). Run `./contributing/tree-sitter/scripts/setup.sh lua` and copy tree-sitter-lua/src/node-types.json to contributing/parsers/lua/node-types.json.
+Missing contributing/parsers/lua/node-types.json (No such file or directory (os error 2)).
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
+These nodes are in examples and handled by parser:
 - "
 - #
 - (
@@ -88,7 +89,7 @@ Missing node-types.json for Lua (No such file or directory (os error 2)). Run `.
 - {
 - }
 
-## 🔍 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Constant
 - Field
 - Function

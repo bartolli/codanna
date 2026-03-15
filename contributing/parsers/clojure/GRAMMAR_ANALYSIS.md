@@ -1,6 +1,6 @@
 # Clojure Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 35
@@ -8,7 +8,8 @@
 - Nodes handled by parser: 34
 - Symbol kinds extracted: 7
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
+These nodes are in examples and handled by parser:
 - anon_fn_lit
 - auto_res_mark
 - bool_lit
@@ -44,7 +45,8 @@
 - var_quoting_lit
 - vec_lit
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
+These nodes appear in comprehensive.clj but aren't handled:
 - #
 - ##
 - #'
@@ -68,10 +70,11 @@
 - ~
 - ~@
 
-## ⭕ Missing from Examples
+## Missing from Examples
+These grammar nodes aren't in comprehensive.clj:
 - evaling_lit
 
-## 🔍 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Function
 - Interface
 - Macro

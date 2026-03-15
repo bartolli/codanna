@@ -1,6 +1,6 @@
 # Go Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 112
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 114
 - Symbol kinds extracted: 9
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - !=
 - "
@@ -125,11 +125,11 @@ These nodes are in examples and handled by parser:
 - }
 - ~
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
 These nodes appear in comprehensive.go but aren't handled:
 - source_file
 
-## 📝 Missing from Examples
+## Missing from Examples
 These grammar nodes aren't in comprehensive.go:
 - _expression
 - _simple_statement
@@ -168,7 +168,7 @@ These grammar nodes aren't in comprehensive.go:
 - variadic_argument
 - variadic_parameter_declaration
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Constant
 - Field
 - Function

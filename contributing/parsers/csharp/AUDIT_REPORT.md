@@ -1,6 +1,6 @@
 # C# Parser Coverage Report
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Summary
 - Key nodes: 31/32 (96%)

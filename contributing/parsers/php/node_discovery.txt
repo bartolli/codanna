@@ -1,210 +1,211 @@
-=== PHP Language ABI-15 COMPREHENSIVE NODE MAPPING ===
+=== PHP Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 15
   Node kind count: 177
 
 === NAMESPACE & IMPORT NODES ===
-  ✓ namespace_definition                -> ID: 206
-  ✓ namespace_use_declaration           -> ID: 207
-  ✓ namespace_use_clause                -> ID: 208
-  ✓ namespace_use_group                 -> ID: 214
-  ✓ namespace_name                      -> ID: 212
-  ✗ namespace_aliasing_clause           NOT FOUND
+  + namespace_definition                -> ID: 206
+  + namespace_use_declaration           -> ID: 207
+  + namespace_use_clause                -> ID: 208
+  + namespace_use_group                 -> ID: 214
+  + namespace_name                      -> ID: 212
+  x namespace_aliasing_clause           NOT FOUND
 
 === CLASS & TRAIT NODES ===
-  ✓ class_declaration                   -> ID: 222
-  ✓ interface_declaration               -> ID: 216
-  ✓ trait_declaration                   -> ID: 215
-  ✓ enum_declaration                    -> ID: 218
-  ✓ abstract_modifier                   -> ID: 225
-  ✓ final_modifier                      -> ID: 224
-  ✓ readonly_modifier                   -> ID: 226
-  ✓ base_clause                         -> ID: 217
-  ✓ class_interface_clause              -> ID: 227
-  ✗ trait_use_clause                    NOT FOUND
-  ✗ trait_alias                         NOT FOUND
-  ✗ trait_precedence                    NOT FOUND
+  + class_declaration                   -> ID: 222
+  + interface_declaration               -> ID: 216
+  + trait_declaration                   -> ID: 215
+  + enum_declaration                    -> ID: 218
+  + abstract_modifier                   -> ID: 225
+  + final_modifier                      -> ID: 224
+  + readonly_modifier                   -> ID: 226
+  + base_clause                         -> ID: 217
+  + class_interface_clause              -> ID: 227
+  x trait_use_clause                    NOT FOUND
+  x trait_alias                         NOT FOUND
+  x trait_precedence                    NOT FOUND
 
 === METHOD & FUNCTION NODES ===
-  ✓ method_declaration                  -> ID: 237
-  ✓ function_definition                 -> ID: 244
-  ✓ arrow_function                      -> ID: 249
-  ✓ anonymous_function                  -> ID: 245
-  ✗ anonymous_function_creation_expression NOT FOUND
-  ✓ anonymous_function_use_clause       -> ID: 246
-  ✓ formal_parameters                   -> ID: 250
-  ✓ simple_parameter                    -> ID: 252
-  ✓ property_promotion_parameter        -> ID: 251
-  ✓ variadic_parameter                  -> ID: 253
-  ✗ reference_parameter                 NOT FOUND
-  ✗ typed_parameter                     NOT FOUND
+  + method_declaration                  -> ID: 237
+  + function_definition                 -> ID: 244
+  + arrow_function                      -> ID: 249
+  + anonymous_function                  -> ID: 245
+  x anonymous_function_creation_expression NOT FOUND
+  + anonymous_function_use_clause       -> ID: 246
+  + formal_parameters                   -> ID: 250
+  + simple_parameter                    -> ID: 252
+  + property_promotion_parameter        -> ID: 251
+  + variadic_parameter                  -> ID: 253
+  x reference_parameter                 NOT FOUND
+  x typed_parameter                     NOT FOUND
 
 === PROPERTY & CONSTANT NODES ===
-  ✓ property_declaration                -> ID: 231
-  ✓ property_element                    -> ID: 233
-  ✓ const_declaration                   -> ID: 229
-  ✓ const_element                       -> ID: 264
-  ✓ class_constant_access_expression    -> ID: 314
-  ✓ visibility_modifier                 -> ID: 243
-  ✓ static_modifier                     -> ID: 238
-  ✗ var_modifier                        NOT FOUND
+  + property_declaration                -> ID: 231
+  + property_element                    -> ID: 233
+  + const_declaration                   -> ID: 229
+  + const_element                       -> ID: 264
+  + class_constant_access_expression    -> ID: 314
+  + visibility_modifier                 -> ID: 243
+  + static_modifier                     -> ID: 238
+  x var_modifier                        NOT FOUND
 
 === ATTRIBUTE NODES ===
-  ✓ attribute_list                      -> ID: 357
-  ✓ attribute_group                     -> ID: 356
-  ✓ attribute                           -> ID: 358
-  ✗ attribute_arguments                 NOT FOUND
-  ✗ named_argument                      NOT FOUND
+  + attribute_list                      -> ID: 357
+  + attribute_group                     -> ID: 356
+  + attribute                           -> ID: 358
+  x attribute_arguments                 NOT FOUND
+  x named_argument                      NOT FOUND
 
 === TYPE NODES ===
-  ✓ union_type                          -> ID: 258
-  ✓ intersection_type                   -> ID: 259
-  ✗ nullable_type                       NOT FOUND
-  ✓ primitive_type                      -> ID: 261
-  ✓ named_type                          -> ID: 256
-  ✓ optional_type                       -> ID: 257
-  ✓ bottom_type                         -> ID: 46
-  ✗ void_type                           NOT FOUND
-  ✗ mixed_type                          NOT FOUND
-  ✗ never_type                          NOT FOUND
+  + union_type                          -> ID: 258
+  + intersection_type                   -> ID: 259
+  x nullable_type                       NOT FOUND
+  + primitive_type                      -> ID: 261
+  + named_type                          -> ID: 256
+  + optional_type                       -> ID: 257
+  + bottom_type                         -> ID: 46
+  x void_type                           NOT FOUND
+  x mixed_type                          NOT FOUND
+  x never_type                          NOT FOUND
 
 === UNCATEGORIZED NODES ===
-  ✓ !                                   -> ID: 107
-  ✓ "                                   -> ID: 141
-  ✓ #[                                  -> ID: 137
-  ✓ $                                   -> ID: 151
-  ✓ &                                   -> ID: 7
-  ✓ &&                                  -> ID: 161
-  ✓ '                                   -> ID: 143
-  ✓ (                                   -> ID: 39
-  ✓ )                                   -> ID: 40
-  ✓ *                                   -> ID: 177
-  ✓ +                                   -> ID: 104
-  ✓ ++                                  -> ID: 114
-  ✓ ,                                   -> ID: 9
-  ✓ ->                                  -> ID: 128
-  ✓ .                                   -> ID: 174
-  ✓ ...                                 -> ID: 44
-  ✓ :                                   -> ID: 24
-  ✓ ::                                  -> ID: 110
-  ✓ ;                                   -> ID: 6
-  ✓ <                                   -> ID: 168
-  ✓ =                                   -> ID: 10
-  ✓ ===                                 -> ID: 166
-  ✓ =>                                  -> ID: 33
-  ✓ >                                   -> ID: 169
-  ✓ >=                                  -> ID: 171
-  ✓ ?                                   -> ID: 45
-  ✓ ?->                                 -> ID: 129
-  ✓ ??                                  -> ID: 155
-  ✓ [                                   -> ID: 131
-  ✓ \                                   -> ID: 17
-  ✓ ]                                   -> ID: 132
-  ✓ abstract                            -> ID: 30
-  ✓ anonymous_class                     -> ID: 320
-  ✓ argument                            -> ID: 345
-  ✓ arguments                           -> ID: 344
-  ✓ array                               -> ID: 48
-  ✓ array_creation_expression           -> ID: 355
-  ✓ array_element_initializer           -> ID: 386
-  ✓ as                                  -> ID: 14
-  ✓ assignment_expression               -> ID: 324
-  ✓ binary_expression                   -> ID: 387
-  ✓ bool                                -> ID: 49
-  ✓ boolean                             -> ID: 376
-  ✓ case                                -> ID: 27
-  ✓ catch                               -> ID: 81
-  ✓ catch_clause                        -> ID: 273
-  ✓ class                               -> ID: 28
-  ✓ clone                               -> ID: 109
-  ✓ clone_expression                    -> ID: 311
-  ✓ comment                             -> ID: 184
-  ✓ compound_statement                  -> ID: 304
-  ✓ conditional_expression              -> ID: 326
-  ✓ const                               -> ID: 16
-  ✓ declaration_list                    -> ID: 223
-  ✓ declare                             -> ID: 74
-  ✓ declare_directive                   -> ID: 270
-  ✓ declare_statement                   -> ID: 269
-  ✓ default                             -> ID: 101
-  ✓ disjunctive_normal_form_type        -> ID: 260
-  ✓ echo                                -> ID: 71
-  ✓ echo_statement                      -> ID: 266
-  ✓ encapsed_string                     -> ID: 367
-  ✓ enum                                -> ID: 23
-  ✓ enum_case                           -> ID: 221
-  ✓ enum_declaration_list               -> ID: 219
-  ✓ escape_sequence                     -> ID: 138
-  ✓ expression_statement                -> ID: 306
-  ✓ extends                             -> ID: 22
-  ✓ final                               -> ID: 29
-  ✓ finally                             -> ID: 82
-  ✓ finally_clause                      -> ID: 275
-  ✓ fn                                  -> ID: 43
-  ✓ for                                 -> ID: 92
-  ✓ for_statement                       -> ID: 283
-  ✓ function                            -> ID: 15
-  ✓ function_call_expression            -> ID: 338
-  ✓ if                                  -> ID: 96
-  ✓ if_statement                        -> ID: 289
-  ✓ implements                          -> ID: 32
-  ✓ int                                 -> ID: 26
-  ✓ integer                             -> ID: 86
-  ✓ interface                           -> ID: 21
-  ✓ list_literal                        -> ID: 334
-  ✓ match                               -> ID: 100
-  ✓ match_block                         -> ID: 296
-  ✓ match_condition_list                -> ID: 297
-  ✓ match_conditional_expression        -> ID: 298
-  ✓ match_default_expression            -> ID: 299
-  ✓ match_expression                    -> ID: 295
-  ✓ member_access_expression            -> ID: 329
-  ✓ member_call_expression              -> ID: 347
-  ✓ name                                -> ID: 1
-  ✓ namespace                           -> ID: 12
-  ✓ new                                 -> ID: 112
-  ✓ null                                -> ID: 377
-  ✓ nullsafe_member_call_expression     -> ID: 348
-  ✓ object                              -> ID: 56
-  ✓ object_creation_expression          -> ID: 316
-  ✓ parent                              -> ID: 134
-  ✓ parenthesized_expression            -> ID: 313
-  ✓ php_tag                             -> ID: 2
-  ✓ private                             -> ID: 38
-  ✓ program                             -> ID: 197
-  ✓ protected                           -> ID: 37
-  ✓ public                              -> ID: 36
-  ✓ qualified_name                      -> ID: 209
-  ✓ readonly                            -> ID: 31
-  ✓ relative_scope                      -> ID: 342
-  ✓ return                              -> ID: 87
-  ✓ return_statement                    -> ID: 279
-  ✓ scoped_call_expression              -> ID: 340
-  ✓ self                                -> ID: 133
-  ✓ static                              -> ID: 8
-  ✓ strict_types                        -> ID: 78
-  ✓ string                              -> ID: 368
-  ✓ string_content                      -> ID: 369
-  ✓ subscript_expression                -> ID: 351
-  ✓ throw                               -> ID: 88
-  ✓ throw_expression                    -> ID: 280
-  ✓ trait                               -> ID: 20
-  ✓ try                                 -> ID: 80
-  ✓ try_statement                       -> ID: 272
-  ✓ type_list                           -> ID: 274
-  ✓ unary_op_expression                 -> ID: 309
-  ✓ unset                               -> ID: 73
-  ✓ unset_statement                     -> ID: 268
-  ✓ update_expression                   -> ID: 321
-  ✓ use                                 -> ID: 13
-  ✓ use_declaration                     -> ID: 239
-  ✓ variable_name                       -> ID: 383
-  ✓ variadic_placeholder                -> ID: 343
-  ✓ variadic_unpacking                  -> ID: 349
-  ✓ yield                               -> ID: 152
-  ✓ yield_expression                    -> ID: 385
-  ✓ {                                   -> ID: 18
-  ✓ |                                   -> ID: 47
-  ✓ ||                                  -> ID: 160
-  ✓ }                                   -> ID: 19
+  + !                                   -> ID: 107
+  + "                                   -> ID: 141
+  + #[                                  -> ID: 137
+  + $                                   -> ID: 151
+  + &                                   -> ID: 7
+  + &&                                  -> ID: 161
+  + '                                   -> ID: 143
+  + (                                   -> ID: 39
+  + )                                   -> ID: 40
+  + *                                   -> ID: 177
+  + +                                   -> ID: 104
+  + ++                                  -> ID: 114
+  + ,                                   -> ID: 9
+  + ->                                  -> ID: 128
+  + .                                   -> ID: 174
+  + ...                                 -> ID: 44
+  + :                                   -> ID: 24
+  + ::                                  -> ID: 110
+  + ;                                   -> ID: 6
+  + <                                   -> ID: 168
+  + =                                   -> ID: 10
+  + ===                                 -> ID: 166
+  + =>                                  -> ID: 33
+  + >                                   -> ID: 169
+  + >=                                  -> ID: 171
+  + ?                                   -> ID: 45
+  + ?->                                 -> ID: 129
+  + ??                                  -> ID: 155
+  + [                                   -> ID: 131
+  + \                                   -> ID: 17
+  + ]                                   -> ID: 132
+  + abstract                            -> ID: 30
+  + anonymous_class                     -> ID: 320
+  + argument                            -> ID: 345
+  + arguments                           -> ID: 344
+  + array                               -> ID: 48
+  + array_creation_expression           -> ID: 355
+  + array_element_initializer           -> ID: 386
+  + as                                  -> ID: 14
+  + assignment_expression               -> ID: 324
+  + binary_expression                   -> ID: 387
+  + bool                                -> ID: 49
+  + boolean                             -> ID: 376
+  + case                                -> ID: 27
+  + catch                               -> ID: 81
+  + catch_clause                        -> ID: 273
+  + class                               -> ID: 28
+  + clone                               -> ID: 109
+  + clone_expression                    -> ID: 311
+  + comment                             -> ID: 184
+  + compound_statement                  -> ID: 304
+  + conditional_expression              -> ID: 326
+  + const                               -> ID: 16
+  + declaration_list                    -> ID: 223
+  + declare                             -> ID: 74
+  + declare_directive                   -> ID: 270
+  + declare_statement                   -> ID: 269
+  + default                             -> ID: 101
+  + disjunctive_normal_form_type        -> ID: 260
+  + echo                                -> ID: 71
+  + echo_statement                      -> ID: 266
+  + encapsed_string                     -> ID: 367
+  + enum                                -> ID: 23
+  + enum_case                           -> ID: 221
+  + enum_declaration_list               -> ID: 219
+  + escape_sequence                     -> ID: 138
+  + expression_statement                -> ID: 306
+  + extends                             -> ID: 22
+  + final                               -> ID: 29
+  + finally                             -> ID: 82
+  + finally_clause                      -> ID: 275
+  + fn                                  -> ID: 43
+  + for                                 -> ID: 92
+  + for_statement                       -> ID: 283
+  + function                            -> ID: 15
+  + function_call_expression            -> ID: 338
+  + if                                  -> ID: 96
+  + if_statement                        -> ID: 289
+  + implements                          -> ID: 32
+  + int                                 -> ID: 26
+  + integer                             -> ID: 86
+  + interface                           -> ID: 21
+  + list_literal                        -> ID: 334
+  + match                               -> ID: 100
+  + match_block                         -> ID: 296
+  + match_condition_list                -> ID: 297
+  + match_conditional_expression        -> ID: 298
+  + match_default_expression            -> ID: 299
+  + match_expression                    -> ID: 295
+  + member_access_expression            -> ID: 329
+  + member_call_expression              -> ID: 347
+  + name                                -> ID: 1
+  + namespace                           -> ID: 12
+  + new                                 -> ID: 112
+  + null                                -> ID: 377
+  + nullsafe_member_call_expression     -> ID: 348
+  + object                              -> ID: 56
+  + object_creation_expression          -> ID: 316
+  + parent                              -> ID: 134
+  + parenthesized_expression            -> ID: 313
+  + php_tag                             -> ID: 2
+  + private                             -> ID: 38
+  + program                             -> ID: 197
+  + protected                           -> ID: 37
+  + public                              -> ID: 36
+  + qualified_name                      -> ID: 209
+  + readonly                            -> ID: 31
+  + relative_scope                      -> ID: 342
+  + return                              -> ID: 87
+  + return_statement                    -> ID: 279
+  + scoped_call_expression              -> ID: 340
+  + self                                -> ID: 133
+  + static                              -> ID: 8
+  + strict_types                        -> ID: 78
+  + string                              -> ID: 368
+  + string_content                      -> ID: 369
+  + subscript_expression                -> ID: 351
+  + throw                               -> ID: 88
+  + throw_expression                    -> ID: 280
+  + trait                               -> ID: 20
+  + try                                 -> ID: 80
+  + try_statement                       -> ID: 272
+  + type_list                           -> ID: 274
+  + unary_op_expression                 -> ID: 309
+  + unset                               -> ID: 73
+  + unset_statement                     -> ID: 268
+  + update_expression                   -> ID: 321
+  + use                                 -> ID: 13
+  + use_declaration                     -> ID: 239
+  + variable_name                       -> ID: 383
+  + variadic_placeholder                -> ID: 343
+  + variadic_unpacking                  -> ID: 349
+  + yield                               -> ID: 152
+  + yield_expression                    -> ID: 385
+  + {                                   -> ID: 18
+  + |                                   -> ID: 47
+  + ||                                  -> ID: 160
+  + }                                   -> ID: 19
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

@@ -1,178 +1,180 @@
-=== Kotlin Grammar Node Discovery ===
-Generated: 2026-03-15 18:02:08 UTC
-
-Total unique node types found: 152
+=== Kotlin Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
+  ABI Version: 14
+  Node kind count: 152
 
 === CLASS & OBJECT DECLARATIONS ===
-  ✓ class_declaration                        -> ID: 162
-  ✓ object_declaration                       -> ID: 192
-  ✓ interface                                -> ID: 18
-  ✗ enum_class                               NOT FOUND
-  ✗ data_class                               NOT FOUND
-  ✗ sealed_class                             NOT FOUND
-  ✓ companion_object                         -> ID: 179
+  + class_declaration                   -> ID: 162
+  + object_declaration                  -> ID: 192
+  + interface                           -> ID: 18
+  x enum_class                          NOT FOUND
+  x data_class                          NOT FOUND
+  x sealed_class                        NOT FOUND
+  + companion_object                    -> ID: 179
 
 === FUNCTION DECLARATIONS ===
-  ✓ function_declaration                     -> ID: 183
-  ✓ primary_constructor                      -> ID: 163
-  ✓ secondary_constructor                    -> ID: 193
-  ✗ anonymous_function                       NOT FOUND
-  ✓ lambda_literal                           -> ID: 254
+  + function_declaration                -> ID: 183
+  + primary_constructor                 -> ID: 163
+  + secondary_constructor               -> ID: 193
+  x anonymous_function                  NOT FOUND
+  + lambda_literal                      -> ID: 254
 
 === PROPERTY & VARIABLE DECLARATIONS ===
-  ✓ property_declaration                     -> ID: 186
-  ✓ variable_declaration                     -> ID: 185
-  ✓ class_parameter                          -> ID: 167
-  ✗ function_value_parameter                 NOT FOUND
+  + property_declaration                -> ID: 186
+  + variable_declaration                -> ID: 185
+  + class_parameter                     -> ID: 167
+  x function_value_parameter            NOT FOUND
 
 === TYPE SYSTEM ===
-  ✓ type_alias                               -> ID: 160
-  ✗ type_reference                           NOT FOUND
-  ✓ nullable_type                            -> ID: 201
-  ✓ user_type                                -> ID: 202
-  ✓ function_type                            -> ID: 207
-  ✓ type_projection                          -> ID: 204
+  + type_alias                          -> ID: 160
+  x type_reference                      NOT FOUND
+  + nullable_type                       -> ID: 201
+  + user_type                           -> ID: 202
+  + function_type                       -> ID: 207
+  + type_projection                     -> ID: 204
 
 === MODIFIERS & VISIBILITY ===
-  ✓ modifiers                                -> ID: 289
-  ✓ visibility_modifier                      -> ID: 296
-  ✗ inheritance_modifier                     NOT FOUND
-  ✓ function_modifier                        -> ID: 300
-  ✓ property_modifier                        -> ID: 108
+  + modifiers                           -> ID: 289
+  + visibility_modifier                 -> ID: 296
+  x inheritance_modifier                NOT FOUND
+  + function_modifier                   -> ID: 300
+  + property_modifier                   -> ID: 108
 
 === EXPRESSIONS ===
-  ✓ call_expression                          -> ID: 224
-  ✓ string_literal                           -> ID: 252
-  ✓ integer_literal                          -> ID: 132
-  ✓ boolean_literal                          -> ID: 319
-  ✗ binary_expression                        NOT FOUND
-  ✓ prefix_expression                        -> ID: 227
+  + call_expression                     -> ID: 224
+  + string_literal                      -> ID: 252
+  + integer_literal                     -> ID: 132
+  + boolean_literal                     -> ID: 319
+  x binary_expression                   NOT FOUND
+  + prefix_expression                   -> ID: 227
 
---- UNCATEGORIZED NODES ---
-  $ (ID: 55)
-  ${ (ID: 54)
-  ( (ID: 23)
-  ) (ID: 25)
-  * (ID: 43)
-  + (ID: 81)
-  , (ID: 24)
-  - (ID: 82)
-  -> (ID: 44)
-  . (ID: 11)
-  : (ID: 6)
-  ; (ID: 35)
-  < (ID: 29)
-  <= (ID: 76)
-  = (ID: 15)
-  == (ID: 74)
-  > (ID: 30)
-  ?. (ID: 148)
-  ?: (ID: 51)
-  @ (ID: 4)
-  ERROR (ID: 65535)
-  [ (ID: 7)
-  ] (ID: 8)
-  additive_expression (ID: 232)
-  annotated_lambda (ID: 244)
-  annotation (ID: 304)
-  assignment (ID: 220)
-  binding_pattern_kind (ID: 166)
-  by (ID: 28)
-  call_suffix (ID: 243)
-  check_expression (ID: 236)
-  class (ID: 16)
-  class_body (ID: 164)
-  class_modifier (ID: 294)
-  companion (ID: 33)
-  comparison_expression (ID: 237)
-  constructor (ID: 20)
-  constructor_delegation_call (ID: 194)
-  constructor_invocation (ID: 170)
-  control_structure_body (ID: 213)
-  data (ID: 93)
-  delegation_specifier (ID: 169)
-  directly_assignable_expression (ID: 288)
-  else (ID: 57)
-  elvis_expression (ID: 235)
-  enum (ID: 19)
-  enum_class_body (ID: 195)
-  enum_entry (ID: 197)
-  equality_expression (ID: 238)
-  explicit_delegation (ID: 171)
-  for (ID: 46)
-  for_statement (ID: 216)
-  fun (ID: 17)
-  function_body (ID: 184)
-  function_type_parameters (ID: 208)
-  function_value_parameters (ID: 180)
-  get (ID: 36)
-  identifier (ID: 310)
-  if (ID: 56)
-  if_expression (ID: 263)
-  import (ID: 10)
-  import_header (ID: 158)
-  import_list (ID: 157)
-  in (ID: 47)
-  indexing_expression (ID: 225)
-  indexing_suffix (ID: 241)
-  infix (ID: 105)
-  infix_expression (ID: 234)
-  inline (ID: 106)
-  inner (ID: 94)
-  internal (ID: 100)
-  interpolated_expression (ID: 357)
-  interpolated_identifier (ID: 358)
-  is (ID: 79)
-  jump_expression (ID: 273)
-  lambda_parameters (ID: 256)
-  line_comment (ID: 124)
-  member_modifier (ID: 295)
-  multiline_comment (ID: 149)
-  multiplicative_expression (ID: 231)
-  navigation_expression (ID: 226)
-  navigation_suffix (ID: 242)
-  null_literal (ID: 141)
-  object (ID: 34)
-  operator (ID: 104)
-  out (ID: 102)
-  override (ID: 96)
-  package (ID: 9)
-  package_header (ID: 156)
-  parameter (ID: 191)
-  parameter_modifier (ID: 302)
-  parameter_modifiers (ID: 290)
-  parenthesized_expression (ID: 249)
-  private (ID: 99)
-  property_delegate (ID: 187)
-  protected (ID: 101)
-  public (ID: 98)
-  receiver_type (ID: 182)
-  reification_modifier (ID: 115)
-  return (ID: 63)
-  sealed (ID: 91)
-  simple_identifier (ID: 309)
-  source_file (ID: 153)
-  statements (ID: 211)
-  string_content (ID: 152)
-  suspend (ID: 90)
-  tailrec (ID: 103)
-  this (ID: 38)
-  this_expression (ID: 261)
-  throw (ID: 62)
-  true (ID: 137)
-  type_arguments (ID: 245)
-  type_identifier (ID: 359)
-  type_parameter (ID: 173)
-  type_parameter_modifiers (ID: 298)
-  type_parameters (ID: 172)
-  typealias (ID: 14)
-  val (ID: 26)
-  value (ID: 95)
-  value_argument (ID: 247)
-  value_arguments (ID: 246)
-  var (ID: 27)
-  vararg (ID: 112)
-  variance_modifier (ID: 297)
-  wildcard_import (ID: 12)
-  { (ID: 21)
-  } (ID: 22)
+=== UNCATEGORIZED NODES ===
+  + $                                   -> ID: 55
+  + ${                                  -> ID: 54
+  + (                                   -> ID: 23
+  + )                                   -> ID: 25
+  + *                                   -> ID: 43
+  + +                                   -> ID: 81
+  + ,                                   -> ID: 24
+  + -                                   -> ID: 82
+  + ->                                  -> ID: 44
+  + .                                   -> ID: 11
+  + :                                   -> ID: 6
+  + ;                                   -> ID: 35
+  + <                                   -> ID: 29
+  + <=                                  -> ID: 76
+  + =                                   -> ID: 15
+  + ==                                  -> ID: 74
+  + >                                   -> ID: 30
+  + ?.                                  -> ID: 148
+  + ?:                                  -> ID: 51
+  + @                                   -> ID: 4
+  + ERROR                               -> ID: 65535
+  + [                                   -> ID: 7
+  + ]                                   -> ID: 8
+  + additive_expression                 -> ID: 232
+  + annotated_lambda                    -> ID: 244
+  + annotation                          -> ID: 304
+  + assignment                          -> ID: 220
+  + binding_pattern_kind                -> ID: 166
+  + by                                  -> ID: 28
+  + call_suffix                         -> ID: 243
+  + check_expression                    -> ID: 236
+  + class                               -> ID: 16
+  + class_body                          -> ID: 164
+  + class_modifier                      -> ID: 294
+  + companion                           -> ID: 33
+  + comparison_expression               -> ID: 237
+  + constructor                         -> ID: 20
+  + constructor_delegation_call         -> ID: 194
+  + constructor_invocation              -> ID: 170
+  + control_structure_body              -> ID: 213
+  + data                                -> ID: 93
+  + delegation_specifier                -> ID: 169
+  + directly_assignable_expression      -> ID: 288
+  + else                                -> ID: 57
+  + elvis_expression                    -> ID: 235
+  + enum                                -> ID: 19
+  + enum_class_body                     -> ID: 195
+  + enum_entry                          -> ID: 197
+  + equality_expression                 -> ID: 238
+  + explicit_delegation                 -> ID: 171
+  + for                                 -> ID: 46
+  + for_statement                       -> ID: 216
+  + fun                                 -> ID: 17
+  + function_body                       -> ID: 184
+  + function_type_parameters            -> ID: 208
+  + function_value_parameters           -> ID: 180
+  + get                                 -> ID: 36
+  + identifier                          -> ID: 310
+  + if                                  -> ID: 56
+  + if_expression                       -> ID: 263
+  + import                              -> ID: 10
+  + import_header                       -> ID: 158
+  + import_list                         -> ID: 157
+  + in                                  -> ID: 47
+  + indexing_expression                 -> ID: 225
+  + indexing_suffix                     -> ID: 241
+  + infix                               -> ID: 105
+  + infix_expression                    -> ID: 234
+  + inline                              -> ID: 106
+  + inner                               -> ID: 94
+  + internal                            -> ID: 100
+  + interpolated_expression             -> ID: 357
+  + interpolated_identifier             -> ID: 358
+  + is                                  -> ID: 79
+  + jump_expression                     -> ID: 273
+  + lambda_parameters                   -> ID: 256
+  + line_comment                        -> ID: 124
+  + member_modifier                     -> ID: 295
+  + multiline_comment                   -> ID: 149
+  + multiplicative_expression           -> ID: 231
+  + navigation_expression               -> ID: 226
+  + navigation_suffix                   -> ID: 242
+  + null_literal                        -> ID: 141
+  + object                              -> ID: 34
+  + operator                            -> ID: 104
+  + out                                 -> ID: 102
+  + override                            -> ID: 96
+  + package                             -> ID: 9
+  + package_header                      -> ID: 156
+  + parameter                           -> ID: 191
+  + parameter_modifier                  -> ID: 302
+  + parameter_modifiers                 -> ID: 290
+  + parenthesized_expression            -> ID: 249
+  + private                             -> ID: 99
+  + property_delegate                   -> ID: 187
+  + protected                           -> ID: 101
+  + public                              -> ID: 98
+  + receiver_type                       -> ID: 182
+  + reification_modifier                -> ID: 115
+  + return                              -> ID: 63
+  + sealed                              -> ID: 91
+  + simple_identifier                   -> ID: 309
+  + source_file                         -> ID: 153
+  + statements                          -> ID: 211
+  + string_content                      -> ID: 152
+  + suspend                             -> ID: 90
+  + tailrec                             -> ID: 103
+  + this                                -> ID: 38
+  + this_expression                     -> ID: 261
+  + throw                               -> ID: 62
+  + true                                -> ID: 137
+  + type_arguments                      -> ID: 245
+  + type_identifier                     -> ID: 359
+  + type_parameter                      -> ID: 173
+  + type_parameter_modifiers            -> ID: 298
+  + type_parameters                     -> ID: 172
+  + typealias                           -> ID: 14
+  + val                                 -> ID: 26
+  + value                               -> ID: 95
+  + value_argument                      -> ID: 247
+  + value_arguments                     -> ID: 246
+  + var                                 -> ID: 27
+  + vararg                              -> ID: 112
+  + variance_modifier                   -> ID: 297
+  + wildcard_import                     -> ID: 12
+  + {                                   -> ID: 21
+  + }                                   -> ID: 22
+
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

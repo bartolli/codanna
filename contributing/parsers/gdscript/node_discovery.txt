@@ -1,98 +1,98 @@
-=== GDScript Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== GDScript Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 14
   Node kind count: 76
 
 === SCRIPT DECLARATIONS ===
-  ✅ class_name_statement                -> ID: 152
-  ✅ class_definition                    -> ID: 159
-  ✅ extends_statement                   -> ID: 153
-  ✅ enum_definition                     -> ID: 165
+  + class_name_statement                -> ID: 152
+  + class_definition                    -> ID: 159
+  + extends_statement                   -> ID: 153
+  + enum_definition                     -> ID: 165
 
 === SIGNALS & VARIABLES ===
-  ✅ signal_statement                    -> ID: 151
-  ✅ variable_statement                  -> ID: 143
-  ✅ const_statement                     -> ID: 146
-  ❓ export_variable_statement           NOT FOUND
+  + signal_statement                    -> ID: 151
+  + variable_statement                  -> ID: 143
+  + const_statement                     -> ID: 146
+  x export_variable_statement           NOT FOUND
 
 === FUNCTIONS ===
-  ❓ constructor_definition              NOT FOUND
-  ✅ function_definition                 -> ID: 201
-  ✅ parameters                          -> ID: 199
-  ❓ block                               NOT FOUND
+  x constructor_definition              NOT FOUND
+  + function_definition                 -> ID: 201
+  + parameters                          -> ID: 199
+  x block                               NOT FOUND
 
 === CONTROL FLOW ===
-  ✅ if_statement                        -> ID: 154
-  ✅ while_statement                     -> ID: 158
-  ✅ for_statement                       -> ID: 157
-  ✅ match_statement                     -> ID: 169
-  ✅ pattern_section                     -> ID: 172
+  + if_statement                        -> ID: 154
+  + while_statement                     -> ID: 158
+  + for_statement                       -> ID: 157
+  + match_statement                     -> ID: 169
+  + pattern_section                     -> ID: 172
 
 === EXPRESSIONS ===
-  ✅ assignment                          -> ID: 189
-  ✅ call                                -> ID: 206
-  ✅ binary_operator                     -> ID: 179
-  ❓ unary_operator                      NOT FOUND
+  + assignment                          -> ID: 189
+  + call                                -> ID: 206
+  + binary_operator                     -> ID: 179
+  x unary_operator                      NOT FOUND
 
---- UNCATEGORIZED NODES ---
-  ✅ "                                   -> ID: 105
-  ✅ %                                   -> ID: 21
-  ✅ (                                   -> ID: 83
-  ✅ )                                   -> ID: 84
-  ✅ +                                   -> ID: 61
-  ✅ +=                                  -> ID: 86
-  ✅ ,                                   -> ID: 29
-  ✅ ->                                  -> ID: 98
-  ✅ .                                   -> ID: 82
-  ✅ /                                   -> ID: 20
-  ✅ :                                   -> ID: 25
-  ✅ :=                                  -> ID: 24
-  ✅ <                                   -> ID: 70
-  ✅ =                                   -> ID: 26
-  ✅ >=                                  -> ID: 74
-  ✅ @                                   -> ID: 23
-  ✅ [                                   -> ID: 80
-  ✅ ]                                   -> ID: 81
-  ✅ annotation                          -> ID: 125
-  ✅ annotations                         -> ID: 127
-  ✅ arguments                           -> ID: 204
-  ✅ array                               -> ID: 193
-  ✅ attribute                           -> ID: 185
-  ✅ attribute_call                      -> ID: 183
-  ✅ augmented_assignment                -> ID: 190
-  ✅ body                                -> ID: 122
-  ✅ class                               -> ID: 49
-  ✅ class_body                          -> ID: 160
-  ✅ class_name                          -> ID: 41
-  ✅ comment                             -> ID: 5
-  ✅ const                               -> ID: 34
-  ✅ enum                                -> ID: 50
-  ✅ enumerator                          -> ID: 168
-  ✅ enumerator_list                     -> ID: 166
-  ✅ expression_statement                -> ID: 124
-  ✅ extends                             -> ID: 42
-  ✅ float                               -> ID: 17
-  ✅ for                                 -> ID: 46
-  ✅ func                                -> ID: 99
-  ✅ identifier                          -> ID: 112
-  ✅ if                                  -> ID: 43
-  ✅ in                                  -> ID: 47
-  ✅ inferred_type                       -> ID: 128
-  ✅ integer                             -> ID: 18
-  ✅ match                               -> ID: 53
-  ✅ match_body                          -> ID: 170
-  ✅ name                                -> ID: 113
-  ✅ return                              -> ID: 35
-  ✅ return_statement                    -> ID: 147
-  ✅ signal                              -> ID: 40
-  ✅ source                              -> ID: 111
-  ✅ string                              -> ID: 116
-  ✅ type                                -> ID: 120
-  ✅ typed_default_parameter             -> ID: 196
-  ✅ typed_parameter                     -> ID: 194
-  ✅ var                                 -> ID: 31
-  ✅ while                               -> ID: 48
-  ✅ {                                   -> ID: 51
-  ✅ }                                   -> ID: 52
+=== UNCATEGORIZED NODES ===
+  + "                                   -> ID: 105
+  + %                                   -> ID: 21
+  + (                                   -> ID: 83
+  + )                                   -> ID: 84
+  + +                                   -> ID: 61
+  + +=                                  -> ID: 86
+  + ,                                   -> ID: 29
+  + ->                                  -> ID: 98
+  + .                                   -> ID: 82
+  + /                                   -> ID: 20
+  + :                                   -> ID: 25
+  + :=                                  -> ID: 24
+  + <                                   -> ID: 70
+  + =                                   -> ID: 26
+  + >=                                  -> ID: 74
+  + @                                   -> ID: 23
+  + [                                   -> ID: 80
+  + ]                                   -> ID: 81
+  + annotation                          -> ID: 125
+  + annotations                         -> ID: 127
+  + arguments                           -> ID: 204
+  + array                               -> ID: 193
+  + attribute                           -> ID: 185
+  + attribute_call                      -> ID: 183
+  + augmented_assignment                -> ID: 190
+  + body                                -> ID: 122
+  + class                               -> ID: 49
+  + class_body                          -> ID: 160
+  + class_name                          -> ID: 41
+  + comment                             -> ID: 5
+  + const                               -> ID: 34
+  + enum                                -> ID: 50
+  + enumerator                          -> ID: 168
+  + enumerator_list                     -> ID: 166
+  + expression_statement                -> ID: 124
+  + extends                             -> ID: 42
+  + float                               -> ID: 17
+  + for                                 -> ID: 46
+  + func                                -> ID: 99
+  + identifier                          -> ID: 112
+  + if                                  -> ID: 43
+  + in                                  -> ID: 47
+  + inferred_type                       -> ID: 128
+  + integer                             -> ID: 18
+  + match                               -> ID: 53
+  + match_body                          -> ID: 170
+  + name                                -> ID: 113
+  + return                              -> ID: 35
+  + return_statement                    -> ID: 147
+  + signal                              -> ID: 40
+  + source                              -> ID: 111
+  + string                              -> ID: 116
+  + type                                -> ID: 120
+  + typed_default_parameter             -> ID: 196
+  + typed_parameter                     -> ID: 194
+  + var                                 -> ID: 31
+  + while                               -> ID: 48
+  + {                                   -> ID: 51
+  + }                                   -> ID: 52
 
-Legend: ✅ = found in example,   = only in grammar, ❓ = not present
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

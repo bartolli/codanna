@@ -1,154 +1,154 @@
-=== Go Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== Go Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 15
   Node kind count: 115
 
 === PACKAGE AND IMPORT NODES ===
-  ✓ package_clause                      -> ID: 96
-  ✓ package_identifier                  -> ID: 216
-  ✓ import_declaration                  -> ID: 97
-  ✓ import_spec                         -> ID: 98
-  ✓ import_spec_list                    -> ID: 100
-  ✓ interpreted_string_literal          -> ID: 190
-  ✗ dot                                 NOT FOUND
-  ✗ blank_identifier                    NOT FOUND
-  ✗ import_alias                        NOT FOUND
+  + package_clause                      -> ID: 96
+  + package_identifier                  -> ID: 216
+  + import_declaration                  -> ID: 97
+  + import_spec                         -> ID: 98
+  + import_spec_list                    -> ID: 100
+  + interpreted_string_literal          -> ID: 190
+  x dot                                 NOT FOUND
+  x blank_identifier                    NOT FOUND
+  x import_alias                        NOT FOUND
 
 === STRUCT-RELATED NODES ===
-  ✓ type_declaration                    -> ID: 115
-  ✓ type_spec                           -> ID: 116
-  ✓ struct_type                         -> ID: 126
-  ✓ field_declaration                   -> ID: 129
-  ✓ field_declaration_list              -> ID: 128
-  ✓ type_identifier                     -> ID: 218
-  ✓ field_identifier                    -> ID: 214
-  ✗ tag                                 NOT FOUND
-  ✗ struct_field                        NOT FOUND
-  ✗ embedded_field                      NOT FOUND
+  + type_declaration                    -> ID: 115
+  + type_spec                           -> ID: 116
+  + struct_type                         -> ID: 126
+  + field_declaration                   -> ID: 129
+  + field_declaration_list              -> ID: 128
+  + type_identifier                     -> ID: 218
+  + field_identifier                    -> ID: 214
+  x tag                                 NOT FOUND
+  x struct_field                        NOT FOUND
+  x embedded_field                      NOT FOUND
 
 === INTERFACE-RELATED NODES ===
-  ✓ interface_type                      -> ID: 130
-  ✓ method_elem                         -> ID: 131
-  ✗ method_spec                         NOT FOUND
-  ✗ method_spec_list                    NOT FOUND
-  ✓ type_elem                           -> ID: 132
-  ✓ type_constraint                     -> ID: 217
-  ✗ type_set                            NOT FOUND
-  ✗ embedded_interface                  NOT FOUND
+  + interface_type                      -> ID: 130
+  + method_elem                         -> ID: 131
+  x method_spec                         NOT FOUND
+  x method_spec_list                    NOT FOUND
+  + type_elem                           -> ID: 132
+  + type_constraint                     -> ID: 217
+  x type_set                            NOT FOUND
+  x embedded_interface                  NOT FOUND
 
 === FUNCTION-RELATED NODES ===
-  ✓ function_declaration                -> ID: 107
-  ✓ func_literal                        -> ID: 185
-  ✓ function_type                       -> ID: 135
-  ✓ method_declaration                  -> ID: 108
-  ✗ receiver                            NOT FOUND
-  ✓ parameter_declaration               -> ID: 112
-  ✓ parameter_list                      -> ID: 111
-  ✗ result                              NOT FOUND
-  ✗ variadic_parameter_declaration      NOT FOUND
-  ✓ type_parameter_declaration          -> ID: 110
-  ✓ type_parameter_list                 -> ID: 109
+  + function_declaration                -> ID: 107
+  + func_literal                        -> ID: 185
+  + function_type                       -> ID: 135
+  + method_declaration                  -> ID: 108
+  x receiver                            NOT FOUND
+  + parameter_declaration               -> ID: 112
+  + parameter_list                      -> ID: 111
+  x result                              NOT FOUND
+  x variadic_parameter_declaration      NOT FOUND
+  + type_parameter_declaration          -> ID: 110
+  + type_parameter_list                 -> ID: 109
 
 === VARIABLE/CONSTANT NODES ===
-  ✓ var_declaration                     -> ID: 104
-  ✓ var_spec                            -> ID: 105
-  ✓ const_declaration                   -> ID: 102
-  ✓ const_spec                          -> ID: 103
-  ✓ short_var_declaration               -> ID: 147
-  ✓ assignment_statement                -> ID: 146
-  ✓ inc_statement                       -> ID: 144
-  ✗ dec_statement                       NOT FOUND
-  ✓ expression_list                     -> ID: 117
-  ✗ identifier_list                     NOT FOUND
+  + var_declaration                     -> ID: 104
+  + var_spec                            -> ID: 105
+  + const_declaration                   -> ID: 102
+  + const_spec                          -> ID: 103
+  + short_var_declaration               -> ID: 147
+  + assignment_statement                -> ID: 146
+  + inc_statement                       -> ID: 144
+  x dec_statement                       NOT FOUND
+  + expression_list                     -> ID: 117
+  x identifier_list                     NOT FOUND
 
 === TYPE-RELATED NODES ===
-  ✓ type_alias                          -> ID: 114
-  ✓ pointer_type                        -> ID: 122
-  ✗ array_type                          NOT FOUND
-  ✓ slice_type                          -> ID: 125
-  ✗ map_type                            NOT FOUND
-  ✓ channel_type                        -> ID: 134
-  ✓ generic_type                        -> ID: 120
-  ✗ type_instantiation                  NOT FOUND
-  ✓ type_arguments                      -> ID: 121
-  ✗ type_parameter                      NOT FOUND
-  ✓ qualified_type                      -> ID: 188
+  + type_alias                          -> ID: 114
+  + pointer_type                        -> ID: 122
+  x array_type                          NOT FOUND
+  + slice_type                          -> ID: 125
+  x map_type                            NOT FOUND
+  + channel_type                        -> ID: 134
+  + generic_type                        -> ID: 120
+  x type_instantiation                  NOT FOUND
+  + type_arguments                      -> ID: 121
+  x type_parameter                      NOT FOUND
+  + qualified_type                      -> ID: 188
 
 === UNCATEGORIZED NODES ===
-  ✓ !=                                  -> ID: 73
-  ✓ "                                   -> ID: 82
-  ✓ &                                   -> ID: 66
-  ✓ (                                   -> ID: 9
-  ✓ )                                   -> ID: 10
-  ✓ *                                   -> ID: 20
-  ✓ ++                                  -> ID: 31
-  ✓ ,                                   -> ID: 12
-  ✓ .                                   -> ID: 7
-  ✓ :                                   -> ID: 44
-  ✓ :=                                  -> ID: 30
-  ✓ ;                                   -> ID: 3
-  ✓ <                                   -> ID: 74
-  ✓ <-                                  -> ID: 29
-  ✓ =                                   -> ID: 13
-  ✓ ==                                  -> ID: 72
-  ✓ [                                   -> ID: 16
-  ✓ ]                                   -> ID: 17
-  ✓ `                                   -> ID: 80
-  ✓ argument_list                       -> ID: 174
-  ✓ binary_expression                   -> ID: 187
-  ✓ block                               -> ID: 136
-  ✓ break                               -> ID: 46
-  ✓ break_statement                     -> ID: 151
-  ✓ call_expression                     -> ID: 171
-  ✓ chan                                -> ID: 28
-  ✓ comment                             -> ID: 94
-  ✓ composite_literal                   -> ID: 181
-  ✓ const                               -> ID: 11
-  ✓ defer                               -> ID: 51
-  ✓ defer_statement                     -> ID: 156
-  ✓ else                                -> ID: 53
-  ✓ escape_sequence                     -> ID: 85
-  ✓ expression_statement                -> ID: 141
-  ✓ for                                 -> ID: 54
-  ✓ for_clause                          -> ID: 159
-  ✓ for_statement                       -> ID: 158
-  ✓ func                                -> ID: 15
-  ✓ go                                  -> ID: 50
-  ✓ go_statement                        -> ID: 155
-  ✓ identifier                          -> ID: 1
-  ✓ if                                  -> ID: 52
-  ✓ if_statement                        -> ID: 157
-  ✓ import                              -> ID: 6
-  ✓ index_expression                    -> ID: 176
-  ✓ int_literal                         -> ID: 86
-  ✓ interface                           -> ID: 25
-  ✓ interpreted_string_literal_content  -> ID: 83
-  ✓ iota                                -> ID: 93
-  ✓ keyed_element                       -> ID: 184
-  ✓ literal_element                     -> ID: 183
-  ✓ literal_value                       -> ID: 182
-  ✓ negated_type                        -> ID: 127
-  ✓ nil                                 -> ID: 90
-  ✓ package                             -> ID: 5
-  ✓ parenthesized_expression            -> ID: 170
-  ✓ range                               -> ID: 55
-  ✓ range_clause                        -> ID: 160
-  ✓ raw_string_literal                  -> ID: 189
-  ✓ raw_string_literal_content          -> ID: 81
-  ✓ return                              -> ID: 49
-  ✓ return_statement                    -> ID: 154
-  ✓ selector_expression                 -> ID: 175
-  ✓ send_statement                      -> ID: 142
-  ✓ source_file                         -> ID: 95
-  ✓ statement_list                      -> ID: 137
-  ✓ struct                              -> ID: 21
-  ✓ true                                -> ID: 91
-  ✓ type                                -> ID: 19
-  ✓ unary_expression                    -> ID: 186
-  ✓ var                                 -> ID: 14
-  ✓ var_spec_list                       -> ID: 106
-  ✓ {                                   -> ID: 23
-  ✓ }                                   -> ID: 24
-  ✓ ~                                   -> ID: 22
+  + !=                                  -> ID: 73
+  + "                                   -> ID: 82
+  + &                                   -> ID: 66
+  + (                                   -> ID: 9
+  + )                                   -> ID: 10
+  + *                                   -> ID: 20
+  + ++                                  -> ID: 31
+  + ,                                   -> ID: 12
+  + .                                   -> ID: 7
+  + :                                   -> ID: 44
+  + :=                                  -> ID: 30
+  + ;                                   -> ID: 3
+  + <                                   -> ID: 74
+  + <-                                  -> ID: 29
+  + =                                   -> ID: 13
+  + ==                                  -> ID: 72
+  + [                                   -> ID: 16
+  + ]                                   -> ID: 17
+  + `                                   -> ID: 80
+  + argument_list                       -> ID: 174
+  + binary_expression                   -> ID: 187
+  + block                               -> ID: 136
+  + break                               -> ID: 46
+  + break_statement                     -> ID: 151
+  + call_expression                     -> ID: 171
+  + chan                                -> ID: 28
+  + comment                             -> ID: 94
+  + composite_literal                   -> ID: 181
+  + const                               -> ID: 11
+  + defer                               -> ID: 51
+  + defer_statement                     -> ID: 156
+  + else                                -> ID: 53
+  + escape_sequence                     -> ID: 85
+  + expression_statement                -> ID: 141
+  + for                                 -> ID: 54
+  + for_clause                          -> ID: 159
+  + for_statement                       -> ID: 158
+  + func                                -> ID: 15
+  + go                                  -> ID: 50
+  + go_statement                        -> ID: 155
+  + identifier                          -> ID: 1
+  + if                                  -> ID: 52
+  + if_statement                        -> ID: 157
+  + import                              -> ID: 6
+  + index_expression                    -> ID: 176
+  + int_literal                         -> ID: 86
+  + interface                           -> ID: 25
+  + interpreted_string_literal_content  -> ID: 83
+  + iota                                -> ID: 93
+  + keyed_element                       -> ID: 184
+  + literal_element                     -> ID: 183
+  + literal_value                       -> ID: 182
+  + negated_type                        -> ID: 127
+  + nil                                 -> ID: 90
+  + package                             -> ID: 5
+  + parenthesized_expression            -> ID: 170
+  + range                               -> ID: 55
+  + range_clause                        -> ID: 160
+  + raw_string_literal                  -> ID: 189
+  + raw_string_literal_content          -> ID: 81
+  + return                              -> ID: 49
+  + return_statement                    -> ID: 154
+  + selector_expression                 -> ID: 175
+  + send_statement                      -> ID: 142
+  + source_file                         -> ID: 95
+  + statement_list                      -> ID: 137
+  + struct                              -> ID: 21
+  + true                                -> ID: 91
+  + type                                -> ID: 19
+  + unary_expression                    -> ID: 186
+  + var                                 -> ID: 14
+  + var_spec_list                       -> ID: 106
+  + {                                   -> ID: 23
+  + }                                   -> ID: 24
+  + ~                                   -> ID: 22
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

@@ -1,6 +1,6 @@
 # PHP Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 161
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 176
 - Symbol kinds extracted: 8
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - !
 - "
@@ -187,11 +187,11 @@ These nodes are in examples and handled by parser:
 - ||
 - }
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
 These nodes appear in comprehensive.php but aren't handled:
 - property_element
 
-## 📝 Missing from Examples
+## Missing from Examples
 These grammar nodes aren't in comprehensive.php:
 - augmented_assignment_expression
 - break_statement
@@ -255,7 +255,7 @@ These grammar nodes aren't in comprehensive.php:
 - var_modifier
 - while_statement
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Class
 - Constant
 - Field

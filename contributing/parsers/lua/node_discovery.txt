@@ -1,52 +1,97 @@
-=== Lua Language COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== Lua Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 15
   Node kind count: 75
 
-== FUNCTION NODES ==
-✓ function_declaration (ID: 94)
-✓ function_definition (ID: 114)
-✓ function_call (ID: 123)
-✓ parameters (ID: 116)
-✓ return_statement (ID: 76)
+=== FUNCTION NODES ===
+  + function_declaration                -> ID: 94
+  + function_definition                 -> ID: 114
+  + function_call                       -> ID: 123
+  + parameters                          -> ID: 116
+  + return_statement                    -> ID: 76
 
-== VARIABLE NODES ==
-✓ variable_declaration (ID: 101)
-✓ assignment_statement (ID: 78)
-✓ variable_list (ID: 79)
-✓ expression_list (ID: 80)
-✓ identifier (ID: 1)
+=== VARIABLE NODES ===
+  + variable_declaration                -> ID: 101
+  + assignment_statement                -> ID: 78
+  + variable_list                       -> ID: 79
+  + expression_list                     -> ID: 80
+  + identifier                          -> ID: 1
 
-== TABLE NODES ==
-✓ table_constructor (ID: 127)
-✓ field (ID: 130)
-✓ dot_index_expression (ID: 122)
-✓ bracket_index_expression (ID: 121)
-✓ method_index_expression (ID: 124)
+=== TABLE NODES ===
+  + table_constructor                   -> ID: 127
+  + field                               -> ID: 130
+  + dot_index_expression                -> ID: 122
+  + bracket_index_expression            -> ID: 121
+  + method_index_expression             -> ID: 124
 
-== CONTROL FLOW NODES ==
-✓ if_statement (ID: 86)
-✓ elseif_statement (ID: 87)
-✓ else_statement (ID: 88)
-✓ for_statement (ID: 89)
-✗ for_in_statement (not found)
-✓ while_statement (ID: 84)
-✓ repeat_statement (ID: 85)
-✓ do_statement (ID: 83)
-✓ block (ID: 74)
+=== CONTROL FLOW NODES ===
+  + if_statement                        -> ID: 86
+  + elseif_statement                    -> ID: 87
+  + else_statement                      -> ID: 88
+  + for_statement                       -> ID: 89
+  x for_in_statement                    NOT FOUND
+  + while_statement                     -> ID: 84
+  + repeat_statement                    -> ID: 85
+  + do_statement                        -> ID: 83
+  + block                               -> ID: 74
 
-== EXPRESSION NODES ==
-✓ binary_expression (ID: 131)
-✓ unary_expression (ID: 132)
-✗ parenthesized_expression (not found)
-✓ string (ID: 109)
-✓ number (ID: 32)
-✓ true (ID: 31)
-✓ false (ID: 30)
-✓ nil (ID: 29)
+=== EXPRESSION NODES ===
+  + binary_expression                   -> ID: 131
+  + unary_expression                    -> ID: 132
+  x parenthesized_expression            NOT FOUND
+  + string                              -> ID: 109
+  + number                              -> ID: 32
+  + true                                -> ID: 31
+  + false                               -> ID: 30
+  + nil                                 -> ID: 29
 
-== COMMENT NODES ==
-✓ comment (ID: 133)
+=== COMMENT NODES ===
+  + comment                             -> ID: 133
 
+=== UNCATEGORIZED NODES ===
+  + "                                   -> ID: 33
+  + #                                   -> ID: 64
+  + (                                   -> ID: 39
+  + )                                   -> ID: 40
+  + *                                   -> ID: 26
+  + +                                   -> ID: 56
+  + ,                                   -> ID: 6
+  + -                                   -> ID: 57
+  + --                                  -> ID: 65
+  + .                                   -> ID: 24
+  + ..                                  -> ID: 61
+  + /                                   -> ID: 58
+  + :                                   -> ID: 25
+  + <=                                  -> ID: 47
+  + =                                   -> ID: 5
+  + ==                                  -> ID: 48
+  + >                                   -> ID: 28
+  + [                                   -> ID: 41
+  + ]                                   -> ID: 42
+  + and                                 -> ID: 46
+  + arguments                           -> ID: 125
+  + chunk                               -> ID: 73
+  + comment_content                     -> ID: 68
+  + do                                  -> ID: 10
+  + else                                -> ID: 18
+  + elseif                              -> ID: 17
+  + end                                 -> ID: 11
+  + for                                 -> ID: 19
+  + for_generic_clause                  -> ID: 90
+  + for_numeric_clause                  -> ID: 91
+  + function                            -> ID: 21
+  + if                                  -> ID: 15
+  + in                                  -> ID: 20
+  + local                               -> ID: 22
+  + or                                  -> ID: 45
+  + repeat                              -> ID: 13
+  + return                              -> ID: 3
+  + string_content                      -> ID: 71
+  + then                                -> ID: 16
+  + until                               -> ID: 14
+  + vararg_expression                   -> ID: 38
+  + while                               -> ID: 12
+  + {                                   -> ID: 43
+  + }                                   -> ID: 44
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

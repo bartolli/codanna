@@ -1,199 +1,199 @@
-=== Rust Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== Rust Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 15
   Node kind count: 147
 
 === MODULE & USE NODES ===
-  ✓ mod_item                            -> ID: 173
-  ✓ use_declaration                     -> ID: 204
-  ✗ use_clause                          NOT FOUND
-  ✓ use_list                            -> ID: 207
-  ✓ use_as_clause                       -> ID: 208
-  ✓ use_wildcard                        -> ID: 209
-  ✓ scoped_use_list                     -> ID: 206
-  ✗ extern_crate                        NOT FOUND
+  + mod_item                            -> ID: 173
+  + use_declaration                     -> ID: 204
+  x use_clause                          NOT FOUND
+  + use_list                            -> ID: 207
+  + use_as_clause                       -> ID: 208
+  + use_wildcard                        -> ID: 209
+  + scoped_use_list                     -> ID: 206
+  x extern_crate                        NOT FOUND
 
 === STRUCT & ENUM NODES ===
-  ✓ struct_item                         -> ID: 176
-  ✓ enum_item                           -> ID: 178
-  ✓ enum_variant                        -> ID: 180
-  ✓ enum_variant_list                   -> ID: 179
-  ✓ field_declaration                   -> ID: 182
-  ✓ field_declaration_list              -> ID: 181
-  ✓ ordered_field_declaration_list      -> ID: 183
-  ✓ struct_expression                   -> ID: 262
-  ✗ struct_pattern                      NOT FOUND
-  ✗ tuple_struct_pattern                NOT FOUND
+  + struct_item                         -> ID: 176
+  + enum_item                           -> ID: 178
+  + enum_variant                        -> ID: 180
+  + enum_variant_list                   -> ID: 179
+  + field_declaration                   -> ID: 182
+  + field_declaration_list              -> ID: 181
+  + ordered_field_declaration_list      -> ID: 183
+  + struct_expression                   -> ID: 262
+  x struct_pattern                      NOT FOUND
+  x tuple_struct_pattern                NOT FOUND
 
 === TRAIT & IMPL NODES ===
-  ✓ trait_item                          -> ID: 194
-  ✓ impl_item                           -> ID: 193
-  ✓ associated_type                     -> ID: 195
-  ✓ trait_bounds                        -> ID: 196
-  ✓ where_clause                        -> ID: 191
-  ✓ where_predicate                     -> ID: 192
-  ✓ higher_ranked_trait_bound           -> ID: 197
-  ✗ removed_trait_bound                 NOT FOUND
-  ✗ trait_type                          NOT FOUND
-  ✓ abstract_type                       -> ID: 235
+  + trait_item                          -> ID: 194
+  + impl_item                           -> ID: 193
+  + associated_type                     -> ID: 195
+  + trait_bounds                        -> ID: 196
+  + where_clause                        -> ID: 191
+  + where_predicate                     -> ID: 192
+  + higher_ranked_trait_bound           -> ID: 197
+  x removed_trait_bound                 NOT FOUND
+  x trait_type                          NOT FOUND
+  + abstract_type                       -> ID: 235
 
 === FUNCTION NODES ===
-  ✓ function_item                       -> ID: 188
-  ✓ function_signature_item             -> ID: 189
-  ✓ parameters                          -> ID: 210
-  ✓ parameter                           -> ID: 213
-  ✓ self_parameter                      -> ID: 211
-  ✗ variadic_parameter                  NOT FOUND
-  ✗ optional_type_parameter             NOT FOUND
-  ✓ closure_expression                  -> ID: 281
-  ✓ closure_parameters                  -> ID: 282
-  ✓ async_block                         -> ID: 290
+  + function_item                       -> ID: 188
+  + function_signature_item             -> ID: 189
+  + parameters                          -> ID: 210
+  + parameter                           -> ID: 213
+  + self_parameter                      -> ID: 211
+  x variadic_parameter                  NOT FOUND
+  x optional_type_parameter             NOT FOUND
+  + closure_expression                  -> ID: 281
+  + closure_parameters                  -> ID: 282
+  + async_block                         -> ID: 290
 
 === TYPE NODES ===
-  ✗ type_alias                          NOT FOUND
-  ✓ type_item                           -> ID: 187
-  ✓ generic_type                        -> ID: 226
-  ✗ generic_type_with_turbofish         NOT FOUND
-  ✓ function_type                       -> ID: 222
-  ✓ tuple_type                          -> ID: 223
-  ✓ array_type                          -> ID: 220
-  ✓ pointer_type                        -> ID: 233
-  ✓ reference_type                      -> ID: 232
-  ✗ empty_type                          NOT FOUND
-  ✓ dynamic_type                        -> ID: 236
-  ✓ bounded_type                        -> ID: 228
+  x type_alias                          NOT FOUND
+  + type_item                           -> ID: 187
+  + generic_type                        -> ID: 226
+  x generic_type_with_turbofish         NOT FOUND
+  + function_type                       -> ID: 222
+  + tuple_type                          -> ID: 223
+  + array_type                          -> ID: 220
+  + pointer_type                        -> ID: 233
+  + reference_type                      -> ID: 232
+  x empty_type                          NOT FOUND
+  + dynamic_type                        -> ID: 236
+  + bounded_type                        -> ID: 228
 
 === PATTERN NODES ===
-  ✗ tuple_pattern                       NOT FOUND
-  ✗ slice_pattern                       NOT FOUND
-  ✗ tuple_struct_pattern                NOT FOUND
-  ✗ struct_pattern                      NOT FOUND
-  ✗ remaining_field_pattern             NOT FOUND
-  ✗ mut_pattern                         NOT FOUND
-  ✗ range_pattern                       NOT FOUND
-  ✗ ref_pattern                         NOT FOUND
-  ✗ captured_pattern                    NOT FOUND
-  ✗ reference_pattern                   NOT FOUND
-  ✗ or_pattern                          NOT FOUND
+  x tuple_pattern                       NOT FOUND
+  x slice_pattern                       NOT FOUND
+  x tuple_struct_pattern                NOT FOUND
+  x struct_pattern                      NOT FOUND
+  x remaining_field_pattern             NOT FOUND
+  x mut_pattern                         NOT FOUND
+  x range_pattern                       NOT FOUND
+  x ref_pattern                         NOT FOUND
+  x captured_pattern                    NOT FOUND
+  x reference_pattern                   NOT FOUND
+  x or_pattern                          NOT FOUND
 
 === EXPRESSION NODES ===
-  ✓ macro_invocation                    -> ID: 239
-  ✓ macro_definition                    -> ID: 161
-  ✓ macro_rule                          -> ID: 162
-  ✓ token_tree                          -> ID: 168
-  ✗ match_expression                    NOT FOUND
-  ✗ match_arm                           NOT FOUND
-  ✗ match_pattern                       NOT FOUND
-  ✗ if_expression                       NOT FOUND
-  ✗ while_expression                    NOT FOUND
-  ✗ loop_expression                     NOT FOUND
-  ✗ for_expression                      NOT FOUND
-  ✓ const_item                          -> ID: 185
-  ✓ static_item                         -> ID: 186
-  ✓ attribute_item                      -> ID: 170
-  ✗ inner_attribute_item                NOT FOUND
+  + macro_invocation                    -> ID: 239
+  + macro_definition                    -> ID: 161
+  + macro_rule                          -> ID: 162
+  + token_tree                          -> ID: 168
+  x match_expression                    NOT FOUND
+  x match_arm                           NOT FOUND
+  x match_pattern                       NOT FOUND
+  x if_expression                       NOT FOUND
+  x while_expression                    NOT FOUND
+  x loop_expression                     NOT FOUND
+  x for_expression                      NOT FOUND
+  + const_item                          -> ID: 185
+  + static_item                         -> ID: 186
+  + attribute_item                      -> ID: 170
+  x inner_attribute_item                NOT FOUND
 
 === UNCATEGORIZED NODES ===
-  ✓ !                                   -> ID: 53
-  ✓ "                                   -> ID: 129
-  ✓ #                                   -> ID: 86
-  ✓ &                                   -> ID: 54
-  ✓ '                                   -> ID: 87
-  ✓ (                                   -> ID: 4
-  ✓ )                                   -> ID: 5
-  ✓ *                                   -> ID: 15
-  ✓ +                                   -> ID: 14
-  ✓ ,                                   -> ID: 83
-  ✓ ->                                  -> ID: 85
-  ✓ .                                   -> ID: 79
-  ✓ /                                   -> ID: 50
-  ✓ //                                  -> ID: 134
-  ✓ :                                   -> ID: 11
-  ✓ ::                                  -> ID: 84
-  ✓ ;                                   -> ID: 2
-  ✓ <                                   -> ID: 74
-  ✓ =                                   -> ID: 70
-  ✓ =>                                  -> ID: 10
-  ✓ >                                   -> ID: 73
-  ✓ [                                   -> ID: 6
-  ✓ ]                                   -> ID: 7
-  ✓ arguments                           -> ID: 257
-  ✓ as                                  -> ID: 88
-  ✓ assignment_expression               -> ID: 251
-  ✓ async                               -> ID: 89
-  ✓ attribute                           -> ID: 172
-  ✓ binary_expression                   -> ID: 250
-  ✓ block                               -> ID: 293
-  ✓ boolean_literal                     -> ID: 313
-  ✓ call_expression                     -> ID: 256
-  ✓ const                               -> ID: 92
-  ✓ declaration_list                    -> ID: 175
-  ✓ doc_comment                         -> ID: 155
-  ✓ dyn                                 -> ID: 121
-  ✓ enum                                -> ID: 95
-  ✓ expression_statement                -> ID: 160
-  ✓ extern                              -> ID: 116
-  ✓ extern_modifier                     -> ID: 214
-  ✓ field_expression                    -> ID: 288
-  ✓ field_identifier                    -> ID: 351
-  ✓ field_initializer                   -> ID: 265
-  ✓ field_initializer_list              -> ID: 263
-  ✓ fn                                  -> ID: 96
-  ✓ for                                 -> ID: 97
-  ✓ foreign_mod_item                    -> ID: 174
-  ✓ fragment_specifier                  -> ID: 167
-  ✓ function_modifiers                  -> ID: 190
-  ✓ ident                               -> ID: 20
-  ✓ identifier                          -> ID: 1
-  ✓ impl                                -> ID: 100
-  ✓ inner_doc_comment_marker            -> ID: 153
-  ✓ integer_literal                     -> ID: 127
-  ✓ let                                 -> ID: 101
-  ✓ let_declaration                     -> ID: 203
-  ✓ lifetime                            -> ID: 219
-  ✓ lifetime_parameter                  -> ID: 202
-  ✓ line_comment                        -> ID: 314
-  ✓ macro_rules!                        -> ID: 3
-  ✓ metavariable                        -> ID: 146
-  ✓ mod                                 -> ID: 104
-  ✓ mutable_specifier                   -> ID: 122
-  ✓ outer_doc_comment_marker            -> ID: 152
-  ✓ primitive_type                      -> ID: 32
-  ✓ pub                                 -> ID: 105
-  ✓ reference_expression                -> ID: 249
-  ✓ scoped_identifier                   -> ID: 243
-  ✓ scoped_type_identifier              -> ID: 245
-  ✓ self                                -> ID: 143
-  ✓ shorthand_field_initializer         -> ID: 264
-  ✓ source_file                         -> ID: 157
-  ✓ static                              -> ID: 107
-  ✓ string_content                      -> ID: 147
-  ✓ string_literal                      -> ID: 311
-  ✓ struct                              -> ID: 108
-  ✓ super                               -> ID: 144
-  ✓ token_binding_pattern               -> ID: 165
-  ✓ token_tree_pattern                  -> ID: 164
-  ✓ trait                               -> ID: 109
-  ✓ true                                -> ID: 132
-  ✓ tuple_expression                    -> ID: 260
-  ✓ type                                -> ID: 110
-  ✓ type_arguments                      -> ID: 230
-  ✓ type_binding                        -> ID: 231
-  ✓ type_cast_expression                -> ID: 253
-  ✓ type_identifier                     -> ID: 354
-  ✓ type_parameter                      -> ID: 201
-  ✓ type_parameters                     -> ID: 199
-  ✓ unary_expression                    -> ID: 247
-  ✓ union                               -> ID: 111
-  ✓ union_item                          -> ID: 177
-  ✓ unit_expression                     -> ID: 261
-  ✓ unit_type                           -> ID: 224
-  ✓ unsafe                              -> ID: 112
-  ✓ use                                 -> ID: 113
-  ✓ visibility_modifier                 -> ID: 215
-  ✓ where                               -> ID: 114
-  ✓ {                                   -> ID: 8
-  ✓ |                                   -> ID: 55
-  ✓ }                                   -> ID: 9
+  + !                                   -> ID: 53
+  + "                                   -> ID: 129
+  + #                                   -> ID: 86
+  + &                                   -> ID: 54
+  + '                                   -> ID: 87
+  + (                                   -> ID: 4
+  + )                                   -> ID: 5
+  + *                                   -> ID: 15
+  + +                                   -> ID: 14
+  + ,                                   -> ID: 83
+  + ->                                  -> ID: 85
+  + .                                   -> ID: 79
+  + /                                   -> ID: 50
+  + //                                  -> ID: 134
+  + :                                   -> ID: 11
+  + ::                                  -> ID: 84
+  + ;                                   -> ID: 2
+  + <                                   -> ID: 74
+  + =                                   -> ID: 70
+  + =>                                  -> ID: 10
+  + >                                   -> ID: 73
+  + [                                   -> ID: 6
+  + ]                                   -> ID: 7
+  + arguments                           -> ID: 257
+  + as                                  -> ID: 88
+  + assignment_expression               -> ID: 251
+  + async                               -> ID: 89
+  + attribute                           -> ID: 172
+  + binary_expression                   -> ID: 250
+  + block                               -> ID: 293
+  + boolean_literal                     -> ID: 313
+  + call_expression                     -> ID: 256
+  + const                               -> ID: 92
+  + declaration_list                    -> ID: 175
+  + doc_comment                         -> ID: 155
+  + dyn                                 -> ID: 121
+  + enum                                -> ID: 95
+  + expression_statement                -> ID: 160
+  + extern                              -> ID: 116
+  + extern_modifier                     -> ID: 214
+  + field_expression                    -> ID: 288
+  + field_identifier                    -> ID: 351
+  + field_initializer                   -> ID: 265
+  + field_initializer_list              -> ID: 263
+  + fn                                  -> ID: 96
+  + for                                 -> ID: 97
+  + foreign_mod_item                    -> ID: 174
+  + fragment_specifier                  -> ID: 167
+  + function_modifiers                  -> ID: 190
+  + ident                               -> ID: 20
+  + identifier                          -> ID: 1
+  + impl                                -> ID: 100
+  + inner_doc_comment_marker            -> ID: 153
+  + integer_literal                     -> ID: 127
+  + let                                 -> ID: 101
+  + let_declaration                     -> ID: 203
+  + lifetime                            -> ID: 219
+  + lifetime_parameter                  -> ID: 202
+  + line_comment                        -> ID: 314
+  + macro_rules!                        -> ID: 3
+  + metavariable                        -> ID: 146
+  + mod                                 -> ID: 104
+  + mutable_specifier                   -> ID: 122
+  + outer_doc_comment_marker            -> ID: 152
+  + primitive_type                      -> ID: 32
+  + pub                                 -> ID: 105
+  + reference_expression                -> ID: 249
+  + scoped_identifier                   -> ID: 243
+  + scoped_type_identifier              -> ID: 245
+  + self                                -> ID: 143
+  + shorthand_field_initializer         -> ID: 264
+  + source_file                         -> ID: 157
+  + static                              -> ID: 107
+  + string_content                      -> ID: 147
+  + string_literal                      -> ID: 311
+  + struct                              -> ID: 108
+  + super                               -> ID: 144
+  + token_binding_pattern               -> ID: 165
+  + token_tree_pattern                  -> ID: 164
+  + trait                               -> ID: 109
+  + true                                -> ID: 132
+  + tuple_expression                    -> ID: 260
+  + type                                -> ID: 110
+  + type_arguments                      -> ID: 230
+  + type_binding                        -> ID: 231
+  + type_cast_expression                -> ID: 253
+  + type_identifier                     -> ID: 354
+  + type_parameter                      -> ID: 201
+  + type_parameters                     -> ID: 199
+  + unary_expression                    -> ID: 247
+  + union                               -> ID: 111
+  + union_item                          -> ID: 177
+  + unit_expression                     -> ID: 261
+  + unit_type                           -> ID: 224
+  + unsafe                              -> ID: 112
+  + use                                 -> ID: 113
+  + visibility_modifier                 -> ID: 215
+  + where                               -> ID: 114
+  + {                                   -> ID: 8
+  + |                                   -> ID: 55
+  + }                                   -> ID: 9
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

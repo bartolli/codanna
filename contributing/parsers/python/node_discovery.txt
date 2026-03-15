@@ -1,177 +1,177 @@
-=== Python Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== Python Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 15
   Node kind count: 136
 
 === IMPORT NODES ===
-  ✓ import_statement                    -> ID: 111
-  ✓ import_from_statement               -> ID: 115
-  ✓ aliased_import                      -> ID: 117
-  ✓ dotted_name                         -> ID: 162
-  ✗ relative_import                     NOT FOUND
-  ✗ wildcard_import                     NOT FOUND
+  + import_statement                    -> ID: 111
+  + import_from_statement               -> ID: 115
+  + aliased_import                      -> ID: 117
+  + dotted_name                         -> ID: 162
+  x relative_import                     NOT FOUND
+  x wildcard_import                     NOT FOUND
 
 === CLASS & FUNCTION NODES ===
-  ✓ class_definition                    -> ID: 154
-  ✓ function_definition                 -> ID: 145
-  ✓ decorated_definition                -> ID: 158
-  ✓ lambda                              -> ID: 73
-  ✓ parameters                          -> ID: 146
-  ✗ default_parameter                   NOT FOUND
-  ✓ typed_parameter                     -> ID: 207
-  ✓ typed_default_parameter             -> ID: 182
-  ✗ list_splat_parameter                NOT FOUND
-  ✗ dictionary_splat_parameter          NOT FOUND
+  + class_definition                    -> ID: 154
+  + function_definition                 -> ID: 145
+  + decorated_definition                -> ID: 158
+  + lambda                              -> ID: 73
+  + parameters                          -> ID: 146
+  x default_parameter                   NOT FOUND
+  + typed_parameter                     -> ID: 207
+  + typed_default_parameter             -> ID: 182
+  x list_splat_parameter                NOT FOUND
+  x dictionary_splat_parameter          NOT FOUND
 
 === ASYNC NODES ===
-  ✗ async_function_definition           NOT FOUND
-  ✗ async_for_statement                 NOT FOUND
-  ✗ async_with_statement                NOT FOUND
-  ✓ await                               -> ID: 95
-  ✗ async_for_in_clause                 NOT FOUND
-  ✗ async_comprehension                 NOT FOUND
+  x async_function_definition           NOT FOUND
+  x async_for_statement                 NOT FOUND
+  x async_with_statement                NOT FOUND
+  + await                               -> ID: 95
+  x async_for_in_clause                 NOT FOUND
+  x async_comprehension                 NOT FOUND
 
 === STATEMENT NODES ===
-  ✓ if_statement                        -> ID: 131
-  ✗ elif_clause                         NOT FOUND
-  ✓ else_clause                         -> ID: 133
-  ✓ while_statement                     -> ID: 138
-  ✓ for_statement                       -> ID: 137
-  ✓ try_statement                       -> ID: 139
-  ✓ except_clause                       -> ID: 140
-  ✓ finally_clause                      -> ID: 141
-  ✓ with_statement                      -> ID: 142
-  ✓ match_statement                     -> ID: 134
-  ✓ case_clause                         -> ID: 136
+  + if_statement                        -> ID: 131
+  x elif_clause                         NOT FOUND
+  + else_clause                         -> ID: 133
+  + while_statement                     -> ID: 138
+  + for_statement                       -> ID: 137
+  + try_statement                       -> ID: 139
+  + except_clause                       -> ID: 140
+  + finally_clause                      -> ID: 141
+  + with_statement                      -> ID: 142
+  + match_statement                     -> ID: 134
+  + case_clause                         -> ID: 136
 
 === EXPRESSION NODES ===
-  ✓ assignment                          -> ID: 198
-  ✓ augmented_assignment                -> ID: 199
-  ✗ annotated_assignment                NOT FOUND
-  ✓ binary_operator                     -> ID: 191
-  ✗ unary_operator                      NOT FOUND
-  ✓ comparison_operator                 -> ID: 195
-  ✗ conditional_expression              NOT FOUND
-  ✓ named_expression                    -> ID: 123
-  ✓ as_pattern                          -> ID: 185
+  + assignment                          -> ID: 198
+  + augmented_assignment                -> ID: 199
+  x annotated_assignment                NOT FOUND
+  + binary_operator                     -> ID: 191
+  x unary_operator                      NOT FOUND
+  + comparison_operator                 -> ID: 195
+  x conditional_expression              NOT FOUND
+  + named_expression                    -> ID: 123
+  + as_pattern                          -> ID: 185
 
 === COMPREHENSION NODES ===
-  ✓ list_comprehension                  -> ID: 220
-  ✓ dictionary_comprehension            -> ID: 221
-  ✓ set_comprehension                   -> ID: 222
-  ✓ generator_expression                -> ID: 223
-  ✓ for_in_clause                       -> ID: 227
-  ✓ if_clause                           -> ID: 228
+  + list_comprehension                  -> ID: 220
+  + dictionary_comprehension            -> ID: 221
+  + set_comprehension                   -> ID: 222
+  + generator_expression                -> ID: 223
+  + for_in_clause                       -> ID: 227
+  + if_clause                           -> ID: 228
 
 === TYPE NODES ===
-  ✓ type                                -> ID: 208
-  ✗ type_alias_statement                NOT FOUND
-  ✓ type_parameter                      -> ID: 155
-  ✗ type_comment                        NOT FOUND
-  ✓ generic_type                        -> ID: 210
-  ✗ union_type                          NOT FOUND
-  ✗ constrained_type                    NOT FOUND
-  ✗ member_type                         NOT FOUND
+  + type                                -> ID: 208
+  x type_alias_statement                NOT FOUND
+  + type_parameter                      -> ID: 155
+  x type_comment                        NOT FOUND
+  + generic_type                        -> ID: 210
+  x union_type                          NOT FOUND
+  x constrained_type                    NOT FOUND
+  x member_type                         NOT FOUND
 
 === UNCATEGORIZED NODES ===
-  ✓ %                                   -> ID: 59
-  ✓ (                                   -> ID: 7
-  ✓ )                                   -> ID: 8
-  ✓ *                                   -> ID: 11
-  ✓ **                                  -> ID: 39
-  ✓ *=                                  -> ID: 76
-  ✓ +                                   -> ID: 54
-  ✓ +=                                  -> ID: 74
-  ✓ ,                                   -> ID: 9
-  ✓ -                                   -> ID: 49
-  ✓ -=                                  -> ID: 75
-  ✓ ->                                  -> ID: 38
-  ✓ .                                   -> ID: 4
-  ✓ //                                  -> ID: 60
-  ✓ :                                   -> ID: 23
-  ✓ :=                                  -> ID: 15
-  ✓ <                                   -> ID: 66
-  ✓ <=                                  -> ID: 67
-  ✓ =                                   -> ID: 44
-  ✓ ==                                  -> ID: 68
-  ✓ >                                   -> ID: 71
-  ✓ @                                   -> ID: 48
-  ✓ [                                   -> ID: 46
-  ✓ ]                                   -> ID: 47
-  ✓ _                                   -> ID: 50
-  ✓ argument_list                       -> ID: 157
-  ✓ as                                  -> ID: 10
-  ✓ as_pattern_target                   -> ID: 272
-  ✓ async                               -> ID: 28
-  ✓ attribute                           -> ID: 203
-  ✓ block                               -> ID: 160
-  ✓ call                                -> ID: 206
-  ✓ case                                -> ID: 27
-  ✓ case_pattern                        -> ID: 163
-  ✓ class                               -> ID: 45
-  ✓ class_pattern                       -> ID: 173
-  ✓ comment                             -> ID: 99
-  ✓ decorator                           -> ID: 159
-  ✓ def                                 -> ID: 37
-  ✓ dict_pattern                        -> ID: 169
-  ✓ dictionary                          -> ID: 218
-  ✓ dictionary_splat                    -> ID: 149
-  ✓ dictionary_splat_pattern            -> ID: 184
-  ✓ ellipsis                            -> ID: 88
-  ✓ else                                -> ID: 25
-  ✓ except                              -> ID: 33
-  ✓ expression_list                     -> ID: 161
-  ✓ expression_statement                -> ID: 122
-  ✓ finally                             -> ID: 35
-  ✓ float                               -> ID: 94
-  ✓ for                                 -> ID: 29
-  ✓ from                                -> ID: 5
-  ✓ global                              -> ID: 40
-  ✓ global_statement                    -> ID: 150
-  ✓ identifier                          -> ID: 1
-  ✓ if                                  -> ID: 22
-  ✓ import                              -> ID: 3
-  ✓ in                                  -> ID: 30
-  ✓ integer                             -> ID: 93
-  ✓ interpolation                       -> ID: 233
-  ✓ is                                  -> ID: 65
-  ✓ keyword_argument                    -> ID: 214
-  ✓ lambda_parameters                   -> ID: 147
-  ✓ list                                -> ID: 215
-  ✓ list_pattern                        -> ID: 180
-  ✓ list_splat                          -> ID: 148
-  ✓ list_splat_pattern                  -> ID: 183
-  ✓ match                               -> ID: 26
-  ✓ module                              -> ID: 108
-  ✓ none                                -> ID: 98
-  ✓ nonlocal                            -> ID: 41
-  ✓ nonlocal_statement                  -> ID: 151
-  ✓ not                                 -> ID: 55
-  ✓ not in                              -> ID: 193
-  ✓ pair                                -> ID: 219
-  ✓ parenthesized_expression            -> ID: 225
-  ✓ pass                                -> ID: 19
-  ✓ pass_statement                      -> ID: 128
-  ✓ pattern_list                        -> ID: 200
-  ✓ raise                               -> ID: 18
-  ✓ raise_statement                     -> ID: 127
-  ✓ return                              -> ID: 16
-  ✓ return_statement                    -> ID: 125
-  ✓ splat_pattern                       -> ID: 172
-  ✓ string                              -> ID: 231
-  ✓ string_content                      -> ID: 232
-  ✓ string_end                          -> ID: 107
-  ✓ string_start                        -> ID: 104
-  ✓ subscript                           -> ID: 204
-  ✓ true                                -> ID: 96
-  ✓ try                                 -> ID: 32
-  ✓ type_conversion                     -> ID: 92
-  ✓ while                               -> ID: 31
-  ✓ with                                -> ID: 36
-  ✓ with_clause                         -> ID: 143
-  ✓ with_item                           -> ID: 144
-  ✓ yield                               -> ID: 87
-  ✓ {                                   -> ID: 52
-  ✓ }                                   -> ID: 53
+  + %                                   -> ID: 59
+  + (                                   -> ID: 7
+  + )                                   -> ID: 8
+  + *                                   -> ID: 11
+  + **                                  -> ID: 39
+  + *=                                  -> ID: 76
+  + +                                   -> ID: 54
+  + +=                                  -> ID: 74
+  + ,                                   -> ID: 9
+  + -                                   -> ID: 49
+  + -=                                  -> ID: 75
+  + ->                                  -> ID: 38
+  + .                                   -> ID: 4
+  + //                                  -> ID: 60
+  + :                                   -> ID: 23
+  + :=                                  -> ID: 15
+  + <                                   -> ID: 66
+  + <=                                  -> ID: 67
+  + =                                   -> ID: 44
+  + ==                                  -> ID: 68
+  + >                                   -> ID: 71
+  + @                                   -> ID: 48
+  + [                                   -> ID: 46
+  + ]                                   -> ID: 47
+  + _                                   -> ID: 50
+  + argument_list                       -> ID: 157
+  + as                                  -> ID: 10
+  + as_pattern_target                   -> ID: 272
+  + async                               -> ID: 28
+  + attribute                           -> ID: 203
+  + block                               -> ID: 160
+  + call                                -> ID: 206
+  + case                                -> ID: 27
+  + case_pattern                        -> ID: 163
+  + class                               -> ID: 45
+  + class_pattern                       -> ID: 173
+  + comment                             -> ID: 99
+  + decorator                           -> ID: 159
+  + def                                 -> ID: 37
+  + dict_pattern                        -> ID: 169
+  + dictionary                          -> ID: 218
+  + dictionary_splat                    -> ID: 149
+  + dictionary_splat_pattern            -> ID: 184
+  + ellipsis                            -> ID: 88
+  + else                                -> ID: 25
+  + except                              -> ID: 33
+  + expression_list                     -> ID: 161
+  + expression_statement                -> ID: 122
+  + finally                             -> ID: 35
+  + float                               -> ID: 94
+  + for                                 -> ID: 29
+  + from                                -> ID: 5
+  + global                              -> ID: 40
+  + global_statement                    -> ID: 150
+  + identifier                          -> ID: 1
+  + if                                  -> ID: 22
+  + import                              -> ID: 3
+  + in                                  -> ID: 30
+  + integer                             -> ID: 93
+  + interpolation                       -> ID: 233
+  + is                                  -> ID: 65
+  + keyword_argument                    -> ID: 214
+  + lambda_parameters                   -> ID: 147
+  + list                                -> ID: 215
+  + list_pattern                        -> ID: 180
+  + list_splat                          -> ID: 148
+  + list_splat_pattern                  -> ID: 183
+  + match                               -> ID: 26
+  + module                              -> ID: 108
+  + none                                -> ID: 98
+  + nonlocal                            -> ID: 41
+  + nonlocal_statement                  -> ID: 151
+  + not                                 -> ID: 55
+  + not in                              -> ID: 193
+  + pair                                -> ID: 219
+  + parenthesized_expression            -> ID: 225
+  + pass                                -> ID: 19
+  + pass_statement                      -> ID: 128
+  + pattern_list                        -> ID: 200
+  + raise                               -> ID: 18
+  + raise_statement                     -> ID: 127
+  + return                              -> ID: 16
+  + return_statement                    -> ID: 125
+  + splat_pattern                       -> ID: 172
+  + string                              -> ID: 231
+  + string_content                      -> ID: 232
+  + string_end                          -> ID: 107
+  + string_start                        -> ID: 104
+  + subscript                           -> ID: 204
+  + true                                -> ID: 96
+  + try                                 -> ID: 32
+  + type_conversion                     -> ID: 92
+  + while                               -> ID: 31
+  + with                                -> ID: 36
+  + with_clause                         -> ID: 143
+  + with_item                           -> ID: 144
+  + yield                               -> ID: 87
+  + {                                   -> ID: 52
+  + }                                   -> ID: 53
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

@@ -1,191 +1,191 @@
-=== C Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== C Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 15
   Node kind count: 145
 
 === PREPROCESSOR AND INCLUDE NODES ===
-  ✓ translation_unit                    -> ID: 161
-  ✓ preproc_include                     -> ID: 164
-  ✗ preproc_define                      NOT FOUND
-  ✓ preproc_function_def                -> ID: 166
-  ✓ preproc_call                        -> ID: 168
-  ✓ preproc_def                         -> ID: 165
-  ✓ preproc_if                          -> ID: 169
-  ✓ preproc_ifdef                       -> ID: 170
-  ✗ preproc_ifndef                      NOT FOUND
-  ✓ preproc_else                        -> ID: 171
-  ✓ preproc_elif                        -> ID: 172
-  ✗ preproc_endif                       NOT FOUND
-  ✓ system_lib_string                   -> ID: 155
-  ✓ string_literal                      -> ID: 320
-  ✓ identifier                          -> ID: 1
+  + translation_unit                    -> ID: 161
+  + preproc_include                     -> ID: 164
+  x preproc_define                      NOT FOUND
+  + preproc_function_def                -> ID: 166
+  + preproc_call                        -> ID: 168
+  + preproc_def                         -> ID: 165
+  + preproc_if                          -> ID: 169
+  + preproc_ifdef                       -> ID: 170
+  x preproc_ifndef                      NOT FOUND
+  + preproc_else                        -> ID: 171
+  + preproc_elif                        -> ID: 172
+  x preproc_endif                       NOT FOUND
+  + system_lib_string                   -> ID: 155
+  + string_literal                      -> ID: 320
+  + identifier                          -> ID: 1
 
 === FUNCTION-RELATED NODES ===
-  ✓ function_definition                 -> ID: 196
-  ✓ function_declarator                 -> ID: 230
-  ✗ function_type                       NOT FOUND
-  ✓ parameter_declaration               -> ID: 260
-  ✓ parameter_list                      -> ID: 258
-  ✓ variadic_parameter                  -> ID: 257
-  ✗ abstract_function_declarator        NOT FOUND
-  ✓ call_expression                     -> ID: 299
-  ✓ argument_list                       -> ID: 309
+  + function_definition                 -> ID: 196
+  + function_declarator                 -> ID: 230
+  x function_type                       NOT FOUND
+  + parameter_declaration               -> ID: 260
+  + parameter_list                      -> ID: 258
+  + variadic_parameter                  -> ID: 257
+  x abstract_function_declarator        NOT FOUND
+  + call_expression                     -> ID: 299
+  + argument_list                       -> ID: 309
 
 === STRUCT AND UNION NODES ===
-  ✓ struct_specifier                    -> ID: 249
-  ✓ union_specifier                     -> ID: 250
-  ✓ field_declaration                   -> ID: 253
-  ✓ field_declaration_list              -> ID: 251
-  ✓ field_identifier                    -> ID: 360
-  ✗ bitfield_clause                     NOT FOUND
-  ✓ field_designator                    -> ID: 317
-  ✓ init_declarator                     -> ID: 240
+  + struct_specifier                    -> ID: 249
+  + union_specifier                     -> ID: 250
+  + field_declaration                   -> ID: 253
+  + field_declaration_list              -> ID: 251
+  + field_identifier                    -> ID: 360
+  x bitfield_clause                     NOT FOUND
+  + field_designator                    -> ID: 317
+  + init_declarator                     -> ID: 240
 
 === ENUM-RELATED NODES ===
-  ✓ enum_specifier                      -> ID: 247
-  ✓ enumerator                          -> ID: 256
-  ✓ enumerator_list                     -> ID: 248
+  + enum_specifier                      -> ID: 247
+  + enumerator                          -> ID: 256
+  + enumerator_list                     -> ID: 248
 
 === DECLARATION AND TYPEDEF NODES ===
-  ✓ declaration                         -> ID: 198
-  ✗ typedef_declaration                 NOT FOUND
-  ✓ type_definition                     -> ID: 199
-  ✗ declarator                          NOT FOUND
-  ✓ init_declarator                     -> ID: 240
-  ✓ storage_class_specifier             -> ID: 242
-  ✓ type_qualifier                      -> ID: 243
-  ✓ pointer_declarator                  -> ID: 226
-  ✓ array_declarator                    -> ID: 236
-  ✓ abstract_pointer_declarator         -> ID: 229
-  ✗ abstract_array_declarator           NOT FOUND
-  ✓ type_descriptor                     -> ID: 293
+  + declaration                         -> ID: 198
+  x typedef_declaration                 NOT FOUND
+  + type_definition                     -> ID: 199
+  x declarator                          NOT FOUND
+  + init_declarator                     -> ID: 240
+  + storage_class_specifier             -> ID: 242
+  + type_qualifier                      -> ID: 243
+  + pointer_declarator                  -> ID: 226
+  + array_declarator                    -> ID: 236
+  + abstract_pointer_declarator         -> ID: 229
+  x abstract_array_declarator           NOT FOUND
+  + type_descriptor                     -> ID: 293
 
 === TYPE-RELATED NODES ===
-  ✓ primitive_type                      -> ID: 93
-  ✗ sized_type_specifier                NOT FOUND
-  ✓ type_identifier                     -> ID: 362
-  ✗ pointer_type                        NOT FOUND
-  ✗ array_type                          NOT FOUND
-  ✗ struct_type                         NOT FOUND
-  ✗ union_type                          NOT FOUND
-  ✗ enum_type                           NOT FOUND
+  + primitive_type                      -> ID: 93
+  x sized_type_specifier                NOT FOUND
+  + type_identifier                     -> ID: 362
+  x pointer_type                        NOT FOUND
+  x array_type                          NOT FOUND
+  x struct_type                         NOT FOUND
+  x union_type                          NOT FOUND
+  x enum_type                           NOT FOUND
 
 === STATEMENT NODES ===
-  ✓ compound_statement                  -> ID: 241
-  ✓ expression_statement                -> ID: 266
-  ✓ labeled_statement                   -> ID: 264
-  ✓ if_statement                        -> ID: 267
-  ✓ switch_statement                    -> ID: 269
-  ✓ case_statement                      -> ID: 270
-  ✓ while_statement                     -> ID: 271
-  ✓ for_statement                       -> ID: 273
-  ✓ do_statement                        -> ID: 272
-  ✓ break_statement                     -> ID: 276
-  ✓ continue_statement                  -> ID: 277
-  ✓ return_statement                    -> ID: 275
-  ✓ goto_statement                      -> ID: 278
+  + compound_statement                  -> ID: 241
+  + expression_statement                -> ID: 266
+  + labeled_statement                   -> ID: 264
+  + if_statement                        -> ID: 267
+  + switch_statement                    -> ID: 269
+  + case_statement                      -> ID: 270
+  + while_statement                     -> ID: 271
+  + for_statement                       -> ID: 273
+  + do_statement                        -> ID: 272
+  + break_statement                     -> ID: 276
+  + continue_statement                  -> ID: 277
+  + return_statement                    -> ID: 275
+  + goto_statement                      -> ID: 278
 
 === EXPRESSION NODES ===
-  ✓ assignment_expression               -> ID: 287
-  ✓ update_expression                   -> ID: 291
-  ✓ cast_expression                     -> ID: 292
-  ✓ sizeof_expression                   -> ID: 294
-  ✗ alignof_expression                  NOT FOUND
-  ✗ offsetof_expression                 NOT FOUND
-  ✗ generic_expression                  NOT FOUND
-  ✓ subscript_expression                -> ID: 298
-  ✓ field_expression                    -> ID: 310
-  ✗ comma_expression                    NOT FOUND
-  ✓ conditional_expression              -> ID: 286
-  ✓ binary_expression                   -> ID: 290
-  ✓ unary_expression                    -> ID: 289
-  ✗ postfix_expression                  NOT FOUND
-  ✓ parenthesized_expression            -> ID: 312
-  ✓ initializer_list                    -> ID: 313
-  ✓ initializer_pair                    -> ID: 314
+  + assignment_expression               -> ID: 287
+  + update_expression                   -> ID: 291
+  + cast_expression                     -> ID: 292
+  + sizeof_expression                   -> ID: 294
+  x alignof_expression                  NOT FOUND
+  x offsetof_expression                 NOT FOUND
+  x generic_expression                  NOT FOUND
+  + subscript_expression                -> ID: 298
+  + field_expression                    -> ID: 310
+  x comma_expression                    NOT FOUND
+  + conditional_expression              -> ID: 286
+  + binary_expression                   -> ID: 290
+  + unary_expression                    -> ID: 289
+  x postfix_expression                  NOT FOUND
+  + parenthesized_expression            -> ID: 312
+  + initializer_list                    -> ID: 313
+  + initializer_pair                    -> ID: 314
 
 === UNCATEGORIZED NODES ===
-  ✓ 
+  + 
                                    -> ID: 10
-  ✓ !                                   -> ID: 22
-  ✓ "                                   -> ID: 152
-  ✓ #define                             -> ID: 4
-  ✓ #elif                               -> ID: 15
-  ✓ #else                               -> ID: 14
-  ✓ #endif                              -> ID: 11
-  ✓ #if                                 -> ID: 9
-  ✓ #ifdef                              -> ID: 12
-  ✓ #include                            -> ID: 2
-  ✓ %                                   -> ID: 28
-  ✓ &                                   -> ID: 33
-  ✓ &&                                  -> ID: 30
-  ✓ (                                   -> ID: 5
-  ✓ )                                   -> ID: 8
-  ✓ *                                   -> ID: 26
-  ✓ +                                   -> ID: 25
-  ✓ ++                                  -> ID: 126
-  ✓ ,                                   -> ID: 7
-  ✓ -                                   -> ID: 24
-  ✓ ->                                  -> ID: 140
-  ✓ .                                   -> ID: 139
-  ✓ ...                                 -> ID: 6
-  ✓ :                                   -> ID: 95
-  ✓ ;                                   -> ID: 42
-  ✓ <                                   -> ID: 39
-  ✓ <<                                  -> ID: 40
-  ✓ =                                   -> ID: 73
-  ✓ ==                                  -> ID: 34
-  ✓ >                                   -> ID: 36
-  ✓ >=                                  -> ID: 37
-  ✓ ?                                   -> ID: 114
-  ✓ NULL                                -> ID: 158
-  ✓ [                                   -> ID: 70
-  ✓ ]                                   -> ID: 72
-  ✓ __attribute__                       -> ID: 46
-  ✓ attribute_specifier                 -> ID: 205
-  ✓ break                               -> ID: 107
-  ✓ case                                -> ID: 101
-  ✓ comment                             -> ID: 160
-  ✓ compound_literal_expression         -> ID: 311
-  ✓ const                               -> ID: 82
-  ✓ continue                            -> ID: 108
-  ✓ declaration_list                    -> ID: 213
-  ✓ default                             -> ID: 102
-  ✓ defined                             -> ID: 21
-  ✓ do                                  -> ID: 104
-  ✓ else                                -> ID: 99
-  ✓ else_clause                         -> ID: 268
-  ✓ enum                                -> ID: 94
-  ✓ escape_sequence                     -> ID: 154
-  ✓ extern                              -> ID: 45
-  ✓ for                                 -> ID: 105
-  ✓ goto                                -> ID: 109
-  ✓ if                                  -> ID: 98
-  ✓ inline                              -> ID: 76
-  ✓ linkage_specification               -> ID: 204
-  ✓ null                                -> ID: 321
-  ✓ number_literal                      -> ID: 141
-  ✓ parenthesized_declarator            -> ID: 219
-  ✓ pointer_expression                  -> ID: 288
-  ✓ preproc_arg                         -> ID: 18
-  ✓ preproc_defined                     -> ID: 191
-  ✓ preproc_directive                   -> ID: 19
-  ✓ preproc_params                      -> ID: 167
-  ✓ return                              -> ID: 106
-  ✓ sizeof                              -> ID: 127
-  ✓ statement_identifier                -> ID: 361
-  ✓ static                              -> ID: 71
-  ✓ string_content                      -> ID: 153
-  ✓ struct                              -> ID: 96
-  ✓ subscript_designator                -> ID: 315
-  ✓ switch                              -> ID: 100
-  ✓ typedef                             -> ID: 44
-  ✓ union                               -> ID: 97
-  ✓ volatile                            -> ID: 84
-  ✓ while                               -> ID: 103
-  ✓ {                                   -> ID: 64
-  ✓ |=                                  -> ID: 124
-  ✓ ||                                  -> ID: 29
-  ✓ }                                   -> ID: 65
+  + !                                   -> ID: 22
+  + "                                   -> ID: 152
+  + #define                             -> ID: 4
+  + #elif                               -> ID: 15
+  + #else                               -> ID: 14
+  + #endif                              -> ID: 11
+  + #if                                 -> ID: 9
+  + #ifdef                              -> ID: 12
+  + #include                            -> ID: 2
+  + %                                   -> ID: 28
+  + &                                   -> ID: 33
+  + &&                                  -> ID: 30
+  + (                                   -> ID: 5
+  + )                                   -> ID: 8
+  + *                                   -> ID: 26
+  + +                                   -> ID: 25
+  + ++                                  -> ID: 126
+  + ,                                   -> ID: 7
+  + -                                   -> ID: 24
+  + ->                                  -> ID: 140
+  + .                                   -> ID: 139
+  + ...                                 -> ID: 6
+  + :                                   -> ID: 95
+  + ;                                   -> ID: 42
+  + <                                   -> ID: 39
+  + <<                                  -> ID: 40
+  + =                                   -> ID: 73
+  + ==                                  -> ID: 34
+  + >                                   -> ID: 36
+  + >=                                  -> ID: 37
+  + ?                                   -> ID: 114
+  + NULL                                -> ID: 158
+  + [                                   -> ID: 70
+  + ]                                   -> ID: 72
+  + __attribute__                       -> ID: 46
+  + attribute_specifier                 -> ID: 205
+  + break                               -> ID: 107
+  + case                                -> ID: 101
+  + comment                             -> ID: 160
+  + compound_literal_expression         -> ID: 311
+  + const                               -> ID: 82
+  + continue                            -> ID: 108
+  + declaration_list                    -> ID: 213
+  + default                             -> ID: 102
+  + defined                             -> ID: 21
+  + do                                  -> ID: 104
+  + else                                -> ID: 99
+  + else_clause                         -> ID: 268
+  + enum                                -> ID: 94
+  + escape_sequence                     -> ID: 154
+  + extern                              -> ID: 45
+  + for                                 -> ID: 105
+  + goto                                -> ID: 109
+  + if                                  -> ID: 98
+  + inline                              -> ID: 76
+  + linkage_specification               -> ID: 204
+  + null                                -> ID: 321
+  + number_literal                      -> ID: 141
+  + parenthesized_declarator            -> ID: 219
+  + pointer_expression                  -> ID: 288
+  + preproc_arg                         -> ID: 18
+  + preproc_defined                     -> ID: 191
+  + preproc_directive                   -> ID: 19
+  + preproc_params                      -> ID: 167
+  + return                              -> ID: 106
+  + sizeof                              -> ID: 127
+  + statement_identifier                -> ID: 361
+  + static                              -> ID: 71
+  + string_content                      -> ID: 153
+  + struct                              -> ID: 96
+  + subscript_designator                -> ID: 315
+  + switch                              -> ID: 100
+  + typedef                             -> ID: 44
+  + union                               -> ID: 97
+  + volatile                            -> ID: 84
+  + while                               -> ID: 103
+  + {                                   -> ID: 64
+  + |=                                  -> ID: 124
+  + ||                                  -> ID: 29
+  + }                                   -> ID: 65
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

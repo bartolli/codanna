@@ -1,243 +1,243 @@
-=== TypeScript Language ABI-15 COMPREHENSIVE NODE MAPPING ===
-  Generated: 2026-03-15 18:02:08 UTC
+=== TypeScript Language NODE MAPPING ===
+  Generated: 2026-03-15 18:41:01 UTC
   ABI Version: 14
   Node kind count: 198
 
 === IMPORT/EXPORT NODES ===
-  ✓ import_statement                    -> ID: 174
-  ✓ import_clause                       -> ID: 175
-  ✓ named_imports                       -> ID: 178
-  ✓ namespace_import                    -> ID: 177
-  ✓ export_statement                    -> ID: 167
-  ✓ export_clause                       -> ID: 169
-  ✓ export_specifier                    -> ID: 170
-  ✓ import_specifier                    -> ID: 179
-  ✗ import_alias                        NOT FOUND
-  ✗ default_type                        NOT FOUND
+  + import_statement                    -> ID: 174
+  + import_clause                       -> ID: 175
+  + named_imports                       -> ID: 178
+  + namespace_import                    -> ID: 177
+  + export_statement                    -> ID: 167
+  + export_clause                       -> ID: 169
+  + export_specifier                    -> ID: 170
+  + import_specifier                    -> ID: 179
+  x import_alias                        NOT FOUND
+  x default_type                        NOT FOUND
 
 === CLASS NODES ===
-  ✓ class_declaration                   -> ID: 221
-  ✓ class_body                          -> ID: 256
-  ✓ method_definition                   -> ID: 261
-  ✓ method_signature                    -> ID: 269
-  ✓ public_field_definition             -> ID: 266
-  ✗ private_field_definition            NOT FOUND
-  ✓ abstract_method_signature           -> ID: 270
-  ✓ class_heritage                      -> ID: 222
-  ✓ extends_clause                      -> ID: 278
-  ✓ implements_clause                   -> ID: 280
-  ✓ decorator                           -> ID: 253
-  ✓ computed_property_name              -> ID: 265
+  + class_declaration                   -> ID: 221
+  + class_body                          -> ID: 256
+  + method_definition                   -> ID: 261
+  + method_signature                    -> ID: 269
+  + public_field_definition             -> ID: 266
+  x private_field_definition            NOT FOUND
+  + abstract_method_signature           -> ID: 270
+  + class_heritage                      -> ID: 222
+  + extends_clause                      -> ID: 278
+  + implements_clause                   -> ID: 280
+  + decorator                           -> ID: 253
+  + computed_property_name              -> ID: 265
 
 === INTERFACE & TYPE NODES ===
-  ✓ interface_declaration               -> ID: 288
-  ✓ interface_body                      -> ID: 376
-  ✓ type_alias_declaration              -> ID: 293
-  ✓ enum_declaration                    -> ID: 290
-  ✓ enum_body                           -> ID: 291
-  ✓ enum_assignment                     -> ID: 292
-  ✓ type_parameter                      -> ID: 341
-  ✓ type_parameters                     -> ID: 340
-  ✓ type_arguments                      -> ID: 336
-  ✓ type_annotation                     -> ID: 302
-  ✓ type_predicate                      -> ID: 320
-  ✓ type_predicate_annotation           -> ID: 321
+  + interface_declaration               -> ID: 288
+  + interface_body                      -> ID: 376
+  + type_alias_declaration              -> ID: 293
+  + enum_declaration                    -> ID: 290
+  + enum_body                           -> ID: 291
+  + enum_assignment                     -> ID: 292
+  + type_parameter                      -> ID: 341
+  + type_parameters                     -> ID: 340
+  + type_arguments                      -> ID: 336
+  + type_annotation                     -> ID: 302
+  + type_predicate                      -> ID: 320
+  + type_predicate_annotation           -> ID: 321
 
 === FUNCTION NODES ===
-  ✓ function_declaration                -> ID: 224
-  ✓ function_expression                 -> ID: 223
-  ✓ arrow_function                      -> ID: 227
-  ✗ generator_function                  NOT FOUND
-  ✓ generator_function_declaration      -> ID: 226
-  ✓ formal_parameters                   -> ID: 257
-  ✓ required_parameter                  -> ID: 296
-  ✓ optional_parameter                  -> ID: 297
-  ✗ rest_parameter                      NOT FOUND
-  ✗ async_function                      NOT FOUND
-  ✗ async_arrow_function                NOT FOUND
+  + function_declaration                -> ID: 224
+  + function_expression                 -> ID: 223
+  + arrow_function                      -> ID: 227
+  x generator_function                  NOT FOUND
+  + generator_function_declaration      -> ID: 226
+  + formal_parameters                   -> ID: 257
+  + required_parameter                  -> ID: 296
+  + optional_parameter                  -> ID: 297
+  x rest_parameter                      NOT FOUND
+  x async_function                      NOT FOUND
+  x async_arrow_function                NOT FOUND
 
 === TYPE SYSTEM NODES ===
-  ✓ union_type                          -> ID: 349
-  ✓ intersection_type                   -> ID: 350
-  ✓ conditional_type                    -> ID: 318
-  ✓ generic_type                        -> ID: 319
-  ✗ type_query                          NOT FOUND
-  ✓ index_type_query                    -> ID: 327
-  ✓ lookup_type                         -> ID: 328
-  ✓ literal_type                        -> ID: 330
-  ✓ template_literal_type               -> ID: 316
-  ✗ flow_maybe_type                     NOT FOUND
-  ✓ parenthesized_type                  -> ID: 334
-  ✓ predefined_type                     -> ID: 335
-  ✓ type_identifier                     -> ID: 382
+  + union_type                          -> ID: 349
+  + intersection_type                   -> ID: 350
+  + conditional_type                    -> ID: 318
+  + generic_type                        -> ID: 319
+  x type_query                          NOT FOUND
+  + index_type_query                    -> ID: 327
+  + lookup_type                         -> ID: 328
+  + literal_type                        -> ID: 330
+  + template_literal_type               -> ID: 316
+  x flow_maybe_type                     NOT FOUND
+  + parenthesized_type                  -> ID: 334
+  + predefined_type                     -> ID: 335
+  + type_identifier                     -> ID: 382
 
 === JSX NODES ===
-  ✗ jsx_element                         NOT FOUND
-  ✗ jsx_self_closing_element            NOT FOUND
-  ✗ jsx_opening_element                 NOT FOUND
-  ✗ jsx_closing_element                 NOT FOUND
-  ✗ jsx_fragment                        NOT FOUND
-  ✗ jsx_expression                      NOT FOUND
-  ✗ jsx_attribute                       NOT FOUND
-  ✗ jsx_namespace_name                  NOT FOUND
-  ✗ jsx_text                            NOT FOUND
+  x jsx_element                         NOT FOUND
+  x jsx_self_closing_element            NOT FOUND
+  x jsx_opening_element                 NOT FOUND
+  x jsx_closing_element                 NOT FOUND
+  x jsx_fragment                        NOT FOUND
+  x jsx_expression                      NOT FOUND
+  x jsx_attribute                       NOT FOUND
+  x jsx_namespace_name                  NOT FOUND
+  x jsx_text                            NOT FOUND
 
 === MODULE NODES ===
-  ✓ module                              -> ID: 131
-  ✓ internal_module                     -> ID: 284
-  ✗ module_body                         NOT FOUND
-  ✓ ambient_declaration                 -> ID: 281
-  ✗ namespace_declaration               NOT FOUND
-  ✗ namespace_body                      NOT FOUND
-  ✗ export_assignment                   NOT FOUND
-  ✗ export_default_declaration          NOT FOUND
+  + module                              -> ID: 131
+  + internal_module                     -> ID: 284
+  x module_body                         NOT FOUND
+  + ambient_declaration                 -> ID: 281
+  x namespace_declaration               NOT FOUND
+  x namespace_body                      NOT FOUND
+  x export_assignment                   NOT FOUND
+  x export_default_declaration          NOT FOUND
 
 === UNCATEGORIZED NODES ===
-  ✓ !                                   -> ID: 21
-  ✓ "                                   -> ID: 99
-  ✓ ${                                  -> ID: 106
-  ✓ &                                   -> ID: 76
-  ✓ &&                                  -> ID: 71
-  ✓ '                                   -> ID: 100
-  ✓ (                                   -> ID: 26
-  ✓ )                                   -> ID: 28
-  ✓ *                                   -> ID: 4
-  ✓ +                                   -> ID: 79
-  ✓ ++                                  -> ID: 97
-  ✓ ,                                   -> ID: 11
-  ✓ -                                   -> ID: 80
-  ✓ .                                   -> ID: 47
-  ✓ ...                                 -> ID: 70
-  ✓ /                                   -> ID: 81
-  ✓ :                                   -> ID: 40
-  ✓ ;                                   -> ID: 27
-  ✓ <                                   -> ID: 84
-  ✓ <<                                  -> ID: 75
-  ✓ <=                                  -> ID: 85
-  ✓ =                                   -> ID: 7
-  ✓ ===                                 -> ID: 87
-  ✓ =>                                  -> ID: 51
-  ✓ >                                   -> ID: 91
-  ✓ ?                                   -> ID: 125
-  ✓ ?:                                  -> ID: 149
-  ✓ @                                   -> ID: 120
-  ✓ ERROR                               -> ID: 65535
-  ✓ [                                   -> ID: 45
-  ✓ ]                                   -> ID: 46
-  ✓ `                                   -> ID: 105
-  ✓ abstract                            -> ID: 138
-  ✓ abstract_class_declaration          -> ID: 282
-  ✓ accessibility_modifier              -> ID: 294
-  ✓ any                                 -> ID: 132
-  ✓ arguments                           -> ID: 252
-  ✓ array                               -> ID: 217
-  ✓ array_pattern                       -> ID: 218
-  ✓ array_type                          -> ID: 346
-  ✓ as                                  -> ID: 8
-  ✓ as_expression                       -> ID: 274
-  ✓ assignment_expression               -> ID: 236
-  ✓ async                               -> ID: 49
-  ✓ await                               -> ID: 29
-  ✓ await_expression                    -> ID: 233
-  ✓ binary_expression                   -> ID: 243
-  ✓ boolean                             -> ID: 134
-  ✓ call_expression                     -> ID: 231
-  ✓ class                               -> ID: 48
-  ✓ comment                             -> ID: 104
-  ✓ const                               -> ID: 20
-  ✓ constraint                          -> ID: 343
-  ✓ declare                             -> ID: 126
-  ✓ default                             -> ID: 5
-  ✓ enum                                -> ID: 146
-  ✓ export                              -> ID: 3
-  ✓ expression_statement                -> ID: 182
-  ✓ extends                             -> ID: 142
-  ✓ extends_type_clause                 -> ID: 289
-  ✓ false                               -> ID: 117
-  ✓ for                                 -> ID: 25
-  ✓ for_statement                       -> ID: 190
-  ✓ from                                -> ID: 15
-  ✓ function                            -> ID: 50
-  ✓ function_signature                  -> ID: 271
-  ✓ function_type                       -> ID: 351
-  ✓ get                                 -> ID: 123
-  ✓ global                              -> ID: 144
-  ✓ identifier                          -> ID: 1
-  ✓ implements                          -> ID: 143
-  ✓ import                              -> ID: 14
-  ✓ in                                  -> ID: 30
-  ✓ index_signature                     -> ID: 345
-  ✓ infer                               -> ID: 151
-  ✓ infer_type                          -> ID: 317
-  ✓ interface                           -> ID: 145
-  ✓ is                                  -> ID: 152
-  ✓ keyof                               -> ID: 153
-  ✓ let                                 -> ID: 19
-  ✓ lexical_declaration                 -> ID: 184
-  ✓ mapped_type_clause                  -> ID: 329
-  ✓ member_expression                   -> ID: 234
-  ✓ namespace                           -> ID: 9
-  ✓ nested_type_identifier              -> ID: 287
-  ✓ never                               -> ID: 156
-  ✓ new                                 -> ID: 53
-  ✓ new_expression                      -> ID: 232
-  ✓ non_null_expression                 -> ID: 268
-  ✓ null                                -> ID: 118
-  ✓ number                              -> ID: 133
-  ✓ object                              -> ID: 213
-  ✓ object_pattern                      -> ID: 214
-  ✓ object_type                         -> ID: 337
-  ✓ opting_type_annotation              -> ID: 301
-  ✓ pair                                -> ID: 262
-  ✓ parenthesized_expression            -> ID: 209
-  ✓ private                             -> ID: 128
-  ✓ program                             -> ID: 166
-  ✓ property_identifier                 -> ID: 377
-  ✓ property_signature                  -> ID: 339
-  ✓ protected                           -> ID: 129
-  ✓ public                              -> ID: 127
-  ✓ readonly                            -> ID: 122
-  ✓ regex                               -> ID: 250
-  ✓ regex_pattern                       -> ID: 108
-  ✓ rest_pattern                        -> ID: 260
-  ✓ return                              -> ID: 38
-  ✓ return_statement                    -> ID: 200
-  ✓ satisfies                           -> ID: 140
-  ✓ satisfies_expression                -> ID: 275
-  ✓ set                                 -> ID: 124
-  ✓ shorthand_property_identifier       -> ID: 378
-  ✓ shorthand_property_identifier_pattern -> ID: 379
-  ✓ spread_element                      -> ID: 241
-  ✓ statement_block                     -> ID: 186
-  ✓ static                              -> ID: 121
-  ✓ string                              -> ID: 247
-  ✓ string_fragment                     -> ID: 160
-  ✓ subscript_expression                -> ID: 235
-  ✓ template_string                     -> ID: 248
-  ✓ template_substitution               -> ID: 249
-  ✓ template_type                       -> ID: 315
-  ✓ ternary_expression                  -> ID: 242
-  ✓ this                                -> ID: 114
-  ✓ this_type                           -> ID: 381
-  ✓ true                                -> ID: 116
-  ✓ tuple_type                          -> ID: 347
-  ✓ type                                -> ID: 6
-  ✓ type_assertion                      -> ID: 273
-  ✓ typeof                              -> ID: 13
-  ✓ unary_expression                    -> ID: 244
-  ✓ undefined                           -> ID: 119
-  ✓ unknown                             -> ID: 155
-  ✓ update_expression                   -> ID: 245
-  ✓ var                                 -> ID: 18
-  ✓ variable_declaration                -> ID: 183
-  ✓ variable_declarator                 -> ID: 185
-  ✓ void                                -> ID: 95
-  ✓ while                               -> ID: 32
-  ✓ while_statement                     -> ID: 193
-  ✓ yield                               -> ID: 44
-  ✓ yield_expression                    -> ID: 212
-  ✓ {                                   -> ID: 10
-  ✓ |                                   -> ID: 78
-  ✓ }                                   -> ID: 12
+  + !                                   -> ID: 21
+  + "                                   -> ID: 99
+  + ${                                  -> ID: 106
+  + &                                   -> ID: 76
+  + &&                                  -> ID: 71
+  + '                                   -> ID: 100
+  + (                                   -> ID: 26
+  + )                                   -> ID: 28
+  + *                                   -> ID: 4
+  + +                                   -> ID: 79
+  + ++                                  -> ID: 97
+  + ,                                   -> ID: 11
+  + -                                   -> ID: 80
+  + .                                   -> ID: 47
+  + ...                                 -> ID: 70
+  + /                                   -> ID: 81
+  + :                                   -> ID: 40
+  + ;                                   -> ID: 27
+  + <                                   -> ID: 84
+  + <<                                  -> ID: 75
+  + <=                                  -> ID: 85
+  + =                                   -> ID: 7
+  + ===                                 -> ID: 87
+  + =>                                  -> ID: 51
+  + >                                   -> ID: 91
+  + ?                                   -> ID: 125
+  + ?:                                  -> ID: 149
+  + @                                   -> ID: 120
+  + ERROR                               -> ID: 65535
+  + [                                   -> ID: 45
+  + ]                                   -> ID: 46
+  + `                                   -> ID: 105
+  + abstract                            -> ID: 138
+  + abstract_class_declaration          -> ID: 282
+  + accessibility_modifier              -> ID: 294
+  + any                                 -> ID: 132
+  + arguments                           -> ID: 252
+  + array                               -> ID: 217
+  + array_pattern                       -> ID: 218
+  + array_type                          -> ID: 346
+  + as                                  -> ID: 8
+  + as_expression                       -> ID: 274
+  + assignment_expression               -> ID: 236
+  + async                               -> ID: 49
+  + await                               -> ID: 29
+  + await_expression                    -> ID: 233
+  + binary_expression                   -> ID: 243
+  + boolean                             -> ID: 134
+  + call_expression                     -> ID: 231
+  + class                               -> ID: 48
+  + comment                             -> ID: 104
+  + const                               -> ID: 20
+  + constraint                          -> ID: 343
+  + declare                             -> ID: 126
+  + default                             -> ID: 5
+  + enum                                -> ID: 146
+  + export                              -> ID: 3
+  + expression_statement                -> ID: 182
+  + extends                             -> ID: 142
+  + extends_type_clause                 -> ID: 289
+  + false                               -> ID: 117
+  + for                                 -> ID: 25
+  + for_statement                       -> ID: 190
+  + from                                -> ID: 15
+  + function                            -> ID: 50
+  + function_signature                  -> ID: 271
+  + function_type                       -> ID: 351
+  + get                                 -> ID: 123
+  + global                              -> ID: 144
+  + identifier                          -> ID: 1
+  + implements                          -> ID: 143
+  + import                              -> ID: 14
+  + in                                  -> ID: 30
+  + index_signature                     -> ID: 345
+  + infer                               -> ID: 151
+  + infer_type                          -> ID: 317
+  + interface                           -> ID: 145
+  + is                                  -> ID: 152
+  + keyof                               -> ID: 153
+  + let                                 -> ID: 19
+  + lexical_declaration                 -> ID: 184
+  + mapped_type_clause                  -> ID: 329
+  + member_expression                   -> ID: 234
+  + namespace                           -> ID: 9
+  + nested_type_identifier              -> ID: 287
+  + never                               -> ID: 156
+  + new                                 -> ID: 53
+  + new_expression                      -> ID: 232
+  + non_null_expression                 -> ID: 268
+  + null                                -> ID: 118
+  + number                              -> ID: 133
+  + object                              -> ID: 213
+  + object_pattern                      -> ID: 214
+  + object_type                         -> ID: 337
+  + opting_type_annotation              -> ID: 301
+  + pair                                -> ID: 262
+  + parenthesized_expression            -> ID: 209
+  + private                             -> ID: 128
+  + program                             -> ID: 166
+  + property_identifier                 -> ID: 377
+  + property_signature                  -> ID: 339
+  + protected                           -> ID: 129
+  + public                              -> ID: 127
+  + readonly                            -> ID: 122
+  + regex                               -> ID: 250
+  + regex_pattern                       -> ID: 108
+  + rest_pattern                        -> ID: 260
+  + return                              -> ID: 38
+  + return_statement                    -> ID: 200
+  + satisfies                           -> ID: 140
+  + satisfies_expression                -> ID: 275
+  + set                                 -> ID: 124
+  + shorthand_property_identifier       -> ID: 378
+  + shorthand_property_identifier_pattern -> ID: 379
+  + spread_element                      -> ID: 241
+  + statement_block                     -> ID: 186
+  + static                              -> ID: 121
+  + string                              -> ID: 247
+  + string_fragment                     -> ID: 160
+  + subscript_expression                -> ID: 235
+  + template_string                     -> ID: 248
+  + template_substitution               -> ID: 249
+  + template_type                       -> ID: 315
+  + ternary_expression                  -> ID: 242
+  + this                                -> ID: 114
+  + this_type                           -> ID: 381
+  + true                                -> ID: 116
+  + tuple_type                          -> ID: 347
+  + type                                -> ID: 6
+  + type_assertion                      -> ID: 273
+  + typeof                              -> ID: 13
+  + unary_expression                    -> ID: 244
+  + undefined                           -> ID: 119
+  + unknown                             -> ID: 155
+  + update_expression                   -> ID: 245
+  + var                                 -> ID: 18
+  + variable_declaration                -> ID: 183
+  + variable_declarator                 -> ID: 185
+  + void                                -> ID: 95
+  + while                               -> ID: 32
+  + while_statement                     -> ID: 193
+  + yield                               -> ID: 44
+  + yield_expression                    -> ID: 212
+  + {                                   -> ID: 10
+  + |                                   -> ID: 78
+  + }                                   -> ID: 12
 
-Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar

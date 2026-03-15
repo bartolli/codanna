@@ -1,6 +1,6 @@
 # C Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 132
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 29
 - Symbol kinds extracted: 6
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - case_statement
 - compound_literal_expression
@@ -40,7 +40,7 @@ These nodes are in examples and handled by parser:
 - union_specifier
 - while_statement
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
 These nodes appear in comprehensive.c but aren't handled:
 - 
 
@@ -160,7 +160,7 @@ These nodes appear in comprehensive.c but aren't handled:
 - ||
 - }
 
-## 📝 Missing from Examples
+## Missing from Examples
 These grammar nodes aren't in comprehensive.c:
 - _abstract_declarator
 - _declarator
@@ -213,7 +213,7 @@ These grammar nodes aren't in comprehensive.c:
 - true
 - type_specifier
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Constant
 - Function
 - Macro

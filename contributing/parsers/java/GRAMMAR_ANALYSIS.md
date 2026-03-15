@@ -1,6 +1,6 @@
 # Java Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 151
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 91
 - Symbol kinds extracted: 5
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - "
 - (
@@ -102,12 +102,12 @@ These nodes are in examples and handled by parser:
 - {
 - }
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
 These nodes appear in comprehensive.java but aren't handled:
 - program
 
-## 📚 Grammar-Only Nodes
-These nodes exist in grammar but not in comprehensive.java:
+## Missing from Examples
+These grammar nodes aren't in comprehensive.java:
 - _literal
 - _simple_type
 - _type
@@ -202,4 +202,11 @@ These nodes exist in grammar but not in comprehensive.java:
 - while_statement
 - wildcard
 - yield_statement
+
+## Symbol Kinds Extracted
+- Class
+- Enum
+- Function
+- Interface
+- Variable
 

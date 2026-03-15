@@ -1,6 +1,6 @@
 # Kotlin Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 136
@@ -8,7 +8,7 @@
 - Nodes handled by parser: 144
 - Symbol kinds extracted: 8
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
 - $
 - ${
@@ -155,7 +155,7 @@ These nodes are in examples and handled by parser:
 - {
 - }
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
 These nodes appear in comprehensive.kt but aren't handled:
 - ERROR
 - identifier
@@ -166,7 +166,7 @@ These nodes appear in comprehensive.kt but aren't handled:
 - typealias
 - wildcard_import
 
-## 📝 Missing from Examples
+## Missing from Examples
 These grammar nodes aren't in comprehensive.kt:
 - anonymous_function
 - anonymous_initializer
@@ -217,7 +217,7 @@ These grammar nodes aren't in comprehensive.kt:
 - when_subject
 - while_statement
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Class
 - Constant
 - Enum

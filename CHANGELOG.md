@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.17] - 2026-03-15
+
+### Added
+
+- Clojure language support: parser, behavior, definition, resolution modules (PR #80)
+- Clojure test fixtures, examples, grammar analysis, and audit report
+
+### Changed
+
+- Grammar audit tests split into per-language modules under abi15_grammar_audit/
+
 ## [0.9.16] - 2026-03-15
 
 ### Fixed

@@ -1,6 +1,6 @@
 # GDScript Grammar Analysis
 
-*Generated: 2026-03-15 18:02:08 UTC*
+*Generated: 2026-03-15 18:41:01 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 91
@@ -8,7 +8,8 @@
 - Nodes handled by parser: 14
 - Symbol kinds extracted: 7
 
-## ✅ Successfully Handled Nodes
+## Successfully Handled Nodes
+These nodes are in examples and handled by parser:
 - annotation
 - annotations
 - class_definition
@@ -24,7 +25,8 @@
 - variable_statement
 - while_statement
 
-## ⚠️ Implementation Gaps
+## Implementation Gaps
+These nodes appear in comprehensive.gd but aren't handled:
 - "
 - %
 - (
@@ -88,7 +90,8 @@
 - {
 - }
 
-## ⭕ Missing from Examples
+## Missing from Examples
+These grammar nodes aren't in comprehensive.gd:
 - _attribute_expression
 - _compound_statement
 - _expression
@@ -139,7 +142,7 @@
 - unary_operator
 - variadic_parameter
 
-## 🎯 Symbol Kinds Extracted
+## Symbol Kinds Extracted
 - Class
 - Constant
 - Field
