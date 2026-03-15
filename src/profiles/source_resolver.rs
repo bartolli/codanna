@@ -80,7 +80,7 @@ fn resolve_local_source(path: &str, profile_name: &str) -> ProfileResult<Resolve
 fn resolve_git_source(url: &str, profile_name: &str) -> ProfileResult<ResolvedProfileSource> {
     let temp_dir = tempfile::tempdir()?;
 
-    // Clone repository (requires git2 integration - Task 9)
+    // Clone repository
     let commit = clone_repository(url, temp_dir.path(), None)?;
 
     // Verify profile exists in cloned repo
@@ -100,7 +100,7 @@ fn resolve_git_source(url: &str, profile_name: &str) -> ProfileResult<ResolvedPr
     Ok(ResolvedProfileSource::Git { temp_dir, commit })
 }
 
-/// Clone git repository using git2
+/// Clone git repository using system git
 fn clone_repository(url: &str, dest: &Path, git_ref: Option<&str>) -> ProfileResult<String> {
     super::git::clone_repository(url, dest, git_ref)
 }

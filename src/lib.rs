@@ -9,6 +9,7 @@ pub mod config;
 pub mod display;
 pub mod documents;
 pub mod error;
+pub mod git;
 pub mod indexing;
 pub mod init;
 pub mod io;

@@ -55,11 +55,6 @@ pub enum ProfileError {
     ProfileNotFoundInAnyProvider { profile: String },
 
     #[error(
-        "Git operation failed: {message}\nSuggestion: Check network connection and repository permissions"
-    )]
-    GitError { message: String },
-
-    #[error(
         "Git operation failed: {operation}\nSuggestion: Check network connection and repository permissions"
     )]
     GitOperationFailed { operation: String },
@@ -69,9 +64,6 @@ pub enum ProfileError {
 
     #[error("IO error: {0}\nSuggestion: Check file permissions and disk space")]
     IoError(#[from] io::Error),
-
-    #[error("Git2 error: {0}\nSuggestion: Check repository URL and network connection")]
-    Git2Error(#[from] git2::Error),
 }
 
 /// Result type for profile operations
@@ -110,10 +102,9 @@ impl ProfileError {
             | ProfileError::ProviderNotFound { .. }
             | ProfileError::ProfileNotFoundInProvider { .. }
             | ProfileError::ProfileNotFoundInAnyProvider { .. } => ExitCode::NotFound,
-            ProfileError::GitError { .. }
-            | ProfileError::GitOperationFailed { .. }
-            | ProfileError::Git2Error(_)
-            | ProfileError::IoError(_) => ExitCode::GeneralError,
+            ProfileError::GitOperationFailed { .. } | ProfileError::IoError(_) => {
+                ExitCode::GeneralError
+            }
         }
     }
 }

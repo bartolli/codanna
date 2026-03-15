@@ -99,13 +99,6 @@ async-trait = "0.1.89"
 sysinfo = "0.38.0"
 indexmap = { version = "2.13.0", features = ["serde"] }
 
-# Unix: vendored OpenSSL for portable binaries
-[target.'cfg(unix)'.dependencies]
-git2 = { version = "0.20.3", features = ["vendored-openssl"] }
-# Windows: native TLS (Schannel) instead of OpenSSL
-[target.'cfg(windows)'.dependencies]
-git2 = { version = "0.20.3", default-features = false, features = ["https", "ssh"] }
-
 [dev-dependencies]
 criterion = { version = "0.8.1", features = ["html_reports"] }
 ort = { version = "=2.0.0-rc.10", default-features = false }

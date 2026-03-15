@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::Path;
 
+use std::process::Command;
+
 use codanna::plugins::error::PluginError;
 use codanna::{Settings, plugins};
-use git2::{IndexAddOption, Repository, Signature};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -90,17 +91,25 @@ fn create_marketplace_repo(
         fs::write(&file_path, content).expect("write extra file");
     }
 
-    let repo = Repository::init(&repo_path).expect("init git repo");
-    let mut index = repo.index().expect("load git index");
-    index
-        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
-        .expect("stage files");
-    index.write().expect("write index");
-    let tree_id = index.write_tree().expect("write tree");
-    let tree = repo.find_tree(tree_id).expect("find tree");
-    let sig = Signature::now("Test", "test@example.com").expect("signature");
-    repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
-        .expect("commit repository");
+    let run = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&repo_path)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run git {}: {e}", args.join(" ")));
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["init"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "Test"]);
+    run(&["config", "commit.gpgsign", "false"]);
+    run(&["add", "-A"]);
+    run(&["commit", "-m", "initial commit"]);
 
     repo_path.to_str().unwrap().to_string()
 }

@@ -80,9 +80,7 @@ pub enum PluginError {
     #[error("Missing required argument: {0}\nSuggestion: Provide the {0} argument")]
     MissingArgument(String),
 
-    #[error(
-        "Invalid reference '{ref_name}': {reason}\nSuggestion: Use a valid branch name, tag, or commit SHA"
-    )]
+    #[error("Invalid reference '{ref_name}': {reason}\nSuggestion: Use a valid branch name or tag")]
     InvalidReference { ref_name: String, reason: String },
 
     #[error("Network error: {0}\nSuggestion: Check your internet connection and try again")]
@@ -93,11 +91,6 @@ pub enum PluginError {
 
     #[error("JSON parsing error: {0}\nSuggestion: Ensure the JSON file is well-formed")]
     JsonError(#[from] serde_json::Error),
-
-    #[error(
-        "Git operation error: {0}\nSuggestion: Check network connection and repository permissions"
-    )]
-    Git2Error(#[from] git2::Error),
 
     #[error(
         "Plugin '{name}' has local modifications\nSuggestion: Use --force to overwrite changes or backup modified files"
@@ -131,7 +124,6 @@ impl PluginError {
             PluginError::PermissionDenied { .. }
             | PluginError::IoError(_)
             | PluginError::GitOperationFailed { .. }
-            | PluginError::Git2Error(_)
             | PluginError::NetworkError(_)
             | PluginError::InvalidReference { .. } => ExitCode::GeneralError,
             PluginError::AlreadyInstalled { .. } => ExitCode::UnsupportedOperation,
