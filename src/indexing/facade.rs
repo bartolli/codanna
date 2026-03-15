@@ -863,6 +863,11 @@ impl IndexFacade {
         path: impl AsRef<std::path::Path>,
     ) -> crate::IndexResult<crate::IndexingResult> {
         let path = path.as_ref();
+        if self.has_semantic_search() {
+            if let Err(e) = self.ensure_embedding_pool() {
+                tracing::warn!("Failed to initialize embedding pool: {e}");
+            }
+        }
         let stats = self.pipeline.index_file_single(
             path,
             Arc::clone(&self.document_index),
@@ -914,6 +919,11 @@ impl IndexFacade {
     ///
     /// This is the primary indexing entry point using Pipeline.
     pub fn index_directory(&mut self, path: &Path, force: bool) -> FacadeResult<IndexingStats> {
+        if self.has_semantic_search() {
+            if let Err(e) = self.ensure_embedding_pool() {
+                tracing::warn!("Failed to initialize embedding pool: {e}");
+            }
+        }
         let stats = self.pipeline.index_incremental(
             path,
             Arc::clone(&self.document_index),
@@ -982,6 +992,12 @@ impl IndexFacade {
         // Auto-force mode for empty indexes (clean index behaves like --force)
         let force = force || self.document_count().unwrap_or(0) == 0;
 
+        if self.has_semantic_search() {
+            if let Err(e) = self.ensure_embedding_pool() {
+                tracing::warn!("Failed to initialize embedding pool: {e}");
+            }
+        }
+
         // Use Pipeline for indexing with progress flag
         // The pipeline manages progress bars internally for clean sequential display
         let pipeline_stats = self.pipeline.index_incremental_with_progress_flag(
@@ -1024,6 +1040,12 @@ impl IndexFacade {
         let to_remove: Vec<&PathBuf> = stored_set.difference(&config_set).collect();
 
         let mut stats = SyncStats::default();
+
+        if self.has_semantic_search() && !to_add.is_empty() {
+            if let Err(e) = self.ensure_embedding_pool() {
+                tracing::warn!("Failed to initialize embedding pool: {e}");
+            }
+        }
 
         // Index new directories with progress if enabled
         // Use force=true since these are new directories being indexed for the first time

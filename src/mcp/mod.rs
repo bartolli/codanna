@@ -1019,10 +1019,11 @@ impl CodeIntelligenceServer {
 
         // Get semantic search info
         let semantic_info = if let Some(metadata) = indexer.get_semantic_metadata() {
+            let live_count = indexer.semantic_search_embedding_count();
             format!(
                 "\n\nSemantic Search:\n  - Status: Enabled\n  - Model: {}\n  - Embeddings: {}\n  - Dimensions: {}\n  - Created: {}\n  - Updated: {}",
                 metadata.model_name,
-                metadata.embedding_count,
+                live_count,
                 metadata.dimension,
                 format_relative_time(metadata.created_at),
                 format_relative_time(metadata.updated_at)
@@ -2007,10 +2008,11 @@ impl CodeIntelligenceServer {
         let indexer = self.facade.read().await;
 
         let semantic = if let Some(metadata) = indexer.get_semantic_metadata() {
+            let live_count = indexer.semantic_search_embedding_count();
             serde_json::json!({
                 "enabled": true,
                 "model": metadata.model_name,
-                "embeddings": metadata.embedding_count,
+                "embeddings": live_count,
                 "dimensions": metadata.dimension
             })
         } else {

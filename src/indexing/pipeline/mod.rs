@@ -1260,7 +1260,9 @@ impl Pipeline {
         // Save embeddings
         if let Some(sem) = semantic {
             if let Ok(guard) = sem.lock() {
-                let _ = guard.save(&semantic_path);
+                if let Err(e) = guard.save(&semantic_path) {
+                    tracing::warn!(target: "pipeline", "Failed to save embeddings: {e}");
+                }
             }
         }
 

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.16] - 2026-03-15
+
+### Fixed
+
+- Embedding pool initialized on incremental index when loaded from disk (#88)
+- Semantic save errors logged instead of silently discarded
+- get_index_info reports live embedding count instead of stale metadata
+- Debug printlns removed from semantic search
+
 ## [0.9.15] - 2026-03-15
 
 ### Changed
