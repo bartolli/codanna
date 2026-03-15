@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.9.14"
+version = "0.9.15"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -70,6 +70,10 @@ tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.0"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
+# Pinned: fastembed >=5.7 uses ort 2.0.0-rc.11 (ONNX Runtime 1.23) whose
+# prebuilt binaries require glibc 2.38+. Homebrew Linux CI runs Ubuntu 22.04
+# (glibc 2.35), so the bottle build fails with undefined __isoc23_strtol.
+# Upgrade when ort ships glibc 2.35 binaries or Homebrew moves to Ubuntu 24.04.
 fastembed = "=5.6.0"
 rand = "0.10.0"
 indicatif = "0.18.4"
