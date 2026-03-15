@@ -213,6 +213,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
             sse_keep_alive: Some(Duration::from_secs(15)),
             sse_retry: None,
             stateful_mode: true,
+            json_response: false,
         },
     );
 

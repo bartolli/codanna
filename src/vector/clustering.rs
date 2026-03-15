@@ -16,7 +16,7 @@
 //! - Parallelizable assignment step
 
 use crate::vector::types::{ClusterId, VectorError};
-use rand::Rng;
+use rand::RngExt;
 use thiserror::Error;
 
 /// Maximum number of iterations for K-means clustering.

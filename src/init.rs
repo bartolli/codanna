@@ -201,7 +201,7 @@ impl Default for ProjectId {
 impl ProjectId {
     /// Create a new random project ID using SHA-256 of random data
     pub fn new() -> Self {
-        use rand::Rng;
+        use rand::RngExt;
         use sha2::{Digest, Sha256};
 
         // Generate 16 random bytes (128 bits, like UUID v4)

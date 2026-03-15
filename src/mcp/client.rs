@@ -57,12 +57,7 @@ impl CodeIntelligenceClient {
         // Always call get_index_info first to verify semantic availability
         println!("\nCalling get_index_info tool...");
         let get_info_result = client
-            .call_tool(CallToolRequestParams {
-                meta: None,
-                name: "get_index_info".into(),
-                arguments: None,
-                task: None,
-            })
+            .call_tool(CallToolRequestParams::new("get_index_info"))
             .await?;
         Self::print_tool_output(&get_info_result);
 
@@ -93,14 +88,11 @@ impl CodeIntelligenceClient {
                 None
             };
 
-            let tool_result = client
-                .call_tool(CallToolRequestParams {
-                    meta: None,
-                    name: tool_name.into(),
-                    arguments: parsed_args,
-                    task: None,
-                })
-                .await?;
+            let mut call_params = CallToolRequestParams::new(tool_name);
+            if let Some(args) = parsed_args {
+                call_params = call_params.with_arguments(args);
+            }
+            let tool_result = client.call_tool(call_params).await?;
             Self::print_tool_output(&tool_result);
         }
 

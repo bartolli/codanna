@@ -221,6 +221,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
             sse_keep_alive: Some(Duration::from_secs(15)),
             sse_retry: None,
             stateful_mode: true,
+            json_response: false,
         },
     );
 

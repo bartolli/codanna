@@ -1880,28 +1880,24 @@ impl CodeIntelligenceServer {
 #[tool_handler]
 impl ServerHandler for CodeIntelligenceServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .build(),
-            server_info: Implementation {
-                name: "codanna".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: Some("Codanna Code Intelligence".to_string()),
-                website_url: Some("https://github.com/bartolli/codanna".to_string()),
-                icons: None,
-            },
-            instructions: Some(
-                "This server provides code intelligence tools for analyzing this codebase. \
-                WORKFLOW: Start with 'semantic_search_with_context' or 'semantic_search_docs' to anchor on the right files and APIs - they provide the highest-quality context. \
-                Then use 'find_symbol' and 'search_symbols' to lock onto exact files and kinds. \
-                Treat 'get_calls', 'find_callers', and 'analyze_impact' as hints; confirm with code reading or tighter queries (unique names, kind filters). \
-                Use 'search_documents' to find relevant project documentation (markdown files). \
-                Use 'get_index_info' to understand what's indexed."
-                .to_string()
-            ),
-        }
+        )
+        .with_server_info(
+            Implementation::new("codanna", env!("CARGO_PKG_VERSION"))
+                .with_title("Codanna Code Intelligence")
+                .with_website_url("https://github.com/bartolli/codanna"),
+        )
+        .with_instructions(
+            "This server provides code intelligence tools for analyzing this codebase. \
+            WORKFLOW: Start with 'semantic_search_with_context' or 'semantic_search_docs' to anchor on the right files and APIs - they provide the highest-quality context. \
+            Then use 'find_symbol' and 'search_symbols' to lock onto exact files and kinds. \
+            Treat 'get_calls', 'find_callers', and 'analyze_impact' as hints; confirm with code reading or tighter queries (unique names, kind filters). \
+            Use 'search_documents' to find relevant project documentation (markdown files). \
+            Use 'get_index_info' to understand what's indexed.",
+        )
     }
 
     async fn initialize(
