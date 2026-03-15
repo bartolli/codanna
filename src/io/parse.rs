@@ -15,7 +15,7 @@ pub enum ParseError {
     FileNotFound { path: String },
 
     #[error(
-        "Unable to detect language from file extension: {extension}\nSuggestion: Use a supported file extension (rs, py, ts, tsx, js, jsx, php, go, c, cpp, cs, gd, java, kt, lua, swift)"
+        "Unable to detect language from file extension: {extension}\nSuggestion: Use a supported file extension (rs, py, ts, tsx, js, jsx, php, go, c, clj, cpp, cs, gd, java, kt, lua, swift)"
     )]
     UnsupportedLanguage { extension: String },
 
@@ -257,6 +257,7 @@ pub fn execute_parse(
         Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
         Language::Go => tree_sitter_go::LANGUAGE.into(),
         Language::C => tree_sitter_c::LANGUAGE.into(),
+        Language::Clojure => tree_sitter_clojure_orchard::LANGUAGE.into(),
         Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
         Language::Gdscript => tree_sitter_gdscript::LANGUAGE.into(),

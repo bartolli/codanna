@@ -76,6 +76,7 @@ impl<'de> Deserialize<'de> for LanguageId {
         // This is necessary because LanguageId requires &'static str
         let static_str = match s.as_str() {
             "c" => "c",
+            "clojure" => "clojure",
             "cpp" => "cpp",
             "csharp" => "csharp",
             "gdscript" => "gdscript",
@@ -388,6 +389,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::gdscript::register(registry);
     super::java::register(registry);
     super::kotlin::register(registry);
+    super::clojure::register(registry);
     super::lua::register(registry);
     super::swift::register(registry);
 }

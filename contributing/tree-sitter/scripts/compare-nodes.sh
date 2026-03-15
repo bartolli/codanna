@@ -18,7 +18,7 @@ if [ -z "$INPUT" ]; then
     echo "  $0 <language>       # Compare using comprehensive.* (with audit)"
     echo "  $0 <file>           # Compare specific file (output to .log)"
     echo ""
-    echo "Languages: typescript, javascript, python, rust, go, php, c, cpp, csharp, gdscript, java, kotlin, lua"
+    echo "Languages: typescript, javascript, python, rust, go, php, c, clojure, cpp, csharp, gdscript, java, kotlin, lua"
     exit 1
 fi
 
@@ -163,10 +163,11 @@ else
         gdscript) EXT="gd" ;;
         java) EXT="java" ;;
         kotlin) EXT="kt" ;;
+        clojure) EXT="clj" ;;
         lua) EXT="lua" ;;
         *)
             echo "❌ Unsupported language: $LANG"
-            echo "Supported: typescript, javascript, python, rust, go, php, c, cpp, csharp, gdscript, java, kotlin, lua"
+            echo "Supported: typescript, javascript, python, rust, go, php, c, clojure, cpp, csharp, gdscript, java, kotlin, lua"
             exit 1
             ;;
     esac
@@ -198,9 +199,18 @@ else
         exit 1
     fi
 
-    # Get nodes from our parser (this triggers audit report generation)
-    cargo test comprehensive_${LANG}_analysis 2>&1 | \
-        grep "✓" | awk '{print $2}' | sort -u > /tmp/codanna-nodes.txt
+    # Run audit test to generate GRAMMAR_ANALYSIS.md
+    cargo test "comprehensive_${LANG}_analysis" -- --nocapture 2>&1 > /dev/null
+
+    # Extract handled nodes from the generated analysis
+    ANALYSIS_FILE="contributing/parsers/${LANG}/GRAMMAR_ANALYSIS.md"
+    if [ -f "$ANALYSIS_FILE" ]; then
+        sed -n '/^## .*Successfully Handled/,/^##/p' "$ANALYSIS_FILE" | \
+            grep "^- " | sed 's/^- //' | sort -u > /tmp/codanna-nodes.txt
+    else
+        echo "Warning: $ANALYSIS_FILE not found after test run"
+        touch /tmp/codanna-nodes.txt
+    fi
 
     echo "=== Nodes in CLI but not in Codanna ==="
     comm -23 /tmp/cli-nodes.txt /tmp/codanna-nodes.txt

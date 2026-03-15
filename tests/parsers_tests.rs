@@ -106,6 +106,9 @@ mod test_php_readonly_class;
 #[path = "parsers/kotlin/test_context_receiver.rs"]
 mod test_kotlin_context_receiver;
 
+#[path = "parsers/clojure/test_symbols.rs"]
+mod test_clojure_symbols;
+
 #[path = "parsers/lua/test_call_tracking.rs"]
 mod test_lua_call_tracking;
 

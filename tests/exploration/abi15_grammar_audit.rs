@@ -29,7 +29,8 @@ mod tests {
         c::audit::CParserAudit, cpp::audit::CppParserAudit, csharp::audit::CSharpParserAudit,
         gdscript::audit::GdscriptParserAudit, go::audit::GoParserAudit,
         java::audit::JavaParserAudit, javascript::audit::JavaScriptParserAudit,
-        kotlin::audit::KotlinParserAudit, lua::audit::LuaParserAudit, php::audit::PhpParserAudit,
+        clojure::audit::ClojureParserAudit, kotlin::audit::KotlinParserAudit,
+        lua::audit::LuaParserAudit, php::audit::PhpParserAudit,
         python::audit::PythonParserAudit, rust::audit::RustParserAudit,
         swift::audit::SwiftParserAudit, typescript::audit::TypeScriptParserAudit,
     };
@@ -4795,6 +4796,270 @@ tree-sitter-gdscript/src/node-types.json to {grammar_path}."
 
         output.push_str(
             "\nLegend: found = in example file, not found = in grammar but not in file\n",
+        );
+        output
+    }
+
+    #[test]
+    fn comprehensive_clojure_analysis() {
+        println!("=== Clojure Comprehensive Grammar Analysis ===\n");
+
+        fs::create_dir_all("contributing/parsers/clojure")
+            .expect("Failed to create Clojure parser output directory");
+
+        let grammar_path = "contributing/parsers/clojure/node-types.json";
+        let mut all_grammar_nodes = HashSet::new();
+        let mut grammar_warning = None;
+
+        match fs::read_to_string(grammar_path) {
+            Ok(json) => match serde_json::from_str::<Value>(&json) {
+                Ok(Value::Array(nodes)) => {
+                    for node in nodes {
+                        if let (Some(Value::Bool(true)), Some(Value::String(node_type))) =
+                            (node.get("named"), node.get("type"))
+                        {
+                            all_grammar_nodes.insert(node_type.clone());
+                        }
+                    }
+                }
+                Ok(_) => {
+                    grammar_warning =
+                        Some("Unexpected grammar JSON structure for Clojure.".to_string());
+                }
+                Err(err) => {
+                    grammar_warning = Some(format!(
+                        "Failed to parse Clojure grammar JSON: {err}. \
+Run `tree-sitter generate` and copy node-types.json to {grammar_path}."
+                    ));
+                }
+            },
+            Err(err) => {
+                grammar_warning = Some(format!(
+                    "Missing node-types.json for Clojure ({err}). \
+Run `./contributing/tree-sitter/scripts/setup.sh clojure` and copy \
+tree-sitter-clojure/src/node-types.json to {grammar_path}."
+                ));
+            }
+        }
+
+        let audit =
+            match ClojureParserAudit::audit_file("examples/clojure/comprehensive.clj") {
+                Ok(audit) => audit,
+                Err(e) => {
+                    println!("Warning: Failed to audit Clojure file: {e}");
+                    ClojureParserAudit {
+                        grammar_nodes: HashMap::new(),
+                        implemented_nodes: HashSet::new(),
+                        extracted_symbol_kinds: HashSet::new(),
+                    }
+                }
+            };
+
+        let example_nodes: HashSet<String> = audit.grammar_nodes.keys().cloned().collect();
+
+        let report = audit.generate_report();
+        fs::write("contributing/parsers/clojure/AUDIT_REPORT.md", &report)
+            .expect("Failed to write Clojure audit report");
+
+        let mut analysis = String::new();
+        analysis.push_str("# Clojure Grammar Analysis\n\n");
+        analysis.push_str(&format!("*Generated: {}*\n\n", get_formatted_timestamp()));
+        analysis.push_str("## Statistics\n");
+        analysis.push_str(&format!(
+            "- Total nodes in grammar JSON: {}\n",
+            all_grammar_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes found in comprehensive.clj: {}\n",
+            example_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Nodes handled by parser: {}\n",
+            audit.implemented_nodes.len()
+        ));
+        analysis.push_str(&format!(
+            "- Symbol kinds extracted: {}\n",
+            audit.extracted_symbol_kinds.len()
+        ));
+        analysis.push('\n');
+
+        if let Some(warning) = &grammar_warning {
+            analysis.push_str("## Warning\n");
+            analysis.push_str(warning);
+            analysis.push_str("\n\n");
+        }
+
+        let mut in_grammar_only: Vec<_> = all_grammar_nodes.difference(&example_nodes).collect();
+        let mut in_example_not_handled: Vec<_> = example_nodes
+            .iter()
+            .filter(|n| !audit.implemented_nodes.contains(n.as_str()))
+            .collect();
+        let mut handled_well: Vec<_> = audit
+            .implemented_nodes
+            .iter()
+            .filter(|n| example_nodes.contains(n.as_str()))
+            .collect();
+
+        in_grammar_only.sort();
+        in_example_not_handled.sort();
+        handled_well.sort();
+
+        if !handled_well.is_empty() {
+            analysis.push_str("## ✅ Successfully Handled Nodes\n");
+            for node in &handled_well {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !in_example_not_handled.is_empty() {
+            analysis.push_str("## ⚠️ Implementation Gaps\n");
+            for node in &in_example_not_handled {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !in_grammar_only.is_empty() {
+            analysis.push_str("## ⭕ Missing from Examples\n");
+            for node in &in_grammar_only {
+                analysis.push_str(&format!("- {node}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        if !audit.extracted_symbol_kinds.is_empty() {
+            analysis.push_str("## 🔍 Symbol Kinds Extracted\n");
+            let mut kinds: Vec<_> = audit.extracted_symbol_kinds.iter().collect();
+            kinds.sort();
+            for kind in kinds {
+                analysis.push_str(&format!("- {kind}\n"));
+            }
+            analysis.push('\n');
+        }
+
+        fs::write("contributing/parsers/clojure/GRAMMAR_ANALYSIS.md", &analysis)
+            .expect("Failed to write Clojure grammar analysis");
+
+        let node_discovery = generate_clojure_node_discovery();
+        fs::write(
+            "contributing/parsers/clojure/node_discovery.txt",
+            node_discovery,
+        )
+        .expect("Failed to write Clojure node discovery");
+
+        println!("✅ Clojure Analysis:");
+        println!("  - Grammar nodes: {}", all_grammar_nodes.len());
+        println!("  - Example nodes: {}", example_nodes.len());
+        println!("  - Handled nodes: {}", audit.implemented_nodes.len());
+        println!("  - Symbol kinds: {:?}", audit.extracted_symbol_kinds);
+        println!(
+            "  - Coverage: {:.1}%",
+            audit.implemented_nodes.len() as f32 / example_nodes.len() as f32 * 100.0
+        );
+        println!("✅ Clojure node_discovery.txt saved");
+    }
+
+    fn generate_clojure_node_discovery() -> String {
+        use super::abi15_exploration_common::print_node_tree;
+        use tree_sitter::{Language, Parser};
+
+        let mut output = String::new();
+        output.push_str("=== Clojure Language COMPREHENSIVE NODE MAPPING ===\n");
+        output.push_str(&format!("  Generated: {}\n", get_formatted_timestamp()));
+
+        let language: Language = tree_sitter_clojure_orchard::LANGUAGE.into();
+        output.push_str(&format!("  ABI Version: {}\n", language.abi_version()));
+
+        let mut parser = Parser::new();
+        parser.set_language(&language).unwrap();
+
+        let code = fs::read_to_string("examples/clojure/comprehensive.clj")
+            .unwrap_or_else(|_| "(ns test.core)\n(defn main [])\n".to_string());
+
+        let tree = parser.parse(&code, None).unwrap();
+        let root = tree.root_node();
+
+        if std::env::var("DEBUG_TREE").is_ok() {
+            println!("\n=== Clojure Tree Structure ===");
+            print_node_tree(root, &code, 0);
+        }
+
+        let mut node_registry: HashMap<String, u16> = HashMap::new();
+        let mut found_in_file = HashSet::new();
+        discover_nodes_with_ids(root, &mut node_registry, &mut found_in_file);
+
+        output.push_str(&format!("  Node kind count: {}\n\n", node_registry.len()));
+
+        let node_categories = vec![
+            (
+                "DEFINITION NODES",
+                vec![
+                    "list_lit",
+                    "sym_lit",
+                    "sym_name",
+                    "sym_ns",
+                ],
+            ),
+            (
+                "LITERAL NODES",
+                vec![
+                    "num_lit",
+                    "str_lit",
+                    "bool_lit",
+                    "nil_lit",
+                    "kwd_lit",
+                    "kwd_name",
+                    "char_lit",
+                ],
+            ),
+            (
+                "COLLECTION NODES",
+                vec![
+                    "vec_lit",
+                    "map_lit",
+                    "set_lit",
+                ],
+            ),
+            (
+                "SPECIAL FORM NODES",
+                vec![
+                    "meta_lit",
+                    "syn_quoting_lit",
+                    "unquoting_lit",
+                    "unquote_splicing_lit",
+                    "derefing_lit",
+                    "anon_fn_lit",
+                ],
+            ),
+            (
+                "STRUCTURAL NODES",
+                vec![
+                    "source",
+                    "comment",
+                ],
+            ),
+        ];
+
+        for (category_name, expected_nodes) in &node_categories {
+            output.push_str(&format!("== {category_name} ==\n"));
+            for node_name in expected_nodes {
+                if let Some(&id) = node_registry.get(*node_name) {
+                    let in_file = if found_in_file.contains(*node_name) {
+                        "✓"
+                    } else {
+                        "○"
+                    };
+                    output.push_str(&format!("{in_file} {node_name} (ID: {id})\n"));
+                } else {
+                    output.push_str(&format!("✗ {node_name} (not found)\n"));
+                }
+            }
+            output.push('\n');
+        }
+
+        output.push_str(
+            "\nLegend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar\n",
         );
         output
     }

@@ -4,12 +4,12 @@
 //! Validates language enablement and provides discovery of supported languages.
 
 use super::{
-    CBehavior, CParser, CSharpBehavior, CSharpParser, CppBehavior, CppParser, GdscriptBehavior,
-    GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser, JavaScriptBehavior,
-    JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior, LanguageId,
-    LanguageParser, LuaBehavior, LuaParser, PhpBehavior, PhpParser, PythonBehavior, PythonParser,
-    RustBehavior, RustParser, SwiftBehavior, SwiftParser, TypeScriptBehavior, TypeScriptParser,
-    get_registry,
+    CBehavior, CParser, CSharpBehavior, CSharpParser, ClojureBehavior, ClojureParser, CppBehavior,
+    CppParser, GdscriptBehavior, GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser,
+    JavaScriptBehavior, JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior,
+    LanguageId, LanguageParser, LuaBehavior, LuaParser, PhpBehavior, PhpParser, PythonBehavior,
+    PythonParser, RustBehavior, RustParser, SwiftBehavior, SwiftParser, TypeScriptBehavior,
+    TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -177,6 +177,11 @@ impl ParserFactory {
                 let parser = KotlinParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Clojure => {
+                let parser =
+                    ClojureParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
             Language::Lua => {
                 let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
@@ -309,6 +314,14 @@ impl ParserFactory {
                     behavior: Box::new(KotlinBehavior::new()),
                 }
             }
+            Language::Clojure => {
+                let parser =
+                    ClojureParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(ClojureBehavior::new()),
+                }
+            }
             Language::Lua => {
                 let parser = LuaParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 ParserWithBehavior {
@@ -351,6 +364,7 @@ impl ParserFactory {
     pub fn enabled_languages(&self) -> Vec<Language> {
         vec![
             Language::C,
+            Language::Clojure,
             Language::Cpp,
             Language::CSharp,
             Language::Gdscript,
