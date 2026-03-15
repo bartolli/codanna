@@ -1,0 +1,39 @@
+=== Clojure Language COMPREHENSIVE NODE MAPPING ===
+  Generated: 2026-03-15 18:02:08 UTC
+  ABI Version: 14
+  Node kind count: 56
+
+== DEFINITION NODES ==
+✓ list_lit (ID: 45)
+✓ sym_lit (ID: 41)
+✓ sym_name (ID: 15)
+✓ sym_ns (ID: 14)
+
+== LITERAL NODES ==
+✓ num_lit (ID: 4)
+✓ str_lit (ID: 40)
+✓ bool_lit (ID: 13)
+✓ nil_lit (ID: 12)
+✓ kwd_lit (ID: 39)
+✓ kwd_name (ID: 6)
+✓ char_lit (ID: 11)
+
+== COLLECTION NODES ==
+✓ vec_lit (ID: 49)
+✓ map_lit (ID: 47)
+✓ set_lit (ID: 51)
+
+== SPECIAL FORM NODES ==
+✓ meta_lit (ID: 43)
+✓ syn_quoting_lit (ID: 65)
+✓ unquoting_lit (ID: 67)
+✓ unquote_splicing_lit (ID: 66)
+✓ derefing_lit (ID: 63)
+✓ anon_fn_lit (ID: 53)
+
+== STRUCTURAL NODES ==
+✓ source (ID: 35)
+✓ comment (ID: 2)
+
+
+Legend: ✓ = found in file, ○ = in grammar but not in file, ✗ = not in grammar

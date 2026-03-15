@@ -1,6 +1,6 @@
 # Lua Grammar Analysis
 
-*Generated: 2026-01-25 22:44:47 UTC*
+*Generated: 2026-03-15 18:02:08 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 0
@@ -88,7 +88,7 @@ Missing node-types.json for Lua (No such file or directory (os error 2)). Run `.
 - {
 - }
 
-## 🎯 Symbol Kinds Extracted
+## 🔍 Symbol Kinds Extracted
 - Constant
 - Field
 - Function

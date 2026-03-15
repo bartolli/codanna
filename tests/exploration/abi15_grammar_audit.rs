@@ -26,13 +26,13 @@ mod tests {
     // Import the timestamp utility from the main codebase
     use codanna::io::format::format_utc_timestamp as get_formatted_timestamp;
     use codanna::parsing::{
-        c::audit::CParserAudit, cpp::audit::CppParserAudit, csharp::audit::CSharpParserAudit,
-        gdscript::audit::GdscriptParserAudit, go::audit::GoParserAudit,
-        java::audit::JavaParserAudit, javascript::audit::JavaScriptParserAudit,
-        clojure::audit::ClojureParserAudit, kotlin::audit::KotlinParserAudit,
-        lua::audit::LuaParserAudit, php::audit::PhpParserAudit,
-        python::audit::PythonParserAudit, rust::audit::RustParserAudit,
-        swift::audit::SwiftParserAudit, typescript::audit::TypeScriptParserAudit,
+        c::audit::CParserAudit, clojure::audit::ClojureParserAudit, cpp::audit::CppParserAudit,
+        csharp::audit::CSharpParserAudit, gdscript::audit::GdscriptParserAudit,
+        go::audit::GoParserAudit, java::audit::JavaParserAudit,
+        javascript::audit::JavaScriptParserAudit, kotlin::audit::KotlinParserAudit,
+        lua::audit::LuaParserAudit, php::audit::PhpParserAudit, python::audit::PythonParserAudit,
+        rust::audit::RustParserAudit, swift::audit::SwiftParserAudit,
+        typescript::audit::TypeScriptParserAudit,
     };
     use serde_json::Value;
     use std::collections::{HashMap, HashSet};
@@ -4842,18 +4842,17 @@ tree-sitter-clojure/src/node-types.json to {grammar_path}."
             }
         }
 
-        let audit =
-            match ClojureParserAudit::audit_file("examples/clojure/comprehensive.clj") {
-                Ok(audit) => audit,
-                Err(e) => {
-                    println!("Warning: Failed to audit Clojure file: {e}");
-                    ClojureParserAudit {
-                        grammar_nodes: HashMap::new(),
-                        implemented_nodes: HashSet::new(),
-                        extracted_symbol_kinds: HashSet::new(),
-                    }
+        let audit = match ClojureParserAudit::audit_file("examples/clojure/comprehensive.clj") {
+            Ok(audit) => audit,
+            Err(e) => {
+                println!("Warning: Failed to audit Clojure file: {e}");
+                ClojureParserAudit {
+                    grammar_nodes: HashMap::new(),
+                    implemented_nodes: HashSet::new(),
+                    extracted_symbol_kinds: HashSet::new(),
                 }
-            };
+            }
+        };
 
         let example_nodes: HashSet<String> = audit.grammar_nodes.keys().cloned().collect();
 
@@ -4938,8 +4937,11 @@ tree-sitter-clojure/src/node-types.json to {grammar_path}."
             analysis.push('\n');
         }
 
-        fs::write("contributing/parsers/clojure/GRAMMAR_ANALYSIS.md", &analysis)
-            .expect("Failed to write Clojure grammar analysis");
+        fs::write(
+            "contributing/parsers/clojure/GRAMMAR_ANALYSIS.md",
+            &analysis,
+        )
+        .expect("Failed to write Clojure grammar analysis");
 
         let node_discovery = generate_clojure_node_discovery();
         fs::write(
@@ -4994,33 +4996,15 @@ tree-sitter-clojure/src/node-types.json to {grammar_path}."
         let node_categories = vec![
             (
                 "DEFINITION NODES",
-                vec![
-                    "list_lit",
-                    "sym_lit",
-                    "sym_name",
-                    "sym_ns",
-                ],
+                vec!["list_lit", "sym_lit", "sym_name", "sym_ns"],
             ),
             (
                 "LITERAL NODES",
                 vec![
-                    "num_lit",
-                    "str_lit",
-                    "bool_lit",
-                    "nil_lit",
-                    "kwd_lit",
-                    "kwd_name",
-                    "char_lit",
+                    "num_lit", "str_lit", "bool_lit", "nil_lit", "kwd_lit", "kwd_name", "char_lit",
                 ],
             ),
-            (
-                "COLLECTION NODES",
-                vec![
-                    "vec_lit",
-                    "map_lit",
-                    "set_lit",
-                ],
-            ),
+            ("COLLECTION NODES", vec!["vec_lit", "map_lit", "set_lit"]),
             (
                 "SPECIAL FORM NODES",
                 vec![
@@ -5032,13 +5016,7 @@ tree-sitter-clojure/src/node-types.json to {grammar_path}."
                     "anon_fn_lit",
                 ],
             ),
-            (
-                "STRUCTURAL NODES",
-                vec![
-                    "source",
-                    "comment",
-                ],
-            ),
+            ("STRUCTURAL NODES", vec!["source", "comment"]),
         ];
 
         for (category_name, expected_nodes) in &node_categories {

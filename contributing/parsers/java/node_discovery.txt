@@ -1,5 +1,5 @@
 === Java Grammar Node Discovery ===
-Generated: 2026-01-12 21:49:41 UTC
+Generated: 2026-03-15 18:02:08 UTC
 
 Total unique node types found: 92
 

@@ -1,6 +1,6 @@
 # Lua Parser Symbol Extraction Coverage Report
 
-*Generated: 2026-01-25 22:44:47 UTC*
+*Generated: 2026-03-15 18:02:08 UTC*
 
 ## Summary
 - Key nodes: 21/21 (100%)
@@ -12,27 +12,27 @@
 
 | Node Type | ID | Status |
 |-----------|-----|--------|
-| chunk | 72 | ✅ implemented |
-| function_declaration | 92 | ✅ implemented |
-| function_definition | 110 | ✅ implemented |
-| variable_declaration | 98 | ✅ implemented |
-| assignment_statement | 77 | ✅ implemented |
-| table_constructor | 122 | ✅ implemented |
-| field | 125 | ✅ implemented |
-| function_call | 118 | ✅ implemented |
-| method_index_expression | 119 | ✅ implemented |
-| dot_index_expression | 117 | ✅ implemented |
-| bracket_index_expression | 116 | ✅ implemented |
-| for_statement | 88 | ✅ implemented |
-| for_generic_clause | 89 | ✅ implemented |
-| for_numeric_clause | 90 | ✅ implemented |
-| while_statement | 83 | ✅ implemented |
-| repeat_statement | 84 | ✅ implemented |
-| if_statement | 85 | ✅ implemented |
-| do_statement | 82 | ✅ implemented |
-| block | 73 | ✅ implemented |
-| return_statement | 75 | ✅ implemented |
-| comment | 128 | ✅ implemented |
+| chunk | 73 | ✅ implemented |
+| function_declaration | 94 | ✅ implemented |
+| function_definition | 114 | ✅ implemented |
+| variable_declaration | 101 | ✅ implemented |
+| assignment_statement | 78 | ✅ implemented |
+| table_constructor | 127 | ✅ implemented |
+| field | 130 | ✅ implemented |
+| function_call | 123 | ✅ implemented |
+| method_index_expression | 124 | ✅ implemented |
+| dot_index_expression | 122 | ✅ implemented |
+| bracket_index_expression | 121 | ✅ implemented |
+| for_statement | 89 | ✅ implemented |
+| for_generic_clause | 90 | ✅ implemented |
+| for_numeric_clause | 91 | ✅ implemented |
+| while_statement | 84 | ✅ implemented |
+| repeat_statement | 85 | ✅ implemented |
+| if_statement | 86 | ✅ implemented |
+| do_statement | 83 | ✅ implemented |
+| block | 74 | ✅ implemented |
+| return_statement | 76 | ✅ implemented |
+| comment | 133 | ✅ implemented |
 
 ## Legend
 
