@@ -8,8 +8,17 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, naersk, flake-utils, ... }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      naersk,
+      flake-utils,
+      ...
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -20,18 +29,35 @@
           cargo = rust;
           rustc = rust;
         };
-      in {
+      in
+      {
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [ rust rust-analyzer ];
+          buildInputs = with pkgs; [
+            rust
+            rust-analyzer
+            openssl
+            onnxruntime
+            pkg-config
+          ];
         };
         packages.default = naersk'.buildPackage {
           pname = "codanna";
           version = "0.9.17";
           src = ./.;
-          buildInputs = [ pkgs.openssl pkgs.onnxruntime ];
+          buildInputs = [
+            pkgs.openssl
+            pkgs.onnxruntime
+          ];
           nativeBuildInputs = [ pkgs.pkg-config ];
-          cargoBuildOptions = x: x ++ [ "-p" "codanna" ];
+          cargoBuildOptions =
+            x:
+            x
+            ++ [
+              "-p"
+              "codanna"
+            ];
           ORT_SKIP_DOWNLOAD = "1";
         };
-      });
+      }
+    );
 }
