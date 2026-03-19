@@ -1,6 +1,8 @@
 //! Test to verify MCP schema generation for usize fields
 
-use codanna::mcp::{AnalyzeImpactRequest, SearchSymbolsRequest, SemanticSearchRequest};
+use codanna::mcp::{
+    AnalyzeImpactRequest, GetIndexInfoRequest, SearchSymbolsRequest, SemanticSearchRequest,
+};
 
 #[test]
 fn test_mcp_schema_uint_format() {
@@ -59,4 +61,32 @@ fn test_mcp_schema_uint_format() {
     } else {
         println!("✅ No 'uint' format found in schemas.");
     }
+}
+
+/// Regression test: `get_index_info` is a no-parameter tool whose inputSchema must satisfy
+/// both MCP spec (recommends `additionalProperties: false`) and OpenAI's strict
+/// function-calling validation (requires `properties` field).
+#[test]
+fn test_get_index_info_schema_has_properties() {
+    let schema = rmcp::schemars::schema_for!(GetIndexInfoRequest);
+    let json = serde_json::to_string_pretty(&schema).unwrap();
+    println!("GetIndexInfoRequest schema:\n{json}");
+
+    let root: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        root.get("type").and_then(|v| v.as_str()),
+        Some("object"),
+        "schema must have type=object\nGot:\n{json}"
+    );
+    assert!(
+        root.get("properties").is_some(),
+        "schema must contain 'properties' for OpenAI compatibility\nGot:\n{json}"
+    );
+    assert_eq!(
+        root.get("additionalProperties").and_then(|v| v.as_bool()),
+        Some(false),
+        "schema should set additionalProperties=false per MCP spec\nGot:\n{json}"
+    );
+    println!("✅ GetIndexInfoRequest schema is MCP-spec compliant and OpenAI-compatible.");
 }
