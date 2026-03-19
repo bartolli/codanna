@@ -161,8 +161,35 @@ pub struct SemanticSearchWithContextRequest {
     pub lang: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GetIndexInfoRequest {}
+
+impl schemars::JsonSchema for GetIndexInfoRequest {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("GetIndexInfoRequest")
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed(concat!(module_path!(), "::GetIndexInfoRequest"))
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // MCP spec recommends `{"type":"object","additionalProperties":false}` for
+        // no-parameter tools. We also include an empty `properties` map because
+        // OpenAI's strict function-calling validation rejects object schemas that
+        // lack `properties` entirely.
+        schemars::Schema::from(
+            serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    }
+}
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct SearchDocumentsRequest {
