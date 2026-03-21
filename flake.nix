@@ -3,8 +3,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    naersk.url = "github:nix-community/naersk";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    naersk = {
+      url = "github:nix-community/naersk";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -39,10 +45,10 @@
             onnxruntime
             pkg-config
           ];
+          ORT_SKIP_DOWNLOAD = "1";
         };
         packages.default = naersk'.buildPackage {
           pname = "codanna";
-          version = "0.9.17";
           src = ./.;
           buildInputs = [
             pkgs.openssl
