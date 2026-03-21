@@ -3,11 +3,11 @@
 //! COLLECT ─┬─> EMBED (this stage) ─> SimpleSemanticSearch
 //!          └─> INDEX ─> Tantivy
 //!
-//! Receives EmbeddingBatch from COLLECT, generates embeddings using EmbeddingPool,
+//! Receives EmbeddingBatch from COLLECT, generates embeddings using EmbeddingBackend,
 //! stores them in SimpleSemanticSearch. Runs in parallel with INDEX stage.
 
 use crate::indexing::pipeline::types::{EmbeddingBatch, PipelineError, PipelineResult};
-use crate::semantic::{EmbeddingPool, SimpleSemanticSearch};
+use crate::semantic::{EmbeddingBackend, SimpleSemanticSearch};
 use crossbeam_channel::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,19 +37,19 @@ impl SemanticEmbedStats {
 /// Progress callback type for EMBED stage.
 pub type EmbedProgressCallback = Arc<dyn Fn(u64) + Send + Sync>;
 
-/// Semantic embedding stage using EmbeddingPool.
+/// Semantic embedding stage — dispatches to local fastembed pool or remote HTTP backend.
 ///
 /// Receives EmbeddingBatch from COLLECT, generates embeddings in parallel,
 /// stores them in SimpleSemanticSearch.
 pub struct SemanticEmbedStage {
-    pool: Arc<EmbeddingPool>,
+    pool: Arc<EmbeddingBackend>,
     semantic: Arc<Mutex<SimpleSemanticSearch>>,
     progress_callback: Option<EmbedProgressCallback>,
 }
 
 impl SemanticEmbedStage {
     /// Create a new semantic embed stage.
-    pub fn new(pool: Arc<EmbeddingPool>, semantic: Arc<Mutex<SimpleSemanticSearch>>) -> Self {
+    pub fn new(pool: Arc<EmbeddingBackend>, semantic: Arc<Mutex<SimpleSemanticSearch>>) -> Self {
         Self {
             pool,
             semantic,
@@ -143,18 +143,20 @@ impl SemanticEmbedStage {
 
         // Generate embeddings in parallel using pool
         let embeddings = self.pool.embed_parallel(&items);
-        let count = embeddings.len();
 
-        // Store in semantic search
-        if !embeddings.is_empty() {
+        // Store in semantic search; use the returned count which excludes any
+        // embeddings dropped due to dimension mismatch (store_embeddings warns).
+        let stored = if !embeddings.is_empty() {
             let mut semantic = self.semantic.lock().map_err(|_| PipelineError::Parse {
                 path: std::path::PathBuf::new(),
                 reason: "Failed to lock semantic search".to_string(),
             })?;
-            semantic.store_embeddings(embeddings);
-        }
+            semantic.store_embeddings(embeddings)
+        } else {
+            0
+        };
 
-        Ok(count)
+        Ok(stored)
     }
 }
 

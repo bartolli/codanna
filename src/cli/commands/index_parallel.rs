@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::config::Settings;
+use crate::indexing::facade::{build_embedding_backend, resolve_remote_model_name};
 use crate::indexing::pipeline::{IncrementalStats, Phase2Stats, Pipeline, PipelineConfig};
 use crate::io::status_line::{ProgressBar, ProgressBarOptions, ProgressBarStyle};
-use crate::semantic::SimpleSemanticSearch;
+use crate::semantic::{EmbeddingBackend, SemanticSearchError, SimpleSemanticSearch};
 use crate::storage::DocumentIndex;
 
 /// Arguments for the index-parallel command.
@@ -71,8 +72,10 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
         }
     };
 
-    // Create semantic search (for embeddings)
-    let semantic = create_semantic_search(settings, &semantic_path);
+    // Create semantic search (for storing/loading/searching embeddings)
+    // and a separate embedding backend for generating new embeddings.
+    let (semantic, embedding_backend) =
+        create_semantic_search(settings, &semantic_path);
 
     // Create pipeline
     let settings_arc = Arc::new(settings.clone());
@@ -102,7 +105,7 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
 
         tracing::info!(target: "pipeline", "Indexing directory ({mode}): {}", path.display());
 
-        match pipeline.index_incremental(path, Arc::clone(&index), semantic.clone(), None, force) {
+        match pipeline.index_incremental(path, Arc::clone(&index), semantic.clone(), embedding_backend.clone(), force) {
             Ok(stats) => {
                 display_incremental_stats(&stats, progress);
             }
@@ -119,42 +122,103 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
     }
 }
 
-/// Create semantic search instance if enabled in settings.
+/// Create semantic search instance and embedding backend if enabled in settings.
+///
+/// Returns `(semantic, backend)` where:
+/// - `semantic` stores/loads/searches the embedding vectors
+/// - `backend` generates new embeddings (local fastembed pool or remote HTTP)
 fn create_semantic_search(
     settings: &Settings,
     semantic_path: &Path,
-) -> Option<Arc<Mutex<SimpleSemanticSearch>>> {
+) -> (Option<Arc<Mutex<SimpleSemanticSearch>>>, Option<Arc<EmbeddingBackend>>) {
     if !settings.semantic_search.enabled {
         tracing::debug!(target: "pipeline", "Semantic search disabled");
-        return None;
+        return (None, None);
     }
+
+    let is_remote = std::env::var("CODANNA_EMBED_URL").is_ok()
+        || settings.semantic_search.remote_url.is_some();
+
+    // Build embedding backend (local pool or remote HTTP)
+    let backend = match build_embedding_backend(&settings.semantic_search) {
+        Ok(b) => Arc::new(b),
+        Err(e) => {
+            tracing::warn!(target: "pipeline", "Failed to initialize embedding backend: {e}");
+            return (None, None);
+        }
+    };
 
     let model = &settings.semantic_search.model;
 
-    // Try to load existing embeddings first
-    if semantic_path.exists() {
-        match SimpleSemanticSearch::load(semantic_path) {
-            Ok(semantic) => {
+    // Load existing embeddings or create fresh instance.
+    // After loading, verify dimensions match the backend so we don't silently
+    // drop all new embeddings during an incremental run after a backend switch.
+    let semantic = if semantic_path.exists() {
+        // In remote mode load without initialising a local fastembed model
+        let load_result = if is_remote {
+            SimpleSemanticSearch::load_remote(semantic_path)
+        } else {
+            SimpleSemanticSearch::load(semantic_path)
+        };
+        match load_result {
+            Ok(s) => {
+                let index_dim = s.dimensions();
+                let backend_dim = backend.dimensions();
+                if index_dim != backend_dim {
+                    tracing::error!(
+                        target: "pipeline",
+                        "Semantic index dimension mismatch: index has {index_dim}d but backend produces {backend_dim}d. \
+                         Re-index with: codanna index-parallel <path> --force"
+                    );
+                    std::process::exit(1);
+                }
+                let index_is_remote = s.is_remote_index();
+                if index_is_remote != is_remote {
+                    tracing::warn!(
+                        target: "pipeline",
+                        "Backend kind changed (index={}, current={}). \
+                         Embedding spaces may differ — similarity scores could be inaccurate. \
+                         Re-index with --force to fix.",
+                        if index_is_remote { "remote" } else { "local" },
+                        if is_remote { "remote" } else { "local" },
+                    );
+                }
                 tracing::debug!(target: "pipeline", "Loaded existing embeddings from {}", semantic_path.display());
-                return Some(Arc::new(Mutex::new(semantic)));
+                Some(Arc::new(Mutex::new(s)))
+            }
+            Err(SemanticSearchError::DimensionMismatch { suggestion, .. }) => {
+                // Incompatible existing index — cannot continue silently as stored
+                // vectors are structurally wrong for this backend.
+                tracing::error!(target: "pipeline", "Semantic index incompatible: {suggestion}");
+                std::process::exit(1);
             }
             Err(e) => {
-                tracing::warn!(target: "pipeline", "Failed to load embeddings: {e}");
+                tracing::warn!(target: "pipeline", "Failed to load embeddings, continuing without semantic search: {e}");
+                None
             }
         }
-    }
+    } else {
+        let new_result = if is_remote {
+            Ok(SimpleSemanticSearch::new_empty(
+                backend.dimensions(),
+                &resolve_remote_model_name(&settings.semantic_search),
+            ))
+        } else {
+            SimpleSemanticSearch::from_model_name(model)
+        };
+        match new_result {
+            Ok(s) => {
+                tracing::debug!(target: "pipeline", "Created new semantic search with model: {model}");
+                Some(Arc::new(Mutex::new(s)))
+            }
+            Err(e) => {
+                tracing::warn!(target: "pipeline", "Failed to initialize semantic search: {e}");
+                None
+            }
+        }
+    };
 
-    // Create new semantic search instance
-    match SimpleSemanticSearch::from_model_name(model) {
-        Ok(semantic) => {
-            tracing::debug!(target: "pipeline", "Created new semantic search with model: {model}");
-            Some(Arc::new(Mutex::new(semantic)))
-        }
-        Err(e) => {
-            tracing::warn!(target: "pipeline", "Failed to initialize semantic search: {e}");
-            None
-        }
-    }
+    (semantic, Some(backend))
 }
 
 fn display_incremental_stats(stats: &IncrementalStats, with_progress: bool) {

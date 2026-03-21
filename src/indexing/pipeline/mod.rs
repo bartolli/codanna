@@ -863,7 +863,7 @@ impl Pipeline {
         path: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
     ) -> PipelineResult<SingleFileStats> {
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
@@ -974,7 +974,7 @@ impl Pipeline {
                 // Generate embeddings
                 let embeddings = pool.embed_parallel(&items);
 
-                // Store in semantic search
+                // store_embeddings warns internally on any dropped embeddings.
                 if !embeddings.is_empty() {
                     if let Ok(mut guard) = sem.lock() {
                         guard.store_embeddings(embeddings);
@@ -1030,7 +1030,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         force: bool,
     ) -> PipelineResult<IncrementalStats> {
         self.index_incremental_with_progress(root, index, semantic, embedding_pool, force, None)
@@ -1045,7 +1045,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         force: bool,
         show_progress: bool,
         total_files: usize,
@@ -1283,7 +1283,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         force: bool,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
@@ -1439,7 +1439,7 @@ impl Pipeline {
         files: &[PathBuf],
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
         if files.is_empty() {
@@ -1659,7 +1659,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         semantic_path: &Path,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
     ) -> PipelineResult<IncrementalStats> {
@@ -1761,7 +1761,7 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
         semantic: Arc<Mutex<SimpleSemanticSearch>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
         dual_progress: Option<Arc<DualProgressBar>>,
     ) -> PipelineResult<Phase1Result> {
@@ -2175,7 +2175,7 @@ impl Pipeline {
         config_paths: &[PathBuf],
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingPool>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
         _progress: bool,
     ) -> PipelineResult<SyncStats> {
         use std::collections::HashSet;

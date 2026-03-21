@@ -101,6 +101,7 @@ tree-sitter-lua = "0.5.0"
 tree-sitter-clojure-orchard = "0.2.5"
 glob = "0.3.3"
 async-trait = "0.1.89"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sysinfo = "0.38.4"
 indexmap = { version = "2.13.0", features = ["serde"] }
 

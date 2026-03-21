@@ -8,11 +8,28 @@ use crate::semantic::SemanticSearchError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Embedding backend type recorded in metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EmbeddingBackendKind {
+    /// Local fastembed model (default for backward compat with old metadata).
+    #[default]
+    Local,
+    /// Remote OpenAI-compatible HTTP endpoint.
+    Remote,
+}
+
 /// Metadata for semantic search persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SemanticMetadata {
     /// Name of the embedding model used
     pub model_name: String,
+
+    /// Embedding backend type — distinguishes local fastembed from remote HTTP.
+    /// Defaults to Local for backward compatibility with indexes written before
+    /// this field was added.
+    #[serde(default)]
+    pub backend: EmbeddingBackendKind,
 
     /// Dimension of embeddings
     pub dimension: usize,
@@ -34,17 +51,37 @@ impl SemanticMetadata {
     /// Current metadata version
     const CURRENT_VERSION: u32 = 1;
 
-    /// Create new metadata with current timestamp
+    /// Create new metadata for a local fastembed index.
     pub fn new(model_name: String, dimension: usize, embedding_count: usize) -> Self {
         let now = get_utc_timestamp();
         Self {
             model_name,
+            backend: EmbeddingBackendKind::Local,
             dimension,
             embedding_count,
             created_at: now,
             updated_at: now,
             version: Self::CURRENT_VERSION,
         }
+    }
+
+    /// Create new metadata for a remote-embedding index.
+    pub fn new_remote(model_name: String, dimension: usize, embedding_count: usize) -> Self {
+        let now = get_utc_timestamp();
+        Self {
+            model_name,
+            backend: EmbeddingBackendKind::Remote,
+            dimension,
+            embedding_count,
+            created_at: now,
+            updated_at: now,
+            version: Self::CURRENT_VERSION,
+        }
+    }
+
+    /// Whether this index was built with a remote embedding backend.
+    pub fn is_remote(&self) -> bool {
+        self.backend == EmbeddingBackendKind::Remote
     }
 
     /// Update the metadata with new embedding count and timestamp
