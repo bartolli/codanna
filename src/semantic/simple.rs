@@ -45,8 +45,9 @@ pub struct SimpleSemanticSearch {
     /// Language mapping for each symbol (for language-filtered search)
     symbol_languages: HashMap<SymbolId, String>,
 
-    /// The embedding model (wrapped in Mutex for interior mutability)
-    model: Mutex<TextEmbedding>,
+    /// The embedding model for query-time embedding (None in remote mode — caller
+    /// must use `search_with_embedding` and provide the query vector externally).
+    model: Option<Mutex<TextEmbedding>>,
 
     /// Model dimensions for validation
     dimensions: usize,
@@ -141,7 +142,7 @@ impl SimpleSemanticSearch {
         Ok(Self {
             embeddings: HashMap::new(),
             symbol_languages: HashMap::new(),
-            model: Mutex::new(text_model),
+            model: Some(Mutex::new(text_model)),
             dimensions,
             metadata: Some(metadata),
         })
@@ -158,9 +159,13 @@ impl SimpleSemanticSearch {
             return Ok(());
         }
 
-        // Generate embedding
-        let embeddings = self
-            .model
+        // Generate embedding — only available in local-model mode
+        let model = self.model.as_ref().ok_or_else(|| {
+            SemanticSearchError::ModelInitError(
+                "No local model — use EmbeddingBackend to generate embeddings in remote mode".to_string(),
+            )
+        })?;
+        let embeddings = model
             .lock()
             .unwrap()
             .embed(vec![doc], None)
@@ -200,17 +205,27 @@ impl SimpleSemanticSearch {
         Ok(())
     }
 
-    /// Store pre-generated embeddings (from parallel pool generation).
-    ///
-    /// Used when embeddings are generated in parallel by EmbeddingPool.
+    /// Store pre-generated embeddings produced by an `EmbeddingBackend`.
     pub fn store_embeddings(&mut self, items: Vec<(SymbolId, Vec<f32>, String)>) -> usize {
         let mut count = 0;
+        let mut dropped = 0usize;
         for (symbol_id, embedding, language) in items {
             if embedding.len() == self.dimensions {
                 self.embeddings.insert(symbol_id, embedding);
                 self.symbol_languages.insert(symbol_id, language);
                 count += 1;
+            } else {
+                dropped += 1;
             }
+        }
+        if dropped > 0 {
+            // This typically means the backend dimension changed without a --force re-index.
+            tracing::warn!(
+                target: "semantic",
+                "store_embeddings dropped {dropped} embeddings due to dimension mismatch \
+                 (index={}, received=?). Re-index with --force to fix.",
+                self.dimensions
+            );
         }
         count
     }
@@ -218,6 +233,89 @@ impl SimpleSemanticSearch {
     /// Search for similar documentation using a natural language query
     ///
     /// Returns symbol IDs with their similarity scores, sorted by score descending
+    /// Search using a pre-computed query embedding vector.
+    ///
+    /// Use this in remote-embedding mode where the caller obtains the query
+    /// vector via `EmbeddingBackend::embed_one` before calling this method.
+    pub fn search_with_embedding(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        threshold: f32,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        if self.embeddings.is_empty() {
+            return Err(SemanticSearchError::NoEmbeddings);
+        }
+        if query_embedding.len() != self.dimensions {
+            return Err(SemanticSearchError::EmbeddingError(format!(
+                "Query embedding dimension {} does not match index dimension {}",
+                query_embedding.len(),
+                self.dimensions
+            )));
+        }
+        let mut similarities: Vec<(SymbolId, f32)> = self
+            .embeddings
+            .iter()
+            .filter_map(|(id, emb)| {
+                let sim = cosine_similarity(query_embedding, emb);
+                if sim >= threshold { Some((*id, sim)) } else { None }
+            })
+            .collect();
+        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.truncate(limit);
+        Ok(similarities)
+    }
+
+    /// Search using a pre-computed query vector with optional language pre-filtering.
+    ///
+    /// Language filtering is applied before similarity ranking so the result slice
+    /// respects `limit` after filtering, matching the behaviour of `search_with_language`.
+    /// Convenience wrapper: `search_with_embedding` + threshold filter.
+    pub fn search_with_embedding_threshold(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        threshold: f32,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        let results = self.search_with_embedding(query_embedding, limit, threshold)?;
+        Ok(results.into_iter().filter(|(_, s)| *s >= threshold).collect())
+    }
+
+    pub fn search_with_embedding_and_language(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+        language: Option<&str>,
+    ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
+        if self.embeddings.is_empty() {
+            return Err(SemanticSearchError::NoEmbeddings);
+        }
+        if query_embedding.len() != self.dimensions {
+            return Err(SemanticSearchError::EmbeddingError(format!(
+                "Query embedding dimension {} does not match index dimension {}",
+                query_embedding.len(),
+                self.dimensions
+            )));
+        }
+        let candidates: Vec<(&SymbolId, &Vec<f32>)> = if let Some(lang) = language {
+            self.embeddings
+                .iter()
+                .filter(|(id, _)| {
+                    self.symbol_languages.get(id).is_some_and(|l| l == lang)
+                })
+                .collect()
+        } else {
+            self.embeddings.iter().collect()
+        };
+        let mut similarities: Vec<(SymbolId, f32)> = candidates
+            .into_iter()
+            .map(|(id, emb)| (*id, cosine_similarity(query_embedding, emb)))
+            .collect();
+        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.truncate(limit);
+        Ok(similarities)
+    }
+
     pub fn search(
         &self,
         query: &str,
@@ -227,9 +325,14 @@ impl SimpleSemanticSearch {
             return Err(SemanticSearchError::NoEmbeddings);
         }
 
+        let model = self.model.as_ref().ok_or_else(|| {
+            SemanticSearchError::ModelInitError(
+                "No local model available — use search_with_embedding() in remote mode".to_string(),
+            )
+        })?;
+
         // Generate query embedding
-        let query_embeddings = self
-            .model
+        let query_embeddings = model
             .lock()
             .unwrap()
             .embed(vec![query], None)
@@ -268,9 +371,14 @@ impl SimpleSemanticSearch {
             return Err(SemanticSearchError::NoEmbeddings);
         }
 
+        let model = self.model.as_ref().ok_or_else(|| {
+            SemanticSearchError::ModelInitError(
+                "No local model available — use search_with_embedding() in remote mode".to_string(),
+            )
+        })?;
+
         // Generate query embedding
-        let query_embeddings = self
-            .model
+        let query_embeddings = model
             .lock()
             .unwrap()
             .embed(vec![query], None)
@@ -308,7 +416,11 @@ impl SimpleSemanticSearch {
         Ok(similarities)
     }
 
-    /// Search with a similarity threshold
+    /// Search with a similarity threshold.
+    ///
+    /// Requires a local embedding model. In remote-embedding mode, use the
+    /// facade's `semantic_search_docs_with_threshold` which handles backend
+    /// dispatch, or call `search_with_embedding` with a pre-computed vector.
     pub fn search_with_threshold(
         &self,
         query: &str,
@@ -323,6 +435,22 @@ impl SimpleSemanticSearch {
     }
 
     /// Get the number of indexed embeddings
+    /// Returns true when a local fastembed model is available for query embedding.
+    /// Returns false for remote-mode instances that require an external backend.
+    pub fn has_local_model(&self) -> bool {
+        self.model.is_some()
+    }
+
+    /// Output dimension of embeddings stored in this index.
+    pub fn dimensions(&self) -> usize {
+        self.dimensions
+    }
+
+    /// Returns true when this index was built with a remote embedding backend.
+    pub fn is_remote_index(&self) -> bool {
+        self.metadata.as_ref().is_some_and(|m| m.is_remote())
+    }
+
     pub fn embedding_count(&self) -> usize {
         self.embeddings.len()
     }
@@ -363,15 +491,18 @@ impl SimpleSemanticSearch {
             suggestion: "Check directory permissions".to_string(),
         })?;
 
-        // Save metadata with actual model name
-        let model_name = if let Some(ref meta) = self.metadata {
-            meta.model_name.clone()
+        let (model_name, is_remote_backend) = if let Some(ref meta) = self.metadata {
+            (meta.model_name.clone(), meta.is_remote())
         } else {
-            // Fallback to AllMiniLML6V2 if metadata not set (shouldn't happen)
-            "AllMiniLML6V2".to_string()
+            // Legacy instance without metadata — infer from model field presence
+            ("AllMiniLML6V2".to_string(), self.model.is_none())
         };
 
-        let metadata = SemanticMetadata::new(model_name, self.dimensions, self.embeddings.len());
+        let metadata = if is_remote_backend {
+            SemanticMetadata::new_remote(model_name, self.dimensions, self.embeddings.len())
+        } else {
+            SemanticMetadata::new(model_name, self.dimensions, self.embeddings.len())
+        };
         metadata.save(path)?;
 
         // Create storage with our dimension
@@ -423,11 +554,99 @@ impl SimpleSemanticSearch {
     ///
     /// # Arguments
     /// * `path` - Path where semantic data is stored
+    /// Create an empty semantic search instance for remote-embedding mode.
+    ///
+    /// `model_name` should identify the remote model (e.g. "bge-large-en-v1.5")
+    /// so it is preserved in saved metadata and visible in status output.
+    /// No local fastembed model is loaded. Queries must use `search_with_embedding`.
+    pub fn new_empty(dimensions: usize, model_name: &str) -> Self {
+        let metadata = crate::semantic::SemanticMetadata::new_remote(
+            model_name.to_string(),
+            dimensions,
+            0,
+        );
+        Self {
+            embeddings: HashMap::new(),
+            symbol_languages: HashMap::new(),
+            model: None,
+            dimensions,
+            metadata: Some(metadata),
+        }
+    }
+
+    /// Load an existing semantic index without initialising a local embedding model.
+    ///
+    /// Used in remote-embedding mode: stored vectors are loaded for similarity
+    /// search but query embedding is handled externally via `search_with_embedding`.
+    pub fn load_remote(path: &Path) -> Result<Self, SemanticSearchError> {
+        use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
+
+        let metadata = SemanticMetadata::load(path)?;
+        let mut storage = SemanticVectorStorage::open(path)?;
+
+        // Verify storage dimension matches metadata to catch corrupted indexes.
+        // Without this, cosine_similarity would silently zip vectors of mismatched
+        // lengths, producing garbage similarity scores.
+        if storage.dimension().get() != metadata.dimension {
+            return Err(SemanticSearchError::DimensionMismatch {
+                expected: metadata.dimension,
+                actual: storage.dimension().get(),
+                suggestion: format!(
+                    "Remote index was built with {}-dimensional embeddings but storage has {}. Re-index with: codanna index <path> --force",
+                    metadata.dimension,
+                    storage.dimension().get()
+                ),
+            });
+        }
+
+        let embeddings_vec = storage.load_all()?;
+        let mut embeddings = HashMap::with_capacity(embeddings_vec.len());
+        for (id, embedding) in embeddings_vec {
+            embeddings.insert(id, embedding);
+        }
+
+        let languages_path = path.join("languages.json");
+        let symbol_languages = if languages_path.exists() {
+            let languages_json = std::fs::read_to_string(&languages_path).map_err(|e| {
+                SemanticSearchError::StorageError {
+                    message: format!("Failed to read language mappings: {e}"),
+                    suggestion: "Language mappings file may be corrupted".to_string(),
+                }
+            })?;
+            let languages_map: HashMap<u32, String> = serde_json::from_str(&languages_json)
+                .map_err(|e| SemanticSearchError::StorageError {
+                    message: format!("Failed to parse language mappings: {e}"),
+                    suggestion: "Try rebuilding the semantic index".to_string(),
+                })?;
+            languages_map
+                .into_iter()
+                .filter_map(|(id, lang)| SymbolId::new(id).map(|sid| (sid, lang)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Self {
+            embeddings,
+            symbol_languages,
+            model: None, // no local model — caller uses search_with_embedding()
+            dimensions: metadata.dimension,
+            metadata: Some(metadata),
+        })
+    }
+
     pub fn load(path: &Path) -> Result<Self, SemanticSearchError> {
         use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
 
         // Load metadata first
         let metadata = SemanticMetadata::load(path)?;
+
+        // Delegate to load_remote for indexes explicitly built with a remote backend.
+        // The backend field defaults to Local for old metadata without this field,
+        // preserving backward compatibility.
+        if metadata.is_remote() {
+            return Self::load_remote(path);
+        }
 
         // Parse model name from metadata
         let model = crate::vector::parse_embedding_model(&metadata.model_name)
@@ -511,7 +730,7 @@ impl SimpleSemanticSearch {
         Ok(Self {
             embeddings,
             symbol_languages,
-            model: Mutex::new(text_model),
+            model: Some(Mutex::new(text_model)),
             dimensions: metadata.dimension,
             metadata: Some(metadata),
         })

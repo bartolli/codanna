@@ -25,7 +25,8 @@
 
 use crate::config::Settings;
 use crate::indexing::pipeline::Pipeline;
-use crate::semantic::{EmbeddingPool, SimpleSemanticSearch};
+use crate::semantic::{EmbeddingBackend, EmbeddingPool, RemoteEmbedder, SemanticSearchError, SimpleSemanticSearch};
+use crate::semantic::remote::run_async;
 use crate::storage::{DocumentIndex, SearchResult};
 use crate::symbol::context::{ContextIncludes, SymbolContext, SymbolRelationships};
 use crate::{FileId, IndexError, RelationKind, Relationship, Symbol, SymbolId, SymbolKind};
@@ -79,7 +80,7 @@ pub struct IndexFacade {
     semantic_search: Option<Arc<Mutex<SimpleSemanticSearch>>>,
 
     /// Optional embedding pool for parallel embedding generation
-    embedding_pool: Option<Arc<EmbeddingPool>>,
+    embedding_pool: Option<Arc<EmbeddingBackend>>,
 
     /// Configuration
     settings: Arc<Settings>,
@@ -174,17 +175,25 @@ impl IndexFacade {
         let semantic_path = self.index_base.join("semantic");
         std::fs::create_dir_all(&semantic_path)?;
 
-        let model = &self.settings.semantic_search.model;
+        let backend = build_embedding_backend(&self.settings.semantic_search)?;
+        let backend = Arc::new(backend);
 
-        let semantic = SimpleSemanticSearch::from_model_name(model)?;
+        // In remote mode, skip local fastembed init; use new_empty so the
+        // SemanticSearch instance carries the correct dimension from the backend.
+        let is_remote = self.settings.semantic_search.remote_url.is_some()
+            || std::env::var("CODANNA_EMBED_URL").is_ok();
+        let semantic = if is_remote {
+            SimpleSemanticSearch::new_empty(
+                backend.dimensions(),
+                &resolve_remote_model_name(&self.settings.semantic_search),
+            )
+        } else {
+            let model = &self.settings.semantic_search.model;
+            SimpleSemanticSearch::from_model_name(model)?
+        };
+
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
-
-        // Create embedding pool for parallel generation
-        let pool_size = self.settings.semantic_search.embedding_threads;
-        let embedding_model = crate::vector::parse_embedding_model(model)
-            .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
-        let pool = EmbeddingPool::new(pool_size, embedding_model)?;
-        self.embedding_pool = Some(Arc::new(pool));
+        self.embedding_pool = Some(backend);
 
         Ok(())
     }
@@ -209,21 +218,88 @@ impl IndexFacade {
     /// Embedding pool for generating new embeddings is initialized lazily.
     pub fn load_semantic_search(&mut self, path: &Path) -> FacadeResult<bool> {
         if path.join("metadata.json").exists() {
-            match SimpleSemanticSearch::load(path) {
+            let is_remote = self.settings.semantic_search.remote_url.is_some()
+                || std::env::var("CODANNA_EMBED_URL").is_ok();
+            let load_result = if is_remote {
+                SimpleSemanticSearch::load_remote(path)
+            } else {
+                SimpleSemanticSearch::load(path)
+            };
+            match load_result {
                 Ok(semantic) => {
+                    // Restore the embedding backend so query-time remote embedding
+                    // works immediately without waiting for a lazy reindex call.
+                    if self.embedding_pool.is_none() {
+                        match build_embedding_backend(&self.settings.semantic_search) {
+                            Ok(b) => self.embedding_pool = Some(Arc::new(b)),
+                            Err(e) => tracing::warn!("Failed to restore embedding backend: {e}"),
+                        }
+                    }
+
+                    // Verify dimension and backend kind compatibility.
+                    if let Some(ref pool) = self.embedding_pool {
+                        let backend_dim = pool.dimensions();
+                        let index_dim = semantic.dimensions();
+
+                        if backend_dim != index_dim {
+                            return Err(IndexError::SemanticSearch(
+                                SemanticSearchError::DimensionMismatch {
+                                    expected: backend_dim,
+                                    actual: index_dim,
+                                    suggestion: format!(
+                                        "Index was built with {index_dim}-dimensional embeddings \
+                                         but current backend produces {backend_dim}d. \
+                                         Re-index with: codanna index <path> --force"
+                                    ),
+                                },
+                            ));
+                        }
+
+                        // Warn when backend kind changed but dimensions happen to match.
+                        // Embedding spaces differ between models so similarity scores may
+                        // be meaningless. Only a --force re-index can fully fix this.
+                        let index_is_remote = semantic.is_remote_index();
+                        let backend_is_remote = matches!(pool.as_ref(), EmbeddingBackend::Remote(_));
+                        if index_is_remote != backend_is_remote {
+                            tracing::warn!(
+                                target: "semantic",
+                                "Backend kind changed (index={}, current={}). \
+                                 Embedding spaces may differ — similarity scores could be inaccurate. \
+                                 Re-index with --force to fix.",
+                                if index_is_remote { "remote" } else { "local" },
+                                if backend_is_remote { "remote" } else { "local" },
+                            );
+                        }
+                    }
+
                     self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
-                    // Embedding pool is initialized lazily when needed
                     return Ok(true);
                 }
+                Err(SemanticSearchError::DimensionMismatch { expected, actual, ref suggestion }) => {
+                    // Dimension mismatch means the index is structurally incompatible —
+                    // surface as an error rather than silently disabling semantic search,
+                    // because the user needs to act (re-index).
+                    tracing::error!(
+                        target: "semantic",
+                        "Semantic index dimension mismatch (expected={expected}, actual={actual}): {suggestion}"
+                    );
+                    return Err(IndexError::SemanticSearch(SemanticSearchError::DimensionMismatch {
+                        expected,
+                        actual,
+                        suggestion: suggestion.to_string(),
+                    }));
+                }
                 Err(e) => {
-                    tracing::warn!("Failed to load semantic search: {e}");
+                    // Other errors (missing file, corrupt data) — warn and continue
+                    // without semantic search rather than blocking startup.
+                    tracing::warn!("Failed to load semantic search, continuing without it: {e}");
                 }
             }
         }
         Ok(false)
     }
 
-    /// Ensure embedding pool is initialized for generating new embeddings.
+    /// Ensure embedding backend is initialized for generating new embeddings.
     ///
     /// Called lazily by methods that need to compute embeddings (reindexing, watcher).
     pub fn ensure_embedding_pool(&mut self) -> FacadeResult<()> {
@@ -231,13 +307,9 @@ impl IndexFacade {
             return Ok(());
         }
 
-        let model = &self.settings.semantic_search.model;
-        let pool_size = self.settings.semantic_search.embedding_threads;
-        let embedding_model = crate::vector::parse_embedding_model(model)
-            .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
-        let pool = EmbeddingPool::new(pool_size, embedding_model)?;
-        self.embedding_pool = Some(Arc::new(pool));
-        tracing::debug!("Initialized embedding pool for incremental updates");
+        let backend = build_embedding_backend(&self.settings.semantic_search)?;
+        self.embedding_pool = Some(Arc::new(backend));
+        tracing::debug!("Initialized embedding backend for incremental updates");
         Ok(())
     }
 
@@ -727,7 +799,23 @@ impl IndexFacade {
             .ok_or(IndexError::SemanticSearchNotEnabled)?;
 
         let sem = semantic.lock().map_err(|_| IndexError::lock_error())?;
-        let results = sem.search_with_language(query, limit, language_filter)?;
+
+        // When the semantic search has no local model (built with remote embeddings),
+        // generate the query vector via the embedding backend regardless of whether
+        // the backend is currently remote or local — the pool just needs to produce
+        // a vector of the right dimension.
+        let results = if sem.has_local_model() {
+            sem.search_with_language(query, limit, language_filter)?
+        } else {
+            let pool = self.embedding_pool.as_ref().ok_or_else(|| {
+                IndexError::General(
+                    "Remote-mode index requires an embedding backend for queries. \
+                     Set CODANNA_EMBED_URL or re-index with a local model.".to_string(),
+                )
+            })?;
+            let query_vec = pool.embed_one(query)?;
+            sem.search_with_embedding_and_language(&query_vec, limit, language_filter)?
+        };
 
         let mut symbols = Vec::new();
         for (symbol_id, score) in results {
@@ -1095,4 +1183,79 @@ impl IndexFacade {
         // For now, this is a placeholder
         Ok(())
     }
+}
+
+// ── Embedding backend factory ──────────────────────────────────────────────
+
+/// Resolve the embedding backend from config + env var overrides.
+///
+/// Env vars take precedence over settings.toml:
+///   CODANNA_EMBED_URL    — remote endpoint (enables remote mode)
+///   CODANNA_EMBED_MODEL  — model name for remote server
+///   CODANNA_EMBED_DIM    — expected output dimension
+/// Resolve the effective remote model name using the same env-var-first priority
+/// as `build_embedding_backend`. Call this when populating `new_empty` so the
+/// stored metadata model name matches the model that actually generated the vectors.
+/// Resolve the effective remote model name, applying env-var-first precedence.
+///
+/// Both `build_embedding_backend` and `new_empty` call sites use this so that
+/// the model name embedded in saved metadata always matches what the backend uses.
+pub fn resolve_remote_model_name(cfg: &crate::config::SemanticSearchConfig) -> String {
+    std::env::var("CODANNA_EMBED_MODEL")
+        .ok()
+        .or_else(|| cfg.remote_model.clone())
+        .unwrap_or_else(|| "text-embedding-ada-002".to_string())
+}
+
+pub fn build_embedding_backend(
+    cfg: &crate::config::SemanticSearchConfig,
+) -> FacadeResult<EmbeddingBackend> {
+    // Env vars override config file
+    let remote_url = std::env::var("CODANNA_EMBED_URL")
+        .ok()
+        .or_else(|| cfg.remote_url.clone());
+
+    if let Some(url) = remote_url {
+        let model = resolve_remote_model_name(cfg);
+
+        let dim: Option<usize> = match std::env::var("CODANNA_EMBED_DIM") {
+            Ok(s) => {
+                let parsed = s.parse::<usize>().map_err(|_| {
+                    IndexError::General(format!(
+                        "CODANNA_EMBED_DIM must be a positive integer, got: {s:?}"
+                    ))
+                })?;
+                if parsed == 0 {
+                    return Err(IndexError::General(
+                        "CODANNA_EMBED_DIM must be greater than zero".to_string(),
+                    ));
+                }
+                Some(parsed)
+            }
+            Err(_) => cfg.remote_dim,
+        };
+
+        tracing::info!(
+            target: "semantic",
+            "Using remote embedding backend: url={url} model={model}"
+        );
+
+        let url_owned = url.clone();
+        let model_owned = model.clone();
+        let embedder = run_async(async move {
+            RemoteEmbedder::new(&url_owned, &model_owned, dim).await
+        })
+        .map_err(|e| IndexError::General(format!("Remote embedder init failed: {e}")))?;
+
+        return Ok(EmbeddingBackend::Remote(Arc::new(embedder)));
+    }
+
+    // Local fastembed pool
+    let pool_size = cfg.embedding_threads;
+    let embedding_model = crate::vector::parse_embedding_model(&cfg.model)
+        .map_err(|e| IndexError::General(format!("Failed to parse embedding model: {e}")))?;
+    let pool = EmbeddingPool::new(pool_size, embedding_model)
+        .map_err(|e| IndexError::General(format!("Local embedding pool init failed: {e}")))?;
+
+    Ok(EmbeddingBackend::Local(pool))
 }

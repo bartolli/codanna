@@ -205,6 +205,22 @@ pub struct SemanticSearchConfig {
     /// Number of parallel embedding model instances
     #[serde(default = "default_embedding_threads")]
     pub embedding_threads: usize,
+
+    /// Remote embedding server URL (OpenAI-compatible, e.g. http://host:8100).
+    /// When set, local fastembed is bypassed and this endpoint is used instead.
+    /// Overrideable via CODANNA_EMBED_URL env var.
+    #[serde(default)]
+    pub remote_url: Option<String>,
+
+    /// Model name to send to the remote embedding server.
+    /// Overrideable via CODANNA_EMBED_MODEL env var.
+    #[serde(default)]
+    pub remote_model: Option<String>,
+
+    /// Output dimension of the remote embedding model.
+    /// Required when remote_url is set. Overrideable via CODANNA_EMBED_DIM env var.
+    #[serde(default)]
+    pub remote_dim: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -424,6 +440,9 @@ impl Default for SemanticSearchConfig {
             model: default_embedding_model(),
             threshold: default_similarity_threshold(),
             embedding_threads: default_embedding_threads(),
+            remote_url: None,
+            remote_model: None,
+            remote_dim: None,
         }
     }
 }
