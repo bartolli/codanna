@@ -226,11 +226,14 @@ fn highlight_keywords(text: &str, query: &str) -> String {
     let mut merged: Vec<(usize, usize)> = Vec::new();
     for (start, end) in matches {
         if let Some(last) = merged.last_mut() {
-            // Check if adjacent: only spaces/tabs between (no newlines)
-            let between = &text[last.1..start];
-            let is_adjacent = start <= last.1 || between.chars().all(|c| c == ' ' || c == '\t');
+            // Check overlap first — slice is only safe when start > last.1
+            let is_adjacent = if start <= last.1 {
+                true // overlapping, merge unconditionally
+            } else {
+                // Adjacent: only spaces/tabs between ranges (no newlines)
+                text[last.1..start].chars().all(|c| c == ' ' || c == '\t')
+            };
             if is_adjacent {
-                // Merge: extend the previous range
                 last.1 = last.1.max(end);
                 continue;
             }
