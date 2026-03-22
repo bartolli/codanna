@@ -139,6 +139,16 @@ impl HotReloadWatcher {
                                     "semantic metadata present but reload returned false"
                                 );
                             }
+                            Err(crate::IndexError::SemanticSearch(
+                                crate::semantic::SemanticSearchError::DimensionMismatch {
+                                    ref suggestion, ..
+                                },
+                            )) => {
+                                warn!(
+                                    "Semantic index dimension mismatch after hot-reload: {suggestion}. \
+                                     Semantic search disabled until re-indexed with --force."
+                                );
+                            }
                             Err(e) => {
                                 warn!("Failed to reload semantic search after index update: {e}");
                             }

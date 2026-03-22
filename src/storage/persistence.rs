@@ -106,6 +106,10 @@ impl IndexPersistence {
                 Ok(false) => {
                     tracing::debug!("[persistence] no semantic data found (this is optional)");
                 }
+                Err(IndexError::SemanticSearch(crate::semantic::SemanticSearchError::DimensionMismatch { ref suggestion, .. })) => {
+                    tracing::error!("[persistence] semantic index incompatible: {suggestion}");
+                    return Err(IndexError::General(suggestion.clone()));
+                }
                 Err(e) => {
                     tracing::warn!("[persistence] failed to load semantic search: {e}");
                 }
