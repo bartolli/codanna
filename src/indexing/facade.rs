@@ -90,6 +90,10 @@ pub struct IndexFacade {
 
     /// Base path for index storage
     index_base: PathBuf,
+
+    /// Set to true when load_semantic_search fails with DimensionMismatch so
+    /// hot-reload and other callers do not retry on every reload cycle.
+    semantic_incompatible: bool,
 }
 
 impl IndexFacade {
@@ -119,6 +123,7 @@ impl IndexFacade {
             settings,
             indexed_paths: HashSet::new(),
             index_base,
+            semantic_incompatible: false,
         })
     }
 
@@ -143,6 +148,7 @@ impl IndexFacade {
             settings,
             indexed_paths: HashSet::new(),
             index_base,
+            semantic_incompatible: false,
         }
     }
 
@@ -203,6 +209,12 @@ impl IndexFacade {
         self.semantic_search.is_some()
     }
 
+    /// Returns true if a previous load_semantic_search call failed with
+    /// DimensionMismatch, meaning retrying would always fail until re-indexed.
+    pub fn is_semantic_incompatible(&self) -> bool {
+        self.semantic_incompatible
+    }
+
     /// Save semantic search data to disk.
     pub fn save_semantic_search(&self, path: &Path) -> FacadeResult<()> {
         if let Some(ref semantic) = self.semantic_search {
@@ -242,6 +254,7 @@ impl IndexFacade {
                         let index_dim = semantic.dimensions();
 
                         if backend_dim != index_dim {
+                            self.semantic_incompatible = true;
                             return Err(IndexError::SemanticSearch(
                                 SemanticSearchError::DimensionMismatch {
                                     expected: backend_dim,
@@ -276,9 +289,12 @@ impl IndexFacade {
                     return Ok(true);
                 }
                 Err(SemanticSearchError::DimensionMismatch { expected, actual, ref suggestion }) => {
-                    // Dimension mismatch means the index is structurally incompatible —
-                    // surface as an error rather than silently disabling semantic search,
-                    // because the user needs to act (re-index).
+                    // Dimension mismatch: index is structurally incompatible with the
+                    // current backend. Mark this facade so callers do not retry on every
+                    // cycle. The error propagates upward; callers that need the process
+                    // to survive (startup, hot-reload) swallow it and continue text-only.
+                    // Callers that want to fail fast can treat this Err as fatal.
+                    self.semantic_incompatible = true;
                     tracing::error!(
                         target: "semantic",
                         "Semantic index dimension mismatch (expected={expected}, actual={actual}): {suggestion}"

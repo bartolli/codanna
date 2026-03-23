@@ -125,7 +125,7 @@ impl HotReloadWatcher {
 
                 // Ensure semantic search stays attached after hot reloads
                 let mut restored_semantic = false;
-                if !facade_guard.has_semantic_search() {
+                if !facade_guard.has_semantic_search() && !facade_guard.is_semantic_incompatible() {
                     let semantic_path = self.index_path.join("semantic");
                     let metadata_exists = semantic_path.join("metadata.json").exists();
                     if metadata_exists {
