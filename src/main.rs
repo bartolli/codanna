@@ -406,7 +406,7 @@ async fn main() {
 
     if let Some(ref mut idx) = indexer {
         // Only enable semantic search for commands that need it
-        if needs_semantic_search && config.semantic_search.enabled && !idx.has_semantic_search() {
+        if needs_semantic_search && config.semantic_search.enabled && !idx.has_semantic_search() && !idx.is_semantic_incompatible() {
             if let Err(e) = idx.enable_semantic_search() {
                 eprintln!("Warning: Failed to enable semantic search: {e}");
             } else {
