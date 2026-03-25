@@ -106,6 +106,15 @@ impl IndexPersistence {
                 Ok(false) => {
                     tracing::debug!("[persistence] no semantic data found (this is optional)");
                 }
+                Err(IndexError::SemanticSearch(crate::semantic::SemanticSearchError::DimensionMismatch { ref suggestion, .. })) => {
+                    // Semantic index is structurally incompatible with the current backend.
+                    // Log at error level so it is visible, but continue without semantic
+                    // search rather than failing the whole facade load and discarding the
+                    // valid text index.
+                    tracing::error!(
+                        "[persistence] semantic search disabled — index incompatible: {suggestion}"
+                    );
+                }
                 Err(e) => {
                     tracing::warn!("[persistence] failed to load semantic search: {e}");
                 }

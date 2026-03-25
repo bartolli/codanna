@@ -62,9 +62,10 @@ pub fn run(
                             skipped.path.display(),
                             parent.display()
                         ),
-                        SkipReason::AlreadyPresent => {
+                        SkipReason::AlreadyPresent if !force => {
                             println!("{}: Already indexed", skipped.path.display())
                         }
+                        SkipReason::AlreadyPresent => {}
                         SkipReason::FileNotPersisted => println!(
                             "{}: Ad-hoc indexed (not in settings.toml)",
                             skipped.path.display()

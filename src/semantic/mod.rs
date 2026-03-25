@@ -5,11 +5,13 @@
 
 mod metadata;
 mod pool;
+pub(crate) mod remote;
 mod simple;
 mod storage;
 
-pub use metadata::SemanticMetadata;
-pub use pool::EmbeddingPool;
+pub use metadata::{EmbeddingBackendKind, SemanticMetadata};
+pub use pool::{EmbeddingBackend, EmbeddingPool};
+pub use remote::RemoteEmbedder;
 pub use simple::{SemanticSearchError, SimpleSemanticSearch};
 pub use storage::SemanticVectorStorage;
 

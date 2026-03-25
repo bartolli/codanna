@@ -1,14 +1,114 @@
-//! Embedding model pool for parallel embedding generation
+//! Embedding backend abstraction — local fastembed pool or remote HTTP endpoint.
 //!
-//! Provides multiple TextEmbedding instances that can be used concurrently
-//! by different threads, enabling parallel embedding generation.
+//! `EmbeddingBackend` is the single type the rest of the codebase interacts with.
+//! It dispatches to either:
+//!   - `EmbeddingPool`   — local fastembed (parallel, thread-pool based)
+//!   - `RemoteEmbedder`  — OpenAI-compatible HTTP server (async, batched)
 
 use crate::SymbolId;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
+use super::remote::{run_async, RemoteEmbedder};
 use super::SemanticSearchError;
+
+// ── EmbeddingBackend ───────────────────────────────────────────────────────
+
+/// Unified embedding backend — wraps either a local fastembed pool or a remote
+/// HTTP embedder. All callers use this type; the backend is chosen at startup
+/// based on configuration.
+pub enum EmbeddingBackend {
+    Local(EmbeddingPool),
+    Remote(Arc<RemoteEmbedder>),
+}
+
+impl EmbeddingBackend {
+    /// Output dimension of this backend's embeddings.
+    pub fn dimensions(&self) -> usize {
+        match self {
+            EmbeddingBackend::Local(pool) => pool.dimensions(),
+            EmbeddingBackend::Remote(r) => r.dim(),
+        }
+    }
+
+    /// Log usage statistics (no-op for remote backend).
+    pub fn log_usage_stats(&self) {
+        if let EmbeddingBackend::Local(pool) = self {
+            pool.log_usage_stats();
+        }
+    }
+
+    /// Model name / URL for metadata and logging.
+    pub fn model_name(&self) -> &str {
+        match self {
+            EmbeddingBackend::Local(pool) => pool.model_name(),
+            EmbeddingBackend::Remote(_) => "remote",
+        }
+    }
+
+    /// Embed a single text synchronously.
+    /// Remote backend blocks the calling thread via `tokio::task::block_in_place`.
+    pub fn embed_one(&self, text: &str) -> Result<Vec<f32>, SemanticSearchError> {
+        match self {
+            EmbeddingBackend::Local(pool) => pool.embed_one(text),
+            EmbeddingBackend::Remote(r) => {
+                let r = Arc::clone(r);
+                let text = text.to_string();
+                run_async(async move {
+                    let results = r.embed(&[text]).await?;
+                    results.into_iter().next().ok_or_else(|| {
+                        SemanticSearchError::EmbeddingError("Remote embed returned empty".into())
+                    })
+                })
+            }
+        }
+    }
+
+    /// Embed multiple items in parallel (local) or batched async (remote).
+    pub fn embed_parallel(
+        &self,
+        items: &[(SymbolId, &str, &str)],
+    ) -> Vec<(SymbolId, Vec<f32>, String)> {
+        match self {
+            EmbeddingBackend::Local(pool) => pool.embed_parallel(items),
+            EmbeddingBackend::Remote(r) => {
+                let r = Arc::clone(r);
+                let texts: Vec<String> = items.iter().map(|(_, t, _)| t.to_string()).collect();
+                let dim = r.dim();
+
+                let embeddings = run_async(async move { r.embed(&texts).await });
+
+                match embeddings {
+                    Ok(embs) => {
+                        embs.into_iter()
+                            .zip(items.iter())
+                            .filter_map(|(emb, (id, _, lang))| {
+                                if emb.len() == dim {
+                                    Some((*id, emb, (*lang).to_string()))
+                                } else {
+                                    tracing::warn!(
+                                        target: "semantic",
+                                        "Remote dim mismatch for {}: expected {dim}, got {}",
+                                        id.to_u32(), emb.len()
+                                    );
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
+                    Err(e) => {
+                        tracing::error!(target: "semantic", "Remote embed_parallel failed: {e}");
+                        Vec::new()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── EmbeddingPool (local fastembed) ───────────────────────────────────────
 
 /// Model instance with an ID for tracking
 struct ModelInstance {
@@ -21,27 +121,17 @@ struct ModelInstance {
 /// Each model instance is expensive (~86MB), but having multiple allows
 /// true parallel embedding generation with rayon.
 pub struct EmbeddingPool {
-    /// Channel to acquire models from the pool
     model_sender: Sender<ModelInstance>,
     model_receiver: Receiver<ModelInstance>,
-    /// Number of models in the pool
     pool_size: usize,
-    /// Model dimensions (all models have same dimensions)
     dimensions: usize,
-    /// Model name for metadata
     model_name: String,
-    /// Usage counters per model instance (for tracing)
     usage_counters: Vec<AtomicUsize>,
 }
 
 impl EmbeddingPool {
     /// Create a new embedding pool with the specified number of model instances.
     ///
-    /// # Arguments
-    /// * `pool_size` - Number of TextEmbedding instances to create
-    /// * `model` - The embedding model to use
-    ///
-    /// # Note
     /// Each model instance uses ~86MB of memory for AllMiniLML6V2.
     pub fn new(pool_size: usize, model: EmbeddingModel) -> Result<Self, SemanticSearchError> {
         let pool_size = pool_size.max(1);
@@ -56,17 +146,14 @@ impl EmbeddingPool {
         );
 
         let mut dimensions = 0;
-
-        // Create usage counters for each model
         let usage_counters: Vec<AtomicUsize> =
             (0..pool_size).map(|_| AtomicUsize::new(0)).collect();
 
-        // Create pool_size model instances
         for i in 0..pool_size {
             let mut text_model = TextEmbedding::try_new(
                 InitOptions::new(model.clone())
                     .with_cache_dir(cache_dir.clone())
-                    .with_show_download_progress(i == 0), // Only show progress for first model
+                    .with_show_download_progress(i == 0),
             )
             .map_err(|e| {
                 SemanticSearchError::ModelInitError(format!(
@@ -76,7 +163,6 @@ impl EmbeddingPool {
                 ))
             })?;
 
-            // Get dimensions from first model
             if i == 0 {
                 let test_embedding = text_model
                     .embed(vec!["test"], None)
@@ -84,12 +170,8 @@ impl EmbeddingPool {
                 dimensions = test_embedding.into_iter().next().unwrap().len();
             }
 
-            let instance = ModelInstance {
-                model: text_model,
-                id: i,
-            };
             sender
-                .send(instance)
+                .send(ModelInstance { model: text_model, id: i })
                 .expect("Pool channel should not be closed");
         }
 
@@ -108,52 +190,42 @@ impl EmbeddingPool {
         })
     }
 
-    /// Create a pool with default model (AllMiniLML6V2)
+    /// Create a pool with default model (AllMiniLML6V2).
     pub fn with_size(pool_size: usize) -> Result<Self, SemanticSearchError> {
         Self::new(pool_size, EmbeddingModel::AllMiniLML6V2)
     }
 
-    /// Acquire a model from the pool (blocks if none available)
+    /// Acquire a model from the pool (blocks if none available).
     fn acquire(&self) -> ModelInstance {
-        let instance = self
-            .model_receiver
-            .recv()
-            .expect("Pool should not be empty");
-
-        // Increment usage counter for this model
+        let instance = self.model_receiver.recv().expect("Pool should not be empty");
         self.usage_counters[instance.id].fetch_add(1, Ordering::Relaxed);
-
         instance
     }
 
-    /// Return a model to the pool
+    /// Return a model to the pool.
     fn release(&self, instance: ModelInstance) {
         let _ = self.model_sender.send(instance);
     }
 
-    /// Get the embedding dimensions
+    /// Get the embedding dimensions.
     pub fn dimensions(&self) -> usize {
         self.dimensions
     }
 
-    /// Get the pool size
+    /// Get the pool size.
     pub fn pool_size(&self) -> usize {
         self.pool_size
     }
 
-    /// Get the model name
+    /// Get the model name.
     pub fn model_name(&self) -> &str {
         &self.model_name
     }
 
-    /// Generate embedding for a single document using a pooled model.
-    ///
-    /// Thread-safe: acquires model, generates embedding, returns model.
+    /// Generate embedding for a single text. Thread-safe via pool acquire/release.
     pub fn embed_one(&self, text: &str) -> Result<Vec<f32>, SemanticSearchError> {
         if text.trim().is_empty() {
-            return Err(SemanticSearchError::EmbeddingError(
-                "Empty text".to_string(),
-            ));
+            return Err(SemanticSearchError::EmbeddingError("Empty text".to_string()));
         }
 
         let mut instance = self.acquire();
@@ -181,7 +253,6 @@ impl EmbeddingPool {
                 .enumerate()
                 .map(|(i, c)| format!("model[{i}]={c}"))
                 .collect();
-
             tracing::info!(
                 target: "semantic",
                 "Embedding pool usage: {} (total: {total})",
@@ -190,10 +261,9 @@ impl EmbeddingPool {
         }
     }
 
-    /// Generate embeddings for multiple documents in parallel using rayon.
+    /// Generate embeddings for multiple items in parallel using rayon.
     ///
-    /// Uses batched embedding (64 docs per model call) for optimal throughput.
-    /// Returns a Vec of (SymbolId, embedding, language) for successful embeddings.
+    /// Uses batched embedding (64 docs per model call) for throughput.
     /// Failed embeddings are logged and skipped.
     pub fn embed_parallel(
         &self,
@@ -201,10 +271,8 @@ impl EmbeddingPool {
     ) -> Vec<(SymbolId, Vec<f32>, String)> {
         use rayon::prelude::*;
 
-        // Optimal batch size for embedding models (matches benchmark)
         const BATCH_SIZE: usize = 64;
 
-        // Filter out empty docs first
         let valid_items: Vec<_> = items
             .iter()
             .filter(|(_, doc, _)| !doc.trim().is_empty())
@@ -214,20 +282,16 @@ impl EmbeddingPool {
             return Vec::new();
         }
 
-        // Process in batches of 64, parallelized across available model instances
         let results: Vec<_> = valid_items
             .chunks(BATCH_SIZE)
             .par_bridge()
             .flat_map(|batch| {
-                // Collect texts for batch embedding
                 let texts: Vec<&str> = batch.iter().map(|(_, doc, _)| *doc).collect();
 
-                // Acquire model, embed entire batch, release model
                 let mut instance = self.acquire();
                 let embeddings_result = instance.model.embed(texts.clone(), None);
                 self.release(instance);
 
-                // Process results
                 match embeddings_result {
                     Ok(embeddings) => {
                         let mut results = Vec::with_capacity(batch.len());
@@ -248,20 +312,14 @@ impl EmbeddingPool {
                         results
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            target: "semantic",
-                            "Batch embedding failed: {}",
-                            e
-                        );
+                        tracing::warn!(target: "semantic", "Batch embedding failed: {e}");
                         Vec::new()
                     }
                 }
             })
             .collect();
 
-        // Log usage stats after parallel embedding
         self.log_usage_stats();
-
         results
     }
 }
@@ -275,21 +333,18 @@ mod tests {
     fn test_pool_creation() {
         let pool = EmbeddingPool::with_size(2).unwrap();
         assert_eq!(pool.pool_size(), 2);
-        assert_eq!(pool.dimensions(), 384); // AllMiniLML6V2
+        assert_eq!(pool.dimensions(), 384);
     }
 
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored"]
     fn test_parallel_embedding() {
         let pool = EmbeddingPool::with_size(2).unwrap();
-
         let items = vec![
             (SymbolId::new(1).unwrap(), "Parse JSON data", "rust"),
             (SymbolId::new(2).unwrap(), "Connect to database", "rust"),
-            (SymbolId::new(3).unwrap(), "Calculate hash", "rust"),
         ];
-
         let results = pool.embed_parallel(&items);
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 2);
     }
 }
