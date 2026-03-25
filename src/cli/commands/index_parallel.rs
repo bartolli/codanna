@@ -74,8 +74,7 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
 
     // Create semantic search (for storing/loading/searching embeddings)
     // and a separate embedding backend for generating new embeddings.
-    let (semantic, embedding_backend) =
-        create_semantic_search(settings, &semantic_path);
+    let (semantic, embedding_backend) = create_semantic_search(settings, &semantic_path);
 
     // Create pipeline
     let settings_arc = Arc::new(settings.clone());
@@ -105,7 +104,13 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
 
         tracing::info!(target: "pipeline", "Indexing directory ({mode}): {}", path.display());
 
-        match pipeline.index_incremental(path, Arc::clone(&index), semantic.clone(), embedding_backend.clone(), force) {
+        match pipeline.index_incremental(
+            path,
+            Arc::clone(&index),
+            semantic.clone(),
+            embedding_backend.clone(),
+            force,
+        ) {
             Ok(stats) => {
                 display_incremental_stats(&stats, progress);
             }
@@ -130,14 +135,17 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
 fn create_semantic_search(
     settings: &Settings,
     semantic_path: &Path,
-) -> (Option<Arc<Mutex<SimpleSemanticSearch>>>, Option<Arc<EmbeddingBackend>>) {
+) -> (
+    Option<Arc<Mutex<SimpleSemanticSearch>>>,
+    Option<Arc<EmbeddingBackend>>,
+) {
     if !settings.semantic_search.enabled {
         tracing::debug!(target: "pipeline", "Semantic search disabled");
         return (None, None);
     }
 
-    let is_remote = std::env::var("CODANNA_EMBED_URL").is_ok()
-        || settings.semantic_search.remote_url.is_some();
+    let is_remote =
+        std::env::var("CODANNA_EMBED_URL").is_ok() || settings.semantic_search.remote_url.is_some();
 
     // Build embedding backend (local pool or remote HTTP)
     let backend = match build_embedding_backend(&settings.semantic_search) {

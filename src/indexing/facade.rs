@@ -25,8 +25,10 @@
 
 use crate::config::Settings;
 use crate::indexing::pipeline::Pipeline;
-use crate::semantic::{EmbeddingBackend, EmbeddingPool, RemoteEmbedder, SemanticSearchError, SimpleSemanticSearch};
 use crate::semantic::remote::run_async;
+use crate::semantic::{
+    EmbeddingBackend, EmbeddingPool, RemoteEmbedder, SemanticSearchError, SimpleSemanticSearch,
+};
 use crate::storage::{DocumentIndex, SearchResult};
 use crate::symbol::context::{ContextIncludes, SymbolContext, SymbolRelationships};
 use crate::{FileId, IndexError, RelationKind, Relationship, Symbol, SymbolId, SymbolKind};
@@ -272,7 +274,8 @@ impl IndexFacade {
                         // Embedding spaces differ between models so similarity scores may
                         // be meaningless. Only a --force re-index can fully fix this.
                         let index_is_remote = semantic.is_remote_index();
-                        let backend_is_remote = matches!(pool.as_ref(), EmbeddingBackend::Remote(_));
+                        let backend_is_remote =
+                            matches!(pool.as_ref(), EmbeddingBackend::Remote(_));
                         if index_is_remote != backend_is_remote {
                             tracing::warn!(
                                 target: "semantic",
@@ -288,7 +291,11 @@ impl IndexFacade {
                     self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
                     return Ok(true);
                 }
-                Err(SemanticSearchError::DimensionMismatch { expected, actual, ref suggestion }) => {
+                Err(SemanticSearchError::DimensionMismatch {
+                    expected,
+                    actual,
+                    ref suggestion,
+                }) => {
                     // Dimension mismatch: index is structurally incompatible with the
                     // current backend. Mark this facade so callers do not retry on every
                     // cycle. The error propagates upward; callers that need the process
@@ -299,11 +306,13 @@ impl IndexFacade {
                         target: "semantic",
                         "Semantic index dimension mismatch (expected={expected}, actual={actual}): {suggestion}"
                     );
-                    return Err(IndexError::SemanticSearch(SemanticSearchError::DimensionMismatch {
-                        expected,
-                        actual,
-                        suggestion: suggestion.to_string(),
-                    }));
+                    return Err(IndexError::SemanticSearch(
+                        SemanticSearchError::DimensionMismatch {
+                            expected,
+                            actual,
+                            suggestion: suggestion.to_string(),
+                        },
+                    ));
                 }
                 Err(e) => {
                     // Other errors (missing file, corrupt data) — warn and continue
@@ -826,7 +835,8 @@ impl IndexFacade {
             let pool = self.embedding_pool.as_ref().ok_or_else(|| {
                 IndexError::General(
                     "Remote-mode index requires an embedding backend for queries. \
-                     Set CODANNA_EMBED_URL or re-index with a local model.".to_string(),
+                     Set CODANNA_EMBED_URL or re-index with a local model."
+                        .to_string(),
                 )
             })?;
             let query_vec = pool.embed_one(query)?;
@@ -1253,10 +1263,11 @@ pub fn build_embedding_backend(
 
         let url_owned = url.clone();
         let model_owned = model.clone();
-        let embedder = run_async(async move {
-            RemoteEmbedder::new(&url_owned, &model_owned, dim, api_key).await
-        })
-        .map_err(|e| IndexError::General(format!("Remote embedder init failed: {e}")))?;
+        let embedder =
+            run_async(
+                async move { RemoteEmbedder::new(&url_owned, &model_owned, dim, api_key).await },
+            )
+            .map_err(|e| IndexError::General(format!("Remote embedder init failed: {e}")))?;
 
         return Ok(EmbeddingBackend::Remote(Arc::new(embedder)));
     }

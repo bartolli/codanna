@@ -406,7 +406,11 @@ async fn main() {
 
     if let Some(ref mut idx) = indexer {
         // Only enable semantic search for commands that need it
-        if needs_semantic_search && config.semantic_search.enabled && !idx.has_semantic_search() && !idx.is_semantic_incompatible() {
+        if needs_semantic_search
+            && config.semantic_search.enabled
+            && !idx.has_semantic_search()
+            && !idx.is_semantic_incompatible()
+        {
             if let Err(e) = idx.enable_semantic_search() {
                 eprintln!("Warning: Failed to enable semantic search: {e}");
             } else {
@@ -460,7 +464,9 @@ async fn main() {
                     .iter()
                     .filter(|p| {
                         let canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-                        !cli_canonical.iter().any(|c| canon.starts_with(c) || c.starts_with(&canon))
+                        !cli_canonical
+                            .iter()
+                            .any(|c| canon.starts_with(c) || c.starts_with(&canon))
                     })
                     .map(|p| p.display().to_string())
                     .collect();

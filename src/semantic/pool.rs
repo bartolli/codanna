@@ -8,11 +8,11 @@
 use crate::SymbolId;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::remote::{run_async, RemoteEmbedder};
 use super::SemanticSearchError;
+use super::remote::{RemoteEmbedder, run_async};
 
 // ── EmbeddingBackend ───────────────────────────────────────────────────────
 
@@ -81,23 +81,22 @@ impl EmbeddingBackend {
                 let embeddings = run_async(async move { r.embed(&texts).await });
 
                 match embeddings {
-                    Ok(embs) => {
-                        embs.into_iter()
-                            .zip(items.iter())
-                            .filter_map(|(emb, (id, _, lang))| {
-                                if emb.len() == dim {
-                                    Some((*id, emb, (*lang).to_string()))
-                                } else {
-                                    tracing::warn!(
-                                        target: "semantic",
-                                        "Remote dim mismatch for {}: expected {dim}, got {}",
-                                        id.to_u32(), emb.len()
-                                    );
-                                    None
-                                }
-                            })
-                            .collect()
-                    }
+                    Ok(embs) => embs
+                        .into_iter()
+                        .zip(items.iter())
+                        .filter_map(|(emb, (id, _, lang))| {
+                            if emb.len() == dim {
+                                Some((*id, emb, (*lang).to_string()))
+                            } else {
+                                tracing::warn!(
+                                    target: "semantic",
+                                    "Remote dim mismatch for {}: expected {dim}, got {}",
+                                    id.to_u32(), emb.len()
+                                );
+                                None
+                            }
+                        })
+                        .collect(),
                     Err(e) => {
                         tracing::error!(target: "semantic", "Remote embed_parallel failed: {e}");
                         Vec::new()
@@ -171,7 +170,10 @@ impl EmbeddingPool {
             }
 
             sender
-                .send(ModelInstance { model: text_model, id: i })
+                .send(ModelInstance {
+                    model: text_model,
+                    id: i,
+                })
                 .expect("Pool channel should not be closed");
         }
 
@@ -197,7 +199,10 @@ impl EmbeddingPool {
 
     /// Acquire a model from the pool (blocks if none available).
     fn acquire(&self) -> ModelInstance {
-        let instance = self.model_receiver.recv().expect("Pool should not be empty");
+        let instance = self
+            .model_receiver
+            .recv()
+            .expect("Pool should not be empty");
         self.usage_counters[instance.id].fetch_add(1, Ordering::Relaxed);
         instance
     }
@@ -225,7 +230,9 @@ impl EmbeddingPool {
     /// Generate embedding for a single text. Thread-safe via pool acquire/release.
     pub fn embed_one(&self, text: &str) -> Result<Vec<f32>, SemanticSearchError> {
         if text.trim().is_empty() {
-            return Err(SemanticSearchError::EmbeddingError("Empty text".to_string()));
+            return Err(SemanticSearchError::EmbeddingError(
+                "Empty text".to_string(),
+            ));
         }
 
         let mut instance = self.acquire();

@@ -105,16 +105,26 @@ impl RemoteEmbedder {
         let client = Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
             .build()
-            .map_err(|e| SemanticSearchError::ModelInitError(format!("HTTP client build failed: {e}")))?;
+            .map_err(|e| {
+                SemanticSearchError::ModelInitError(format!("HTTP client build failed: {e}"))
+            })?;
 
         let url = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
 
         // Probe with a single text to determine / validate dimension
-        let probe = Self::request(&client, &url, model, &["probe".to_string()], api_key.as_deref()).await?;
-        let actual_dim = probe
-            .first()
-            .map(|v| v.len())
-            .ok_or_else(|| SemanticSearchError::ModelInitError("Remote server returned empty embedding on probe".into()))?;
+        let probe = Self::request(
+            &client,
+            &url,
+            model,
+            &["probe".to_string()],
+            api_key.as_deref(),
+        )
+        .await?;
+        let actual_dim = probe.first().map(|v| v.len()).ok_or_else(|| {
+            SemanticSearchError::ModelInitError(
+                "Remote server returned empty embedding on probe".into(),
+            )
+        })?;
 
         if let Some(expected) = expected_dim {
             if actual_dim != expected {
@@ -161,7 +171,14 @@ impl RemoteEmbedder {
             .collect();
 
         for (chunk_start, chunk) in truncated.chunks(BATCH_SIZE).enumerate() {
-            let embeddings = Self::request(&self.client, &self.url, &self.model, chunk, self.api_key.as_deref()).await?;
+            let embeddings = Self::request(
+                &self.client,
+                &self.url,
+                &self.model,
+                chunk,
+                self.api_key.as_deref(),
+            )
+            .await?;
 
             if embeddings.len() != chunk.len() {
                 return Err(SemanticSearchError::EmbeddingError(format!(
@@ -196,17 +213,19 @@ impl RemoteEmbedder {
         texts: &[String],
         api_key: Option<&str>,
     ) -> Result<Vec<Vec<f32>>, SemanticSearchError> {
-        let body = EmbedRequest { model, input: texts };
+        let body = EmbedRequest {
+            model,
+            input: texts,
+        };
 
         let mut req = client.post(url).json(&body);
         if let Some(key) = api_key {
             req = req.bearer_auth(key);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| SemanticSearchError::EmbeddingError(format!("Remote embed request failed: {e}")))?;
+        let resp = req.send().await.map_err(|e| {
+            SemanticSearchError::EmbeddingError(format!("Remote embed request failed: {e}"))
+        })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -216,10 +235,9 @@ impl RemoteEmbedder {
             )));
         }
 
-        let parsed: EmbedResponse = resp
-            .json()
-            .await
-            .map_err(|e| SemanticSearchError::EmbeddingError(format!("Failed to parse embed response: {e}")))?;
+        let parsed: EmbedResponse = resp.json().await.map_err(|e| {
+            SemanticSearchError::EmbeddingError(format!("Failed to parse embed response: {e}"))
+        })?;
 
         // Sort by index and validate contiguous range [0, len)
         let mut data = parsed.data;

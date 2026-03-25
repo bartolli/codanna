@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.18] - 2026-03-25
+
+### Added
+
+- Remote embedding backend: OpenAI-compatible HTTP endpoint as alternative to local fastembed (PR #97)
+- CODANNA_EMBED_API_KEY env var for Bearer auth on remote embedding servers
+- CODANNA_EMBED_URL, CODANNA_EMBED_MODEL, CODANNA_EMBED_DIM env var overrides
+- Remote embedding config documentation in `codanna init` output
+- Nix flake for reproducible builds and `nix run` support (PR #94)
+- GetIndexInfoRequest manual JsonSchema impl for OpenAI function-calling compatibility (PR #96)
+
+### Fixed
+
+- Dimension mismatch detection: `enable_semantic_search` no longer overrides `semantic_incompatible` flag
+- `--force` with CLI paths warns about configured roots that will not be rebuilt
+- `--force` suppresses misleading "Already indexed" message
+- `process::exit` removed from `create_semantic_search` in index_parallel (returns gracefully)
+- Highlight range overlap panic in document search
+- DimensionMismatch propagated through persistence and hot-reload paths
+
+### Changed
+
+- EmbeddingBackend enum wraps local fastembed pool and remote HTTP embedder
+- Shared `load_symbol_languages` helper (deduplicated load/load_remote)
+- API keys env-var only: secrets not stored in config files
+
 ## [0.9.17] - 2026-03-15
 
 ### Added

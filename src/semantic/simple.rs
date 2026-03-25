@@ -162,7 +162,8 @@ impl SimpleSemanticSearch {
         // Generate embedding — only available in local-model mode
         let model = self.model.as_ref().ok_or_else(|| {
             SemanticSearchError::ModelInitError(
-                "No local model — use EmbeddingBackend to generate embeddings in remote mode".to_string(),
+                "No local model — use EmbeddingBackend to generate embeddings in remote mode"
+                    .to_string(),
             )
         })?;
         let embeddings = model
@@ -256,7 +257,11 @@ impl SimpleSemanticSearch {
             .iter()
             .filter_map(|(id, emb)| {
                 let sim = cosine_similarity(query_embedding, emb);
-                if sim >= threshold { Some((*id, sim)) } else { None }
+                if sim >= threshold {
+                    Some((*id, sim))
+                } else {
+                    None
+                }
             })
             .collect();
         similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -297,9 +302,7 @@ impl SimpleSemanticSearch {
         let candidates: Vec<(&SymbolId, &Vec<f32>)> = if let Some(lang) = language {
             self.embeddings
                 .iter()
-                .filter(|(id, _)| {
-                    self.symbol_languages.get(id).is_some_and(|l| l == lang)
-                })
+                .filter(|(id, _)| self.symbol_languages.get(id).is_some_and(|l| l == lang))
                 .collect()
         } else {
             self.embeddings.iter().collect()
@@ -551,11 +554,8 @@ impl SimpleSemanticSearch {
     /// so it is preserved in saved metadata and visible in status output.
     /// No local fastembed model is loaded. Queries must use `search_with_embedding`.
     pub fn new_empty(dimensions: usize, model_name: &str) -> Self {
-        let metadata = crate::semantic::SemanticMetadata::new_remote(
-            model_name.to_string(),
-            dimensions,
-            0,
-        );
+        let metadata =
+            crate::semantic::SemanticMetadata::new_remote(model_name.to_string(), dimensions, 0);
         Self {
             embeddings: HashMap::new(),
             symbol_languages: HashMap::new(),
@@ -566,7 +566,9 @@ impl SimpleSemanticSearch {
     }
 
     /// Load symbol-to-language mappings from `languages.json`.
-    fn load_symbol_languages(path: &Path) -> Result<HashMap<SymbolId, String>, SemanticSearchError> {
+    fn load_symbol_languages(
+        path: &Path,
+    ) -> Result<HashMap<SymbolId, String>, SemanticSearchError> {
         let languages_path = path.join("languages.json");
         if !languages_path.exists() {
             return Ok(HashMap::new());
@@ -578,9 +580,11 @@ impl SimpleSemanticSearch {
             }
         })?;
         let languages_map: HashMap<u32, String> =
-            serde_json::from_str(&languages_json).map_err(|e| SemanticSearchError::StorageError {
-                message: format!("Failed to parse language mappings: {e}"),
-                suggestion: "Try rebuilding the semantic index".to_string(),
+            serde_json::from_str(&languages_json).map_err(|e| {
+                SemanticSearchError::StorageError {
+                    message: format!("Failed to parse language mappings: {e}"),
+                    suggestion: "Try rebuilding the semantic index".to_string(),
+                }
             })?;
         Ok(languages_map
             .into_iter()

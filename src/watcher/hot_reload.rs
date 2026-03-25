@@ -141,7 +141,8 @@ impl HotReloadWatcher {
                             }
                             Err(crate::IndexError::SemanticSearch(
                                 crate::semantic::SemanticSearchError::DimensionMismatch {
-                                    ref suggestion, ..
+                                    ref suggestion,
+                                    ..
                                 },
                             )) => {
                                 warn!(
