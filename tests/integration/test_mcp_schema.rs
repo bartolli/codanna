@@ -16,7 +16,7 @@ fn test_mcp_schema_uint_format() {
     println!("{search_json}");
 
     if search_json.contains(r#""format":"uint"#) {
-        println!("\n❌ WARNING: SearchSymbolsRequest contains 'uint' format!");
+        println!("\n[WARN] SearchSymbolsRequest contains 'uint' format!");
         println!("   This may cause issues with MCP clients like Gemini.");
     }
 
@@ -30,7 +30,7 @@ fn test_mcp_schema_uint_format() {
     println!("{semantic_json}");
 
     if semantic_json.contains(r#""format":"uint"#) {
-        println!("\n❌ WARNING: SemanticSearchRequest contains 'uint' format!");
+        println!("\n[WARN] SemanticSearchRequest contains 'uint' format!");
     }
 
     println!("\n{}", "=".repeat(50));
@@ -43,7 +43,7 @@ fn test_mcp_schema_uint_format() {
     println!("{impact_json}");
 
     if impact_json.contains(r#""format":"uint"#) {
-        println!("\n❌ WARNING: AnalyzeImpactRequest contains 'uint' format!");
+        println!("\n[WARN] AnalyzeImpactRequest contains 'uint' format!");
     }
 
     // Summary
@@ -55,11 +55,11 @@ fn test_mcp_schema_uint_format() {
         || impact_json.contains(r#""format":"uint"#);
 
     if has_uint {
-        println!("❌ Schema contains 'uint' format which is not standard JSON Schema.");
+        println!("[FAIL] Schema contains 'uint' format which is not standard JSON Schema.");
         println!("   This causes compatibility issues with MCP clients.");
         println!("   Fix: Change usize fields to u32 or u64 in MCP request structs.");
     } else {
-        println!("✅ No 'uint' format found in schemas.");
+        println!("[OK] No 'uint' format found in schemas.");
     }
 }
 
@@ -88,5 +88,5 @@ fn test_get_index_info_schema_has_properties() {
         Some(false),
         "schema should set additionalProperties=false per MCP spec\nGot:\n{json}"
     );
-    println!("✅ GetIndexInfoRequest schema is MCP-spec compliant and OpenAI-compatible.");
+    println!("[OK] GetIndexInfoRequest schema is MCP-spec compliant and OpenAI-compatible.");
 }
