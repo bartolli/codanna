@@ -86,6 +86,7 @@ pub struct RemoteEmbedder {
     url: String,
     model: String,
     dim: usize,
+    api_key: Option<String>,
 }
 
 const BATCH_SIZE: usize = 64;
@@ -99,6 +100,7 @@ impl RemoteEmbedder {
         base_url: &str,
         model: &str,
         expected_dim: Option<usize>,
+        api_key: Option<String>,
     ) -> Result<Self, SemanticSearchError> {
         let client = Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -108,7 +110,7 @@ impl RemoteEmbedder {
         let url = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
 
         // Probe with a single text to determine / validate dimension
-        let probe = Self::request(&client, &url, model, &["probe".to_string()]).await?;
+        let probe = Self::request(&client, &url, model, &["probe".to_string()], api_key.as_deref()).await?;
         let actual_dim = probe
             .first()
             .map(|v| v.len())
@@ -132,6 +134,7 @@ impl RemoteEmbedder {
             url,
             model: model.to_string(),
             dim: actual_dim,
+            api_key,
         })
     }
 
@@ -158,7 +161,7 @@ impl RemoteEmbedder {
             .collect();
 
         for (chunk_start, chunk) in truncated.chunks(BATCH_SIZE).enumerate() {
-            let embeddings = Self::request(&self.client, &self.url, &self.model, chunk).await?;
+            let embeddings = Self::request(&self.client, &self.url, &self.model, chunk, self.api_key.as_deref()).await?;
 
             if embeddings.len() != chunk.len() {
                 return Err(SemanticSearchError::EmbeddingError(format!(
@@ -191,12 +194,16 @@ impl RemoteEmbedder {
         url: &str,
         model: &str,
         texts: &[String],
+        api_key: Option<&str>,
     ) -> Result<Vec<Vec<f32>>, SemanticSearchError> {
         let body = EmbedRequest { model, input: texts };
 
-        let resp = client
-            .post(url)
-            .json(&body)
+        let mut req = client.post(url).json(&body);
+        if let Some(key) = api_key {
+            req = req.bearer_auth(key);
+        }
+
+        let resp = req
             .send()
             .await
             .map_err(|e| SemanticSearchError::EmbeddingError(format!("Remote embed request failed: {e}")))?;

@@ -130,6 +130,9 @@ pub struct EmbeddingPool {
 }
 
 impl EmbeddingPool {
+    /// Create a new embedding pool with the specified number of model instances.
+    ///
+    /// Each model instance uses ~86MB of memory for AllMiniLML6V2.
     pub fn new(pool_size: usize, model: EmbeddingModel) -> Result<Self, SemanticSearchError> {
         let pool_size = pool_size.max(1);
         let (sender, receiver) = bounded(pool_size);
@@ -187,32 +190,39 @@ impl EmbeddingPool {
         })
     }
 
+    /// Create a pool with default model (AllMiniLML6V2).
     pub fn with_size(pool_size: usize) -> Result<Self, SemanticSearchError> {
         Self::new(pool_size, EmbeddingModel::AllMiniLML6V2)
     }
 
+    /// Acquire a model from the pool (blocks if none available).
     fn acquire(&self) -> ModelInstance {
         let instance = self.model_receiver.recv().expect("Pool should not be empty");
         self.usage_counters[instance.id].fetch_add(1, Ordering::Relaxed);
         instance
     }
 
+    /// Return a model to the pool.
     fn release(&self, instance: ModelInstance) {
         let _ = self.model_sender.send(instance);
     }
 
+    /// Get the embedding dimensions.
     pub fn dimensions(&self) -> usize {
         self.dimensions
     }
 
+    /// Get the pool size.
     pub fn pool_size(&self) -> usize {
         self.pool_size
     }
 
+    /// Get the model name.
     pub fn model_name(&self) -> &str {
         &self.model_name
     }
 
+    /// Generate embedding for a single text. Thread-safe via pool acquire/release.
     pub fn embed_one(&self, text: &str) -> Result<Vec<f32>, SemanticSearchError> {
         if text.trim().is_empty() {
             return Err(SemanticSearchError::EmbeddingError("Empty text".to_string()));
@@ -228,6 +238,7 @@ impl EmbeddingPool {
         result.map(|mut v| v.remove(0))
     }
 
+    /// Log usage statistics for all model instances.
     pub fn log_usage_stats(&self) {
         let counts: Vec<usize> = self
             .usage_counters
@@ -250,6 +261,10 @@ impl EmbeddingPool {
         }
     }
 
+    /// Generate embeddings for multiple items in parallel using rayon.
+    ///
+    /// Uses batched embedding (64 docs per model call) for throughput.
+    /// Failed embeddings are logged and skipped.
     pub fn embed_parallel(
         &self,
         items: &[(SymbolId, &str, &str)],

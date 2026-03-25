@@ -230,13 +230,11 @@ impl SimpleSemanticSearch {
         count
     }
 
-    /// Search for similar documentation using a natural language query
-    ///
-    /// Returns symbol IDs with their similarity scores, sorted by score descending
     /// Search using a pre-computed query embedding vector.
     ///
     /// Use this in remote-embedding mode where the caller obtains the query
     /// vector via `EmbeddingBackend::embed_one` before calling this method.
+    /// Returns symbol IDs with their similarity scores, sorted by score descending.
     pub fn search_with_embedding(
         &self,
         query_embedding: &[f32],
@@ -270,15 +268,14 @@ impl SimpleSemanticSearch {
     ///
     /// Language filtering is applied before similarity ranking so the result slice
     /// respects `limit` after filtering, matching the behaviour of `search_with_language`.
-    /// Convenience wrapper: `search_with_embedding` + threshold filter.
+    /// Convenience wrapper: delegates to `search_with_embedding` with the given threshold.
     pub fn search_with_embedding_threshold(
         &self,
         query_embedding: &[f32],
         limit: usize,
         threshold: f32,
     ) -> Result<Vec<(SymbolId, f32)>, SemanticSearchError> {
-        let results = self.search_with_embedding(query_embedding, limit, threshold)?;
-        Ok(results.into_iter().filter(|(_, s)| *s >= threshold).collect())
+        self.search_with_embedding(query_embedding, limit, threshold)
     }
 
     pub fn search_with_embedding_and_language(
@@ -548,12 +545,6 @@ impl SimpleSemanticSearch {
         Ok(())
     }
 
-    /// Load embeddings from disk.
-    ///
-    /// Automatically uses the model specified in the metadata.
-    ///
-    /// # Arguments
-    /// * `path` - Path where semantic data is stored
     /// Create an empty semantic search instance for remote-embedding mode.
     ///
     /// `model_name` should identify the remote model (e.g. "bge-large-en-v1.5")
@@ -574,6 +565,29 @@ impl SimpleSemanticSearch {
         }
     }
 
+    /// Load symbol-to-language mappings from `languages.json`.
+    fn load_symbol_languages(path: &Path) -> Result<HashMap<SymbolId, String>, SemanticSearchError> {
+        let languages_path = path.join("languages.json");
+        if !languages_path.exists() {
+            return Ok(HashMap::new());
+        }
+        let languages_json = std::fs::read_to_string(&languages_path).map_err(|e| {
+            SemanticSearchError::StorageError {
+                message: format!("Failed to read language mappings: {e}"),
+                suggestion: "Language mappings file may be corrupted".to_string(),
+            }
+        })?;
+        let languages_map: HashMap<u32, String> =
+            serde_json::from_str(&languages_json).map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Failed to parse language mappings: {e}"),
+                suggestion: "Try rebuilding the semantic index".to_string(),
+            })?;
+        Ok(languages_map
+            .into_iter()
+            .filter_map(|(id, lang)| SymbolId::new(id).map(|sid| (sid, lang)))
+            .collect())
+    }
+
     /// Load an existing semantic index without initialising a local embedding model.
     ///
     /// Used in remote-embedding mode: stored vectors are loaded for similarity
@@ -585,8 +599,6 @@ impl SimpleSemanticSearch {
         let mut storage = SemanticVectorStorage::open(path)?;
 
         // Verify storage dimension matches metadata to catch corrupted indexes.
-        // Without this, cosine_similarity would silently zip vectors of mismatched
-        // lengths, producing garbage similarity scores.
         if storage.dimension().get() != metadata.dimension {
             return Err(SemanticSearchError::DimensionMismatch {
                 expected: metadata.dimension,
@@ -605,31 +617,12 @@ impl SimpleSemanticSearch {
             embeddings.insert(id, embedding);
         }
 
-        let languages_path = path.join("languages.json");
-        let symbol_languages = if languages_path.exists() {
-            let languages_json = std::fs::read_to_string(&languages_path).map_err(|e| {
-                SemanticSearchError::StorageError {
-                    message: format!("Failed to read language mappings: {e}"),
-                    suggestion: "Language mappings file may be corrupted".to_string(),
-                }
-            })?;
-            let languages_map: HashMap<u32, String> = serde_json::from_str(&languages_json)
-                .map_err(|e| SemanticSearchError::StorageError {
-                    message: format!("Failed to parse language mappings: {e}"),
-                    suggestion: "Try rebuilding the semantic index".to_string(),
-                })?;
-            languages_map
-                .into_iter()
-                .filter_map(|(id, lang)| SymbolId::new(id).map(|sid| (sid, lang)))
-                .collect()
-        } else {
-            HashMap::new()
-        };
+        let symbol_languages = Self::load_symbol_languages(path)?;
 
         Ok(Self {
             embeddings,
             symbol_languages,
-            model: None, // no local model — caller uses search_with_embedding()
+            model: None,
             dimensions: metadata.dimension,
             metadata: Some(metadata),
         })
@@ -704,28 +697,7 @@ impl SimpleSemanticSearch {
             ))
         })?;
 
-        // Load language mappings if they exist
-        let languages_path = path.join("languages.json");
-        let symbol_languages = if languages_path.exists() {
-            let languages_json = std::fs::read_to_string(&languages_path).map_err(|e| {
-                SemanticSearchError::StorageError {
-                    message: format!("Failed to read language mappings: {e}"),
-                    suggestion: "Language mappings file may be corrupted".to_string(),
-                }
-            })?;
-            let languages_map: HashMap<u32, String> = serde_json::from_str(&languages_json)
-                .map_err(|e| SemanticSearchError::StorageError {
-                    message: format!("Failed to parse language mappings: {e}"),
-                    suggestion: "Try rebuilding the semantic index".to_string(),
-                })?;
-            // Convert u32 keys back to SymbolId
-            languages_map
-                .into_iter()
-                .filter_map(|(id, lang)| SymbolId::new(id).map(|sid| (sid, lang)))
-                .collect()
-        } else {
-            HashMap::new()
-        };
+        let symbol_languages = Self::load_symbol_languages(path)?;
 
         Ok(Self {
             embeddings,

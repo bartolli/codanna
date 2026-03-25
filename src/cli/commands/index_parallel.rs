@@ -170,7 +170,7 @@ fn create_semantic_search(
                         "Semantic index dimension mismatch: index has {index_dim}d but backend produces {backend_dim}d. \
                          Re-index with: codanna index-parallel <path> --force"
                     );
-                    std::process::exit(1);
+                    return (None, None);
                 }
                 let index_is_remote = s.is_remote_index();
                 if index_is_remote != is_remote {
@@ -187,10 +187,8 @@ fn create_semantic_search(
                 Some(Arc::new(Mutex::new(s)))
             }
             Err(SemanticSearchError::DimensionMismatch { suggestion, .. }) => {
-                // Incompatible existing index — cannot continue silently as stored
-                // vectors are structurally wrong for this backend.
                 tracing::error!(target: "pipeline", "Semantic index incompatible: {suggestion}");
-                std::process::exit(1);
+                None
             }
             Err(e) => {
                 tracing::warn!(target: "pipeline", "Failed to load embeddings, continuing without semantic search: {e}");

@@ -221,6 +221,8 @@ pub struct SemanticSearchConfig {
     /// Required when remote_url is set. Overrideable via CODANNA_EMBED_DIM env var.
     #[serde(default)]
     pub remote_dim: Option<usize>,
+    // API key: set CODANNA_EMBED_API_KEY environment variable.
+    // Intentionally not a config field -- secrets must not live in shared config files.
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -954,6 +956,14 @@ impl Settings {
                 result
                     .push_str("# Each instance uses ~86MB RAM. Higher values = faster indexing.\n");
                 result.push_str("# Set to 1 for low-memory systems, 4-6 for high-end machines.\n");
+                result.push_str("\n# Remote embedding server (optional, replaces local fastembed)\n");
+                result.push_str("# Supports OpenAI, Ollama, vLLM, Infinity, or any OpenAI-compatible endpoint.\n");
+                result.push_str("# Uncomment and configure to use a remote server instead of local models.\n");
+                result.push_str("# remote_url = \"http://localhost:11434\"  # server base URL\n");
+                result.push_str("# remote_model = \"nomic-embed-text\"     # model name to send\n");
+                result.push_str("# remote_dim = 768                       # output dimension\n");
+                result.push_str("# API key: set CODANNA_EMBED_API_KEY environment variable (not stored in config)\n");
+                result.push_str("# Override any field with env vars: CODANNA_EMBED_URL, CODANNA_EMBED_MODEL, CODANNA_EMBED_DIM\n");
             } else if line == "[file_watch]" {
                 result.push_str("\n[file_watch]\n");
                 result.push_str("# Enable automatic file watching for indexed files\n");

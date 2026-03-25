@@ -1203,15 +1203,6 @@ impl IndexFacade {
 
 // ── Embedding backend factory ──────────────────────────────────────────────
 
-/// Resolve the embedding backend from config + env var overrides.
-///
-/// Env vars take precedence over settings.toml:
-///   CODANNA_EMBED_URL    — remote endpoint (enables remote mode)
-///   CODANNA_EMBED_MODEL  — model name for remote server
-///   CODANNA_EMBED_DIM    — expected output dimension
-/// Resolve the effective remote model name using the same env-var-first priority
-/// as `build_embedding_backend`. Call this when populating `new_empty` so the
-/// stored metadata model name matches the model that actually generated the vectors.
 /// Resolve the effective remote model name, applying env-var-first precedence.
 ///
 /// Both `build_embedding_backend` and `new_empty` call sites use this so that
@@ -1251,15 +1242,19 @@ pub fn build_embedding_backend(
             Err(_) => cfg.remote_dim,
         };
 
+        // API key from env var only -- secrets must not live in config files.
+        let api_key = std::env::var("CODANNA_EMBED_API_KEY").ok();
+
         tracing::info!(
             target: "semantic",
-            "Using remote embedding backend: url={url} model={model}"
+            "Using remote embedding backend: url={url} model={model} auth={}",
+            if api_key.is_some() { "bearer" } else { "none" }
         );
 
         let url_owned = url.clone();
         let model_owned = model.clone();
         let embedder = run_async(async move {
-            RemoteEmbedder::new(&url_owned, &model_owned, dim).await
+            RemoteEmbedder::new(&url_owned, &model_owned, dim, api_key).await
         })
         .map_err(|e| IndexError::General(format!("Remote embedder init failed: {e}")))?;
 
