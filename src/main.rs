@@ -432,9 +432,46 @@ async fn main() {
         }
     );
     let show_progress = config.indexing.show_progress && !no_progress_flag;
+    // Extract CLI-provided paths for accurate --force messaging
+    let cli_index_paths: Vec<PathBuf> = if let Commands::Index { ref paths, .. } = cli.command {
+        paths.clone()
+    } else {
+        Vec::new()
+    };
+
     if let Some(report) = &seed_report {
         if is_force_index {
-            if !report.newly_seeded.is_empty() {
+            if !cli_index_paths.is_empty() {
+                // CLI paths provided -- only those will be rebuilt
+                let cli_roots: Vec<String> = cli_index_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                println!("Rebuilding index for: {}", cli_roots.join(", "));
+
+                // Warn about configured paths that won't be rebuilt
+                let cli_canonical: Vec<PathBuf> = cli_index_paths
+                    .iter()
+                    .filter_map(|p| p.canonicalize().ok())
+                    .collect();
+                let not_rebuilt: Vec<String> = config
+                    .indexing
+                    .indexed_paths
+                    .iter()
+                    .filter(|p| {
+                        let canon = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+                        !cli_canonical.iter().any(|c| canon.starts_with(c) || c.starts_with(&canon))
+                    })
+                    .map(|p| p.display().to_string())
+                    .collect();
+                if !not_rebuilt.is_empty() {
+                    eprintln!(
+                        "Warning: --force clears the entire index. These configured paths will not be rebuilt: {}",
+                        not_rebuilt.join(", ")
+                    );
+                    eprintln!("Run 'codanna index --force' without paths to rebuild everything.");
+                }
+            } else if !report.newly_seeded.is_empty() {
                 let roots: Vec<String> = report
                     .newly_seeded
                     .iter()
