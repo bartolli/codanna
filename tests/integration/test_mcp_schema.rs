@@ -1,6 +1,8 @@
 //! Test to verify MCP schema generation for usize fields
 
-use codanna::mcp::{AnalyzeImpactRequest, SearchSymbolsRequest, SemanticSearchRequest};
+use codanna::mcp::{
+    AnalyzeImpactRequest, GetIndexInfoRequest, SearchSymbolsRequest, SemanticSearchRequest,
+};
 
 #[test]
 fn test_mcp_schema_uint_format() {
@@ -14,7 +16,7 @@ fn test_mcp_schema_uint_format() {
     println!("{search_json}");
 
     if search_json.contains(r#""format":"uint"#) {
-        println!("\n❌ WARNING: SearchSymbolsRequest contains 'uint' format!");
+        println!("\n[WARN] SearchSymbolsRequest contains 'uint' format!");
         println!("   This may cause issues with MCP clients like Gemini.");
     }
 
@@ -28,7 +30,7 @@ fn test_mcp_schema_uint_format() {
     println!("{semantic_json}");
 
     if semantic_json.contains(r#""format":"uint"#) {
-        println!("\n❌ WARNING: SemanticSearchRequest contains 'uint' format!");
+        println!("\n[WARN] SemanticSearchRequest contains 'uint' format!");
     }
 
     println!("\n{}", "=".repeat(50));
@@ -41,7 +43,7 @@ fn test_mcp_schema_uint_format() {
     println!("{impact_json}");
 
     if impact_json.contains(r#""format":"uint"#) {
-        println!("\n❌ WARNING: AnalyzeImpactRequest contains 'uint' format!");
+        println!("\n[WARN] AnalyzeImpactRequest contains 'uint' format!");
     }
 
     // Summary
@@ -53,10 +55,38 @@ fn test_mcp_schema_uint_format() {
         || impact_json.contains(r#""format":"uint"#);
 
     if has_uint {
-        println!("❌ Schema contains 'uint' format which is not standard JSON Schema.");
+        println!("[FAIL] Schema contains 'uint' format which is not standard JSON Schema.");
         println!("   This causes compatibility issues with MCP clients.");
         println!("   Fix: Change usize fields to u32 or u64 in MCP request structs.");
     } else {
-        println!("✅ No 'uint' format found in schemas.");
+        println!("[OK] No 'uint' format found in schemas.");
     }
+}
+
+/// Regression test: `get_index_info` is a no-parameter tool whose inputSchema must satisfy
+/// both MCP spec (recommends `additionalProperties: false`) and OpenAI's strict
+/// function-calling validation (requires `properties` field).
+#[test]
+fn test_get_index_info_schema_has_properties() {
+    let schema = rmcp::schemars::schema_for!(GetIndexInfoRequest);
+    let json = serde_json::to_string_pretty(&schema).unwrap();
+    println!("GetIndexInfoRequest schema:\n{json}");
+
+    let root: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        root.get("type").and_then(|v| v.as_str()),
+        Some("object"),
+        "schema must have type=object\nGot:\n{json}"
+    );
+    assert!(
+        root.get("properties").is_some(),
+        "schema must contain 'properties' for OpenAI compatibility\nGot:\n{json}"
+    );
+    assert_eq!(
+        root.get("additionalProperties").and_then(|v| v.as_bool()),
+        Some(false),
+        "schema should set additionalProperties=false per MCP spec\nGot:\n{json}"
+    );
+    println!("[OK] GetIndexInfoRequest schema is MCP-spec compliant and OpenAI-compatible.");
 }
