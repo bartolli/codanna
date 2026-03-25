@@ -41,6 +41,12 @@ curl -fsSL --proto '=https' --tlsv1.2 https://install.codanna.sh | sh
 brew install codanna
 ```
 
+### Or via Nix
+
+```bash
+nix run github:bartolli/codanna
+```
+
 ### Windows (PowerShell)
 ```powershell
 irm https://raw.githubusercontent.com/bartolli/codanna/main/scripts/install.ps1 | iex

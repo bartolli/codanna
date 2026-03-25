@@ -37,6 +37,8 @@ pnpm-debug.log*
 .pnpm-debug.log*
 
 # Common build outputs
+result
+result-*
 dist/
 **/dist/
 build/
