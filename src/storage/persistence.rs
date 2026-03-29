@@ -4,7 +4,7 @@
 //! All actual data is stored in Tantivy.
 
 use crate::indexing::facade::IndexFacade;
-use crate::storage::{DataSource, IndexMetadata};
+use crate::storage::{DataSource, DocumentIndex, IndexMetadata};
 use crate::{IndexError, IndexResult, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +42,19 @@ impl IndexPersistence {
     #[must_use = "Load errors should be handled appropriately"]
     pub fn load_facade_lite(&self, settings: Arc<Settings>) -> IndexResult<IndexFacade> {
         self.load_facade_impl(settings, false)
+    }
+
+    fn persist_metadata(&self, metadata: &IndexMetadata) -> IndexResult<()> {
+        metadata.save(&self.base_path)?;
+
+        if let Err(err) = self.update_project_registry(metadata) {
+            tracing::debug!(
+                target: "persistence",
+                "Skipped project registry update: {err}"
+            );
+        }
+
+        Ok(())
     }
 
     /// Internal implementation with configurable semantic search loading
@@ -125,6 +138,22 @@ impl IndexPersistence {
             }
         } else {
             tracing::debug!("[persistence] skipping semantic search (lite mode)");
+            let semantic_path = self.semantic_path();
+            if semantic_path.join("metadata.json").exists() {
+                match facade.load_semantic_metadata_snapshot(&semantic_path) {
+                    Ok(true) => {
+                        tracing::debug!(
+                            "[persistence] loaded semantic metadata snapshot for lite facade"
+                        );
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "[persistence] failed to load semantic metadata snapshot: {e}"
+                        );
+                    }
+                }
+            }
         }
 
         // Restore indexed_paths from metadata
@@ -165,15 +194,7 @@ impl IndexPersistence {
             timestamp: crate::indexing::get_utc_timestamp(),
         };
 
-        metadata.save(&self.base_path)?;
-
-        // Update project registry with latest metadata
-        if let Err(err) = self.update_project_registry(&metadata) {
-            tracing::debug!(
-                target: "persistence",
-                "Skipped project registry update: {err}"
-            );
-        }
+        self.persist_metadata(&metadata)?;
 
         // Save semantic search if enabled
         if facade.has_semantic_search() {
@@ -188,6 +209,27 @@ impl IndexPersistence {
         }
 
         Ok(())
+    }
+
+    /// Save metadata for a raw document index without constructing a facade.
+    #[must_use = "Save errors should be handled to ensure data is persisted"]
+    pub fn save_document_index_metadata(
+        &self,
+        index: &DocumentIndex,
+        indexed_paths: Vec<PathBuf>,
+    ) -> IndexResult<()> {
+        let mut metadata =
+            IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
+
+        metadata.update_counts(index.count_symbols()? as u32, index.count_files()? as u32);
+        metadata.update_indexed_paths(indexed_paths);
+        metadata.data_source = DataSource::Tantivy {
+            path: self.base_path.join("tantivy"),
+            doc_count: index.document_count()?,
+            timestamp: crate::indexing::get_utc_timestamp(),
+        };
+
+        self.persist_metadata(&metadata)
     }
 
     /// Check if an index exists
@@ -297,6 +339,8 @@ impl IndexPersistence {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::semantic::SemanticMetadata;
+    use crate::storage::DocumentIndex;
     use tempfile::TempDir;
 
     /// Check if semantic data exists (test helper)
@@ -340,5 +384,38 @@ mod tests {
 
         // Now has semantic data
         assert!(has_semantic_data(&persistence));
+    }
+
+    #[test]
+    fn test_load_facade_lite_preserves_semantic_metadata_snapshot() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = IndexPersistence::new(temp_dir.path().to_path_buf());
+
+        let settings = Settings {
+            index_path: temp_dir.path().to_path_buf(),
+            ..Settings::default()
+        };
+        DocumentIndex::new(temp_dir.path().join("tantivy"), &settings).unwrap();
+
+        let semantic_path = temp_dir.path().join("semantic");
+        std::fs::create_dir_all(&semantic_path).unwrap();
+        let metadata =
+            SemanticMetadata::new_remote("snowflake-arctic-embed:latest".to_string(), 1024, 42);
+        metadata.save(&semantic_path).unwrap();
+
+        let loaded = persistence.load_facade_lite(Arc::new(settings)).unwrap();
+
+        let snapshot = loaded
+            .get_semantic_metadata()
+            .expect("snapshot should load in lite mode");
+
+        assert_eq!(snapshot.backend, metadata.backend);
+        assert_eq!(snapshot.model_name, metadata.model_name);
+        assert_eq!(snapshot.dimension, metadata.dimension);
+        assert_eq!(
+            loaded.semantic_search_embedding_count(),
+            metadata.embedding_count
+        );
+        assert!(!loaded.has_semantic_search());
     }
 }

@@ -74,11 +74,13 @@ pub fn strip_extension<'a>(path_str: &'a str, extensions: &[&str]) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_normalize_relative_path() {
         let file_path = Path::new("src/foo/bar.rs");
-        let workspace_root = Path::new("/home/user/workspace");
+        let temp_dir = TempDir::new().unwrap();
+        let workspace_root = temp_dir.path();
 
         let result = normalize_for_module_path(file_path, workspace_root);
 
@@ -88,10 +90,11 @@ mod tests {
 
     #[test]
     fn test_normalize_absolute_path() {
-        let file_path = Path::new("/home/user/workspace/src/foo/bar.rs");
-        let workspace_root = Path::new("/home/user/workspace");
+        let temp_dir = TempDir::new().unwrap();
+        let workspace_root = temp_dir.path();
+        let file_path = workspace_root.join("src/foo/bar.rs");
 
-        let result = normalize_for_module_path(file_path, workspace_root);
+        let result = normalize_for_module_path(&file_path, workspace_root);
 
         assert_eq!(result, file_path);
     }

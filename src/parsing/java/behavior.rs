@@ -963,16 +963,13 @@ mod tests {
         fs::write(&pom_path, pom_content).unwrap();
 
         // Create settings and build provider cache
-        let settings_content = format!(
-            r#"
-[languages.java]
-enabled = true
-config_files = ["{}"]
-"#,
-            pom_path.display()
-        );
-
-        let settings: crate::config::Settings = toml::from_str(&settings_content).unwrap();
+        let mut settings = crate::config::Settings::default();
+        let java_settings = settings
+            .languages
+            .get_mut("java")
+            .expect("java language config should exist");
+        java_settings.enabled = true;
+        java_settings.config_files = vec![pom_path.clone()];
 
         // Save original directory to restore later
         let original_dir = std::env::current_dir().unwrap();
