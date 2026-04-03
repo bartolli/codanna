@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Post or update status comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const owner = context.repo.owner;
