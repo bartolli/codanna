@@ -7,7 +7,6 @@ pub mod benchmark;
 pub mod directories;
 pub mod documents;
 pub mod index;
-pub mod index_parallel;
 pub mod init;
 pub mod mcp;
 pub mod parse;

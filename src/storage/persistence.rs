@@ -4,7 +4,7 @@
 //! All actual data is stored in Tantivy.
 
 use crate::indexing::facade::IndexFacade;
-use crate::storage::{DataSource, DocumentIndex, IndexMetadata};
+use crate::storage::{DataSource, IndexMetadata};
 use crate::{IndexError, IndexResult, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -209,27 +209,6 @@ impl IndexPersistence {
         }
 
         Ok(())
-    }
-
-    /// Save metadata for a raw document index without constructing a facade.
-    #[must_use = "Save errors should be handled to ensure data is persisted"]
-    pub fn save_document_index_metadata(
-        &self,
-        index: &DocumentIndex,
-        indexed_paths: &[PathBuf],
-    ) -> IndexResult<()> {
-        let mut metadata =
-            IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
-
-        metadata.update_counts(index.count_symbols()? as u32, index.count_files()? as u32);
-        metadata.update_indexed_paths(indexed_paths.to_vec());
-        metadata.data_source = DataSource::Tantivy {
-            path: self.base_path.join("tantivy"),
-            doc_count: index.document_count()?,
-            timestamp: crate::indexing::get_utc_timestamp(),
-        };
-
-        self.persist_metadata(&metadata)
     }
 
     /// Check if an index exists

@@ -264,7 +264,6 @@ async fn main() {
             | Commands::Plugin { .. }
             | Commands::Documents { .. }
             | Commands::Profile { .. }
-            | Commands::IndexParallel { .. }
     );
 
     // Initialize project resolution providers (only if needed)
@@ -785,26 +784,6 @@ async fn main() {
 
         Commands::Profile { action } => {
             codanna::cli::commands::profile::run(action);
-        }
-
-        Commands::IndexParallel {
-            paths,
-            force,
-            no_progress,
-        } => {
-            use codanna::cli::commands::index_parallel::{
-                IndexParallelArgs, run as run_index_parallel,
-            };
-            // Progress enabled by default from settings, --no-progress overrides
-            let progress = config.indexing.show_progress && !no_progress;
-            run_index_parallel(
-                IndexParallelArgs {
-                    paths,
-                    force,
-                    progress,
-                },
-                &config,
-            );
         }
     }
 }

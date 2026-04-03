@@ -188,11 +188,11 @@ fn mcp_get_index_info_reports_remote_semantic_status_and_model() {
 
     let (index_code, index_stdout, index_stderr) = run_cli(
         workspace.path(),
-        &["index-parallel", "src", "--force", "--no-progress"],
+        &["index", "src", "--force", "--no-progress"],
     );
     assert_eq!(
         index_code, 0,
-        "remote index-parallel should succeed\nstdout:\n{index_stdout}\nstderr:\n{index_stderr}"
+        "remote index should succeed\nstdout:\n{index_stdout}\nstderr:\n{index_stderr}"
     );
     assert!(
         index_stderr.contains("backend: remote, model: snowflake-arctic-embed:latest"),
@@ -206,7 +206,7 @@ fn mcp_get_index_info_reports_remote_semantic_status_and_model() {
     let index_meta_path = workspace.path().join(".codanna/index/index.meta");
     assert!(
         index_meta_path.exists(),
-        "index-parallel should persist index metadata at {}\nstdout:\n{index_stdout}\nstderr:\n{index_stderr}",
+        "index should persist index metadata at {}\nstdout:\n{index_stdout}\nstderr:\n{index_stderr}",
         index_meta_path.display()
     );
 
