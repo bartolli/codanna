@@ -22,7 +22,7 @@ jobs:
 
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Checkout the PR head so we can push back to it
           ref: ${{ github.head_ref }}
@@ -33,6 +33,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
       - name: Configure git
         run: |

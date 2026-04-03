@@ -16,7 +16,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Extract version
         id: version
@@ -61,7 +61,7 @@ jobs:
       version: ${{ needs.info.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure toolchain
         run: |
@@ -120,7 +120,7 @@ jobs:
           sha512sum "$dst.zip" | cut -d' ' -f1 > "$dst.zip.sha512"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           retention-days: 1
@@ -138,9 +138,9 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
@@ -184,7 +184,7 @@ jobs:
           } > dist-manifest.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.info.outputs.version }}
           name: v${{ needs.info.outputs.version }}

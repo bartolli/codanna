@@ -3,14 +3,14 @@ on:
   # Only run on PRs to main
   pull_request:
     branches: [main]
-  
+
   # Manual trigger for testing
   workflow_dispatch:
-  
+
   # Nightly run to catch issues early
   schedule:
     - cron: '0 0 * * *'  # Midnight UTC daily
-  
+
   # Run on version tags
   push:
     tags:
@@ -26,71 +26,73 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Fail if takes longer than 30 minutes
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@v6
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          cache-all-crates: true
+
       # Fast checks first
       - name: Check formatting
         run: cargo fmt --check
-      
+
       - name: Clippy with project rules
         run: cargo clippy --all-targets --all-features -- -D warnings
-      
-      # Build with different feature combinations
-      - name: Build (default features)
-        run: cargo build --verbose
-      
-      - name: Build (no default features)
-        run: cargo build --verbose --no-default-features
-      
-      - name: Build (all features)
-        run: cargo build --verbose --all-features
-      
-      # Build debug binary for integration tests
-      - name: Build debug binary
-        run: cargo build --bin codanna
 
-      # Run tests
+      # Verify no-default-features compiles (check only, no linking needed)
+      - name: Check no-default-features
+        run: cargo check --no-default-features
+
+      # Run tests (implicitly builds debug binary and all test targets)
       - name: Run tests
         run: cargo test --verbose
-      
-      # Build release binary once for CLI tests
-      - name: Build release binary
-        run: cargo build --release
-      
-      # Cache the binary path for subsequent steps
-      - name: Set binary path
-        run: echo "CODANNA_BIN=./target/release/codanna" >> $GITHUB_ENV
-      
-      # Codanna-specific checks
-      - name: Check tree-sitter queries compile
-        run: |
-          # Ensure all tree-sitter queries are valid
-          cargo test --test "*" -- --nocapture | grep -i "query" || true
-      
+
+      # CLI smoke tests using the debug binary built by cargo test
       - name: Verify CLI commands
         run: |
-          # Test basic CLI functionality using the built binary
-          $CODANNA_BIN --help
-          $CODANNA_BIN index --help
-          $CODANNA_BIN retrieve --help
-      
-      # Performance checks
-      - name: Check binary size
-        run: |
-          ls -lh $CODANNA_BIN
-          size=$(stat -c%s $CODANNA_BIN 2>/dev/null || stat -f%z $CODANNA_BIN)
-          echo "Binary size: $size bytes"
-          if [ $size -gt 50000000 ]; then  # 50MB limit
-            echo "::warning::Binary larger than 50MB"
-          fi
-      
+          ./target/debug/codanna --help
+          ./target/debug/codanna index --help
+          ./target/debug/codanna retrieve --help
+
       # Documentation
       - name: Check docs build
         run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
+
+  # Release build and size check -- only on version tags
+  release-check:
+    name: Release Build Check
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release"
+          cache-on-failure: true
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Check binary size
+        run: |
+          ls -lh target/release/codanna
+          size=$(stat -c%s target/release/codanna 2>/dev/null || stat -f%z target/release/codanna)
+          echo "Binary size: $size bytes"
+          if [ $size -gt 50000000 ]; then  # 50MB limit
+            echo "::warning::Binary larger than 50MB"
+          fi
