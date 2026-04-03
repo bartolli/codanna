@@ -31,11 +31,6 @@ cargo clippy --all-targets --all-features -- -D warnings
 echo "✓ Clippy check passed"
 
 echo ""
-echo "3️⃣ Compile check (all features)..."
-cargo check --all-features
-echo "✓ Compile check passed"
-
-echo ""
 echo "✅ Quick checks passed!"
 echo ""
 echo "💡 Tips:"
