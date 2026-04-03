@@ -216,13 +216,13 @@ impl IndexPersistence {
     pub fn save_document_index_metadata(
         &self,
         index: &DocumentIndex,
-        indexed_paths: Vec<PathBuf>,
+        indexed_paths: &[PathBuf],
     ) -> IndexResult<()> {
         let mut metadata =
             IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
 
         metadata.update_counts(index.count_symbols()? as u32, index.count_files()? as u32);
-        metadata.update_indexed_paths(indexed_paths);
+        metadata.update_indexed_paths(indexed_paths.to_vec());
         metadata.data_source = DataSource::Tantivy {
             path: self.base_path.join("tantivy"),
             doc_count: index.document_count()?,

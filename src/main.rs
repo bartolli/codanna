@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use codanna::cli::{Cli, Commands, RetrieveQuery};
-use codanna::indexing::facade::{IndexFacade, resolve_remote_model_name};
+use codanna::indexing::facade::{IndexFacade, format_semantic_status};
 use codanna::project_resolver::{
     providers::{
         csharp::CSharpProvider, go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider,
@@ -414,20 +414,8 @@ async fn main() {
             if let Err(e) = idx.enable_semantic_search() {
                 eprintln!("Warning: Failed to enable semantic search: {e}");
             } else {
-                let is_remote = config.semantic_search.remote_url.is_some()
-                    || std::env::var("CODANNA_EMBED_URL").is_ok();
-                if is_remote {
-                    eprintln!(
-                        "Semantic search enabled (backend: remote, model: {}, threshold: {})",
-                        resolve_remote_model_name(&config.semantic_search),
-                        config.semantic_search.threshold
-                    );
-                } else {
-                    eprintln!(
-                        "Semantic search enabled (model: {}, threshold: {})",
-                        config.semantic_search.model, config.semantic_search.threshold
-                    );
-                }
+                let status = format_semantic_status(&config.semantic_search);
+                eprintln!("{status}");
             }
         }
     }

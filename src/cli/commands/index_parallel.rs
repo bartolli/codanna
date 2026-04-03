@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::IndexPersistence;
 use crate::config::Settings;
-use crate::indexing::facade::{build_embedding_backend, resolve_remote_model_name};
+use crate::indexing::facade::{
+    build_embedding_backend, format_semantic_status, resolve_remote_model_name,
+};
 use crate::indexing::pipeline::{IncrementalStats, Phase2Stats, Pipeline, PipelineConfig};
 use crate::io::status_line::{ProgressBar, ProgressBarOptions, ProgressBarStyle};
 use crate::semantic::{EmbeddingBackend, SemanticSearchError, SimpleSemanticSearch};
@@ -123,8 +125,7 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
     }
 
     let persistence = IndexPersistence::new(settings.index_path.clone());
-    if let Err(e) = persistence.save_document_index_metadata(index.as_ref(), paths_to_index.clone())
-    {
+    if let Err(e) = persistence.save_document_index_metadata(index.as_ref(), &paths_to_index) {
         tracing::error!(target: "pipeline", "Failed to persist index metadata: {e}");
         std::process::exit(1);
     }
@@ -132,24 +133,6 @@ pub fn run(args: IndexParallelArgs, settings: &Settings) {
     tracing::info!(target: "pipeline", "Index saved to: {}", index_path.display());
     if semantic.is_some() {
         tracing::info!(target: "pipeline", "Embeddings saved to: {}", semantic_path.display());
-    }
-}
-
-fn emit_semantic_status(settings: &Settings) {
-    let is_remote =
-        std::env::var("CODANNA_EMBED_URL").is_ok() || settings.semantic_search.remote_url.is_some();
-
-    if is_remote {
-        eprintln!(
-            "Semantic search enabled (backend: remote, model: {}, threshold: {})",
-            resolve_remote_model_name(&settings.semantic_search),
-            settings.semantic_search.threshold
-        );
-    } else {
-        eprintln!(
-            "Semantic search enabled (model: {}, threshold: {})",
-            settings.semantic_search.model, settings.semantic_search.threshold
-        );
     }
 }
 
@@ -249,7 +232,8 @@ fn create_semantic_search(
                     target: "pipeline",
                     "Created new semantic search with model: {effective_model}"
                 );
-                emit_semantic_status(settings);
+                let status = format_semantic_status(&settings.semantic_search);
+                eprintln!("{status}");
                 Some(Arc::new(Mutex::new(s)))
             }
             Err(e) => {

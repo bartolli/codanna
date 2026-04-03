@@ -1250,6 +1250,20 @@ pub fn resolve_remote_model_name(cfg: &crate::config::SemanticSearchConfig) -> S
         .unwrap_or_else(|| "text-embedding-ada-002".to_string())
 }
 
+/// Format a human-readable semantic search status line for CLI output.
+pub fn format_semantic_status(cfg: &crate::config::SemanticSearchConfig) -> String {
+    let is_remote = std::env::var("CODANNA_EMBED_URL").is_ok() || cfg.remote_url.is_some();
+    let threshold = cfg.threshold;
+
+    if is_remote {
+        let model = resolve_remote_model_name(cfg);
+        format!("Semantic search enabled (backend: remote, model: {model}, threshold: {threshold})")
+    } else {
+        let model = &cfg.model;
+        format!("Semantic search enabled (model: {model}, threshold: {threshold})")
+    }
+}
+
 pub fn build_embedding_backend(
     cfg: &crate::config::SemanticSearchConfig,
 ) -> FacadeResult<EmbeddingBackend> {

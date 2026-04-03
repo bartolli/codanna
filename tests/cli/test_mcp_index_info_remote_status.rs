@@ -75,10 +75,9 @@ fn spawn_embedding_server(max_requests: usize, dimension: usize) -> String {
                 .collect();
 
             let response_body = json!({ "data": data }).to_string();
+            let content_length = response_body.len();
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response_body.len(),
-                response_body
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n{response_body}"
             );
             let _ = stream.write_all(response.as_bytes());
         }
