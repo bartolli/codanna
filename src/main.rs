@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use codanna::cli::{Cli, Commands, RetrieveQuery};
-use codanna::indexing::facade::IndexFacade;
+use codanna::indexing::facade::{IndexFacade, format_semantic_status};
 use codanna::project_resolver::{
     providers::{
         csharp::CSharpProvider, go::GoProvider, java::JavaProvider, javascript::JavaScriptProvider,
@@ -414,10 +414,8 @@ async fn main() {
             if let Err(e) = idx.enable_semantic_search() {
                 eprintln!("Warning: Failed to enable semantic search: {e}");
             } else {
-                eprintln!(
-                    "Semantic search enabled (model: {}, threshold: {})",
-                    config.semantic_search.model, config.semantic_search.threshold
-                );
+                let status = format_semantic_status(&config.semantic_search);
+                eprintln!("{status}");
             }
         }
     }

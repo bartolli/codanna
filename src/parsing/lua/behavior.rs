@@ -250,7 +250,7 @@ impl LanguageBehavior for LuaBehavior {
 mod tests {
     use super::*;
     use crate::Visibility;
-    use std::path::Path;
+    use tempfile::TempDir;
 
     #[test]
     fn test_module_separator() {
@@ -261,18 +261,19 @@ mod tests {
     #[test]
     fn test_module_path_from_file() {
         let behavior = LuaBehavior::new();
-        let project_root = Path::new("/home/user/project");
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path();
         let extensions = &["lua"];
 
-        let file_path = Path::new("/home/user/project/lib/utils.lua");
+        let file_path = project_root.join("lib/utils.lua");
         assert_eq!(
-            behavior.module_path_from_file(file_path, project_root, extensions),
+            behavior.module_path_from_file(&file_path, project_root, extensions),
             Some("lib.utils".to_string())
         );
 
-        let file_path = Path::new("/home/user/project/main.lua");
+        let file_path = project_root.join("main.lua");
         assert_eq!(
-            behavior.module_path_from_file(file_path, project_root, extensions),
+            behavior.module_path_from_file(&file_path, project_root, extensions),
             Some("main".to_string())
         );
     }

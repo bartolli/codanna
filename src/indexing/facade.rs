@@ -96,6 +96,10 @@ pub struct IndexFacade {
     /// Set to true when load_semantic_search fails with DimensionMismatch so
     /// hot-reload and other callers do not retry on every reload cycle.
     semantic_incompatible: bool,
+
+    /// Persisted semantic metadata for status/reporting when semantic search
+    /// is not loaded into memory (for example, lite facade loads).
+    semantic_metadata_snapshot: Option<crate::semantic::SemanticMetadata>,
 }
 
 impl IndexFacade {
@@ -126,6 +130,7 @@ impl IndexFacade {
             indexed_paths: HashSet::new(),
             index_base,
             semantic_incompatible: false,
+            semantic_metadata_snapshot: None,
         })
     }
 
@@ -151,6 +156,7 @@ impl IndexFacade {
             indexed_paths: HashSet::new(),
             index_base,
             semantic_incompatible: false,
+            semantic_metadata_snapshot: None,
         }
     }
 
@@ -201,6 +207,7 @@ impl IndexFacade {
         };
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+        self.semantic_metadata_snapshot = self.get_semantic_metadata();
         self.embedding_pool = Some(backend);
 
         Ok(())
@@ -289,6 +296,7 @@ impl IndexFacade {
                     }
 
                     self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
+                    self.semantic_metadata_snapshot = self.get_semantic_metadata();
                     return Ok(true);
                 }
                 Err(SemanticSearchError::DimensionMismatch {
@@ -324,6 +332,18 @@ impl IndexFacade {
         Ok(false)
     }
 
+    /// Load persisted semantic metadata without initializing the semantic backend.
+    pub fn load_semantic_metadata_snapshot(&mut self, path: &Path) -> FacadeResult<bool> {
+        if !path.join("metadata.json").exists() {
+            self.semantic_metadata_snapshot = None;
+            return Ok(false);
+        }
+
+        let metadata = crate::semantic::SemanticMetadata::load(path)?;
+        self.semantic_metadata_snapshot = Some(metadata);
+        Ok(true)
+    }
+
     /// Ensure embedding backend is initialized for generating new embeddings.
     ///
     /// Called lazily by methods that need to compute embeddings (reindexing, watcher).
@@ -343,6 +363,11 @@ impl IndexFacade {
         self.semantic_search
             .as_ref()
             .map(|s| s.lock().map(|sem| sem.embedding_count()).unwrap_or(0))
+            .or_else(|| {
+                self.semantic_metadata_snapshot
+                    .as_ref()
+                    .map(|m| m.embedding_count)
+            })
             .unwrap_or(0)
     }
 
@@ -351,6 +376,7 @@ impl IndexFacade {
         self.semantic_search
             .as_ref()
             .and_then(|s| s.lock().ok().and_then(|sem| sem.metadata().cloned()))
+            .or_else(|| self.semantic_metadata_snapshot.clone())
     }
 
     // =========================================================================
@@ -1222,6 +1248,20 @@ pub fn resolve_remote_model_name(cfg: &crate::config::SemanticSearchConfig) -> S
         .ok()
         .or_else(|| cfg.remote_model.clone())
         .unwrap_or_else(|| "text-embedding-ada-002".to_string())
+}
+
+/// Format a human-readable semantic search status line for CLI output.
+pub fn format_semantic_status(cfg: &crate::config::SemanticSearchConfig) -> String {
+    let is_remote = std::env::var("CODANNA_EMBED_URL").is_ok() || cfg.remote_url.is_some();
+    let threshold = cfg.threshold;
+
+    if is_remote {
+        let model = resolve_remote_model_name(cfg);
+        format!("Semantic search enabled (backend: remote, model: {model}, threshold: {threshold})")
+    } else {
+        let model = &cfg.model;
+        format!("Semantic search enabled (model: {model}, threshold: {threshold})")
+    }
 }
 
 pub fn build_embedding_backend(
