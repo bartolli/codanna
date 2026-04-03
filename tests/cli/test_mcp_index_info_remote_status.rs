@@ -160,12 +160,21 @@ fn write_settings(workspace: &Path, base_url: &str) {
     let codanna_dir = workspace.join(".codanna");
     std::fs::create_dir_all(&codanna_dir).expect("create .codanna");
 
+    // Use canonicalized absolute paths so metadata persisted by `index`
+    // matches what settings.toml declares -- avoids sync mismatch on status reads.
+    // On macOS, TempDir returns /var/... but canonicalize resolves to /private/var/...
+    let src_abs = workspace
+        .join("src")
+        .canonicalize()
+        .expect("src dir should exist and be resolvable");
+    let src_path = src_abs.to_str().expect("src path should be valid UTF-8");
+
     let settings = format!(
         r#"
 index_path = ".codanna/index"
 
 [indexing]
-indexed_paths = ["src"]
+indexed_paths = ["{src_path}"]
 
 [semantic_search]
 enabled = true
