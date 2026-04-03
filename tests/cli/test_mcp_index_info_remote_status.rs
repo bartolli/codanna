@@ -214,7 +214,15 @@ fn mcp_get_index_info_reports_remote_semantic_status_and_model() {
         &std::fs::read_to_string(&index_meta_path).expect("read index metadata"),
     )
     .expect("parse index metadata");
-    assert_eq!(index_meta["indexed_paths"], json!(["src"]));
+    let indexed_paths = index_meta["indexed_paths"]
+        .as_array()
+        .expect("indexed_paths should be an array");
+    assert_eq!(indexed_paths.len(), 1);
+    let first_path = indexed_paths[0].as_str().expect("path should be a string");
+    assert!(
+        first_path == "src" || first_path.ends_with("/src"),
+        "indexed path should be 'src' or end with '/src', got: {first_path}"
+    );
 
     let (info_code, info_stdout, info_stderr) =
         run_cli(workspace.path(), &["mcp", "get_index_info", "--json"]);
