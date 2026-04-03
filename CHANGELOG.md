@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.19] - 2026-04-03
+
+### Fixed
+
+- `mcp get_index_info` reports persisted remote semantic metadata in lite facade loads (PR #98)
+- Remote embedding model name shown instead of local default in status messages (PR #98)
+- `index-parallel` persists `index.meta` so MCP status reads do not trigger unnecessary sync (PR #98)
+- Windows test portability: Java, Lua, and path tests use TempDir instead of hardcoded Unix paths (PR #98)
+
+### Changed
+
+- `index-parallel` command retired; `index` uses the same pipeline path
+- `format_semantic_status()` shared helper for remote/local status formatting
+- GitHub Actions upgraded to Node 24: checkout v6, upload-artifact v7, download-artifact v8, github-script v8
+- `softprops/action-gh-release` v1 to v2 (Node 20, no Node 24 release yet)
+- `Swatinem/rust-cache@v2` in full-test, quick-check, and autofix workflows
+- full-test.yml: redundant build steps removed, release build conditional on tags only
+- Local CI scripts synced with updated workflows
+
+### Removed
+
+- `index-parallel` CLI command and `save_document_index_metadata` from IndexPersistence
+
 ## [0.9.18] - 2026-03-25
 
 ### Added
