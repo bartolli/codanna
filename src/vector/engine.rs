@@ -169,7 +169,7 @@ impl VectorSearchEngine {
         }
 
         // Sort by score (highest first) and take top k
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|c| std::cmp::Reverse(c.1));
         candidates.truncate(k);
 
         Ok(candidates)

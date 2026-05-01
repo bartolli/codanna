@@ -1120,9 +1120,9 @@ impl TypeScriptParser {
                     }
                 }
             }
-            "interface_declaration" => {
+            "interface_declaration"
                 // Only process interface extends if we're looking for extends relationships
-                if extends_only {
+                if extends_only => {
                     if let Some(interface_name_node) = node.child_by_field_name("name") {
                         let interface_name = &code[interface_name_node.byte_range()];
 
@@ -1158,7 +1158,6 @@ impl TypeScriptParser {
                     }
                 }
                 // When extends_only = false, skip interfaces entirely since they don't implement
-            }
             _ => {}
         }
 
@@ -1181,10 +1180,10 @@ impl TypeScriptParser {
         let mut cursor = heritage_node.walk();
         for child in heritage_node.children(&mut cursor) {
             match child.kind() {
-                "extends_clause" => {
+                "extends_clause"
                     // Process extends clause ONLY when looking for extends relationships
                     // This maintains separation between extends and implements
-                    if extends_only {
+                    if extends_only => {
                         let mut extends_cursor = child.walk();
                         for extends_child in child.children(&mut extends_cursor) {
                             if extends_child.kind() == "type_identifier"
@@ -1205,10 +1204,9 @@ impl TypeScriptParser {
                             }
                         }
                     }
-                }
-                "implements_clause" => {
+                "implements_clause"
                     // Only process implements clause when NOT looking for extends only
-                    if !extends_only {
+                    if !extends_only => {
                         // Skip "implements" keyword, get all the interfaces
                         let mut impl_cursor = child.walk();
                         for impl_child in child.children(&mut impl_cursor) {
@@ -1231,7 +1229,6 @@ impl TypeScriptParser {
                             }
                         }
                     }
-                }
                 _ => {}
             }
         }

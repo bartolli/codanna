@@ -72,7 +72,7 @@ impl<G: EmbeddingGenerator> EmbedStage<G> {
 
             // Create (VectorId, Vec<f32>) pairs
             let mut vector_pairs = Vec::with_capacity(chunk.len());
-            for ((symbol_id, _), embedding) in chunk.iter().zip(embeddings.into_iter()) {
+            for ((symbol_id, _), embedding) in chunk.iter().zip(embeddings) {
                 // Map SymbolId to VectorId (same u32 value)
                 if let Some(vector_id) = VectorId::new(symbol_id.value()) {
                     vector_pairs.push((vector_id, embedding));

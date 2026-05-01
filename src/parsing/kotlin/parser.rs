@@ -269,10 +269,8 @@ impl KotlinParser {
             let mut param_cursor = child.walk();
             for grandchild in child.children(&mut param_cursor) {
                 match grandchild.kind() {
-                    NODE_TYPE_IDENTIFIER | NODE_SIMPLE_IDENTIFIER => {
-                        if name.is_none() {
-                            name = Some(self.trimmed_text(code, grandchild));
-                        }
+                    NODE_TYPE_IDENTIFIER | NODE_SIMPLE_IDENTIFIER if name.is_none() => {
+                        name = Some(self.trimmed_text(code, grandchild));
                     }
                     NODE_USER_TYPE | NODE_TYPE_REFERENCE | NODE_SIMPLE_USER_TYPE => {
                         constraints.push(self.trimmed_text(code, grandchild));
@@ -907,15 +905,14 @@ impl KotlinParser {
             NODE_PACKAGE_HEADER | "import_list" | "import_header" | "type_alias" => {
                 self.register_node(&node);
             }
-            "infix_expression" => {
+            "infix_expression"
                 // Check for context receiver pattern: context(...) fun name() { }
                 // AST: infix_expression > call_expression("context") + simple_identifier("fun") + call_expression(name + lambda)
                 if self.try_extract_context_receiver_function(
                     node, code, file_id, symbols, counter, context, depth,
-                ) {
+                ) => {
                     return;
                 }
-            }
             _ => {}
         }
 

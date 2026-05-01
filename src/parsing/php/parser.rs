@@ -395,26 +395,24 @@ impl PhpParser {
                 // Check for global constants via define() or global variables
                 if let Some(child) = node.child(0) {
                     match child.kind() {
-                        "function_call_expression" => {
+                        "function_call_expression"
                             // Check if it's a define() call
-                            if self.is_define_call(child, code) && self.is_global_scope(node) {
+                            if self.is_define_call(child, code) && self.is_global_scope(node) => {
                                 if let Some(symbol) =
                                     self.process_define(child, code, file_id, counter)
                                 {
                                     symbols.push(symbol);
                                 }
                             }
-                        }
-                        "assignment_expression" => {
+                        "assignment_expression"
                             // Global variable assignment
-                            if self.is_global_scope(node) {
+                            if self.is_global_scope(node) => {
                                 if let Some(symbol) =
                                     self.process_global_assignment(child, code, file_id, counter)
                                 {
                                     symbols.push(symbol);
                                 }
                             }
-                        }
                         _ => {}
                     }
                 }

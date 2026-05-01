@@ -302,7 +302,7 @@ impl EmbeddingPool {
                 match embeddings_result {
                     Ok(embeddings) => {
                         let mut results = Vec::with_capacity(batch.len());
-                        for (item, embedding) in batch.iter().zip(embeddings.into_iter()) {
+                        for (item, embedding) in batch.iter().zip(embeddings) {
                             let (symbol_id, _, language) = *item;
                             if embedding.len() == self.dimensions {
                                 results.push((*symbol_id, embedding, (*language).to_string()));

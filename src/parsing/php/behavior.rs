@@ -136,7 +136,7 @@ impl LanguageBehavior for PhpBehavior {
                             // Sort paths by length (longest first) to match most specific path
                             // This ensures src/Illuminate/Macroable/ matches before src/Illuminate/
                             let mut sorted_paths: Vec<_> = rules.paths.iter().collect();
-                            sorted_paths.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+                            sorted_paths.sort_by_key(|p| std::cmp::Reverse(p.0.len()));
 
                             // Try each source root to find the matching namespace prefix
                             for (source_root_str, namespace_prefixes) in sorted_paths {
