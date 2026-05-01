@@ -915,9 +915,12 @@ impl DocumentStore {
             }
         }
 
-        // Find removed files
-        for path in self.file_states.keys() {
-            if !current_files.contains(path) {
+        // Find removed files. Scope to the target collection: file_states is a
+        // single map across all collections, so without this filter, indexing
+        // collection B would classify every collection-A file as "removed" and
+        // wipe its chunks (issue #100).
+        for (path, state) in self.file_states.iter() {
+            if state.collection == collection && !current_files.contains(path) {
                 removed.push(path.clone());
             }
         }
@@ -1504,5 +1507,69 @@ mod tests {
         assert!(collections.contains(&"alpha".to_string()));
         assert!(collections.contains(&"beta".to_string()));
         assert!(collections.contains(&"gamma".to_string()));
+    }
+
+    /// Regression for issue #100: indexing collection B must not wipe
+    /// chunks belonging to collection A.
+    #[test]
+    fn test_index_collection_does_not_wipe_other_collections() {
+        use crate::documents::config::{ChunkingConfig, CollectionConfig};
+
+        let store_dir = TempDir::new().unwrap();
+        let alpha_dir = TempDir::new().unwrap();
+        let beta_dir = TempDir::new().unwrap();
+
+        // Write source markdown for two disjoint collections. Body length is
+        // padded above the 200-char min_chunk_chars default so each file
+        // produces at least one chunk.
+        let body = "# Heading\n\n".to_string()
+            + &"This is a sentence used to pad the chunk above the minimum size threshold. "
+                .repeat(8);
+        std::fs::write(alpha_dir.path().join("a1.md"), &body).unwrap();
+        std::fs::write(alpha_dir.path().join("a2.md"), &body).unwrap();
+        std::fs::write(beta_dir.path().join("b1.md"), &body).unwrap();
+        std::fs::write(beta_dir.path().join("b2.md"), &body).unwrap();
+
+        let alpha_cfg = CollectionConfig {
+            paths: vec![alpha_dir.path().to_path_buf()],
+            patterns: vec!["**/*.md".to_string()],
+            ..Default::default()
+        };
+        let beta_cfg = CollectionConfig {
+            paths: vec![beta_dir.path().to_path_buf()],
+            patterns: vec!["**/*.md".to_string()],
+            ..Default::default()
+        };
+        let chunking = ChunkingConfig::default();
+
+        let mut store = DocumentStore::new(store_dir.path(), test_dimension()).unwrap();
+
+        let alpha_stats = store
+            .index_collection("alpha", &alpha_cfg, &chunking)
+            .unwrap();
+        assert!(alpha_stats.files_processed >= 2);
+        assert!(alpha_stats.chunks_created >= 2);
+        assert_eq!(alpha_stats.chunks_removed, 0);
+
+        let alpha_count_before = store.collection_stats("alpha").unwrap().chunk_count;
+        assert!(alpha_count_before >= 2);
+
+        // Indexing beta on a fresh store (only alpha pre-loaded) must not
+        // touch alpha's chunks. Pre-fix: chunks_removed == alpha_count_before.
+        let beta_stats = store
+            .index_collection("beta", &beta_cfg, &chunking)
+            .unwrap();
+        assert!(beta_stats.files_processed >= 2);
+        assert!(beta_stats.chunks_created >= 2);
+        assert_eq!(
+            beta_stats.chunks_removed, 0,
+            "indexing beta wiped {} alpha chunks (issue #100)",
+            beta_stats.chunks_removed
+        );
+
+        let alpha_count_after = store.collection_stats("alpha").unwrap().chunk_count;
+        let beta_count_after = store.collection_stats("beta").unwrap().chunk_count;
+        assert_eq!(alpha_count_after, alpha_count_before, "alpha chunks lost");
+        assert!(beta_count_after >= 2, "beta chunks not persisted");
     }
 }
