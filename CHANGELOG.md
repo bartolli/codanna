@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.20] - 2026-05-01
+
+### Fixed
+
+- `documents index --collection X` no longer wipes chunks belonging to other collections in the same index. `detect_changes` scopes its removed-files scan by `state.collection` so cross-collection paths in `file_states` are not classified as removed (#100).
+- `codanna serve` (stdio) acquires `.codanna/index/serve.lock` on startup; a duplicate invocation against the same index exits 1 with guidance to use HTTP mode for shared access. Stale lockfiles are reclaimed via `sysinfo` PID-liveness check (#101).
+
+### Changed
+
+- Clippy lint pass: `unnecessary_sort_by` to `sort_by_key` with `Reverse` (php behavior, vector engine), `explicit_counter_loop` to `(1..).zip` (python parser), `collapsible_match` arm guards (kotlin/php/typescript parsers), redundant `.into_iter()` after `.zip()` removed (embed pipeline, embedding pool).
+
 ## [0.9.19] - 2026-04-03
 
 ### Fixed
