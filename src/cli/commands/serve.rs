@@ -1,10 +1,85 @@
 //! Serve command - MCP server modes (stdio, HTTP, HTTPS).
 
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
+
+/// PID lockfile guard for stdio MCP servers. Prevents two concurrent
+/// `codanna serve` (stdio) processes from racing the tantivy writer on the
+/// same `.codanna/index/`. Removed automatically on drop. HTTP/HTTPS modes
+/// get exclusion via port binding and do not use this lock.
+struct ServeLockGuard {
+    path: PathBuf,
+}
+
+#[derive(Debug)]
+enum ServeLockError {
+    AlreadyRunning { pid: u32, lock_path: PathBuf },
+    Io(std::io::Error),
+}
+
+impl ServeLockGuard {
+    fn acquire(index_path: &Path) -> Result<Self, ServeLockError> {
+        let lock_path = index_path.join("serve.lock");
+
+        if let Ok(contents) = std::fs::read_to_string(&lock_path)
+            && let Ok(pid) = contents.trim().parse::<u32>()
+            && pid_is_alive(pid)
+        {
+            return Err(ServeLockError::AlreadyRunning { pid, lock_path });
+        }
+
+        // Stale or missing — clear and create exclusively to close the race
+        // window between the liveness check above and the create below.
+        let _ = std::fs::remove_file(&lock_path);
+
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(ServeLockError::Io)?;
+        }
+
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                f.write_all(std::process::id().to_string().as_bytes())
+                    .map_err(ServeLockError::Io)?;
+                Ok(Self { path: lock_path })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let pid = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                    .unwrap_or(0);
+                Err(ServeLockError::AlreadyRunning { pid, lock_path })
+            }
+            Err(e) => Err(ServeLockError::Io(e)),
+        }
+    }
+}
+
+impl Drop for ServeLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn pid_is_alive(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut sys = System::new();
+    let pid = Pid::from_u32(pid);
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    sys.process(pid).is_some()
+}
 
 /// Arguments for the serve command.
 pub struct ServeArgs {
@@ -141,6 +216,36 @@ async fn run_stdio_server(
     watch: bool,
     actual_watch_interval: u64,
 ) {
+    // Acquire the stdio serve lock before doing anything else. Bound at
+    // function scope so the guard removes the lockfile on return / unwind.
+    let _serve_lock = match ServeLockGuard::acquire(&index_path) {
+        Ok(guard) => guard,
+        Err(ServeLockError::AlreadyRunning { pid, lock_path }) => {
+            eprintln!(
+                "Another codanna serve is already running for this index (PID {pid}, lock at {}).",
+                lock_path.display()
+            );
+            eprintln!();
+            eprintln!("Subagents and other AI tools may have spawned a duplicate. To run multiple");
+            eprintln!("clients against one index, use HTTP mode:");
+            eprintln!("  codanna serve --http --watch");
+            eprintln!("HTTP mode supports concurrent clients without lock conflicts.");
+            eprintln!();
+            eprintln!(
+                "If you are sure no other codanna serve is running, remove {} and retry.",
+                lock_path.display()
+            );
+            std::process::exit(1);
+        }
+        Err(ServeLockError::Io(e)) => {
+            eprintln!(
+                "Failed to acquire serve lock under {}: {e}",
+                index_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
     // stdio mode - current implementation
     eprintln!("Starting MCP server on stdio transport");
     if watch {
@@ -308,5 +413,59 @@ pub async fn run_mcp_test(
     {
         eprintln!("MCP test failed: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod serve_lock_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn acquire_writes_pid_and_drop_removes_lock() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("serve.lock");
+
+        {
+            let _guard = ServeLockGuard::acquire(dir.path()).expect("first acquire");
+            let contents = std::fs::read_to_string(&lock_path).unwrap();
+            assert_eq!(contents.trim(), std::process::id().to_string());
+        }
+
+        assert!(
+            !lock_path.exists(),
+            "lockfile should be removed when guard drops"
+        );
+    }
+
+    #[test]
+    fn second_acquire_blocks_when_first_is_alive() {
+        let dir = TempDir::new().unwrap();
+        let _first = ServeLockGuard::acquire(dir.path()).expect("first acquire");
+
+        match ServeLockGuard::acquire(dir.path()) {
+            Err(ServeLockError::AlreadyRunning { pid, .. }) => {
+                assert_eq!(pid, std::process::id());
+            }
+            Ok(_) => panic!("second acquire should have failed"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stale_lock_with_dead_pid_is_overwritten() {
+        let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("serve.lock");
+
+        // PID 0 never refers to a normal process on Unix; sysinfo also reports
+        // it as absent. Use it as a synthetic stale entry.
+        std::fs::write(&lock_path, "0").unwrap();
+        assert!(!pid_is_alive(0), "PID 0 must read as dead for this test");
+
+        let guard = ServeLockGuard::acquire(dir.path()).expect("stale lock should be reclaimed");
+        let contents = std::fs::read_to_string(&lock_path).unwrap();
+        assert_eq!(contents.trim(), std::process::id().to_string());
+        drop(guard);
+        assert!(!lock_path.exists());
     }
 }
