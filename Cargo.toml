@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.9.20"
+version = "0.9.21"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
@@ -122,30 +122,11 @@ axum-server = ["dep:axum-server"]
 rustls = ["dep:rustls"]
 rcgen = ["dep:rcgen"]
 
-# GPU/Hardware Acceleration (requires vendored fastembed in .cargo/config.toml)
-# Upstream fastembed does not expose these features yet.
-# gpu-cuda = ["fastembed/cuda"]
-# gpu-tensorrt = ["fastembed/tensorrt"]
-# gpu-coreml = ["fastembed/coreml"]
-# gpu-directml = ["fastembed/directml"]
-# gpu-openvino = ["fastembed/openvino"]
-# gpu-rocm = ["fastembed/rocm"]
-
 [profile.release]
 # opt-level = 3
 # lto = true
 # codegen-units = 1
 # strip = true
-
-[lints.clippy]
-# Minimal lints - main enforcement via CI with `cargo clippy -- -D warnings`
-# See clippy.toml for behavior configuration (thresholds, etc.)
-uninlined_format_args = "warn"
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("gpu-cuda", "gpu-tensorrt", "gpu-coreml", "gpu-directml", "gpu-openvino", "gpu-rocm"))'
-] }
 
 [[example]]
 name = "simple_progress_demo"

@@ -793,11 +793,10 @@ impl DocumentStore {
 
         let count = searcher.search(&query, &tantivy::collector::Count)?;
 
-        // Count unique files
         let file_count = self
             .file_states
             .values()
-            .filter(|s| !s.chunk_ids.is_empty())
+            .filter(|s| s.collection == name && !s.chunk_ids.is_empty())
             .count();
 
         Ok(CollectionStats {
@@ -1571,5 +1570,47 @@ mod tests {
         let beta_count_after = store.collection_stats("beta").unwrap().chunk_count;
         assert_eq!(alpha_count_after, alpha_count_before, "alpha chunks lost");
         assert!(beta_count_after >= 2, "beta chunks not persisted");
+    }
+
+    #[test]
+    fn test_collection_stats_file_count_is_scoped() {
+        use crate::documents::config::{ChunkingConfig, CollectionConfig};
+
+        let store_dir = TempDir::new().unwrap();
+        let alpha_dir = TempDir::new().unwrap();
+        let beta_dir = TempDir::new().unwrap();
+
+        let body = "# Heading\n\n".to_string()
+            + &"This is a sentence used to pad the chunk above the minimum size threshold. "
+                .repeat(8);
+        std::fs::write(alpha_dir.path().join("a1.md"), &body).unwrap();
+        std::fs::write(alpha_dir.path().join("a2.md"), &body).unwrap();
+        std::fs::write(beta_dir.path().join("b1.md"), &body).unwrap();
+        std::fs::write(beta_dir.path().join("b2.md"), &body).unwrap();
+
+        let alpha_cfg = CollectionConfig {
+            paths: vec![alpha_dir.path().to_path_buf()],
+            patterns: vec!["**/*.md".to_string()],
+            ..Default::default()
+        };
+        let beta_cfg = CollectionConfig {
+            paths: vec![beta_dir.path().to_path_buf()],
+            patterns: vec!["**/*.md".to_string()],
+            ..Default::default()
+        };
+        let chunking = ChunkingConfig::default();
+
+        let mut store = DocumentStore::new(store_dir.path(), test_dimension()).unwrap();
+        store
+            .index_collection("alpha", &alpha_cfg, &chunking)
+            .unwrap();
+        store
+            .index_collection("beta", &beta_cfg, &chunking)
+            .unwrap();
+
+        let alpha = store.collection_stats("alpha").unwrap();
+        let beta = store.collection_stats("beta").unwrap();
+        assert_eq!(alpha.file_count, 2, "alpha file_count not scoped");
+        assert_eq!(beta.file_count, 2, "beta file_count not scoped");
     }
 }

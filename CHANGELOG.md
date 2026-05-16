@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.21] - 2026-05-15
+
+### Fixed
+
+- `documents stats <collection>` returns per-collection file count. `collection_stats` filters `file_states` by `state.collection == name`; prior count summed all collections (#103).
+
+### Removed
+
+- `gpu-*` feature scaffolding (`gpu-cuda`, `gpu-tensorrt`, `gpu-coreml`, `gpu-directml`, `gpu-openvino`, `gpu-rocm`): commented `Cargo.toml` entries, matching `[lints.rust] unexpected_cfgs` `check-cfg`, `tests/semantic/gpu_*.rs`, `tests/semantic_tests.rs` gateway. Upstream `fastembed = "=5.6.0"` exposes none of these features.
+- `[lints.clippy]` table. CI runs `cargo clippy --all-targets --all-features -- -D warnings`; `uninlined_format_args` is a default clippy lint at `warn`, so `-D warnings` denies it without a table entry. `clippy.toml` header references the CI command.
+
 ## [0.9.20] - 2026-05-01
 
 ### Fixed

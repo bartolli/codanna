@@ -1,8 +1,7 @@
 # Clippy Behavior Configuration
-# This file configures HOW clippy behaves (thresholds, allowed patterns, etc.)
-# For WHICH lints are enabled, see:
-#   - Cargo.toml [lints.clippy] section (project defaults)
-#   - CI runs with --all-targets -- -D warnings (strict enforcement)
+# This file configures HOW clippy behaves (thresholds, allowed patterns, etc.).
+# Lint selection comes from clippy's default set; CI enforces with
+# `cargo clippy --all-targets --all-features -- -D warnings`.
 
 # Minimum supported Rust version
 # Since we use edition 2024, we require at least Rust 1.85
