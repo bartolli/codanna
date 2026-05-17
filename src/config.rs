@@ -1436,6 +1436,7 @@ enabled = true
     }
 
     #[test]
+    #[ignore = "mutates process CWD via set_current_dir; races with subprocess tests under parallel execution; run via cargo test -- --ignored --test-threads=1"]
     fn test_layered_config() {
         let temp_dir = TempDir::new().unwrap();
         let original_dir = std::env::current_dir().unwrap();

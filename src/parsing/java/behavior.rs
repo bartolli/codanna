@@ -946,6 +946,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "mutates process CWD via set_current_dir; races with subprocess tests under parallel execution; run via cargo test -- --ignored --test-threads=1"]
     fn test_module_path_from_file_uses_provider() {
         use crate::project_resolver::provider::ProjectResolutionProvider;
         use std::fs;

@@ -115,14 +115,11 @@ impl ResolveStage {
     ) -> Option<ResolvedRelationship> {
         use crate::parsing::{PipelineSymbolCache, ResolveResult};
 
-        // Must have from_id (assigned by COLLECT stage)
         let from_id = unresolved.from_id?;
 
-        // Build CallerContext from the calling symbol
-        // This gives us file_id, module_path, and language_id for visibility checks
-        let caller = self
-            .symbol_cache
-            .get(from_id)
+        let caller_symbol = self.symbol_cache.get(from_id);
+        let caller = caller_symbol
+            .as_ref()
             .map(|sym| {
                 CallerContext::new(
                     sym.file_id,
@@ -131,19 +128,19 @@ impl ResolveStage {
                 )
             })
             .unwrap_or_else(|| CallerContext::from_file(context.file_id, context.language_id));
+        let from_kind = caller_symbol.as_ref().map(|sym| sym.kind);
 
-        // First try context.resolve() which uses language-specific resolution
-        // with pre-resolved import bindings from build_resolution_context_with_pipeline_cache()
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
-            return Some(ResolvedRelationship {
-                from_id,
-                to_id,
-                kind: unresolved.kind,
-                metadata: unresolved.metadata.clone(),
-            });
+            if self.is_compatible(from_kind, to_id, unresolved.kind, caller.file_id, &caller.language_id) {
+                return Some(ResolvedRelationship {
+                    from_id,
+                    to_id,
+                    kind: unresolved.kind,
+                    metadata: unresolved.metadata.clone(),
+                });
+            }
         }
 
-        // Fall back to cache.resolve() with CallerContext (imports enhanced by behavior)
         let result = self.symbol_cache.resolve(
             &unresolved.to_name,
             &caller,
@@ -152,14 +149,18 @@ impl ResolveStage {
         );
 
         match result {
-            ResolveResult::Found(to_id) => Some(ResolvedRelationship {
-                from_id,
-                to_id,
-                kind: unresolved.kind,
-                metadata: unresolved.metadata.clone(),
-            }),
+            ResolveResult::Found(to_id) => {
+                if !self.is_compatible(from_kind, to_id, unresolved.kind, caller.file_id, &caller.language_id) {
+                    return None;
+                }
+                Some(ResolvedRelationship {
+                    from_id,
+                    to_id,
+                    kind: unresolved.kind,
+                    metadata: unresolved.metadata.clone(),
+                })
+            }
             ResolveResult::Ambiguous(candidates) => {
-                // Multiple candidates - use behavior for disambiguation
                 let to_id = self.disambiguate(&candidates, unresolved, context)?;
                 Some(ResolvedRelationship {
                     from_id,
@@ -170,6 +171,20 @@ impl ResolveStage {
             }
             ResolveResult::NotFound => None,
         }
+    }
+
+    fn is_compatible(
+        &self,
+        from_kind: Option<crate::SymbolKind>,
+        to_id: SymbolId,
+        rel_kind: RelationKind,
+        file_id: FileId,
+        language_id: &LanguageId,
+    ) -> bool {
+        let Some(from_kind) = from_kind else { return true };
+        let Some(to_sym) = self.symbol_cache.get(to_id) else { return true };
+        let Some(behavior) = self.get_behavior(language_id) else { return true };
+        behavior.is_compatible_relationship(from_kind, to_sym.kind, rel_kind, file_id)
     }
 
     /// Disambiguate among multiple candidates.
@@ -188,7 +203,21 @@ impl ResolveStage {
         let file_id = context.file_id;
         let language_id = &context.language_id;
 
-        // Collect candidate metadata
+        let from_kind = unresolved
+            .from_id
+            .and_then(|id| self.symbol_cache.get(id))
+            .map(|sym| sym.kind);
+
+        let filtered: Vec<SymbolId> = candidates
+            .iter()
+            .copied()
+            .filter(|&id| self.is_compatible(from_kind, id, unresolved.kind, file_id, language_id))
+            .collect();
+        if filtered.is_empty() {
+            return None;
+        }
+        let candidates = &filtered[..];
+
         let mut local_matches: Vec<SymbolId> = Vec::new();
         let mut imported_matches: Vec<SymbolId> = Vec::new();
         let mut language_matches: Vec<SymbolId> = Vec::new();
