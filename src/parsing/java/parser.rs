@@ -890,13 +890,19 @@ impl JavaParser {
                     let caller = current_method.unwrap_or(FILE_SCOPE).to_string();
                     let range = self.node_to_range(node);
 
+                    // Pascal-leading heuristic; this./super. receivers stay lowercase ⇒ instance.
+                    let is_static = receiver
+                        .as_deref()
+                        .and_then(|r| r.chars().next())
+                        .is_some_and(|c| c.is_ascii_uppercase());
+
                     method_calls.push(MethodCall {
                         caller,
                         method_name,
                         receiver,
-                        is_static: false, // TODO: detect static calls (Type.method vs instance.method)
+                        is_static,
                         range,
-                        caller_range: None, // TODO: track caller definition range
+                        caller_range: None,
                     });
                 }
             }
@@ -1326,5 +1332,30 @@ impl LanguageParser for JavaParser {
 
     fn language(&self) -> Language {
         Language::Java
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parsing::LanguageParser;
+
+    #[test]
+    fn test_java_static_call_uppercase_receiver_is_static_true() {
+        let mut parser = JavaParser::new().unwrap();
+        let code = r#"
+            class Demo {
+                int parse(String s) {
+                    return Integer.parseInt(s);
+                }
+            }
+        "#;
+        let calls = parser.find_method_calls(code);
+        let call = calls
+            .iter()
+            .find(|c| c.method_name == "parseInt")
+            .expect("Integer.parseInt call should be extracted");
+        assert_eq!(call.receiver.as_deref(), Some("Integer"));
+        assert!(call.is_static);
     }
 }

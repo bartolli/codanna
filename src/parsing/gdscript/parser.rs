@@ -5,7 +5,8 @@
 use crate::parsing::Import;
 use crate::parsing::parser::check_recursion_depth;
 use crate::parsing::{
-    HandledNode, Language, LanguageParser, NodeTracker, NodeTrackingState, ParserContext, ScopeType,
+    HandledNode, Language, LanguageParser, MethodCall, NodeTracker, NodeTrackingState,
+    ParserContext, ScopeType,
 };
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind};
@@ -344,6 +345,99 @@ impl GdscriptParser {
             }
         }
         targets
+    }
+
+    /// Walk the tree and emit MethodCall records for dot-form calls.
+    /// In tree-sitter-gdscript, `obj.method()` is an `attribute` node ending in `attribute_call`;
+    /// bare `method()` is a `call` node (no receiver — left to find_calls).
+    fn collect_method_calls(
+        &mut self,
+        node: Node,
+        code: &str,
+        calls: &mut Vec<MethodCall>,
+        current_function: Option<&str>,
+    ) {
+        match node.kind() {
+            "class_definition" => {
+                self.register_node(&node);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_method_calls(child, code, calls, None);
+                }
+                return;
+            }
+            "function_definition" => {
+                self.register_node(&node);
+                let next_function = node
+                    .child_by_field_name("name")
+                    .map(|n| self.text_for_node(code, n).trim())
+                    .filter(|name| !name.is_empty())
+                    .or(current_function);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_method_calls(child, code, calls, next_function);
+                }
+                return;
+            }
+            "constructor_definition" => {
+                self.register_node(&node);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_method_calls(child, code, calls, Some("_init"));
+                }
+                return;
+            }
+            "attribute" => {
+                self.register_node(&node);
+                // Locate the trailing `attribute_call` (if any) — that marks the method call form.
+                let mut last_call: Option<Node> = None;
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "attribute_call" {
+                        last_call = Some(child);
+                    }
+                }
+                if let Some(call_node) = last_call {
+                    let method_name = call_node
+                        .children(&mut call_node.walk())
+                        .find(|c| c.kind() == "identifier")
+                        .map(|n| self.text_for_node(code, n).trim());
+                    // Receiver text spans from the attribute start up to (but not including)
+                    // the dot preceding the attribute_call.
+                    let attr_start = node.byte_range().start;
+                    let call_start = call_node.byte_range().start;
+                    let receiver_end = code[..call_start].trim_end_matches('.').trim_end();
+                    let receiver_end_idx = receiver_end.len();
+                    let receiver_slice = if attr_start < receiver_end_idx {
+                        code[attr_start..receiver_end_idx].trim()
+                    } else {
+                        ""
+                    };
+                    if let Some(method_name) = method_name {
+                        if !method_name.is_empty() && !receiver_slice.is_empty() {
+                            let caller = current_function.unwrap_or(SCRIPT_SCOPE);
+                            let range = self.node_to_range(node);
+                            let is_static = receiver_slice
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_ascii_uppercase());
+                            let mut call = MethodCall::new(caller, method_name, range)
+                                .with_receiver(receiver_slice);
+                            if is_static {
+                                call = call.static_method();
+                            }
+                            calls.push(call);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.collect_method_calls(child, code, calls, current_function);
+        }
     }
 
     fn collect_calls<'a>(
@@ -1028,6 +1122,17 @@ impl LanguageParser for GdscriptParser {
         let mut calls = Vec::new();
         self.collect_calls(tree.root_node(), code, &mut calls, None);
         calls
+    }
+
+    fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut method_calls = Vec::new();
+        self.collect_method_calls(tree.root_node(), code, &mut method_calls, None);
+        method_calls
     }
 
     fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {

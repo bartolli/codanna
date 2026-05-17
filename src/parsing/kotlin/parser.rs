@@ -1272,6 +1272,15 @@ impl KotlinParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        // Candidate-side class_name; static-call disambiguator matches receiver against it.
+        // Mirrors handle_class_declaration: top-level ⇒ Module, nested ⇒ ClassMember.
+        symbol.scope_context = Some(if let Some(parent_class) = context.current_class() {
+            crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(parent_class.to_string().into()),
+            }
+        } else {
+            crate::symbol::ScopeContext::Module
+        });
 
         // Save parent context before entering new scope
         let saved_function = context.current_function().map(|s| s.to_string());
@@ -1567,8 +1576,17 @@ impl KotlinParser {
                             let caller = current_function.unwrap_or(FILE_SCOPE);
                             let range = self.node_to_range(node);
 
-                            let call = MethodCall::new(caller, &method_name, range)
+                            // Pascal-leading receiver ⇒ companion-object / static call.
+                            let is_static = receiver_text
+                                .chars()
+                                .next()
+                                .is_some_and(|c| c.is_ascii_uppercase());
+
+                            let mut call = MethodCall::new(caller, &method_name, range)
                                 .with_receiver(receiver_text);
+                            if is_static {
+                                call = call.static_method();
+                            }
 
                             method_calls.push(call);
                         }

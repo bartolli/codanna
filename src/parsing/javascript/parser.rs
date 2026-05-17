@@ -1511,9 +1511,11 @@ impl JavaScriptParser {
                 let receiver = &code[obj.byte_range()];
                 let method_name = &code[prop.byte_range()];
 
-                // JavaScript doesn't have static method calls like :: but uses .
-                // We can't easily distinguish static from instance without type information
-                let is_static = false;
+                // Syntactic Pascal heuristic; type-inference recovers lowercase classes later.
+                let is_static = receiver
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_uppercase());
 
                 Some((Some(receiver), method_name, is_static))
             }
@@ -2013,6 +2015,24 @@ export * from './common';
         assert!(calls.iter().any(|c| c.caller == "startVoiceConversation"
             && c.method_name == "createChat"
             && c.receiver.as_deref() == Some("sdk")));
+    }
+
+    #[test]
+    fn test_javascript_static_call_uppercase_receiver_is_static_true() {
+        let mut parser = JavaScriptParser::new().unwrap();
+        let code = r#"
+            function build() {
+                const arr = Array.from(iter);
+                return arr;
+            }
+        "#;
+        let calls = parser.find_method_calls(code);
+        let call = calls
+            .iter()
+            .find(|c| c.method_name == "from")
+            .expect("Array.from call should be extracted");
+        assert_eq!(call.receiver.as_deref(), Some("Array"));
+        assert!(call.is_static);
     }
 
     #[test]

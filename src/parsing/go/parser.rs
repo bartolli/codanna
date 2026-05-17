@@ -14,6 +14,7 @@ use crate::parsing::{
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
 use std::any::Any;
+use std::collections::HashSet;
 use tree_sitter::{Node, Parser};
 
 use super::resolution::GoResolutionContext;
@@ -1831,6 +1832,7 @@ impl GoParser {
         node: &tree_sitter::Node,
         code: &str,
         current_function: Option<&str>,
+        package_names: &HashSet<String>,
         calls: &mut Vec<MethodCall>,
     ) {
         // Track function context for Go
@@ -1854,7 +1856,7 @@ impl GoParser {
                 if function_node.kind() == "selector_expression" {
                     // It's a method call!
                     if let Some((receiver, method_name, is_static)) =
-                        self.extract_go_method_signature(&function_node, code)
+                        self.extract_go_method_signature(&function_node, code, package_names)
                     {
                         if let Some(context) = function_context {
                             let range = Range {
@@ -1883,7 +1885,13 @@ impl GoParser {
         // Recurse
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            self.extract_method_calls_recursive(&child, code, function_context, calls);
+            self.extract_method_calls_recursive(
+                &child,
+                code,
+                function_context,
+                package_names,
+                calls,
+            );
         }
     }
 
@@ -1891,6 +1899,7 @@ impl GoParser {
         &self,
         selector_expr: &tree_sitter::Node,
         code: &'a str,
+        package_names: &HashSet<String>,
     ) -> Option<(Option<&'a str>, &'a str, bool)> {
         // selector_expression has 'operand' and 'field' fields
         let operand = selector_expr.child_by_field_name("operand");
@@ -1901,13 +1910,52 @@ impl GoParser {
                 let receiver = &code[obj.byte_range()];
                 let method_name = &code[prop.byte_range()];
 
-                // In Go, we can't easily distinguish between static and instance calls
-                // without type information, so we'll assume instance calls
-                let is_static = false;
+                // Receiver matching a known import name ⇒ package-qualified call.
+                let is_static = package_names.contains(receiver);
 
                 Some((Some(receiver), method_name, is_static))
             }
             _ => None,
+        }
+    }
+
+    /// Walk the tree once and collect package identifiers usable as receivers.
+    /// Aliased imports use the alias; unaliased imports use the last path segment.
+    /// Dot and blank imports are skipped — they never appear as receivers.
+    fn collect_go_package_names(node: Node, code: &str, out: &mut HashSet<String>) {
+        if node.kind() == "import_spec" {
+            let mut path = None;
+            let mut alias = None;
+            let mut is_dot_or_blank = false;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                match child.kind() {
+                    "interpreted_string_literal" | "raw_string_literal" => {
+                        let raw = &code[child.byte_range()];
+                        path = Some(raw.trim_matches(|c| c == '"' || c == '`'));
+                    }
+                    "package_identifier" => {
+                        alias = Some(&code[child.byte_range()]);
+                    }
+                    "dot" | "blank_identifier" => {
+                        is_dot_or_blank = true;
+                    }
+                    _ => {}
+                }
+            }
+            if !is_dot_or_blank {
+                if let Some(a) = alias {
+                    out.insert(a.to_string());
+                } else if let Some(p) = path {
+                    let name = p.rsplit('/').next().unwrap_or(p);
+                    out.insert(name.to_string());
+                }
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            Self::collect_go_package_names(child, code, out);
         }
     }
 
@@ -2058,8 +2106,10 @@ impl LanguageParser for GoParser {
 
         let root = tree.root_node();
         let mut method_calls = Vec::new();
+        let mut package_names = HashSet::new();
+        Self::collect_go_package_names(root, code, &mut package_names);
 
-        self.extract_method_calls_recursive(&root, code, None, &mut method_calls);
+        self.extract_method_calls_recursive(&root, code, None, &package_names, &mut method_calls);
 
         method_calls
     }
@@ -2639,5 +2689,51 @@ func (p *privateStruct) privateMethod() {
         );
 
         println!("✅ Go visibility variations handled correctly");
+    }
+
+    #[test]
+    fn test_go_package_qualified_call_is_static_true() {
+        let mut parser = GoParser::new().unwrap();
+        let code = r#"
+package main
+
+import "encoding/json"
+
+func encode(payload any) ([]byte, error) {
+    return json.Marshal(payload)
+}
+"#;
+        let calls = parser.find_method_calls(code);
+        let call = calls
+            .iter()
+            .find(|c| c.method_name == "Marshal")
+            .expect("json.Marshal call should be extracted");
+        assert_eq!(call.receiver.as_deref(), Some("json"));
+        assert!(
+            call.is_static,
+            "receiver matching an import package name should mark is_static=true"
+        );
+    }
+
+    #[test]
+    fn test_go_instance_call_is_static_false() {
+        let mut parser = GoParser::new().unwrap();
+        let code = r#"
+package main
+
+type Server struct{}
+func (s *Server) Start() {}
+
+func run(srv *Server) {
+    srv.Start()
+}
+"#;
+        let calls = parser.find_method_calls(code);
+        let call = calls
+            .iter()
+            .find(|c| c.method_name == "Start")
+            .expect("srv.Start call should be extracted");
+        assert_eq!(call.receiver.as_deref(), Some("srv"));
+        assert!(!call.is_static);
     }
 }

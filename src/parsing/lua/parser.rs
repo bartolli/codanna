@@ -128,6 +128,24 @@ impl LuaParser {
         match node.kind() {
             "function_declaration" => {
                 self.register_node_recursively(node);
+
+                // `function tbl:method()` / `function tbl.fn()` define a member of `tbl`.
+                // Both ScopeType::Class on the stack AND current_class are required for
+                // current_scope_context() to return ClassMember{class_name: Some("tbl")}.
+                let saved_class = self.context.current_class().map(|s| s.to_string());
+                let mut entered_class_scope = false;
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name_text = &code[name_node.byte_range()];
+                    if let Some(idx) = name_text.find([':', '.']) {
+                        let table_name = name_text[..idx].trim().to_string();
+                        if !table_name.is_empty() {
+                            self.context.enter_scope(ScopeType::Class);
+                            self.context.set_current_class(Some(table_name));
+                            entered_class_scope = true;
+                        }
+                    }
+                }
+
                 if let Some(symbol) =
                     self.process_function_declaration(node, code, file_id, counter, module_path)
                 {
@@ -164,6 +182,11 @@ impl LuaParser {
                     self.context.exit_scope();
                     self.context.set_current_function(saved_function);
                 }
+
+                if entered_class_scope {
+                    self.context.exit_scope();
+                }
+                self.context.set_current_class(saved_class);
             }
             "function_definition" => {
                 self.register_handled_node("function_definition", node.kind_id());
@@ -737,8 +760,15 @@ fn extract_method_calls_recursive(node: &Node, code: &str, calls: &mut Vec<Metho
     while let Some(current_node) = stack.pop() {
         if current_node.kind() == "function_call" {
             if let Some(name_node) = current_node.child_by_field_name("name") {
-                if name_node.kind() == "method_index_expression" {
-                    if let Some(method_node) = name_node.child_by_field_name("method") {
+                // Colon form `tbl:method()` and dot form `tbl.fn()` differ in AST kind only;
+                // dot form is ambiguous (could be table-fn or static), spec says treat conservative ⇒ instance.
+                let table_field = match name_node.kind() {
+                    "method_index_expression" => "method",
+                    "dot_index_expression" => "field",
+                    _ => "",
+                };
+                if !table_field.is_empty() {
+                    if let Some(method_node) = name_node.child_by_field_name(table_field) {
                         let method_name = code[method_node.byte_range()].to_string();
                         let range = range_from_node(&current_node);
 

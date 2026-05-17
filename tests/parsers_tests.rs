@@ -117,3 +117,24 @@ mod test_lua_relationships;
 
 #[path = "parsers/swift/test_nested_types.rs"]
 mod test_swift_nested_types;
+
+#[path = "parsers/kotlin/test_method_call_static.rs"]
+mod test_kotlin_method_call_static;
+
+#[path = "parsers/swift/test_method_call_static.rs"]
+mod test_swift_method_call_static;
+
+#[path = "parsers/cpp/test_method_call_static.rs"]
+mod test_cpp_method_call_static;
+
+#[path = "parsers/php/test_method_call_static.rs"]
+mod test_php_method_call_static;
+
+#[path = "parsers/c/test_method_call_static.rs"]
+mod test_c_method_call_static;
+
+#[path = "parsers/lua/test_method_call_static.rs"]
+mod test_lua_method_call_static;
+
+#[path = "parsers/gdscript/test_method_call_static.rs"]
+mod test_gdscript_method_call_static;

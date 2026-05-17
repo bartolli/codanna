@@ -786,17 +786,32 @@ impl CParser {
     fn extract_calls_from_node(node: Node, code: &str, calls: &mut Vec<MethodCall>) {
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
-                let function_name = &code[function_node.byte_range()];
-                calls.push(MethodCall::new(
-                    "", // caller will be set by the indexer
-                    function_name,
-                    Range::new(
-                        node.start_position().row as u32,
-                        node.start_position().column as u16,
-                        node.end_position().row as u32,
-                        node.end_position().column as u16,
-                    ),
-                ));
+                let range = Range::new(
+                    node.start_position().row as u32,
+                    node.start_position().column as u16,
+                    node.end_position().row as u32,
+                    node.end_position().column as u16,
+                );
+
+                // C has no method concept; capture struct-field function-pointer calls
+                // (`vtable->draw(ctx)`, `obj.fn(args)`) so receiver type can flow downstream.
+                if function_node.kind() == "field_expression" {
+                    let receiver = function_node
+                        .child_by_field_name("argument")
+                        .map(|n| code[n.byte_range()].trim());
+                    let method_name = function_node
+                        .child_by_field_name("field")
+                        .map(|n| code[n.byte_range()].trim())
+                        .unwrap_or_else(|| code[function_node.byte_range()].trim());
+                    let mut call = MethodCall::new("", method_name, range);
+                    if let Some(r) = receiver {
+                        call = call.with_receiver(r);
+                    }
+                    calls.push(call);
+                } else {
+                    let function_name = code[function_node.byte_range()].trim();
+                    calls.push(MethodCall::new("", function_name, range));
+                }
             }
         }
 

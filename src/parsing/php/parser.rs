@@ -932,10 +932,14 @@ impl LanguageParser for PhpParser {
     }
 
     fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
-        self.find_calls(code)
-            .into_iter()
-            .map(|(caller, target, range)| MethodCall::new(caller, target, range))
-            .collect()
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut method_calls = Vec::new();
+        self.extract_method_calls_from_node(tree.root_node(), code, None, &mut method_calls);
+        method_calls
     }
 
     fn find_implementations<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
@@ -1072,6 +1076,74 @@ impl PhpParser {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     self.extract_calls_from_node(child, code, current_context, calls);
+                }
+            }
+        }
+    }
+
+    /// Walk the tree and collect MethodCall records for ->/:: method-call forms.
+    /// Plain function_call_expression has no receiver and stays out of this set.
+    fn extract_method_calls_from_node(
+        &mut self,
+        node: Node,
+        code: &str,
+        current_function: Option<&str>,
+        calls: &mut Vec<MethodCall>,
+    ) {
+        match node.kind() {
+            "member_call_expression" => {
+                if let (Some(name_node), Some(object_node)) = (
+                    node.child_by_field_name("name"),
+                    node.child_by_field_name("object"),
+                ) {
+                    let method_name = code[name_node.byte_range()].trim();
+                    let receiver = code[object_node.byte_range()].trim();
+                    let range = self.node_to_range(node);
+                    let caller = current_function.unwrap_or("");
+                    let call =
+                        MethodCall::new(caller, method_name, range).with_receiver(receiver);
+                    calls.push(call);
+                }
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.extract_method_calls_from_node(child, code, current_function, calls);
+                }
+            }
+            // Class::method() / self::method() / parent::method() / static::method().
+            // :: is the syntactic static marker in PHP.
+            "scoped_call_expression" => {
+                if let (Some(name_node), Some(scope_node)) = (
+                    node.child_by_field_name("name"),
+                    node.child_by_field_name("scope"),
+                ) {
+                    let method_name = code[name_node.byte_range()].trim();
+                    let receiver = code[scope_node.byte_range()].trim();
+                    let range = self.node_to_range(node);
+                    let caller = current_function.unwrap_or("");
+                    let call = MethodCall::new(caller, method_name, range)
+                        .with_receiver(receiver)
+                        .static_method();
+                    calls.push(call);
+                }
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.extract_method_calls_from_node(child, code, current_function, calls);
+                }
+            }
+            "function_definition" | "method_declaration" => {
+                let new_context = node
+                    .child_by_field_name("name")
+                    .map(|name_node| &code[name_node.byte_range()])
+                    .or(current_function);
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.extract_method_calls_from_node(child, code, new_context, calls);
+                }
+            }
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.extract_method_calls_from_node(child, code, current_function, calls);
                 }
             }
         }

@@ -373,31 +373,49 @@ impl CppParser {
     fn extract_calls_from_node(node: Node, code: &str, calls: &mut Vec<MethodCall>) {
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
-                // Extract the actual function name from different call patterns
-                let function_name = match function_node.kind() {
-                    // Member function call: obj->method() or obj.method()
-                    "field_expression" => {
-                        // Get the field identifier (the actual method name)
-                        if let Some(field_node) = function_node.child_by_field_name("field") {
-                            &code[field_node.byte_range()]
-                        } else {
-                            &code[function_node.byte_range()]
-                        }
-                    }
-                    // Simple function call: function()
-                    _ => &code[function_node.byte_range()],
-                };
+                let range = Range::new(
+                    node.start_position().row as u32,
+                    node.start_position().column as u16,
+                    node.end_position().row as u32,
+                    node.end_position().column as u16,
+                );
 
-                calls.push(MethodCall::new(
-                    "", // caller will be set by the indexer
-                    function_name,
-                    Range::new(
-                        node.start_position().row as u32,
-                        node.start_position().column as u16,
-                        node.end_position().row as u32,
-                        node.end_position().column as u16,
-                    ),
-                ));
+                match function_node.kind() {
+                    // obj.method() and ptr->method() share the field_expression node kind.
+                    "field_expression" => {
+                        let receiver = function_node
+                            .child_by_field_name("argument")
+                            .map(|n| code[n.byte_range()].trim());
+                        let method_name = function_node
+                            .child_by_field_name("field")
+                            .map(|n| code[n.byte_range()].trim())
+                            .unwrap_or_else(|| code[function_node.byte_range()].trim());
+                        let mut call = MethodCall::new("", method_name, range);
+                        if let Some(r) = receiver {
+                            call = call.with_receiver(r);
+                        }
+                        calls.push(call);
+                    }
+                    // Class::method() — :: token is the syntactic static marker in C++.
+                    "qualified_identifier" => {
+                        let receiver = function_node
+                            .child_by_field_name("scope")
+                            .map(|n| code[n.byte_range()].trim());
+                        let method_name = function_node
+                            .child_by_field_name("name")
+                            .map(|n| code[n.byte_range()].trim())
+                            .unwrap_or_else(|| code[function_node.byte_range()].trim());
+                        let mut call = MethodCall::new("", method_name, range);
+                        if let Some(r) = receiver {
+                            call = call.with_receiver(r).static_method();
+                        }
+                        calls.push(call);
+                    }
+                    _ => {
+                        let function_name = code[function_node.byte_range()].trim();
+                        calls.push(MethodCall::new("", function_name, range));
+                    }
+                }
             }
         }
 

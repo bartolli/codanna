@@ -921,6 +921,14 @@ impl PythonParser {
 
                 if let Some(receiver_name) = receiver {
                     method_call = method_call.with_receiver(receiver_name);
+                    // PEP 8 class-name convention: uppercase-leading receiver implies static call.
+                    if receiver_name
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_uppercase())
+                    {
+                        method_call = method_call.static_method();
+                    }
                 }
 
                 Some(method_call)
@@ -3142,5 +3150,24 @@ def process_data():
         );
 
         println!("SUCCESS: Python now tracks cross-module calls correctly!");
+    }
+
+    #[test]
+    fn test_python_static_call_uppercase_receiver_is_static_true() {
+        let code = r#"
+def make(name):
+    return User.create(name)
+"#;
+        let mut parser = PythonParser::new().unwrap();
+        let calls = parser.find_method_calls(code);
+        let call = calls
+            .iter()
+            .find(|c| c.method_name == "create")
+            .expect("User.create call should be extracted");
+        assert_eq!(call.receiver.as_deref(), Some("User"));
+        assert!(
+            call.is_static,
+            "PEP 8 uppercase-leading receiver should mark is_static=true"
+        );
     }
 }

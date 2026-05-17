@@ -4,8 +4,8 @@
 
 use crate::parsing::parser::check_recursion_depth;
 use crate::parsing::{
-    HandledNode, Import, Language, LanguageParser, NodeTracker, NodeTrackingState, ParserContext,
-    ScopeType,
+    HandledNode, Import, Language, LanguageParser, MethodCall, NodeTracker, NodeTrackingState,
+    ParserContext, ScopeType,
 };
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
@@ -837,6 +837,14 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        // Candidate-side class_name; static-call disambiguator matches receiver against it.
+        symbol.scope_context = Some(if let Some(parent_class) = self.context.current_class() {
+            crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(parent_class.to_string().into()),
+            }
+        } else {
+            crate::symbol::ScopeContext::Module
+        });
 
         symbols.push(symbol);
 
@@ -1528,6 +1536,98 @@ impl SwiftParser {
 
         last
     }
+
+    /// Walk the tree and collect MethodCall records with receiver + is_static.
+    /// Bare-identifier calls fall through to find_calls (no receiver to populate).
+    fn collect_method_calls(
+        &mut self,
+        node: Node,
+        code: &str,
+        calls: &mut Vec<MethodCall>,
+        current_function: Option<&str>,
+        depth: usize,
+    ) {
+        if !check_recursion_depth(depth, node) {
+            return;
+        }
+        self.register_node(&node);
+
+        match node.kind() {
+            NODE_FUNCTION_DECLARATION => {
+                let func_name = node
+                    .child_by_field_name("name")
+                    .map(|n| self.trimmed_text(code, n));
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_method_calls(child, code, calls, func_name, depth + 1);
+                }
+            }
+            NODE_CALL_EXPRESSION => {
+                if let Some(caller) = current_function {
+                    let mut cursor = node.walk();
+                    for child in node.children(&mut cursor) {
+                        if child.kind() == NODE_NAVIGATION_EXPRESSION {
+                            if let Some((receiver, method_name)) =
+                                Self::extract_navigation_signature(child, code)
+                            {
+                                let is_static = receiver
+                                    .chars()
+                                    .next()
+                                    .is_some_and(|c| c.is_ascii_uppercase());
+                                let range = self.node_to_range(node);
+                                let mut call = MethodCall::new(caller, method_name, range)
+                                    .with_receiver(receiver);
+                                if is_static {
+                                    call = call.static_method();
+                                }
+                                calls.push(call);
+                            }
+                            break;
+                        } else if child.kind() == NODE_SIMPLE_IDENTIFIER {
+                            break;
+                        }
+                    }
+                }
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_method_calls(child, code, calls, current_function, depth + 1);
+                }
+            }
+            _ => {
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    self.collect_method_calls(child, code, calls, current_function, depth + 1);
+                }
+            }
+        }
+    }
+
+    /// Receiver = whole text of the first non-suffix child (handles chained navigations).
+    /// Method = simple_identifier inside the navigation_suffix.
+    fn extract_navigation_signature<'a>(
+        nav_expr: Node,
+        code: &'a str,
+    ) -> Option<(&'a str, &'a str)> {
+        let mut receiver: Option<&str> = None;
+        let mut method_name: Option<&str> = None;
+        let mut cursor = nav_expr.walk();
+        for child in nav_expr.children(&mut cursor) {
+            if child.kind() == "navigation_suffix" {
+                let mut sc = child.walk();
+                for sc_child in child.children(&mut sc) {
+                    if sc_child.kind() == NODE_SIMPLE_IDENTIFIER {
+                        method_name = Some(code[sc_child.byte_range()].trim());
+                    }
+                }
+            } else if receiver.is_none() {
+                receiver = Some(code[child.byte_range()].trim());
+            }
+        }
+        match (receiver, method_name) {
+            (Some(r), Some(m)) => Some((r, m)),
+            _ => None,
+        }
+    }
 }
 
 impl LanguageParser for SwiftParser {
@@ -1582,6 +1682,17 @@ impl LanguageParser for SwiftParser {
         let mut calls = Vec::new();
         self.collect_calls(tree.root_node(), code, &mut calls, None, 0);
         calls
+    }
+
+    fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut method_calls = Vec::new();
+        self.collect_method_calls(tree.root_node(), code, &mut method_calls, None, 0);
+        method_calls
     }
 
     fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
