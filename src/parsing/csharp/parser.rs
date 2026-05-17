@@ -857,10 +857,17 @@ impl CSharpParser {
                                         node.end_position().row as u32,
                                         node.end_position().column as u16,
                                     );
-                                    method_calls.push(
-                                        MethodCall::new(caller, &method, range)
-                                            .with_receiver(&receiver),
-                                    );
+                                    // Syntactic Pascal heuristic; type-inference recovers lowercase classes later.
+                                    let is_static = receiver
+                                        .chars()
+                                        .next()
+                                        .is_some_and(|c| c.is_ascii_uppercase());
+                                    let mut call = MethodCall::new(caller, &method, range)
+                                        .with_receiver(&receiver);
+                                    if is_static {
+                                        call = call.static_method();
+                                    }
+                                    method_calls.push(call);
                                 }
                             }
                         }

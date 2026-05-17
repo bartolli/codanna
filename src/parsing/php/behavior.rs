@@ -91,6 +91,48 @@ impl LanguageBehavior for PhpBehavior {
         }
     }
 
+    fn is_receiver_compatible(
+        &self,
+        candidate: &crate::Symbol,
+        receiver: &str,
+        caller: Option<&crate::Symbol>,
+    ) -> bool {
+        // PHP receivers carry a `$` sigil; strip it before comparison.
+        // `$this` resolves to the caller's containing class (mirror of Rust's `Self`).
+        let stripped = receiver.strip_prefix('$').unwrap_or(receiver);
+        let resolved: &str = if stripped == "this" {
+            let Some(caller) = caller else {
+                return false;
+            };
+            let Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(caller_class),
+            }) = caller.scope_context.as_ref()
+            else {
+                return false;
+            };
+            caller_class
+        } else {
+            stripped
+        };
+        if let Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some(class),
+        }) = candidate.scope_context.as_ref()
+        {
+            if &**class == resolved {
+                return true;
+            }
+        }
+        let suffix = format!("::{resolved}");
+        candidate
+            .module_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(&suffix))
+    }
+
+    fn self_receiver_aliases(&self) -> &'static [&'static str] {
+        &["$this"]
+    }
+
     fn get_language(&self) -> Language {
         self.language.clone()
     }

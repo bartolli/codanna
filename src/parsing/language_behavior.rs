@@ -322,6 +322,25 @@ pub trait LanguageBehavior: Send + Sync {
         format!("{}{}{}", receiver, self.module_separator(), method)
     }
 
+    /// Extract the declared type of a named variable from a function signature.
+    ///
+    /// Per-language extension point for instance-call receiver-type filtering in
+    /// `disambiguate()`. Default returns `None`; languages override to parse their
+    /// own signature-string format (`name: Type` for Rust/Python/TS, `name Type`
+    /// for Go, `Type name` for Java).
+    fn extract_parameter_type(&self, _signature: &str, _var_name: &str) -> Option<String> {
+        None
+    }
+
+    /// Receiver tokens that route an instance call to the Self-call arm of
+    /// `resolve_method_call`.
+    ///
+    /// Default `&["self"]` matches Rust/Python/Swift. Per-language overrides:
+    /// PHP `&["$this"]`, Python `&["self", "cls"]`, JS/TS/Java/Kotlin/C++ `&["this"]`.
+    fn self_receiver_aliases(&self) -> &'static [&'static str] {
+        &["self"]
+    }
+
     /// Resolve an instance method call to its symbol ID
     ///
     /// Given a type name and method name, find the symbol ID for the method.
@@ -429,7 +448,9 @@ pub trait LanguageBehavior: Send + Sync {
             }
 
             // Instance call: receiver.method()
-            (Some(receiver), false) if receiver != "self" => {
+            (Some(receiver), false)
+                if !self.self_receiver_aliases().contains(&receiver.as_str()) =>
+            {
                 // Look up the receiver's type
                 let type_name = match receiver_types.get(receiver) {
                     Some(t) => t,
@@ -449,11 +470,15 @@ pub trait LanguageBehavior: Send + Sync {
                 self.resolve_instance_method(type_name, method_name, context, document_index)
             }
 
-            // Self call: self.method()
-            (Some(receiver), false) if receiver == "self" => {
+            // Self call: self.method() / $this->method() / this.method() / cls.method() per language.
+            (Some(receiver), false)
+                if self.self_receiver_aliases().contains(&receiver.as_str()) =>
+            {
                 // For self calls, try to resolve via context which should have current type info
                 let self_method = format!("self.{method_name}");
-                tracing::debug!("[resolve_method_call] self call: {self_method}");
+                tracing::debug!(
+                    "[resolve_method_call] self call (receiver={receiver}): {self_method}"
+                );
                 context.resolve(&self_method).or_else(|| {
                     // Fallback: just try the method name
                     context.resolve(method_name)
@@ -1203,5 +1228,21 @@ mod tests {
             RelationKind::Uses,
             FileId::new(1).unwrap()
         ));
+    }
+
+    #[test]
+    fn test_default_extract_parameter_type_returns_none() {
+        let behavior = TestBehavior;
+        assert_eq!(
+            behavior.extract_parameter_type("fn f(node: &Node, code: &str)", "node"),
+            None
+        );
+        assert_eq!(behavior.extract_parameter_type("", "anything"), None);
+    }
+
+    #[test]
+    fn test_default_self_receiver_aliases_is_lowercase_self() {
+        let behavior = TestBehavior;
+        assert_eq!(behavior.self_receiver_aliases(), &["self"]);
     }
 }

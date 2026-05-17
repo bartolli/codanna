@@ -114,6 +114,10 @@ impl LanguageBehavior for PythonBehavior {
         Box::new(crate::parsing::python::PythonInheritanceResolver::new())
     }
 
+    fn self_receiver_aliases(&self) -> &'static [&'static str] {
+        &["self", "cls"]
+    }
+
     fn format_module_path(&self, base_path: &str, _symbol_name: &str) -> String {
         // Python typically uses file paths as module paths, not including the symbol name
         base_path.to_string()

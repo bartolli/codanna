@@ -109,6 +109,10 @@ impl LanguageBehavior for TypeScriptBehavior {
         base_path.to_string()
     }
 
+    fn self_receiver_aliases(&self) -> &'static [&'static str] {
+        &["this"]
+    }
+
     fn get_language(&self) -> Language {
         tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
     }

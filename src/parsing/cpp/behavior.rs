@@ -42,6 +42,10 @@ impl LanguageBehavior for CppBehavior {
         crate::parsing::registry::LanguageId::new("cpp")
     }
 
+    fn self_receiver_aliases(&self) -> &'static [&'static str] {
+        &["this"]
+    }
+
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         format!("{base_path}::{symbol_name}")
     }

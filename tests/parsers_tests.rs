@@ -138,3 +138,30 @@ mod test_lua_method_call_static;
 
 #[path = "parsers/gdscript/test_method_call_static.rs"]
 mod test_gdscript_method_call_static;
+
+#[path = "parsers/csharp/test_method_call_static.rs"]
+mod test_csharp_method_call_static;
+
+#[path = "parsers/php/test_is_receiver_compatible.rs"]
+mod test_php_is_receiver_compatible;
+
+#[path = "parsers/python/test_self_receiver_aliases.rs"]
+mod test_python_self_receiver_aliases;
+
+#[path = "parsers/javascript/test_self_receiver_aliases.rs"]
+mod test_javascript_self_receiver_aliases;
+
+#[path = "parsers/typescript/test_self_receiver_aliases.rs"]
+mod test_typescript_self_receiver_aliases;
+
+#[path = "parsers/java/test_self_receiver_aliases.rs"]
+mod test_java_self_receiver_aliases;
+
+#[path = "parsers/kotlin/test_self_receiver_aliases.rs"]
+mod test_kotlin_self_receiver_aliases;
+
+#[path = "parsers/cpp/test_self_receiver_aliases.rs"]
+mod test_cpp_self_receiver_aliases;
+
+#[path = "parsers/rust/test_extract_parameter_type.rs"]
+mod test_rust_extract_parameter_type;

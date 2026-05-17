@@ -44,6 +44,10 @@ impl LanguageBehavior for JavaBehavior {
         crate::parsing::registry::LanguageId::new("java")
     }
 
+    fn self_receiver_aliases(&self) -> &'static [&'static str] {
+        &["this"]
+    }
+
     /// Format module path for Java packages using dot notation
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         if base_path.is_empty() {

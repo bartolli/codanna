@@ -1100,8 +1100,7 @@ impl PhpParser {
                     let receiver = code[object_node.byte_range()].trim();
                     let range = self.node_to_range(node);
                     let caller = current_function.unwrap_or("");
-                    let call =
-                        MethodCall::new(caller, method_name, range).with_receiver(receiver);
+                    let call = MethodCall::new(caller, method_name, range).with_receiver(receiver);
                     calls.push(call);
                 }
                 let mut cursor = node.walk();

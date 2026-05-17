@@ -7,7 +7,40 @@ use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::{InheritanceResolver, LanguageBehavior, ResolutionScope};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tree_sitter::Language;
+use tree_sitter::{Language, Node};
+
+/// Walk the AST for a `parameter` whose pattern is `var_name`, then reduce its
+/// type field to the bare type-identifier name. Out-of-scope kinds (tuple, fn,
+/// impl Trait, dyn Trait, type parameters) yield `None`.
+fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
+    if node.kind() == "parameter" {
+        if let Some(pattern) = node.child_by_field_name("pattern") {
+            if &code[pattern.byte_range()] == var_name {
+                let type_node = node.child_by_field_name("type")?;
+                return reduce_type_to_name(type_node, code);
+            }
+        }
+    }
+    for child in node.children(&mut node.walk()) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Strip references / lifetimes / mut / generics / module path to reach the
+/// bare leaf type name.
+fn reduce_type_to_name(node: Node, code: &str) -> Option<String> {
+    match node.kind() {
+        "type_identifier" | "primitive_type" => Some(code[node.byte_range()].to_string()),
+        "reference_type" | "generic_type" => {
+            reduce_type_to_name(node.child_by_field_name("type")?, code)
+        }
+        "scoped_type_identifier" => reduce_type_to_name(node.child_by_field_name("name")?, code),
+        _ => None,
+    }
+}
 
 /// Rust language behavior implementation
 #[derive(Clone)]
@@ -162,6 +195,13 @@ impl LanguageBehavior for RustBehavior {
             .module_path
             .as_deref()
             .is_some_and(|path| path.ends_with(&suffix))
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.language).ok()?;
+        let tree = parser.parse(signature, None)?;
+        find_parameter_type(tree.root_node(), signature, var_name)
     }
 
     fn is_resolvable_symbol(&self, symbol: &crate::Symbol) -> bool {

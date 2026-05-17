@@ -370,7 +370,42 @@ impl CppParser {
         }
     }
 
-    fn extract_calls_from_node(node: Node, code: &str, calls: &mut Vec<MethodCall>) {
+    /// Unqualified function name of a `function_definition` node, if any.
+    ///
+    /// `Class::method` impls yield the unqualified `method` to match the
+    /// symbol-extraction path. Used by both call-extraction recursions.
+    fn function_name_at_def<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        if node.kind() != "function_definition" {
+            return None;
+        }
+        node.child_by_field_name("declarator")
+            .and_then(|declarator| {
+                if declarator.kind() == "function_declarator" {
+                    declarator
+                        .child_by_field_name("declarator")
+                        .map(|inner| match inner.kind() {
+                            "qualified_identifier" => inner
+                                .child_by_field_name("name")
+                                .map(|n| &code[n.byte_range()])
+                                .unwrap_or(&code[inner.byte_range()]),
+                            _ => &code[inner.byte_range()],
+                        })
+                } else {
+                    declarator
+                        .child_by_field_name("declarator")
+                        .map(|n| &code[n.byte_range()])
+                }
+            })
+    }
+
+    fn extract_calls_from_node<'a>(
+        node: Node,
+        code: &'a str,
+        current_function: Option<&'a str>,
+        calls: &mut Vec<MethodCall>,
+    ) {
+        let function_context = Self::function_name_at_def(node, code).or(current_function);
+
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
                 let range = Range::new(
@@ -379,6 +414,7 @@ impl CppParser {
                     node.end_position().row as u32,
                     node.end_position().column as u16,
                 );
+                let caller = function_context.unwrap_or("");
 
                 match function_node.kind() {
                     // obj.method() and ptr->method() share the field_expression node kind.
@@ -390,7 +426,7 @@ impl CppParser {
                             .child_by_field_name("field")
                             .map(|n| code[n.byte_range()].trim())
                             .unwrap_or_else(|| code[function_node.byte_range()].trim());
-                        let mut call = MethodCall::new("", method_name, range);
+                        let mut call = MethodCall::new(caller, method_name, range);
                         if let Some(r) = receiver {
                             call = call.with_receiver(r);
                         }
@@ -405,7 +441,7 @@ impl CppParser {
                             .child_by_field_name("name")
                             .map(|n| code[n.byte_range()].trim())
                             .unwrap_or_else(|| code[function_node.byte_range()].trim());
-                        let mut call = MethodCall::new("", method_name, range);
+                        let mut call = MethodCall::new(caller, method_name, range);
                         if let Some(r) = receiver {
                             call = call.with_receiver(r).static_method();
                         }
@@ -413,7 +449,7 @@ impl CppParser {
                     }
                     _ => {
                         let function_name = code[function_node.byte_range()].trim();
-                        calls.push(MethodCall::new("", function_name, range));
+                        calls.push(MethodCall::new(caller, function_name, range));
                     }
                 }
             }
@@ -422,7 +458,7 @@ impl CppParser {
         // Process children
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i as u32) {
-                Self::extract_calls_from_node(child, code, calls);
+                Self::extract_calls_from_node(child, code, function_context, calls);
             }
         }
     }
@@ -826,7 +862,7 @@ impl LanguageParser for CppParser {
         let root_node = tree.root_node();
         let mut calls = Vec::new();
 
-        Self::extract_calls_from_node(root_node, code, &mut calls);
+        Self::extract_calls_from_node(root_node, code, None, &mut calls);
 
         calls
     }
@@ -936,44 +972,7 @@ impl CppParser {
         current_function: Option<&'a str>,
         calls: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
-        // Determine function context - track which function we're inside
-        let function_context = if node.kind() == "function_definition" {
-            // Extract function name
-            if let Some(declarator) = node.child_by_field_name("declarator") {
-                // Handle function_declarator (for both regular functions and methods)
-                if declarator.kind() == "function_declarator" {
-                    if let Some(inner_declarator) = declarator.child_by_field_name("declarator") {
-                        match inner_declarator.kind() {
-                            // Method: QWindow::setX
-                            "qualified_identifier" => {
-                                // Extract just the method name (after ::)
-                                if let Some(name_node) =
-                                    inner_declarator.child_by_field_name("name")
-                                {
-                                    Some(&code[name_node.byte_range()])
-                                } else {
-                                    Some(&code[inner_declarator.byte_range()])
-                                }
-                            }
-                            // Regular function or simple identifier
-                            _ => Some(&code[inner_declarator.byte_range()]),
-                        }
-                    } else {
-                        current_function
-                    }
-                } else if let Some(name_node) = declarator.child_by_field_name("declarator") {
-                    // Fallback for other declarator types
-                    Some(&code[name_node.byte_range()])
-                } else {
-                    current_function
-                }
-            } else {
-                current_function
-            }
-        } else {
-            // Not a function - inherit current context
-            current_function
-        };
+        let function_context = Self::function_name_at_def(node, code).or(current_function);
 
         // Check if this is a call expression
         if node.kind() == "call_expression" {

@@ -138,6 +138,7 @@ impl ResolveStage {
                 caller.file_id,
                 &caller.language_id,
             ) && self.is_receiver_compat(to_id, unresolved, &caller.language_id)
+                && self.is_instance_type_compatible(unresolved, to_id, &caller.language_id)
             {
                 return Some(ResolvedRelationship {
                     from_id,
@@ -172,6 +173,9 @@ impl ResolveStage {
                     caller.file_id,
                     &caller.language_id,
                 ) {
+                    return None;
+                }
+                if !self.is_instance_type_compatible(unresolved, to_id, &caller.language_id) {
                     return None;
                 }
                 Some(ResolvedRelationship {
@@ -240,6 +244,79 @@ impl ResolveStage {
             .filter(|&id| {
                 self.symbol_cache.get(id).is_some_and(|sym| {
                     behavior.is_receiver_compatible(&sym, receiver, caller.as_ref())
+                })
+            })
+            .collect();
+        Some(matches)
+    }
+
+    /// Returns the inferred receiver type for an instance call and the caller
+    /// symbol used for compatibility checks. `None` when the filter does not
+    /// apply: no metadata, static call, no receiver, no caller, no caller
+    /// signature, or the receiver does not name a parameter on the caller
+    /// (or its type is out of `extract_parameter_type` scope — generics-as-type,
+    /// impl/dyn Trait, tuples, fn types).
+    ///
+    /// Caller-signature is read directly off the `Function`/`Method` symbol;
+    /// bypasses per-parser `SymbolKind::Parameter` emission (today only
+    /// C/C++/Go/Lua emit Parameter symbols).
+    fn infer_receiver_type(
+        &self,
+        unresolved: &UnresolvedRelationship,
+        language_id: &LanguageId,
+    ) -> Option<(String, crate::Symbol)> {
+        let metadata = unresolved.metadata.as_ref()?;
+        if metadata.static_call {
+            return None;
+        }
+        let receiver = metadata.receiver.as_deref()?;
+        let behavior = self.get_behavior(language_id)?;
+        let caller = self.symbol_cache.get(unresolved.from_id?)?;
+        let signature = caller.signature.as_deref()?;
+        let type_name = behavior.extract_parameter_type(signature, receiver)?;
+        Some((type_name, caller))
+    }
+
+    /// Single-candidate gate (Found arm of `resolve_one`): when the inferred
+    /// receiver type is known, the candidate is compatible iff its containing
+    /// class matches via `is_receiver_compatible`. When no inference data is
+    /// available (filter doesn't apply), returns `true` (pass-through).
+    fn is_instance_type_compatible(
+        &self,
+        unresolved: &UnresolvedRelationship,
+        to_id: SymbolId,
+        language_id: &LanguageId,
+    ) -> bool {
+        let Some((type_name, caller)) = self.infer_receiver_type(unresolved, language_id) else {
+            return true;
+        };
+        let Some(behavior) = self.get_behavior(language_id) else {
+            return true;
+        };
+        let Some(candidate) = self.symbol_cache.get(to_id) else {
+            return true;
+        };
+        behavior.is_receiver_compatible(&candidate, &type_name, Some(&caller))
+    }
+
+    /// Filter candidates by inferred parameter-type for instance calls.
+    ///
+    /// Called from `disambiguate()` for the multi-candidate (Ambiguous) path;
+    /// the single-candidate (Found) path is gated by `is_instance_type_compatible`.
+    fn filter_by_instance_receiver_type(
+        &self,
+        candidates: &[SymbolId],
+        unresolved: &UnresolvedRelationship,
+        language_id: &LanguageId,
+    ) -> Option<Vec<SymbolId>> {
+        let (type_name, caller) = self.infer_receiver_type(unresolved, language_id)?;
+        let behavior = self.get_behavior(language_id)?;
+        let matches: Vec<SymbolId> = candidates
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.symbol_cache.get(id).is_some_and(|sym| {
+                    behavior.is_receiver_compatible(&sym, &type_name, Some(&caller))
                 })
             })
             .collect();
@@ -378,6 +455,22 @@ impl ResolveStage {
             {
                 if survivors.len() == 1 {
                     return Some(survivors[0]);
+                }
+            }
+        }
+        // Instance-call disambiguation via inferred parameter type: when the
+        // receiver names a parameter on the caller's signature, filter candidates
+        // to those whose containing type matches the inferred type. Zero
+        // survivors → NotFound (don't fall through to a wrong-class same-name
+        // pick); single survivor wins; multiple fall through.
+        if unresolved.kind == RelationKind::Calls {
+            if let Some(survivors) =
+                self.filter_by_instance_receiver_type(&filtered, unresolved, language_id)
+            {
+                match survivors.len() {
+                    1 => return Some(survivors[0]),
+                    0 => return None,
+                    _ => {}
                 }
             }
         }
