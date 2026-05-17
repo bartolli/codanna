@@ -866,6 +866,39 @@ pub trait LanguageBehavior: Send + Sync {
         context.is_compatible_relationship(from_kind, to_kind, rel_kind)
     }
 
+    /// Whether `candidate` belongs to the type identified by `receiver`.
+    ///
+    /// Used by the static-call disambiguator: when a call site is qualified
+    /// (e.g., `RawSymbol::new` or `Class.method`), reject candidates whose
+    /// containing type does not match the receiver. `caller` is provided so
+    /// language overrides can resolve self-aliases (`Self`, `self`, `cls`,
+    /// `this`) against the caller's containing type.
+    ///
+    /// Default match:
+    /// - `candidate.scope_context == ClassMember { class_name: Some(receiver) }`, or
+    /// - `candidate.module_path.ends_with("::{receiver}")` (languages that
+    ///   record containing-type via module_path rather than scope_context).
+    fn is_receiver_compatible(
+        &self,
+        candidate: &Symbol,
+        receiver: &str,
+        _caller: Option<&Symbol>,
+    ) -> bool {
+        if let Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some(class),
+        }) = candidate.scope_context.as_ref()
+        {
+            if &**class == receiver {
+                return true;
+            }
+        }
+        let suffix = format!("::{receiver}");
+        candidate
+            .module_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(&suffix))
+    }
+
     // ========== Relationship Resolution Methods ==========
 
     /// Disambiguate when multiple symbols share the same name

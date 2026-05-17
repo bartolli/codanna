@@ -57,3 +57,6 @@ mod test_pipeline_parse_stage;
 
 #[path = "integration/test_resolve_kind_filter.rs"]
 mod test_resolve_kind_filter;
+
+#[path = "integration/test_resolve_static_call.rs"]
+mod test_resolve_static_call;

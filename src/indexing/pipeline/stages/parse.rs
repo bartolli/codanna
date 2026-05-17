@@ -256,13 +256,22 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
     for call in parser.find_method_calls(content) {
         // Use caller_range when available, otherwise use call site (triggers fallback)
         let from_range = call.caller_range.unwrap_or(call.range);
-        relationships.push(RawRelationship::new(
-            call.caller,
-            from_range,
-            call.method_name,
-            call.range, // to_range = call site
-            crate::RelationKind::Calls,
-        ));
+        let mut meta = crate::relationship::RelationshipMetadata::new()
+            .at_position(call.range.start_line, call.range.start_column)
+            .static_call(call.is_static);
+        if let Some(ref receiver) = call.receiver {
+            meta = meta.with_receiver(receiver.as_str());
+        }
+        relationships.push(
+            RawRelationship::new(
+                call.caller,
+                from_range,
+                call.method_name,
+                call.range, // to_range = call site
+                crate::RelationKind::Calls,
+            )
+            .with_metadata(meta),
+        );
     }
 
     // Plain function calls (legacy - no caller_range available)
@@ -425,5 +434,113 @@ pub struct Foo {
         // This test documents that RawSymbol does NOT have an id field
         // If this compiles, the test passes
         assert_eq!(sym.name.as_ref(), "test");
+    }
+
+    #[test]
+    fn test_method_call_metadata_static_rust() {
+        let settings = Arc::new(Settings::default());
+        init_parser_cache(settings.clone());
+
+        let content = FileContent::new(
+            "test.rs".into(),
+            r#"
+fn build() {
+    let _s = String::new();
+}
+"#
+            .to_string(),
+            "static_call_hash".to_string(),
+        );
+
+        let parsed = parse_file(content, &settings).unwrap();
+        let rel = parsed
+            .raw_relationships
+            .iter()
+            .find(|r| r.to_name.as_ref() == "new" && r.kind == crate::RelationKind::Calls)
+            .expect("expected Calls relation for String::new");
+
+        let meta = rel
+            .metadata
+            .as_ref()
+            .expect("metadata should be populated from MethodCall");
+        assert_eq!(meta.receiver.as_deref(), Some("String"));
+        assert!(
+            meta.static_call,
+            "static_call must be true for Type::method()"
+        );
+    }
+
+    #[test]
+    fn test_method_call_metadata_instance_rust() {
+        let settings = Arc::new(Settings::default());
+        init_parser_cache(settings.clone());
+
+        let content = FileContent::new(
+            "test.rs".into(),
+            r#"
+fn add_items() {
+    let mut vec: Vec<i32> = Vec::new();
+    vec.push(1);
+}
+"#
+            .to_string(),
+            "instance_call_hash".to_string(),
+        );
+
+        let parsed = parse_file(content, &settings).unwrap();
+        let rel = parsed
+            .raw_relationships
+            .iter()
+            .find(|r| r.to_name.as_ref() == "push" && r.kind == crate::RelationKind::Calls)
+            .expect("expected Calls relation for vec.push");
+
+        let meta = rel
+            .metadata
+            .as_ref()
+            .expect("metadata should be populated from MethodCall");
+        assert_eq!(meta.receiver.as_deref(), Some("vec"));
+        assert!(
+            !meta.static_call,
+            "static_call must be false for instance method calls"
+        );
+    }
+
+    #[test]
+    fn test_rust_impl_method_class_name_populated() {
+        let settings = Arc::new(Settings::default());
+        init_parser_cache(settings.clone());
+
+        let content = FileContent::new(
+            "test.rs".into(),
+            r#"
+pub struct Foo;
+
+impl Foo {
+    pub fn new() -> Self { Foo }
+}
+"#
+            .to_string(),
+            "impl_class_name_hash".to_string(),
+        );
+
+        let parsed = parse_file(content, &settings).unwrap();
+        let new_method = parsed
+            .raw_symbols
+            .iter()
+            .find(|s| s.name.as_ref() == "new" && s.kind == crate::SymbolKind::Method)
+            .expect("expected Method `new` from impl block");
+
+        match new_method.scope_context.as_ref() {
+            Some(crate::symbol::ScopeContext::ClassMember { class_name }) => {
+                assert_eq!(
+                    class_name.as_deref(),
+                    Some("Foo"),
+                    "impl method must record its containing type in ClassMember.class_name"
+                );
+            }
+            other => panic!(
+                "expected ClassMember scope_context with class_name=Some(\"Foo\"); got {other:?}"
+            ),
+        }
     }
 }

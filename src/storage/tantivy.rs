@@ -58,6 +58,8 @@ pub struct IndexSchema {
     pub relation_line: Field,
     pub relation_column: Field,
     pub relation_context: Field,
+    pub relation_receiver: Field,
+    pub relation_static_call: Field,
 
     // File info fields
     pub file_id: Field,
@@ -147,6 +149,8 @@ impl IndexSchema {
         let relation_line = builder.add_u64_field("relation_line", STORED);
         let relation_column = builder.add_u64_field("relation_column", STORED);
         let relation_context = builder.add_text_field("relation_context", text_options.clone());
+        let relation_receiver = builder.add_text_field("relation_receiver", text_options.clone());
+        let relation_static_call = builder.add_u64_field("relation_static_call", STORED);
 
         // File info fields
         let file_id = builder.add_u64_field("file_id", indexed_u64_options.clone());
@@ -196,6 +200,8 @@ impl IndexSchema {
             relation_line,
             relation_column,
             relation_context,
+            relation_receiver,
+            relation_static_call,
             file_id,
             file_hash,
             file_timestamp,
@@ -1952,6 +1958,42 @@ impl DocumentIndex {
         Ok(paths)
     }
 
+    /// Reconstruct `RelationshipMetadata` from a stored relationship document.
+    /// Returns `None` unless both `relation_line` and `relation_column` are present
+    /// (matches the gate used by `get_relationships_from` / `get_relationships_to`).
+    fn metadata_for_relationship_doc(&self, doc: &Document) -> Option<RelationshipMetadata> {
+        let line = doc
+            .get_first(self.schema.relation_line)
+            .and_then(|v| v.as_u64())? as u32;
+        let column = doc
+            .get_first(self.schema.relation_column)
+            .and_then(|v| v.as_u64())? as u16;
+
+        let mut metadata = RelationshipMetadata::new().at_position(line, column);
+
+        if let Some(context) = doc
+            .get_first(self.schema.relation_context)
+            .and_then(|v| v.as_str())
+        {
+            metadata = metadata.with_context(context);
+        }
+        if let Some(receiver) = doc
+            .get_first(self.schema.relation_receiver)
+            .and_then(|v| v.as_str())
+        {
+            metadata = metadata.with_receiver(receiver);
+        }
+        if doc
+            .get_first(self.schema.relation_static_call)
+            .and_then(|v| v.as_u64())
+            .is_some_and(|n| n != 0)
+        {
+            metadata = metadata.static_call(true);
+        }
+
+        Some(metadata)
+    }
+
     /// Get relationships from a symbol
     pub fn get_relationships_from(
         &self,
@@ -1998,30 +2040,9 @@ impl DocumentIndex {
                     reason: "not a valid u32".to_string(),
                 })?;
 
-            // Extract metadata if present
             let mut relationship = Relationship::new(kind);
-
-            // Extract metadata fields
-            if let Some(line) = doc
-                .get_first(self.schema.relation_line)
-                .and_then(|v| v.as_u64())
-            {
-                if let Some(column) = doc
-                    .get_first(self.schema.relation_column)
-                    .and_then(|v| v.as_u64())
-                {
-                    let mut metadata =
-                        RelationshipMetadata::new().at_position(line as u32, column as u16);
-
-                    if let Some(context) = doc
-                        .get_first(self.schema.relation_context)
-                        .and_then(|v| v.as_str())
-                    {
-                        metadata = metadata.with_context(context);
-                    }
-
-                    relationship = relationship.with_metadata(metadata);
-                }
+            if let Some(metadata) = self.metadata_for_relationship_doc(&doc) {
+                relationship = relationship.with_metadata(metadata);
             }
 
             relationships.push((from_id, to_id, relationship));
@@ -2076,30 +2097,9 @@ impl DocumentIndex {
                     reason: "not a valid u32".to_string(),
                 })?;
 
-            // Extract metadata if present
             let mut relationship = Relationship::new(kind);
-
-            // Extract metadata fields
-            if let Some(line) = doc
-                .get_first(self.schema.relation_line)
-                .and_then(|v| v.as_u64())
-            {
-                if let Some(column) = doc
-                    .get_first(self.schema.relation_column)
-                    .and_then(|v| v.as_u64())
-                {
-                    let mut metadata =
-                        RelationshipMetadata::new().at_position(line as u32, column as u16);
-
-                    if let Some(context) = doc
-                        .get_first(self.schema.relation_context)
-                        .and_then(|v| v.as_str())
-                    {
-                        metadata = metadata.with_context(context);
-                    }
-
-                    relationship = relationship.with_metadata(metadata);
-                }
+            if let Some(metadata) = self.metadata_for_relationship_doc(&doc) {
+                relationship = relationship.with_metadata(metadata);
             }
 
             relationships.push((from_id, to_id, relationship));
@@ -2243,6 +2243,12 @@ impl DocumentIndex {
             }
             if let Some(ref context) = metadata.context {
                 doc.add_text(self.schema.relation_context, context.as_ref());
+            }
+            if let Some(ref receiver) = metadata.receiver {
+                doc.add_text(self.schema.relation_receiver, receiver.as_ref());
+            }
+            if metadata.static_call {
+                doc.add_u64(self.schema.relation_static_call, 1);
             }
         }
 
@@ -2570,7 +2576,9 @@ impl DocumentIndex {
             // Check for metadata
             let has_metadata = doc.get_first(self.schema.relation_line).is_some()
                 || doc.get_first(self.schema.relation_column).is_some()
-                || doc.get_first(self.schema.relation_context).is_some();
+                || doc.get_first(self.schema.relation_context).is_some()
+                || doc.get_first(self.schema.relation_receiver).is_some()
+                || doc.get_first(self.schema.relation_static_call).is_some();
 
             if has_metadata {
                 let mut metadata = RelationshipMetadata::new();
@@ -2592,6 +2600,19 @@ impl DocumentIndex {
                     .and_then(|v| v.as_str())
                 {
                     metadata.context = Some(context.into());
+                }
+                if let Some(receiver) = doc
+                    .get_first(self.schema.relation_receiver)
+                    .and_then(|v| v.as_str())
+                {
+                    metadata.receiver = Some(receiver.into());
+                }
+                if doc
+                    .get_first(self.schema.relation_static_call)
+                    .and_then(|v| v.as_u64())
+                    .is_some_and(|n| n != 0)
+                {
+                    metadata.static_call = true;
                 }
 
                 relationship = relationship.with_metadata(metadata);
@@ -2901,6 +2922,208 @@ mod tests {
         assert_eq!(*t, to_id);
         assert_eq!(r.kind, crate::RelationKind::Calls);
         assert_eq!(r.weight, 0.8);
+    }
+
+    #[test]
+    fn test_relation_metadata_roundtrip_from_query() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+        let meta = RelationshipMetadata::new()
+            .at_position(10, 4)
+            .with_receiver("RawSymbol")
+            .static_call(true);
+        let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+
+        index.store_relationship(from_id, to_id, &rel).unwrap();
+        index.commit_batch().unwrap();
+
+        let rels = index
+            .get_relationships_from(from_id, crate::RelationKind::Calls)
+            .unwrap();
+        assert_eq!(rels.len(), 1);
+
+        let (_, _, r) = &rels[0];
+        let m = r.metadata.as_ref().expect("metadata should be present");
+        assert_eq!(m.line, Some(10));
+        assert_eq!(m.column, Some(4));
+        assert_eq!(m.receiver.as_deref(), Some("RawSymbol"));
+        assert!(m.static_call);
+    }
+
+    #[test]
+    fn test_relation_metadata_roundtrip_to_query() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+        let meta = RelationshipMetadata::new()
+            .at_position(10, 4)
+            .with_receiver("RawSymbol")
+            .static_call(true);
+        let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+
+        index.store_relationship(from_id, to_id, &rel).unwrap();
+        index.commit_batch().unwrap();
+
+        let rels = index
+            .get_relationships_to(to_id, crate::RelationKind::Calls)
+            .unwrap();
+        assert_eq!(rels.len(), 1);
+
+        let (_, _, r) = &rels[0];
+        let m = r.metadata.as_ref().expect("metadata should be present");
+        assert_eq!(m.receiver.as_deref(), Some("RawSymbol"));
+        assert!(m.static_call);
+    }
+
+    #[test]
+    fn test_relation_metadata_roundtrip_all_query() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+        let meta = RelationshipMetadata::new()
+            .at_position(10, 4)
+            .with_receiver("RawSymbol")
+            .static_call(true);
+        let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+
+        index.store_relationship(from_id, to_id, &rel).unwrap();
+        index.commit_batch().unwrap();
+
+        let rels = index.query_relationships().unwrap();
+        assert_eq!(rels.len(), 1);
+
+        let (_, _, r) = &rels[0];
+        let m = r.metadata.as_ref().expect("metadata should be present");
+        assert_eq!(m.receiver.as_deref(), Some("RawSymbol"));
+        assert!(m.static_call);
+    }
+
+    #[test]
+    fn test_relation_metadata_persists_across_reopen() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let path = temp_dir.path().to_path_buf();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+
+        {
+            let index = DocumentIndex::new(&path, &settings).unwrap();
+            index.start_batch().unwrap();
+            let meta = RelationshipMetadata::new()
+                .at_position(10, 4)
+                .with_receiver("RawSymbol")
+                .static_call(true);
+            let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+            index.store_relationship(from_id, to_id, &rel).unwrap();
+            index.commit_batch().unwrap();
+        } // drop the writer; release the directory lock
+
+        let reopened = DocumentIndex::new(&path, &settings).unwrap();
+        let rels = reopened
+            .get_relationships_from(from_id, crate::RelationKind::Calls)
+            .unwrap();
+        assert_eq!(rels.len(), 1, "relationship must persist across reopen");
+
+        let (_, _, r) = &rels[0];
+        let m = r
+            .metadata
+            .as_ref()
+            .expect("metadata must persist across reopen");
+        assert_eq!(m.line, Some(10));
+        assert_eq!(m.column, Some(4));
+        assert_eq!(m.receiver.as_deref(), Some("RawSymbol"));
+        assert!(m.static_call);
+    }
+
+    #[test]
+    fn test_relation_metadata_legacy_defaults_via_from() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+        let meta = RelationshipMetadata::new().at_position(7, 2);
+        let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+
+        index.store_relationship(from_id, to_id, &rel).unwrap();
+        index.commit_batch().unwrap();
+
+        let rels = index
+            .get_relationships_from(from_id, crate::RelationKind::Calls)
+            .unwrap();
+        assert_eq!(rels.len(), 1);
+
+        let (_, _, r) = &rels[0];
+        let m = r.metadata.as_ref().expect("metadata should be present");
+        assert_eq!(m.line, Some(7));
+        assert_eq!(m.column, Some(2));
+        assert_eq!(m.receiver, None);
+        assert!(!m.static_call);
+    }
+
+    #[test]
+    fn test_relation_metadata_legacy_shape_across_reopen() {
+        // In-band proxy for "legacy `.codanna/index/` data written before
+        // slice 2": same on-disk doc shape (no `relation_receiver`,
+        // no `relation_static_call`), confirms additive schema reads back
+        // with defaults after a full close/reopen.
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let path = temp_dir.path().to_path_buf();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+
+        {
+            let index = DocumentIndex::new(&path, &settings).unwrap();
+            index.start_batch().unwrap();
+            let meta = RelationshipMetadata::new().at_position(7, 2);
+            let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+            index.store_relationship(from_id, to_id, &rel).unwrap();
+            index.commit_batch().unwrap();
+        }
+
+        let reopened = DocumentIndex::new(&path, &settings).unwrap();
+        let rels = reopened
+            .get_relationships_from(from_id, crate::RelationKind::Calls)
+            .unwrap();
+        assert_eq!(rels.len(), 1);
+
+        let (_, _, r) = &rels[0];
+        let m = r
+            .metadata
+            .as_ref()
+            .expect("metadata must persist across reopen");
+        assert_eq!(m.line, Some(7));
+        assert_eq!(m.column, Some(2));
+        assert_eq!(
+            m.receiver, None,
+            "legacy-shape doc must read back with receiver=None"
+        );
+        assert!(
+            !m.static_call,
+            "legacy-shape doc must read back with static_call=false"
+        );
     }
 
     #[test]

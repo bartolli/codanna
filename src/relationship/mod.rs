@@ -29,6 +29,8 @@ pub struct RelationshipMetadata {
     pub line: Option<u32>,
     pub column: Option<u16>,
     pub context: Option<Box<str>>,
+    pub receiver: Option<Box<str>>,
+    pub static_call: bool,
 }
 
 #[repr(C)]
@@ -124,6 +126,16 @@ impl RelationshipMetadata {
         self.context = Some(context.into());
         self
     }
+
+    pub fn with_receiver(mut self, receiver: impl Into<Box<str>>) -> Self {
+        self.receiver = Some(receiver.into());
+        self
+    }
+
+    pub fn static_call(mut self, static_call: bool) -> Self {
+        self.static_call = static_call;
+        self
+    }
 }
 
 pub struct RelationshipEdge {
@@ -173,6 +185,32 @@ mod tests {
         assert_eq!(meta.line, Some(10));
         assert_eq!(meta.column, Some(5));
         assert_eq!(meta.context.as_deref(), Some("inside main function"));
+    }
+
+    #[test]
+    fn test_metadata_default_includes_new_fields() {
+        let meta = RelationshipMetadata::default();
+        assert_eq!(meta.receiver, None);
+        assert!(!meta.static_call);
+    }
+
+    #[test]
+    fn test_metadata_with_receiver() {
+        let meta = RelationshipMetadata::new().with_receiver("RawSymbol");
+        assert_eq!(meta.receiver.as_deref(), Some("RawSymbol"));
+    }
+
+    #[test]
+    fn test_metadata_static_call_chains() {
+        let meta = RelationshipMetadata::new()
+            .at_position(42, 7)
+            .with_receiver("RawSymbol")
+            .static_call(true);
+
+        assert_eq!(meta.line, Some(42));
+        assert_eq!(meta.column, Some(7));
+        assert_eq!(meta.receiver.as_deref(), Some("RawSymbol"));
+        assert!(meta.static_call);
     }
 
     #[test]

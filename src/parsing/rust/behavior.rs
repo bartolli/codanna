@@ -114,6 +114,56 @@ impl LanguageBehavior for RustBehavior {
         Box::new(resolver.clone())
     }
 
+    fn is_receiver_compatible(
+        &self,
+        candidate: &crate::Symbol,
+        receiver: &str,
+        caller: Option<&crate::Symbol>,
+    ) -> bool {
+        // Rust-specific: `Self::method()` qualifies against the caller's
+        // containing type. Resolve the alias before delegating to the default
+        // class_name/module_path match.
+        if receiver == "Self" {
+            let Some(caller) = caller else {
+                return false;
+            };
+            let Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(caller_class),
+            }) = caller.scope_context.as_ref()
+            else {
+                return false;
+            };
+            let resolved: &str = caller_class;
+            if let Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(class),
+            }) = candidate.scope_context.as_ref()
+            {
+                if &**class == resolved {
+                    return true;
+                }
+            }
+            let suffix = format!("::{resolved}");
+            return candidate
+                .module_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with(&suffix));
+        }
+        // Default match for all other receivers.
+        if let Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some(class),
+        }) = candidate.scope_context.as_ref()
+        {
+            if &**class == receiver {
+                return true;
+            }
+        }
+        let suffix = format!("::{receiver}");
+        candidate
+            .module_path
+            .as_deref()
+            .is_some_and(|path| path.ends_with(&suffix))
+    }
+
     fn is_resolvable_symbol(&self, symbol: &crate::Symbol) -> bool {
         use crate::SymbolKind;
         use crate::symbol::ScopeContext;

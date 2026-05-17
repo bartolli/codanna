@@ -25,7 +25,8 @@ fn build_behaviors_for(langs: &[LanguageId]) -> HashMap<LanguageId, Arc<dyn Lang
     let factory = ParserFactory::new(Arc::new(settings));
     let mut map = HashMap::new();
     for lang in langs {
-        let behavior: Arc<dyn LanguageBehavior> = Arc::from(factory.create_behavior_from_registry(*lang));
+        let behavior: Arc<dyn LanguageBehavior> =
+            Arc::from(factory.create_behavior_from_registry(*lang));
         map.insert(*lang, behavior);
     }
     map
@@ -35,7 +36,13 @@ fn build_behaviors() -> HashMap<LanguageId, Arc<dyn LanguageBehavior>> {
     build_behaviors_for(&[rust_lang()])
 }
 
-fn make_symbol_lang(id: u32, name: &str, kind: SymbolKind, file_id: FileId, lang: LanguageId) -> Symbol {
+fn make_symbol_lang(
+    id: u32,
+    name: &str,
+    kind: SymbolKind,
+    file_id: FileId,
+    lang: LanguageId,
+) -> Symbol {
     let mut sym = Symbol::new(
         SymbolId::new(id).unwrap(),
         name,
@@ -70,7 +77,12 @@ fn make_unresolved_kind(
     }
 }
 
-fn make_unresolved(from_id: u32, from_name: &str, to_name: &str, file_id: FileId) -> UnresolvedRelationship {
+fn make_unresolved(
+    from_id: u32,
+    from_name: &str,
+    to_name: &str,
+    file_id: FileId,
+) -> UnresolvedRelationship {
     make_unresolved_kind(from_id, from_name, to_name, file_id, RelationKind::Calls)
 }
 
@@ -147,8 +159,20 @@ fn python_calls_to_field_rejected() {
     let field_file = FileId::new(2).unwrap();
 
     let cache = Arc::new(SymbolLookupCache::new());
-    cache.insert(make_symbol_lang(1, "caller", SymbolKind::Method, caller_file, python));
-    cache.insert(make_symbol_lang(2, "kind", SymbolKind::Field, field_file, python));
+    cache.insert(make_symbol_lang(
+        1,
+        "caller",
+        SymbolKind::Method,
+        caller_file,
+        python,
+    ));
+    cache.insert(make_symbol_lang(
+        2,
+        "kind",
+        SymbolKind::Field,
+        field_file,
+        python,
+    ));
 
     let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[python]));
 
@@ -163,7 +187,11 @@ fn python_calls_to_field_rejected() {
 
     let (batch, stats) = stage.resolve(&context);
 
-    assert_eq!(batch.len(), 0, "Python: Calls(Method, Field) must be rejected by the language's kind-compatibility table");
+    assert_eq!(
+        batch.len(),
+        0,
+        "Python: Calls(Method, Field) must be rejected by the language's kind-compatibility table"
+    );
     assert_eq!(stats.calls_resolved, 0);
 }
 
@@ -174,8 +202,20 @@ fn typescript_calls_to_field_rejected() {
     let field_file = FileId::new(2).unwrap();
 
     let cache = Arc::new(SymbolLookupCache::new());
-    cache.insert(make_symbol_lang(1, "caller", SymbolKind::Method, caller_file, typescript));
-    cache.insert(make_symbol_lang(2, "kind", SymbolKind::Field, field_file, typescript));
+    cache.insert(make_symbol_lang(
+        1,
+        "caller",
+        SymbolKind::Method,
+        caller_file,
+        typescript,
+    ));
+    cache.insert(make_symbol_lang(
+        2,
+        "kind",
+        SymbolKind::Field,
+        field_file,
+        typescript,
+    ));
 
     let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[typescript]));
 
@@ -190,7 +230,11 @@ fn typescript_calls_to_field_rejected() {
 
     let (batch, stats) = stage.resolve(&context);
 
-    assert_eq!(batch.len(), 0, "TypeScript: Calls(Method, Field) must be rejected — TS override at typescript/resolution.rs:415 excludes Field from Calls callees");
+    assert_eq!(
+        batch.len(),
+        0,
+        "TypeScript: Calls(Method, Field) must be rejected — TS override at typescript/resolution.rs:415 excludes Field from Calls callees"
+    );
     assert_eq!(stats.calls_resolved, 0);
 }
 
@@ -228,7 +272,10 @@ fn uses_to_field_rejected_unconditional_filter() {
         "Uses(Function, Field) must be rejected — Field is not in the default Uses callee set. Verifies kind-filter is unconditional across RelationKind, not Calls-only."
     );
     assert_eq!(stats.total_processed, 1);
-    assert_eq!(stats.calls_resolved, 0, "non-Calls relationship; this counter must stay at 0");
+    assert_eq!(
+        stats.calls_resolved, 0,
+        "non-Calls relationship; this counter must stay at 0"
+    );
 }
 
 #[test]
@@ -254,8 +301,15 @@ fn function_to_function_calls_passthrough_preserved() {
 
     let (batch, stats) = stage.resolve(&context);
 
-    assert_eq!(batch.len(), 1, "Calls(Function, Function) is structurally valid; filter must not over-reject");
-    let rel = batch.relationships.first().expect("one resolved relationship");
+    assert_eq!(
+        batch.len(),
+        1,
+        "Calls(Function, Function) is structurally valid; filter must not over-reject"
+    );
+    let rel = batch
+        .relationships
+        .first()
+        .expect("one resolved relationship");
     assert_eq!(rel.to_id, target_id);
     assert_eq!(stats.calls_resolved, 1);
 }
@@ -319,9 +373,19 @@ fn ambiguous_mixed_kind_candidates_filter_to_method_survivor() {
 
     let (batch, stats) = stage.resolve(&context);
 
-    assert_eq!(batch.len(), 1, "exactly one survivor after kind-filter on Ambiguous candidates");
-    let rel = batch.relationships.first().expect("one resolved relationship");
-    assert_eq!(rel.to_id, method_id, "kind-filter must select the Method, rejecting both Fields");
+    assert_eq!(
+        batch.len(),
+        1,
+        "exactly one survivor after kind-filter on Ambiguous candidates"
+    );
+    let rel = batch
+        .relationships
+        .first()
+        .expect("one resolved relationship");
+    assert_eq!(
+        rel.to_id, method_id,
+        "kind-filter must select the Method, rejecting both Fields"
+    );
     assert_eq!(stats.calls_resolved, 1);
 }
 

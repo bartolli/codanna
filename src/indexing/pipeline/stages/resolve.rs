@@ -131,7 +131,14 @@ impl ResolveStage {
         let from_kind = caller_symbol.as_ref().map(|sym| sym.kind);
 
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
-            if self.is_compatible(from_kind, to_id, unresolved.kind, caller.file_id, &caller.language_id) {
+            if self.is_compatible(
+                from_kind,
+                to_id,
+                unresolved.kind,
+                caller.file_id,
+                &caller.language_id,
+            ) && self.is_receiver_compat(to_id, unresolved, &caller.language_id)
+            {
                 return Some(ResolvedRelationship {
                     from_id,
                     to_id,
@@ -139,6 +146,14 @@ impl ResolveStage {
                     metadata: unresolved.metadata.clone(),
                 });
             }
+        }
+
+        // For qualified static calls (`Type::method` / `Type.method`), the
+        // tier-based `cache.resolve()` returns the local same-name candidate
+        // before consulting any non-local match. Bypass tier logic and filter
+        // candidates by receiver-compat directly.
+        if Self::is_qualified_static_call(unresolved) {
+            return self.resolve_static_call(from_id, from_kind, unresolved, &caller, context);
         }
 
         let result = self.symbol_cache.resolve(
@@ -150,7 +165,13 @@ impl ResolveStage {
 
         match result {
             ResolveResult::Found(to_id) => {
-                if !self.is_compatible(from_kind, to_id, unresolved.kind, caller.file_id, &caller.language_id) {
+                if !self.is_compatible(
+                    from_kind,
+                    to_id,
+                    unresolved.kind,
+                    caller.file_id,
+                    &caller.language_id,
+                ) {
                     return None;
                 }
                 Some(ResolvedRelationship {
@@ -181,10 +202,140 @@ impl ResolveStage {
         file_id: FileId,
         language_id: &LanguageId,
     ) -> bool {
-        let Some(from_kind) = from_kind else { return true };
-        let Some(to_sym) = self.symbol_cache.get(to_id) else { return true };
-        let Some(behavior) = self.get_behavior(language_id) else { return true };
+        let Some(from_kind) = from_kind else {
+            return true;
+        };
+        let Some(to_sym) = self.symbol_cache.get(to_id) else {
+            return true;
+        };
+        let Some(behavior) = self.get_behavior(language_id) else {
+            return true;
+        };
         behavior.is_compatible_relationship(from_kind, to_sym.kind, rel_kind, file_id)
+    }
+
+    /// Filter candidates by static-call receiver type.
+    ///
+    /// Returns `None` when the filter does not apply (no metadata, no receiver,
+    /// or `static_call == false`). When it applies, delegates the per-candidate
+    /// match to `LanguageBehavior::is_receiver_compatible` so each language can
+    /// extend the default `class_name`/`module_path` match with its own aliases.
+    fn filter_by_static_receiver(
+        &self,
+        candidates: &[SymbolId],
+        unresolved: &UnresolvedRelationship,
+        language_id: &LanguageId,
+    ) -> Option<Vec<SymbolId>> {
+        let metadata = unresolved.metadata.as_ref()?;
+        if !metadata.static_call {
+            return None;
+        }
+        let receiver = metadata.receiver.as_deref()?;
+        let behavior = self.get_behavior(language_id)?;
+        let caller = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
+
+        let matches: Vec<SymbolId> = candidates
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.symbol_cache.get(id).is_some_and(|sym| {
+                    behavior.is_receiver_compatible(&sym, receiver, caller.as_ref())
+                })
+            })
+            .collect();
+        Some(matches)
+    }
+
+    fn is_qualified_static_call(unresolved: &UnresolvedRelationship) -> bool {
+        if unresolved.kind != RelationKind::Calls {
+            return false;
+        }
+        let Some(metadata) = unresolved.metadata.as_ref() else {
+            return false;
+        };
+        metadata.static_call && metadata.receiver.is_some()
+    }
+
+    /// Resolution path for qualified static calls.
+    ///
+    /// Bypasses the tier-based `cache.resolve()` (which prefers a local
+    /// same-name match before consulting non-locals). Filters the full
+    /// candidate set by `LanguageBehavior::is_receiver_compatible` and
+    /// kind-compatibility, then delegates to `disambiguate()` when more
+    /// than one candidate survives.
+    fn resolve_static_call(
+        &self,
+        from_id: SymbolId,
+        from_kind: Option<crate::SymbolKind>,
+        unresolved: &UnresolvedRelationship,
+        caller: &CallerContext,
+        context: &ResolutionContext,
+    ) -> Option<ResolvedRelationship> {
+        let receiver = unresolved.metadata.as_ref()?.receiver.as_deref()?;
+        let behavior = self.get_behavior(&caller.language_id)?;
+        let caller_symbol = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
+
+        let filtered: Vec<SymbolId> = self
+            .symbol_cache
+            .lookup_candidates(&unresolved.to_name)
+            .into_iter()
+            .filter(|&id| {
+                if !self.is_compatible(
+                    from_kind,
+                    id,
+                    unresolved.kind,
+                    caller.file_id,
+                    &caller.language_id,
+                ) {
+                    return false;
+                }
+                self.symbol_cache.get(id).is_some_and(|sym| {
+                    behavior.is_receiver_compatible(&sym, receiver, caller_symbol.as_ref())
+                })
+            })
+            .collect();
+
+        let to_id = match filtered.len() {
+            0 => return None,
+            1 => filtered[0],
+            _ => self.disambiguate(&filtered, unresolved, context)?,
+        };
+        Some(ResolvedRelationship {
+            from_id,
+            to_id,
+            kind: unresolved.kind,
+            metadata: unresolved.metadata.clone(),
+        })
+    }
+
+    /// Whether a single resolved candidate is receiver-compatible.
+    ///
+    /// Returns `true` when the filter does not apply (no metadata, no receiver,
+    /// or `static_call == false`) — the caller should not reject in that case.
+    /// Otherwise consults `LanguageBehavior::is_receiver_compatible`.
+    fn is_receiver_compat(
+        &self,
+        to_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+        language_id: &LanguageId,
+    ) -> bool {
+        let Some(metadata) = unresolved.metadata.as_ref() else {
+            return true;
+        };
+        if !metadata.static_call {
+            return true;
+        }
+        let Some(receiver) = metadata.receiver.as_deref() else {
+            return true;
+        };
+        let Some(candidate) = self.symbol_cache.get(to_id) else {
+            return true;
+        };
+        let Some(behavior) = self.get_behavior(language_id) else {
+            return true;
+        };
+        let caller = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
+        behavior.is_receiver_compatible(&candidate, receiver, caller.as_ref())
     }
 
     /// Disambiguate among multiple candidates.
@@ -215,6 +366,20 @@ impl ResolveStage {
             .collect();
         if filtered.is_empty() {
             return None;
+        }
+
+        // Static-call disambiguation: when the call is qualified (`Type::method`
+        // or `Type.method`), filter to candidates whose containing type matches
+        // the receiver. Single survivor wins; empty/multiple fall through to
+        // existing priority logic operating on the kind-filtered set.
+        if unresolved.kind == RelationKind::Calls {
+            if let Some(survivors) =
+                self.filter_by_static_receiver(&filtered, unresolved, language_id)
+            {
+                if survivors.len() == 1 {
+                    return Some(survivors[0]);
+                }
+            }
         }
         let candidates = &filtered[..];
 

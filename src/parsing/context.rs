@@ -141,7 +141,7 @@ impl ParserContext {
                 }
                 ScopeType::Class => {
                     return ScopeContext::ClassMember {
-                        class_name: None, // Parsers can populate this if they track class names
+                        class_name: self.current_class.as_deref().map(Into::into),
                     };
                 }
                 ScopeType::Package | ScopeType::Namespace => {
