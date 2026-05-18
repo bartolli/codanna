@@ -63,3 +63,6 @@ mod test_resolve_static_call;
 
 #[path = "integration/test_resolve_param_type_inference.rs"]
 mod test_resolve_param_type_inference;
+
+#[path = "integration/test_resolve_php_keyword_static_call.rs"]
+mod test_resolve_php_keyword_static_call;

@@ -340,6 +340,11 @@ impl ResolveStage {
     /// candidate set by `LanguageBehavior::is_receiver_compatible` and
     /// kind-compatibility, then delegates to `disambiguate()` when more
     /// than one candidate survives.
+    ///
+    /// Pre-gate: `behavior.expand_static_class_keyword` rewrites keyword
+    /// receivers (PHP `self`/`static`/`parent`) to concrete class names.
+    /// Resolver is an empty `GenericInheritanceResolver`; arms that consult
+    /// `parent_of` yield `None` until the resolver is populated.
     fn resolve_static_call(
         &self,
         from_id: SymbolId,
@@ -348,9 +353,17 @@ impl ResolveStage {
         caller: &CallerContext,
         context: &ResolutionContext,
     ) -> Option<ResolvedRelationship> {
-        let receiver = unresolved.metadata.as_ref()?.receiver.as_deref()?;
+        let raw_receiver = unresolved.metadata.as_ref()?.receiver.as_deref()?;
         let behavior = self.get_behavior(&caller.language_id)?;
         let caller_symbol = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
+
+        let empty_resolver = crate::parsing::resolution::GenericInheritanceResolver::new();
+        let expanded = behavior.expand_static_class_keyword(
+            raw_receiver,
+            caller_symbol.as_ref(),
+            &empty_resolver,
+        );
+        let receiver: &str = expanded.as_deref().unwrap_or(raw_receiver);
 
         let filtered: Vec<SymbolId> = self
             .symbol_cache
