@@ -124,6 +124,9 @@ mod test_kotlin_method_call_static;
 #[path = "parsers/swift/test_method_call_static.rs"]
 mod test_swift_method_call_static;
 
+#[path = "parsers/swift/test_scope_context_handlers.rs"]
+mod test_swift_scope_context_handlers;
+
 #[path = "parsers/cpp/test_method_call_static.rs"]
 mod test_cpp_method_call_static;
 

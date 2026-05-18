@@ -7,11 +7,21 @@ use crate::parsing::{
     HandledNode, Import, Language, LanguageParser, MethodCall, NodeTracker, NodeTrackingState,
     ParserContext, ScopeType,
 };
+use crate::symbol::ScopeContext;
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
 use std::any::Any;
 use std::collections::HashSet;
 use tree_sitter::{Node, Parser};
+
+fn class_member_or_module(parent_class: Option<&str>) -> ScopeContext {
+    match parent_class {
+        Some(c) => ScopeContext::ClassMember {
+            class_name: Some(c.to_string().into()),
+        },
+        None => ScopeContext::Module,
+    }
+}
 
 // Node type constants for Swift
 const NODE_CLASS_DECLARATION: &str = "class_declaration";
@@ -413,6 +423,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
 
@@ -691,6 +702,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
 
@@ -783,6 +795,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
 
@@ -892,6 +905,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
     }
@@ -924,6 +938,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
     }
@@ -976,6 +991,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
     }
@@ -1014,6 +1030,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
     }
@@ -1048,6 +1065,7 @@ impl SwiftParser {
                 range,
             );
             symbol.visibility = Visibility::Public; // Enum cases are always public within the enum
+            symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
             symbols.push(symbol);
         }
@@ -1082,6 +1100,7 @@ impl SwiftParser {
         if let Some(doc) = doc_comment {
             symbol.doc_comment = Some(doc.into());
         }
+        symbol.scope_context = Some(class_member_or_module(self.context.current_class()));
 
         symbols.push(symbol);
     }
