@@ -1959,38 +1959,44 @@ impl DocumentIndex {
     }
 
     /// Reconstruct `RelationshipMetadata` from a stored relationship document.
-    /// Returns `None` unless both `relation_line` and `relation_column` are present
-    /// (matches the gate used by `get_relationships_from` / `get_relationships_to`).
+    /// Union-gate: returns `Some(metadata)` if ANY of `{line, column, context,
+    /// receiver, static_call}` is present; each field independently `Option`-set.
+    /// Symmetric with `store_relationship`'s per-field-conditional write.
     fn metadata_for_relationship_doc(&self, doc: &Document) -> Option<RelationshipMetadata> {
         let line = doc
             .get_first(self.schema.relation_line)
-            .and_then(|v| v.as_u64())? as u32;
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
         let column = doc
             .get_first(self.schema.relation_column)
-            .and_then(|v| v.as_u64())? as u16;
-
-        let mut metadata = RelationshipMetadata::new().at_position(line, column);
-
-        if let Some(context) = doc
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u16);
+        let context = doc
             .get_first(self.schema.relation_context)
-            .and_then(|v| v.as_str())
-        {
-            metadata = metadata.with_context(context);
-        }
-        if let Some(receiver) = doc
+            .and_then(|v| v.as_str());
+        let receiver = doc
             .get_first(self.schema.relation_receiver)
-            .and_then(|v| v.as_str())
-        {
-            metadata = metadata.with_receiver(receiver);
-        }
-        if doc
+            .and_then(|v| v.as_str());
+        let static_call = doc
             .get_first(self.schema.relation_static_call)
             .and_then(|v| v.as_u64())
-            .is_some_and(|n| n != 0)
+            .is_some_and(|n| n != 0);
+
+        if line.is_none()
+            && column.is_none()
+            && context.is_none()
+            && receiver.is_none()
+            && !static_call
         {
-            metadata = metadata.static_call(true);
+            return None;
         }
 
+        let mut metadata = RelationshipMetadata::new();
+        metadata.line = line;
+        metadata.column = column;
+        metadata.context = context.map(Into::into);
+        metadata.receiver = receiver.map(Into::into);
+        metadata.static_call = static_call;
         Some(metadata)
     }
 
@@ -2573,48 +2579,7 @@ impl DocumentIndex {
 
             let mut relationship = Relationship::new(kind).with_weight(weight);
 
-            // Check for metadata
-            let has_metadata = doc.get_first(self.schema.relation_line).is_some()
-                || doc.get_first(self.schema.relation_column).is_some()
-                || doc.get_first(self.schema.relation_context).is_some()
-                || doc.get_first(self.schema.relation_receiver).is_some()
-                || doc.get_first(self.schema.relation_static_call).is_some();
-
-            if has_metadata {
-                let mut metadata = RelationshipMetadata::new();
-
-                if let Some(line) = doc
-                    .get_first(self.schema.relation_line)
-                    .and_then(|v| v.as_u64())
-                {
-                    metadata.line = Some(line as u32);
-                }
-                if let Some(column) = doc
-                    .get_first(self.schema.relation_column)
-                    .and_then(|v| v.as_u64())
-                {
-                    metadata.column = Some(column as u16);
-                }
-                if let Some(context) = doc
-                    .get_first(self.schema.relation_context)
-                    .and_then(|v| v.as_str())
-                {
-                    metadata.context = Some(context.into());
-                }
-                if let Some(receiver) = doc
-                    .get_first(self.schema.relation_receiver)
-                    .and_then(|v| v.as_str())
-                {
-                    metadata.receiver = Some(receiver.into());
-                }
-                if doc
-                    .get_first(self.schema.relation_static_call)
-                    .and_then(|v| v.as_u64())
-                    .is_some_and(|n| n != 0)
-                {
-                    metadata.static_call = true;
-                }
-
+            if let Some(metadata) = self.metadata_for_relationship_doc(&doc) {
                 relationship = relationship.with_metadata(metadata);
             }
 
@@ -3050,6 +3015,63 @@ mod tests {
         assert_eq!(m.column, Some(4));
         assert_eq!(m.receiver.as_deref(), Some("RawSymbol"));
         assert!(m.static_call);
+    }
+
+    #[test]
+    fn test_three_reconstruction_paths_agree_on_context_only_metadata() {
+        // Story 8 slice 4 (backlog B): all three reconstruction sites must
+        // return the same metadata for the same on-disk doc. Context-only
+        // metadata exercises the gating divergence — write side emits each
+        // field independently, so read side must also reconstruct each field
+        // independently. Pre-refactor: get_relationships_from / _to use
+        // AND-gate (line+column required) → metadata=None. query_relationships
+        // uses union-gate → metadata=Some({context}). Post-refactor: all three
+        // converge on union-gate via metadata_for_relationship_doc().
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+        let meta = RelationshipMetadata::new().with_context("inside main function");
+        let rel = crate::Relationship::new(crate::RelationKind::Calls).with_metadata(meta);
+
+        index.store_relationship(from_id, to_id, &rel).unwrap();
+        index.commit_batch().unwrap();
+
+        let from_rels = index
+            .get_relationships_from(from_id, crate::RelationKind::Calls)
+            .unwrap();
+        let to_rels = index
+            .get_relationships_to(to_id, crate::RelationKind::Calls)
+            .unwrap();
+        let all_rels = index.query_relationships().unwrap();
+
+        let from_meta = from_rels[0].2.metadata.as_ref();
+        let to_meta = to_rels[0].2.metadata.as_ref();
+        let all_meta = all_rels[0].2.metadata.as_ref();
+
+        assert!(
+            from_meta.is_some(),
+            "get_relationships_from must reconstruct context-only metadata"
+        );
+        assert!(
+            to_meta.is_some(),
+            "get_relationships_to must reconstruct context-only metadata"
+        );
+        assert!(
+            all_meta.is_some(),
+            "query_relationships must reconstruct context-only metadata"
+        );
+
+        let from_meta = from_meta.unwrap();
+        assert_eq!(from_meta.context.as_deref(), Some("inside main function"));
+        assert_eq!(from_meta.line, None);
+        assert_eq!(from_meta.column, None);
+        assert_eq!(from_meta.context, to_meta.unwrap().context);
+        assert_eq!(from_meta.context, all_meta.unwrap().context);
     }
 
     #[test]
