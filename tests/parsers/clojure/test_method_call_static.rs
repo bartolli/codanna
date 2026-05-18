@@ -35,6 +35,49 @@ fn test_top_level_instance_interop_caller_is_module_sentinel() {
 }
 
 #[test]
+fn test_static_interop_emits_method_call() {
+    let code = r#"
+(defn f [] (Integer/parseInt "42"))
+"#;
+    let calls = method_calls(code);
+    let call = calls
+        .iter()
+        .find(|c| c.method_name == "parseInt")
+        .expect("parseInt MethodCall not emitted");
+    assert_eq!(call.caller, "f");
+    assert_eq!(call.receiver.as_deref(), Some("Integer"));
+    assert!(call.is_static);
+}
+
+#[test]
+fn test_top_level_static_interop_caller_is_module_sentinel() {
+    let code = r#"
+(Math/pow 2 3)
+"#;
+    let calls = method_calls(code);
+    let call = calls
+        .iter()
+        .find(|c| c.method_name == "pow")
+        .expect("pow MethodCall not emitted");
+    assert_eq!(call.caller, "<module>");
+    assert_eq!(call.receiver.as_deref(), Some("Math"));
+    assert!(call.is_static);
+}
+
+#[test]
+fn test_static_interop_excluded_from_find_calls_tuples() {
+    let code = r#"
+(defn f [] (Integer/parseInt "42"))
+"#;
+    let mut parser = ClojureParser::new().unwrap();
+    let tuples = parser.find_calls(code);
+    assert!(
+        tuples.iter().all(|(_, called, _)| !called.contains('/')),
+        "static interop must not also appear as a find_calls tuple (dedupe-gate guard)"
+    );
+}
+
+#[test]
 fn test_non_symbolic_receiver_skipped() {
     let code = r#"
 (defn f [] (.method 42))

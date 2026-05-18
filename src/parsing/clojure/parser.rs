@@ -565,12 +565,13 @@ impl ClojureParser {
                             | "import"
                             | "use"
                     ) {
-                        // Instance interop `(.method obj)` is emitted via `find_method_calls`
-                        // with receiver + stripped method name. Skip here to avoid pipeline
-                        // dedupe miss (different `to_name` between dotted vs stripped form).
-                        if callee.len() > 1 && callee.starts_with('.') {
-                            // fall through to recurse
-                        } else {
+                        // Interop forms (`(.method obj)`, `(Class/staticMethod ...)`)
+                        // are emitted via `find_method_calls` with receiver + stripped
+                        // method name. Skip here so the pipeline dedupe gate, which
+                        // compares `to_name` literally, doesn't double-emit.
+                        let is_instance_interop = callee.len() > 1 && callee.starts_with('.');
+                        let is_static_interop = first.child_by_field_name("namespace").is_some();
+                        if !is_instance_interop && !is_static_interop {
                             let caller = current_function.unwrap_or(MODULE_SCOPE);
                             calls.push((caller, callee, Self::range_from_node(&node)));
                         }
@@ -614,6 +615,19 @@ impl ClojureParser {
                                 );
                             }
                         }
+                    } else if let (Some(ns), Some(nm)) = (
+                        head.child_by_field_name("namespace"),
+                        head.child_by_field_name("name"),
+                    ) {
+                        // Static interop: `(Class/staticMethod ...)`
+                        let receiver = &code[ns.byte_range()];
+                        let method = &code[nm.byte_range()];
+                        let caller = func_context.unwrap_or(MODULE_SCOPE);
+                        out.push(
+                            MethodCall::new(caller, method, Self::range_from_node(&node))
+                                .with_receiver(receiver)
+                                .static_method(),
+                        );
                     }
                 }
             }
