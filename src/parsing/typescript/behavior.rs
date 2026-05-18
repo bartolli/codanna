@@ -10,7 +10,72 @@ use crate::{SymbolId, Visibility};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use tree_sitter::Language;
+use tree_sitter::{Language, Node};
+
+/// Walk for `required_parameter` / `optional_parameter` whose pattern matches
+/// `var_name`, then reduce its type_annotation. Returns `None` if no match or
+/// the type reduces to an unsupported kind.
+fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
+    if matches!(node.kind(), "required_parameter" | "optional_parameter") {
+        let pattern = node.child_by_field_name("pattern")?;
+        if pattern.kind() == "identifier" && &code[pattern.byte_range()] == var_name {
+            let type_anno = node.child_by_field_name("type")?;
+            return reduce_type_annotation(type_anno, code);
+        }
+    }
+    for child in node.children(&mut node.walk()) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Reduce a TS `type_annotation` (or any nested type node) to its bare name.
+/// Strips `T | null` / `T | undefined` unions to inner `T`. Generic types
+/// (`Array<T>`, `Foo<T>`) return the base identifier — list/dict-like methods
+/// do not live on `T`. Nested qualifier (`mod.Type`) returns the rightmost.
+/// Object types, function types, tuple types yield `None`.
+fn reduce_type_annotation(node: Node, code: &str) -> Option<String> {
+    let inner = if node.kind() == "type_annotation" {
+        node.named_child(0)?
+    } else {
+        node
+    };
+    match inner.kind() {
+        "type_identifier" | "predefined_type" => Some(code[inner.byte_range()].to_string()),
+        "nested_type_identifier" => {
+            let name = inner.child_by_field_name("name")?;
+            Some(code[name.byte_range()].to_string())
+        }
+        "generic_type" => {
+            let name = inner.child_by_field_name("name")?;
+            reduce_type_annotation(name, code)
+        }
+        "union_type" => {
+            let parts: Vec<_> = inner.named_children(&mut inner.walk()).collect();
+            if parts.len() != 2 {
+                return None;
+            }
+            let is_nullish = |n: Node| -> bool {
+                if n.kind() != "literal_type" {
+                    return false;
+                }
+                n.named_child(0)
+                    .is_some_and(|c| matches!(c.kind(), "null" | "undefined"))
+            };
+            let non_null = if is_nullish(parts[1]) {
+                parts[0]
+            } else if is_nullish(parts[0]) {
+                parts[1]
+            } else {
+                return None;
+            };
+            reduce_type_annotation(non_null, code)
+        }
+        _ => None,
+    }
+}
 
 use super::resolution::{TypeScriptInheritanceResolver, TypeScriptResolutionContext};
 
@@ -111,6 +176,14 @@ impl LanguageBehavior for TypeScriptBehavior {
 
     fn self_receiver_aliases(&self) -> &'static [&'static str] {
         &["this"]
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        let wrapped = format!("class __W__ {{ {signature} {{}} }}");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.get_language()).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
     }
 
     fn get_language(&self) -> Language {

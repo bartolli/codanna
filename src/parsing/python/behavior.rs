@@ -5,7 +5,85 @@ use crate::parsing::ResolutionScope;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::{FileId, Visibility};
 use std::path::{Path, PathBuf};
-use tree_sitter::Language;
+use tree_sitter::{Language, Node};
+
+/// Walk for a `typed_parameter` or `typed_default_parameter` whose name matches
+/// `var_name`, then reduce its type field. Returns `None` if no match or the
+/// type reduces to an unsupported kind.
+fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
+    match node.kind() {
+        "typed_parameter" => {
+            let ident = node.child(0)?;
+            if ident.kind() == "identifier" && &code[ident.byte_range()] == var_name {
+                let type_node = node.child_by_field_name("type")?;
+                return reduce_type_to_name(type_node, code);
+            }
+        }
+        "typed_default_parameter" => {
+            let ident = node.child_by_field_name("name")?;
+            if &code[ident.byte_range()] == var_name {
+                let type_node = node.child_by_field_name("type")?;
+                return reduce_type_to_name(type_node, code);
+            }
+        }
+        _ => {}
+    }
+    for child in node.children(&mut node.walk()) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Reduce a Python `type` AST node to its bare type name.
+/// Strips `Optional[T]` and PEP-604 `T | None` to inner `T`. Other generics
+/// (`List[T]`, `Dict[K,V]`, `Foo[T]`) return the base identifier — list/dict
+/// methods do not live on `T`. Attribute access (`mod.Type`) returns rightmost
+/// component. Unsupported kinds (tuple, callable, etc.) yield `None`.
+fn reduce_type_to_name(node: Node, code: &str) -> Option<String> {
+    let inner = if node.kind() == "type" {
+        node.child(0)?
+    } else {
+        node
+    };
+    match inner.kind() {
+        "identifier" => Some(code[inner.byte_range()].to_string()),
+        "attribute" => {
+            let name = inner.child_by_field_name("attribute")?;
+            Some(code[name.byte_range()].to_string())
+        }
+        "generic_type" => {
+            let base = inner.child(0)?;
+            if base.kind() != "identifier" {
+                return None;
+            }
+            let base_name = &code[base.byte_range()];
+            if base_name == "Optional" {
+                let type_param = inner.child(1)?;
+                if type_param.kind() != "type_parameter" {
+                    return None;
+                }
+                let inner_type = type_param.child_by_field_name("type").or_else(|| {
+                    type_param
+                        .children(&mut type_param.walk())
+                        .find(|c| c.kind() == "type")
+                })?;
+                return reduce_type_to_name(inner_type, code);
+            }
+            Some(base_name.to_string())
+        }
+        "binary_operator" => {
+            let right = inner.child_by_field_name("right")?;
+            if right.kind() != "none" {
+                return None;
+            }
+            let left = inner.child_by_field_name("left")?;
+            reduce_type_to_name(left, code)
+        }
+        _ => None,
+    }
+}
 
 /// Python language behavior implementation
 #[derive(Clone)]
@@ -116,6 +194,15 @@ impl LanguageBehavior for PythonBehavior {
 
     fn self_receiver_aliases(&self) -> &'static [&'static str] {
         &["self", "cls"]
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        let trimmed = signature.strip_prefix("async ").unwrap_or(signature);
+        let wrapped = format!("def __sig__{trimmed}: pass");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.language).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
     }
 
     fn format_module_path(&self, base_path: &str, _symbol_name: &str) -> String {
