@@ -359,6 +359,11 @@ pub trait InheritanceResolver: Send + Sync {
     /// Resolve which parent provides a method
     fn resolve_method(&self, type_name: &str, method: &str) -> Option<String>;
 
+    /// `extends` axis only; excludes interfaces and traits.
+    fn parent_of(&self, _child: &str) -> Option<String> {
+        None
+    }
+
     /// Get the inheritance chain for a type
     fn get_inheritance_chain(&self, type_name: &str) -> Vec<String>;
 

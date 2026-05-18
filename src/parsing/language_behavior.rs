@@ -339,6 +339,21 @@ pub trait LanguageBehavior: Send + Sync {
         &["self"]
     }
 
+    /// Consumed by `ResolveStage::resolve_static_call` pre-gate.
+    fn static_class_keywords(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Direct parent only; multi-level chain walk not modelled.
+    fn expand_static_class_keyword(
+        &self,
+        _receiver: &str,
+        _caller: Option<&crate::Symbol>,
+        _resolver: &dyn crate::parsing::InheritanceResolver,
+    ) -> Option<String> {
+        None
+    }
+
     /// Resolve an instance method call to its symbol ID
     ///
     /// Given a type name and method name, find the symbol ID for the method.

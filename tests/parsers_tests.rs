@@ -154,6 +154,9 @@ mod test_csharp_method_call_static;
 #[path = "parsers/php/test_is_receiver_compatible.rs"]
 mod test_php_is_receiver_compatible;
 
+#[path = "parsers/php/test_keyword_expansion.rs"]
+mod test_php_keyword_expansion;
+
 #[path = "parsers/python/test_is_receiver_compatible.rs"]
 mod test_python_is_receiver_compatible;
 

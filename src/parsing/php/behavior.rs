@@ -133,6 +133,31 @@ impl LanguageBehavior for PhpBehavior {
         &["$this"]
     }
 
+    fn static_class_keywords(&self) -> &'static [&'static str] {
+        &["parent", "self", "static"]
+    }
+
+    fn expand_static_class_keyword(
+        &self,
+        receiver: &str,
+        caller: Option<&crate::Symbol>,
+        resolver: &dyn crate::parsing::InheritanceResolver,
+    ) -> Option<String> {
+        let caller = caller?;
+        let crate::symbol::ScopeContext::ClassMember {
+            class_name: Some(caller_class),
+        } = caller.scope_context.as_ref()?
+        else {
+            return None;
+        };
+        match receiver {
+            "parent" => resolver.parent_of(caller_class),
+            // `static::` ≡ `self::` at index time; PHP late-binding is runtime-only.
+            "self" | "static" => Some(caller_class.to_string()),
+            _ => None,
+        }
+    }
+
     fn get_language(&self) -> Language {
         self.language.clone()
     }

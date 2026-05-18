@@ -373,6 +373,10 @@ impl InheritanceResolver for PhpInheritanceResolver {
         }
     }
 
+    fn parent_of(&self, child: &str) -> Option<String> {
+        self.class_extends.get(child).cloned()
+    }
+
     fn resolve_method(&self, type_name: &str, method_name: &str) -> Option<String> {
         // PHP method resolution order:
         // 1. Own methods
