@@ -12,9 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tree_sitter::{Language, Node};
 
-/// Walk for `required_parameter` / `optional_parameter` whose pattern matches
-/// `var_name`, then reduce its type_annotation. Returns `None` if no match or
-/// the type reduces to an unsupported kind.
+/// AST descent: `required_parameter` | `optional_parameter` matched by pattern.
 fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
     if matches!(node.kind(), "required_parameter" | "optional_parameter") {
         let pattern = node.child_by_field_name("pattern")?;
@@ -31,11 +29,10 @@ fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String>
     None
 }
 
-/// Reduce a TS `type_annotation` (or any nested type node) to its bare name.
-/// Strips `T | null` / `T | undefined` unions to inner `T`. Generic types
-/// (`Array<T>`, `Foo<T>`) return the base identifier — list/dict-like methods
-/// do not live on `T`. Nested qualifier (`mod.Type`) returns the rightmost.
-/// Object types, function types, tuple types yield `None`.
+/// Reduce TS `type_annotation` to bare name.
+/// `T | null`, `T | undefined` -> inner `T`. `generic_type` -> base.
+/// `nested_type_identifier` -> name field. object/function/tuple/intersection -> `None`.
+/// Invariant: array/list methods do not live on inner `T` — do not strip generics.
 fn reduce_type_annotation(node: Node, code: &str) -> Option<String> {
     let inner = if node.kind() == "type_annotation" {
         node.named_child(0)?

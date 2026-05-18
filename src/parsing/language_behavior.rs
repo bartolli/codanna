@@ -322,12 +322,10 @@ pub trait LanguageBehavior: Send + Sync {
         format!("{}{}{}", receiver, self.module_separator(), method)
     }
 
-    /// Extract the declared type of a named variable from a function signature.
-    ///
-    /// Per-language extension point for instance-call receiver-type filtering in
-    /// `disambiguate()`. Default returns `None`; languages override to parse their
-    /// own signature-string format (`name: Type` for Rust/Python/TS, `name Type`
-    /// for Go, `Type name` for Java).
+    /// Inferred parameter type for `var_name` in `signature`.
+    /// Consumed by `is_instance_type_compatible` (Found arm) and
+    /// `filter_by_instance_receiver_type` (Ambiguous arm) of `disambiguate()`.
+    /// Default `None`; languages override per signature-shape.
     fn extract_parameter_type(&self, _signature: &str, _var_name: &str) -> Option<String> {
         None
     }

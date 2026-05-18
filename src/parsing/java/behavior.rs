@@ -12,6 +12,65 @@ use crate::parsing::{
 use crate::symbol::ScopeContext;
 use crate::{FileId, Symbol, SymbolKind, Visibility};
 use std::path::{Path, PathBuf};
+use tree_sitter::Node;
+
+/// AST descent: `formal_parameter` matched by name field; `spread_parameter`
+/// matched by inner `variable_declarator.name`.
+fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
+    match node.kind() {
+        "formal_parameter" => {
+            let name = node.child_by_field_name("name")?;
+            if &code[name.byte_range()] == var_name {
+                let type_node = node.child_by_field_name("type")?;
+                return reduce_type_to_name(type_node, code);
+            }
+        }
+        "spread_parameter" => {
+            let declarator = node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "variable_declarator")?;
+            let name = declarator.child_by_field_name("name")?;
+            if &code[name.byte_range()] == var_name {
+                let type_node = node.named_child(0)?;
+                return reduce_type_to_name(type_node, code);
+            }
+        }
+        _ => {}
+    }
+    for child in node.children(&mut node.walk()) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Reduce Java type to bare name.
+/// `generic_type` -> base. `scoped_type_identifier` -> rightmost component.
+/// `array_type`, function/intersection types -> `None`.
+/// Invariant: array methods do not live on element `T` — do not strip `array_type`.
+fn reduce_type_to_name(node: Node, code: &str) -> Option<String> {
+    match node.kind() {
+        "type_identifier"
+        | "integral_type"
+        | "floating_point_type"
+        | "boolean_type"
+        | "void_type" => Some(code[node.byte_range()].to_string()),
+        "generic_type" => {
+            let base = node.named_child(0)?;
+            reduce_type_to_name(base, code)
+        }
+        "scoped_type_identifier" => {
+            let last = node.named_children(&mut node.walk()).last()?;
+            if last.kind() == "type_identifier" {
+                Some(code[last.byte_range()].to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
 
 /// Behavior handler for Java language
 #[derive(Clone)]
@@ -103,7 +162,14 @@ impl LanguageBehavior for JavaBehavior {
         false
     }
 
-    /// Get tree-sitter language
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        let wrapped = format!("class __W__ {{ {signature} {{}} }}");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.get_language()).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
+    }
+
     fn get_language(&self) -> tree_sitter::Language {
         tree_sitter_java::LANGUAGE.into()
     }

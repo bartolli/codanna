@@ -6,9 +6,50 @@ use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
 use crate::types::FileId;
 use std::path::{Path, PathBuf};
-use tree_sitter::Language;
+use tree_sitter::{Language, Node};
 
 use super::resolution::{GoInheritanceResolver, GoResolutionContext};
+
+/// AST descent: `parameter_declaration` matched by name field.
+fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
+    if node.kind() == "parameter_declaration" {
+        if let Some(name) = node.child_by_field_name("name") {
+            if &code[name.byte_range()] == var_name {
+                let type_node = node.child_by_field_name("type")?;
+                return reduce_type_to_name(type_node, code);
+            }
+        }
+    }
+    for child in node.children(&mut node.walk()) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Reduce Go type to bare name.
+/// `pointer_type` strips `*`. `qualified_type` -> name field. `generic_type` -> base.
+/// `slice_type`, `map_type`, `channel_type`, `array_type`, function/interface types -> `None`.
+/// Invariant: slice/map/channel ops are syntax, not methods — do not strip element type.
+fn reduce_type_to_name(node: Node, code: &str) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => Some(code[node.byte_range()].to_string()),
+        "pointer_type" => {
+            let inner = node.named_child(0)?;
+            reduce_type_to_name(inner, code)
+        }
+        "qualified_type" => {
+            let name = node.child_by_field_name("name")?;
+            Some(code[name.byte_range()].to_string())
+        }
+        "generic_type" => {
+            let base = node.named_child(0)?;
+            reduce_type_to_name(base, code)
+        }
+        _ => None,
+    }
+}
 
 /// Go language behavior implementation
 #[derive(Clone)]
@@ -50,6 +91,14 @@ impl LanguageBehavior for GoBehavior {
 
     fn get_language(&self) -> Language {
         tree_sitter_go::LANGUAGE.into()
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        let wrapped = format!("package __sig__\n{signature} {{}}");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.get_language()).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
     }
     fn module_separator(&self) -> &'static str {
         "/"

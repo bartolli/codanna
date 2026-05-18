@@ -7,9 +7,7 @@ use crate::{FileId, Visibility};
 use std::path::{Path, PathBuf};
 use tree_sitter::{Language, Node};
 
-/// Walk for a `typed_parameter` or `typed_default_parameter` whose name matches
-/// `var_name`, then reduce its type field. Returns `None` if no match or the
-/// type reduces to an unsupported kind.
+/// AST descent: `typed_parameter` | `typed_default_parameter` matched by name.
 fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
     match node.kind() {
         "typed_parameter" => {
@@ -36,11 +34,10 @@ fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String>
     None
 }
 
-/// Reduce a Python `type` AST node to its bare type name.
-/// Strips `Optional[T]` and PEP-604 `T | None` to inner `T`. Other generics
-/// (`List[T]`, `Dict[K,V]`, `Foo[T]`) return the base identifier — list/dict
-/// methods do not live on `T`. Attribute access (`mod.Type`) returns rightmost
-/// component. Unsupported kinds (tuple, callable, etc.) yield `None`.
+/// Reduce Python `type` to bare name.
+/// `Optional[T]`, `T | None` -> inner `T`. Other `generic_type` -> base.
+/// `attribute` -> rightmost. tuple/callable/type-param -> `None`.
+/// Invariant: list/dict methods do not live on element `T` — do not strip `List`/`Dict` to inner.
 fn reduce_type_to_name(node: Node, code: &str) -> Option<String> {
     let inner = if node.kind() == "type" {
         node.child(0)?

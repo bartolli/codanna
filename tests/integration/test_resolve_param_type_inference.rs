@@ -29,13 +29,60 @@ fn rust_lang() -> LanguageId {
 }
 
 fn build_behaviors() -> HashMap<LanguageId, Arc<dyn LanguageBehavior>> {
+    build_behaviors_for(&[rust_lang()])
+}
+
+fn build_behaviors_for(langs: &[LanguageId]) -> HashMap<LanguageId, Arc<dyn LanguageBehavior>> {
     let settings = Settings::load().expect("Failed to load settings");
     let factory = ParserFactory::new(Arc::new(settings));
     let mut map = HashMap::new();
-    let behavior: Arc<dyn LanguageBehavior> =
-        Arc::from(factory.create_behavior_from_registry(rust_lang()));
-    map.insert(rust_lang(), behavior);
+    for lang in langs {
+        let behavior: Arc<dyn LanguageBehavior> =
+            Arc::from(factory.create_behavior_from_registry(*lang));
+        map.insert(*lang, behavior);
+    }
     map
+}
+
+fn make_method_on_class_lang(
+    id: u32,
+    name: &str,
+    file_id: FileId,
+    class: Option<&str>,
+    lang: LanguageId,
+) -> Symbol {
+    let mut sym = Symbol::new(
+        SymbolId::new(id).unwrap(),
+        name,
+        SymbolKind::Method,
+        file_id,
+        Range::new(id, 0, id + 1, 0),
+    );
+    sym.language_id = Some(lang);
+    sym.visibility = Visibility::Public;
+    sym.scope_context = Some(ScopeContext::ClassMember {
+        class_name: class.map(Into::into),
+    });
+    sym
+}
+
+fn make_caller_with_signature_lang(
+    id: u32,
+    file_id: FileId,
+    signature: &str,
+    lang: LanguageId,
+) -> Symbol {
+    let mut sym = Symbol::new(
+        SymbolId::new(id).unwrap(),
+        "caller",
+        SymbolKind::Function,
+        file_id,
+        Range::new(id, 0, id + 1, 0),
+    );
+    sym.language_id = Some(lang);
+    sym.visibility = Visibility::Public;
+    sym.signature = Some(signature.into());
+    sym
 }
 
 fn make_method_on_class(id: u32, name: &str, file_id: FileId, class: Option<&str>) -> Symbol {
@@ -474,4 +521,339 @@ fn instance_call_external_type_resolves_notfound() {
         0,
         "external-type inference with no matching candidate must yield NotFound, not a wrong-class fall-through pick"
     );
+}
+
+#[test]
+fn python_instance_call_ambiguous_filters_to_inferred_type_class() {
+    let lang = LanguageId::new("python");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+    let store_file = FileId::new(3).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "(self, store: DocumentStore) -> None",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "process",
+        other_file,
+        Some("OtherStore"),
+        lang,
+    ));
+    let store_method_id = SymbolId::new(3).unwrap();
+    cache.insert(make_method_on_class_lang(
+        3,
+        "process",
+        store_file,
+        Some("DocumentStore"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    let rel = batch.relationships.first().expect("one resolved");
+    assert_eq!(
+        rel.to_id, store_method_id,
+        "Python Ambiguous-arm filter must select DocumentStore.process over OtherStore.process via parameter type"
+    );
+}
+
+#[test]
+fn python_instance_call_wrong_class_single_candidate_collapses_notfound() {
+    let lang = LanguageId::new("python");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "(self, store: DocumentStore) -> None",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "process",
+        other_file,
+        Some("OtherStore"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    assert_eq!(
+        batch.len(),
+        0,
+        "Python store.process() with store: DocumentStore must NOT resolve to OtherStore.process"
+    );
+}
+
+#[test]
+fn typescript_instance_call_ambiguous_filters_to_inferred_type_class() {
+    let lang = LanguageId::new("typescript");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+    let store_file = FileId::new(3).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "caller(store: DocumentStore): void",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "process",
+        other_file,
+        Some("OtherStore"),
+        lang,
+    ));
+    let store_method_id = SymbolId::new(3).unwrap();
+    cache.insert(make_method_on_class_lang(
+        3,
+        "process",
+        store_file,
+        Some("DocumentStore"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    let rel = batch.relationships.first().expect("one resolved");
+    assert_eq!(rel.to_id, store_method_id);
+}
+
+#[test]
+fn typescript_instance_call_wrong_class_single_candidate_collapses_notfound() {
+    let lang = LanguageId::new("typescript");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "async fetch(url: Url): Promise<void>",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "encode",
+        other_file,
+        Some("Buffer"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "encode", caller_file, "url")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    assert_eq!(batch.len(), 0);
+}
+
+#[test]
+fn go_instance_call_ambiguous_filters_to_inferred_type_class() {
+    let lang = LanguageId::new("go");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+    let store_file = FileId::new(3).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "func Caller(store *DocumentStore)",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "Process",
+        other_file,
+        Some("OtherStore"),
+        lang,
+    ));
+    let store_method_id = SymbolId::new(3).unwrap();
+    cache.insert(make_method_on_class_lang(
+        3,
+        "Process",
+        store_file,
+        Some("DocumentStore"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "Process", caller_file, "store")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    let rel = batch.relationships.first().expect("one resolved");
+    assert_eq!(rel.to_id, store_method_id);
+}
+
+#[test]
+fn go_instance_call_wrong_class_single_candidate_collapses_notfound() {
+    let lang = LanguageId::new("go");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "func (r *Receiver) Bar(node *tree_sitter.Node) error",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "Walk",
+        other_file,
+        Some("FileWalker"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "Walk", caller_file, "node")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    assert_eq!(batch.len(), 0);
+}
+
+#[test]
+fn java_instance_call_ambiguous_filters_to_inferred_type_class() {
+    let lang = LanguageId::new("java");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+    let store_file = FileId::new(3).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "public void caller(DocumentStore store)",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "process",
+        other_file,
+        Some("OtherStore"),
+        lang,
+    ));
+    let store_method_id = SymbolId::new(3).unwrap();
+    cache.insert(make_method_on_class_lang(
+        3,
+        "process",
+        store_file,
+        Some("DocumentStore"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    let rel = batch.relationships.first().expect("one resolved");
+    assert_eq!(rel.to_id, store_method_id);
+}
+
+#[test]
+fn java_instance_call_wrong_class_single_candidate_collapses_notfound() {
+    let lang = LanguageId::new("java");
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_with_signature_lang(
+        1,
+        caller_file,
+        "String bar(final DocumentStore store)",
+        lang,
+    ));
+    cache.insert(make_method_on_class_lang(
+        2,
+        "save",
+        other_file,
+        Some("FileWriter"),
+        lang,
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors_for(&[lang]));
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: lang,
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![instance_call_unresolved(1, "save", caller_file, "store")],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+    assert_eq!(batch.len(), 0);
 }
