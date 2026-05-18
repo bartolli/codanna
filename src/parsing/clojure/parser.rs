@@ -28,6 +28,30 @@ use std::collections::HashSet;
 use thiserror::Error;
 use tree_sitter::{Node, Parser, Tree};
 
+// Caller sentinel; literal matched by Python/Lua downstream resolvers.
+const MODULE_SCOPE: &str = "<module>";
+
+// `defmethod` boundary: caller = multi-name (child[1]); per-arm dispatch
+// stays a symbol-extraction concern.
+fn function_boundary_name<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+    if node.kind() != "list_lit" {
+        return None;
+    }
+    let head = node.named_child(0)?;
+    if head.kind() != "sym_lit" {
+        return None;
+    }
+    let head_text = &code[head.byte_range()];
+    if !matches!(head_text, "defn" | "defn-" | "defmethod") {
+        return None;
+    }
+    let name = node.named_child(1)?;
+    if name.kind() != "sym_lit" {
+        return None;
+    }
+    Some(&code[name.byte_range()])
+}
+
 /// Clojure-specific parsing errors
 #[derive(Error, Debug)]
 pub enum ClojureParseError {
@@ -491,7 +515,7 @@ impl ClojureParser {
         let mut calls = Vec::new();
 
         if let Some(tree) = &self.tree {
-            self.extract_calls_from_node(tree.root_node(), code, &mut calls);
+            self.extract_calls_from_node(tree.root_node(), code, &mut calls, None);
         }
 
         calls
@@ -502,7 +526,11 @@ impl ClojureParser {
         node: Node,
         code: &'a str,
         calls: &mut Vec<(&'a str, &'a str, Range)>,
+        current_function: Option<&'a str>,
     ) {
+        let new_function: Option<&'a str> = function_boundary_name(node, code);
+        let func_context = new_function.or(current_function);
+
         if node.kind() == "list_lit" {
             // First child of a list is typically the function being called
             if let Some(first) = node.named_child(0) {
@@ -536,8 +564,7 @@ impl ClojureParser {
                             | "import"
                             | "use"
                     ) {
-                        // Get caller from context (current function)
-                        let caller = "<module>"; // Placeholder - real impl tracks context
+                        let caller = current_function.unwrap_or(MODULE_SCOPE);
                         calls.push((caller, callee, Self::range_from_node(&node)));
                     }
                 }
@@ -547,7 +574,7 @@ impl ClojureParser {
         // Recurse
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            self.extract_calls_from_node(child, code, calls);
+            self.extract_calls_from_node(child, code, calls, func_context);
         }
     }
 
