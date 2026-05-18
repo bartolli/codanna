@@ -284,6 +284,60 @@ fn static_call_matches_via_module_path_fallback() {
 }
 
 #[test]
+fn static_call_multi_survivor_routes_through_disambiguate_priority() {
+    // Backlog D characterization (story 8 slice 3): when `resolve_static_call`'s
+    // receiver-compat filter leaves multiple survivors, control flows into
+    // `disambiguate`. Pre- and post-refactor, the same priority logic (local >
+    // imported > language) must select the same survivor. Pins behavior across
+    // the redundant-second-pass dedupe.
+    let caller_file = FileId::new(1).unwrap();
+    let other_file = FileId::new(2).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller(1, caller_file));
+    // Two `new` methods both on class `RawSymbol`; one lives in `other_file`,
+    // the other in the caller's file (local-match priority should pick it).
+    cache.insert(make_method_on_class(
+        2,
+        "new",
+        other_file,
+        Some("RawSymbol"),
+    ));
+    let local_new_id = SymbolId::new(3).unwrap();
+    cache.insert(make_method_on_class(
+        3,
+        "new",
+        caller_file,
+        Some("RawSymbol"),
+    ));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors());
+
+    let context = ResolutionContext {
+        file_id: caller_file,
+        language_id: rust_lang(),
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(caller_file)),
+        unresolved_rels: vec![static_call_unresolved(
+            1,
+            "new",
+            caller_file,
+            "RawSymbol",
+            true,
+        )],
+    };
+
+    let (batch, _stats) = stage.resolve(&context);
+
+    let rel = batch.relationships.first().expect("one resolved");
+    assert_eq!(
+        rel.to_id, local_new_id,
+        "multi-survivor static call must route through disambiguate's priority logic and pick the local match"
+    );
+}
+
+#[test]
 fn static_call_overrides_found_in_file_scope() {
     // A same-name `new` is in the caller's file scope (same-file local impl).
     // Without a receiver-compat gate on the `Found` arm, the resolver returns

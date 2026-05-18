@@ -186,7 +186,7 @@ impl ResolveStage {
                 })
             }
             ResolveResult::Ambiguous(candidates) => {
-                let to_id = self.disambiguate(&candidates, unresolved, context)?;
+                let to_id = self.disambiguate(&candidates, unresolved, context, false)?;
                 Some(ResolvedRelationship {
                     from_id,
                     to_id,
@@ -375,7 +375,7 @@ impl ResolveStage {
         let to_id = match filtered.len() {
             0 => return None,
             1 => filtered[0],
-            _ => self.disambiguate(&filtered, unresolved, context)?,
+            _ => self.disambiguate(&filtered, unresolved, context, true)?,
         };
         Some(ResolvedRelationship {
             from_id,
@@ -427,6 +427,7 @@ impl ResolveStage {
         candidates: &[SymbolId],
         unresolved: &UnresolvedRelationship,
         context: &ResolutionContext,
+        static_pre_filtered: bool,
     ) -> Option<SymbolId> {
         let file_id = context.file_id;
         let language_id = &context.language_id;
@@ -447,9 +448,9 @@ impl ResolveStage {
 
         // Static-call disambiguation: when the call is qualified (`Type::method`
         // or `Type.method`), filter to candidates whose containing type matches
-        // the receiver. Single survivor wins; empty/multiple fall through to
-        // existing priority logic operating on the kind-filtered set.
-        if unresolved.kind == RelationKind::Calls {
+        // the receiver. Skipped when `resolve_static_call` already applied the
+        // same filter before delegating here.
+        if !static_pre_filtered && unresolved.kind == RelationKind::Calls {
             if let Some(survivors) =
                 self.filter_by_static_receiver(&filtered, unresolved, language_id)
             {
