@@ -145,6 +145,12 @@ mod test_csharp_method_call_static;
 #[path = "parsers/php/test_is_receiver_compatible.rs"]
 mod test_php_is_receiver_compatible;
 
+#[path = "parsers/python/test_is_receiver_compatible.rs"]
+mod test_python_is_receiver_compatible;
+
+#[path = "parsers/go/test_is_receiver_compatible.rs"]
+mod test_go_is_receiver_compatible;
+
 #[path = "parsers/python/test_self_receiver_aliases.rs"]
 mod test_python_self_receiver_aliases;
 

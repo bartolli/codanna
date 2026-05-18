@@ -915,7 +915,8 @@ pub trait LanguageBehavior: Send + Sync {
                 return true;
             }
         }
-        let suffix = format!("::{receiver}");
+        let sep = self.module_separator();
+        let suffix = format!("{sep}{receiver}");
         candidate
             .module_path
             .as_deref()
