@@ -112,6 +112,9 @@ mod test_clojure_symbols;
 #[path = "parsers/clojure/test_caller_context.rs"]
 mod test_clojure_caller_context;
 
+#[path = "parsers/clojure/test_method_call_static.rs"]
+mod test_clojure_method_call_static;
+
 #[path = "parsers/lua/test_call_tracking.rs"]
 mod test_lua_call_tracking;
 

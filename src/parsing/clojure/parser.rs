@@ -19,7 +19,8 @@
 
 use crate::parsing::parser::check_recursion_depth;
 use crate::parsing::{
-    HandledNode, Import, Language, LanguageParser, NodeTracker, NodeTrackingState, ParserContext,
+    HandledNode, Import, Language, LanguageParser, MethodCall, NodeTracker, NodeTrackingState,
+    ParserContext,
 };
 use crate::types::SymbolCounter;
 use crate::{FileId, Range, Symbol, SymbolKind, Visibility};
@@ -564,8 +565,15 @@ impl ClojureParser {
                             | "import"
                             | "use"
                     ) {
-                        let caller = current_function.unwrap_or(MODULE_SCOPE);
-                        calls.push((caller, callee, Self::range_from_node(&node)));
+                        // Instance interop `(.method obj)` is emitted via `find_method_calls`
+                        // with receiver + stripped method name. Skip here to avoid pipeline
+                        // dedupe miss (different `to_name` between dotted vs stripped form).
+                        if callee.len() > 1 && callee.starts_with('.') {
+                            // fall through to recurse
+                        } else {
+                            let caller = current_function.unwrap_or(MODULE_SCOPE);
+                            calls.push((caller, callee, Self::range_from_node(&node)));
+                        }
                     }
                 }
             }
@@ -575,6 +583,45 @@ impl ClojureParser {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             self.extract_calls_from_node(child, code, calls, func_context);
+        }
+    }
+
+    fn extract_method_calls_from_node(
+        &self,
+        node: Node,
+        code: &str,
+        out: &mut Vec<MethodCall>,
+        current_function: Option<&str>,
+    ) {
+        let new_function: Option<&str> = function_boundary_name(node, code);
+        let func_context = new_function.or(current_function);
+
+        if node.kind() == "list_lit" {
+            if let Some(head) = node.named_child(0) {
+                if head.kind() == "sym_lit" {
+                    let head_text = &code[head.byte_range()];
+                    // Instance interop: `(.method obj)`. Bare `(. obj method)`
+                    // out of scope (handled by future story).
+                    if head_text.len() > 1 && head_text.starts_with('.') {
+                        if let Some(recv) = node.named_child(1) {
+                            if recv.kind() == "sym_lit" {
+                                let receiver = &code[recv.byte_range()];
+                                let method = &head_text[1..];
+                                let caller = func_context.unwrap_or(MODULE_SCOPE);
+                                out.push(
+                                    MethodCall::new(caller, method, Self::range_from_node(&node))
+                                        .with_receiver(receiver),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.extract_method_calls_from_node(child, code, out, func_context);
         }
     }
 
@@ -736,6 +783,15 @@ impl LanguageParser for ClojureParser {
     fn find_calls<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         self.tree = self.parser.parse(code, None);
         self.extract_calls(code)
+    }
+
+    fn find_method_calls(&mut self, code: &str) -> Vec<MethodCall> {
+        self.tree = self.parser.parse(code, None);
+        let mut out = Vec::new();
+        if let Some(tree) = &self.tree {
+            self.extract_method_calls_from_node(tree.root_node(), code, &mut out, None);
+        }
+        out
     }
 
     fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
