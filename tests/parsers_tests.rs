@@ -157,6 +157,9 @@ mod test_php_is_receiver_compatible;
 #[path = "parsers/php/test_keyword_expansion.rs"]
 mod test_php_keyword_expansion;
 
+#[path = "parsers/php/test_find_extends.rs"]
+mod test_php_find_extends;
+
 #[path = "parsers/python/test_is_receiver_compatible.rs"]
 mod test_python_is_receiver_compatible;
 

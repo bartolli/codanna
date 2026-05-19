@@ -19,6 +19,7 @@ use crate::indexing::pipeline::types::{
     CallerContext, ResolutionContext, ResolvedBatch, ResolvedRelationship, SymbolLookupCache,
     UnresolvedRelationship,
 };
+use crate::parsing::resolution::{GenericInheritanceResolver, InheritanceResolver};
 use crate::parsing::{Import, LanguageBehavior, LanguageId};
 use crate::types::{FileId, SymbolId};
 use crate::{RelationKind, Symbol};
@@ -32,6 +33,10 @@ pub struct ResolveStage {
     symbol_cache: Arc<SymbolLookupCache>,
     /// Behaviors by language_id (from CONTEXT stage)
     behaviors: HashMap<LanguageId, Arc<dyn LanguageBehavior>>,
+    /// Per-language inheritance resolvers populated from `Extends`
+    /// `UnresolvedRelationship`s by CONTEXT stage; absent ⇒ fall back to
+    /// empty `GenericInheritanceResolver` (`parent_of` yields `None`).
+    inheritance_resolvers: HashMap<LanguageId, Arc<dyn InheritanceResolver>>,
 }
 
 /// Statistics from resolution.
@@ -62,7 +67,19 @@ impl ResolveStage {
         Self {
             symbol_cache,
             behaviors,
+            inheritance_resolvers: HashMap::new(),
         }
+    }
+
+    /// Install per-language `InheritanceResolver`s (built by CONTEXT stage
+    /// from `Extends` `UnresolvedRelationship`s). Consumed by
+    /// `resolve_static_call` via `behavior.expand_static_class_keyword`.
+    pub fn with_inheritance_resolvers(
+        mut self,
+        resolvers: HashMap<LanguageId, Arc<dyn InheritanceResolver>>,
+    ) -> Self {
+        self.inheritance_resolvers = resolvers;
+        self
     }
 
     /// Get behavior for a language, if available.
@@ -357,12 +374,17 @@ impl ResolveStage {
         let behavior = self.get_behavior(&caller.language_id)?;
         let caller_symbol = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
 
-        let empty_resolver = crate::parsing::resolution::GenericInheritanceResolver::new();
-        let expanded = behavior.expand_static_class_keyword(
-            raw_receiver,
-            caller_symbol.as_ref(),
-            &empty_resolver,
-        );
+        let fallback;
+        let resolver: &dyn InheritanceResolver =
+            match self.inheritance_resolvers.get(&caller.language_id) {
+                Some(r) => r.as_ref(),
+                None => {
+                    fallback = GenericInheritanceResolver::new();
+                    &fallback
+                }
+            };
+        let expanded =
+            behavior.expand_static_class_keyword(raw_receiver, caller_symbol.as_ref(), resolver);
         let receiver: &str = expanded.as_deref().unwrap_or(raw_receiver);
 
         let filtered: Vec<SymbolId> = self

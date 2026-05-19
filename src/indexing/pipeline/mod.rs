@@ -772,9 +772,14 @@ impl Pipeline {
             others.len()
         );
         if !others.is_empty() {
+            // Sequencing invariant: populate per-language InheritanceResolvers from
+            // Extends relationships BEFORE build_contexts(others) consumes the vec
+            // and BEFORE any Calls resolution in this pass fires resolve_static_call.
+            let inheritance_resolvers = context_stage.build_inheritance_resolvers(&others);
             let contexts = context_stage.build_contexts(others);
             let behaviors = context_stage.behaviors();
-            let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
+            let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors)
+                .with_inheritance_resolvers(inheritance_resolvers);
 
             for ctx in contexts {
                 let rel_count = ctx.unresolved_rels.len() as u64;

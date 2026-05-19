@@ -953,6 +953,17 @@ impl LanguageParser for PhpParser {
         implementations
     }
 
+    fn find_extends<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut extends = Vec::with_capacity(4);
+        self.extract_extends_from_node(tree.root_node(), code, &mut extends);
+        extends
+    }
+
     fn find_uses<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
@@ -1154,19 +1165,21 @@ impl PhpParser {
         code: &'a str,
         implementations: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
+        // PHP grammar splits inheritance into two clauses:
+        //   class C extends B          ⇒ `base_clause`            (extract_extends_from_node)
+        //   class C implements I, J    ⇒ `class_interface_clause` (here)
         if node.kind() == "class_declaration" {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let class_name = &code[name_node.byte_range()];
 
-                // Check for implements clause
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    if child.kind() == "base_clause" {
-                        let mut base_cursor = child.walk();
-                        for base_child in child.children(&mut base_cursor) {
-                            if base_child.kind() == "name" {
-                                let interface_name = &code[base_child.byte_range()];
-                                let range = self.node_to_range(base_child);
+                    if child.kind() == "class_interface_clause" {
+                        let mut iface_cursor = child.walk();
+                        for iface_child in child.children(&mut iface_cursor) {
+                            if iface_child.kind() == "name" {
+                                let interface_name = &code[iface_child.byte_range()];
+                                let range = self.node_to_range(iface_child);
                                 implementations.push((class_name, interface_name, range));
                             }
                         }
@@ -1178,6 +1191,40 @@ impl PhpParser {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             self.extract_implementations_from_node(child, code, implementations);
+        }
+    }
+
+    fn extract_extends_from_node<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        extends: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        // PHP allows `extends` on class_declaration (single parent) and on
+        // interface_declaration (multiple parents). Both use `base_clause`.
+        if matches!(node.kind(), "class_declaration" | "interface_declaration") {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let derived = &code[name_node.byte_range()];
+
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    if child.kind() == "base_clause" {
+                        let mut base_cursor = child.walk();
+                        for base_child in child.children(&mut base_cursor) {
+                            if base_child.kind() == "name" {
+                                let base_name = &code[base_child.byte_range()];
+                                let range = self.node_to_range(base_child);
+                                extends.push((derived, base_name, range));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.extract_extends_from_node(child, code, extends);
         }
     }
 

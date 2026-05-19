@@ -9,10 +9,12 @@
 //! - Uses: ParserFactory to get LanguageBehavior per language_id (language-agnostic)
 //! - Outputs: `Vec<ResolutionContext>` for RESOLVE stage
 
+use crate::RelationKind;
 use crate::config::Settings;
 use crate::indexing::pipeline::types::{
     ResolutionContext, SymbolLookupCache, UnresolvedRelationship,
 };
+use crate::parsing::resolution::InheritanceResolver;
 use crate::parsing::{LanguageBehavior, LanguageId, ParserFactory};
 use crate::storage::DocumentIndex;
 use crate::types::FileId;
@@ -160,6 +162,76 @@ impl ContextStage {
             scope,
             unresolved_rels,
         }
+    }
+
+    /// Build per-language `InheritanceResolver` from `Extends`
+    /// `UnresolvedRelationship`s across all files.
+    ///
+    /// Inheritance is a cross-file axis (a class declared in one file extends a
+    /// class declared in another), so the resolver state is global per language
+    /// rather than per `ResolutionContext`. Consumed by `ResolveStage` via
+    /// `with_inheritance_resolvers`, threaded into
+    /// `LanguageBehavior::expand_static_class_keyword` (PHP `parent::` arm).
+    ///
+    /// Language dispatch: read `from_id`'s `language_id` from
+    /// `SymbolLookupCache`; instantiate the concrete resolver via
+    /// `LanguageBehavior::create_inheritance_resolver`. Languages without an
+    /// override get `GenericInheritanceResolver`, whose default `parent_of`
+    /// yields `None`.
+    pub fn build_inheritance_resolvers(
+        &self,
+        unresolved: &[UnresolvedRelationship],
+    ) -> HashMap<LanguageId, Arc<dyn InheritanceResolver>> {
+        let mut resolvers: HashMap<LanguageId, Box<dyn InheritanceResolver>> = HashMap::new();
+        let mut file_lang: HashMap<FileId, LanguageId> = HashMap::new();
+
+        for rel in unresolved {
+            if rel.kind != RelationKind::Extends {
+                continue;
+            }
+            let Some(language_id) = self.language_for_rel(rel, &mut file_lang) else {
+                continue;
+            };
+            let resolver = resolvers
+                .entry(language_id)
+                .or_insert_with(|| self.get_behavior(language_id).create_inheritance_resolver());
+            resolver.add_inheritance(
+                rel.from_name.to_string(),
+                rel.to_name.to_string(),
+                "extends",
+            );
+        }
+
+        resolvers
+            .into_iter()
+            .map(|(k, v)| (k, Arc::<dyn InheritanceResolver>::from(v)))
+            .collect()
+    }
+
+    /// Resolve the language for a relationship via `from_id` first, falling
+    /// back to any symbol on `file_id`. Cached per file.
+    fn language_for_rel(
+        &self,
+        rel: &UnresolvedRelationship,
+        cache: &mut HashMap<FileId, LanguageId>,
+    ) -> Option<LanguageId> {
+        if let Some(id) = cache.get(&rel.file_id) {
+            return Some(*id);
+        }
+        let lang = rel
+            .from_id
+            .and_then(|id| self.symbol_cache.get(id))
+            .and_then(|s| s.language_id)
+            .or_else(|| {
+                self.symbol_cache
+                    .symbols_in_file(rel.file_id)
+                    .into_iter()
+                    .next()
+                    .and_then(|sid| self.symbol_cache.get(sid))
+                    .and_then(|s| s.language_id)
+            })?;
+        cache.insert(rel.file_id, lang);
+        Some(lang)
     }
 
     /// Get statistics about the contexts built.
@@ -350,6 +422,48 @@ mod tests {
         assert_eq!(preserved.from_name.as_ref(), "caller");
         assert_eq!(preserved.to_name.as_ref(), "callee");
         assert_eq!(preserved.to_range, Some(to_range));
+    }
+
+    #[test]
+    fn test_build_inheritance_resolvers_php_extends() {
+        // CONTEXT scans `Extends` UnresolvedRelationship across all files and
+        // populates a per-language InheritanceResolver. Language dispatch goes
+        // through `from_id` ⇒ symbol_cache.get(id).language_id, and the
+        // language's `LanguageBehavior::create_inheritance_resolver` selects
+        // the concrete impl (PhpInheritanceResolver here, exposing `parent_of`
+        // over the `extends` axis).
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Arc::new(Settings::default());
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+        let factory = make_factory();
+
+        let php = LanguageId::new("php");
+        let cache = Arc::new(SymbolLookupCache::new());
+        // `Child` declared in file 1 ⇒ language lookup goes through file 1.
+        cache.insert(make_test_symbol(1, "Child", 1, php));
+        cache.insert(make_test_symbol(2, "Base", 2, php));
+
+        let extends = UnresolvedRelationship {
+            from_id: Some(SymbolId::new(1).unwrap()),
+            from_name: StdArc::from("Child"),
+            to_name: StdArc::from("Base"),
+            file_id: FileId::new(1).unwrap(),
+            kind: RelationKind::Extends,
+            metadata: None,
+            to_range: Some(Range::new(0, 0, 0, 0)),
+        };
+
+        let stage = ContextStage::new(cache, index, factory, settings);
+        let resolvers = stage.build_inheritance_resolvers(&[extends]);
+
+        let php_resolver = resolvers
+            .get(&php)
+            .expect("PHP resolver should be created from Extends relationship");
+        assert_eq!(
+            php_resolver.parent_of("Child").as_deref(),
+            Some("Base"),
+            "PhpInheritanceResolver must expose `extends` axis via parent_of"
+        );
     }
 
     #[test]

@@ -12,7 +12,8 @@ use codanna::indexing::pipeline::ResolveStage;
 use codanna::indexing::pipeline::types::{
     ResolutionContext, SymbolLookupCache, UnresolvedRelationship,
 };
-use codanna::parsing::resolution::GenericResolutionContext;
+use codanna::parsing::php::PhpInheritanceResolver;
+use codanna::parsing::resolution::{GenericResolutionContext, InheritanceResolver};
 use codanna::parsing::{LanguageBehavior, LanguageId, ParserFactory};
 use codanna::relationship::RelationshipMetadata;
 use codanna::symbol::ScopeContext;
@@ -155,6 +156,47 @@ fn static_keyword_resolves_identically_to_self() {
         .first()
         .expect("static::reset must resolve to Counter::reset");
     assert_eq!(rel.to_id, counter_reset_id);
+}
+
+#[test]
+fn parent_keyword_resolves_to_parent_class_method() {
+    // Slice 2b: populated `PhpInheritanceResolver` (Child extends Base) wired
+    // through `with_inheritance_resolvers` ⇒ `parent::hello()` from Child::go
+    // expands to "Base" and resolves to Base::hello, even when Base lives in a
+    // different file from the caller.
+    let file = FileId::new(1).unwrap();
+    let base_file = FileId::new(2).unwrap();
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(make_caller_on_class(1, "go", file, "Child"));
+    let base_hello_id = SymbolId::new(2).unwrap();
+    cache.insert(make_method_on_class(2, "hello", base_file, Some("Base")));
+
+    let mut php_resolver = PhpInheritanceResolver::new();
+    php_resolver.add_class_extends("Child".into(), "Base".into());
+    let mut resolvers: HashMap<LanguageId, Arc<dyn InheritanceResolver>> = HashMap::new();
+    resolvers.insert(php_lang(), Arc::new(php_resolver));
+
+    let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors())
+        .with_inheritance_resolvers(resolvers);
+
+    let context = ResolutionContext {
+        file_id: file,
+        language_id: php_lang(),
+        imports: vec![],
+        local_symbols: vec![],
+        scope: Box::new(GenericResolutionContext::new(file)),
+        unresolved_rels: vec![static_call_unresolved(1, "hello", file, "parent")],
+    };
+
+    let (batch, stats) = stage.resolve(&context);
+
+    let rel = batch
+        .relationships
+        .first()
+        .expect("parent::hello with populated resolver must resolve to Base::hello");
+    assert_eq!(rel.to_id, base_hello_id);
+    assert_eq!(stats.calls_resolved, 1);
 }
 
 #[test]
