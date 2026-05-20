@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.22] - 2026-05-19
+
+Method-call resolution accuracy: static calls disambiguate by receiver type, instance calls infer the receiver from caller-parameter types, and inheritance-aware resolution lands for PHP.
+
+### Breaking Changes
+
+- Method-call resolution is stricter. Calls that previously resolved to a wrong-class same-name method now return unresolved. Downstream consumers of `find_callers`, `analyze_impact`, and `get_calls` will see fewer (but more accurate) edges; cached resolution counts will not match.
+- Re-index recommended. The new Tantivy fields `relation_receiver` and `relation_static_call` drive receiver disambiguation; existing indexes load with defaults (`receiver=none`, `static=false`) and skip the new filtering until re-indexed. The on-disk format itself is additive — no migration step required.
+
+### Added
+
+- Static method calls disambiguate by receiver type. `Foo::bar()` (Rust), `Foo.bar()` (Python/TS/Java/Go), and equivalents now resolve to the candidate whose containing type matches the receiver. No-match returns unresolved instead of silently selecting an unrelated same-name method.
+- Instance method calls resolve via caller-parameter type inference for Rust, Python, TypeScript, Go, Java. In `fn f(x: Foo) { x.bar() }`, `bar` resolves against `Foo`'s methods.
+- PHP `parent::method()` resolves cross-file via per-language inheritance resolver built from `Extends` relationships; `self::` and `static::` resolve to the caller's class.
+- Method calls across 12 parsers (TypeScript, JavaScript, Java, Go, Kotlin, Swift, C++, PHP, C, Lua, GDScript, Python) carry receiver name and static-call flag; per-language `is_static` heuristics (Pascal-leading receiver, imported-package match, `::` token, etc.).
+- Clojure interop: `(.method obj)` resolves as instance call; `(Class/staticMethod)` resolves as static call.
+- Kind-compatibility filter rejects resolutions where the (source-kind, target-kind, relationship-kind) triple is invalid - e.g. a method-call relationship cannot resolve to a field.
+- MCP server: `allowed_hosts` and `allowed_origins` config; unset flows to rmcp defaults.
+
+### Changed
+
+- Tantivy relationship schema gains `relation_receiver` and `relation_static_call` fields (additive; see Breaking Changes).
+- `tantivy` 0.24 -> 0.26, `sha2` 0.10 -> 0.11 (`hex = "0.4"` added as runtime dep), `rmcp` -> 1.7 (consume-self `StreamableHttpServerConfig` builder).
+- `reqwest` pinned to 0.12 / `rustls-tls` -> ring (0.13's `rustls` feature pulls aws-lc-rs + bindgen).
+
+### Fixed
+
+- Receiver-compatibility suffix matching now uses each language's module separator (Python `.`, Go `/`, Java `.`) instead of hardcoded `::`. Previously matched only Rust and PHP path conventions.
+- Broken compare links in CHANGELOG.md.
+
 ## [0.9.21] - 2026-05-15
 
 ### Fixed
@@ -1312,6 +1342,7 @@ _Note: v0.5.0 was an internal milestone, not a public release. Changes were incl
 ### Performance
 - Significant CI pipeline optimization
 
+[0.9.22]: https://github.com/bartolli/codanna/compare/v0.9.21...v0.9.22
 [0.9.21]: https://github.com/bartolli/codanna/compare/v0.9.20...v0.9.21
 [0.9.20]: https://github.com/bartolli/codanna/compare/v0.9.19...v0.9.20
 [0.9.19]: https://github.com/bartolli/codanna/compare/v0.9.18...v0.9.19
