@@ -23,6 +23,7 @@ pub enum Language {
     Kotlin,
     Lua,
     Swift,
+    Svelte,
 }
 
 impl Language {
@@ -48,6 +49,7 @@ impl Language {
             Language::Kotlin => super::LanguageId::new("kotlin"),
             Language::Lua => super::LanguageId::new("lua"),
             Language::Swift => super::LanguageId::new("swift"),
+            Language::Svelte => super::LanguageId::new("svelte"),
         }
     }
 
@@ -72,6 +74,7 @@ impl Language {
             "kotlin" => Some(Language::Kotlin),
             "lua" => Some(Language::Lua),
             "swift" => Some(Language::Swift),
+            "svelte" => Some(Language::Svelte),
             _ => None,
         }
     }
@@ -111,6 +114,7 @@ impl Language {
             "kt" | "kts" => Some(Language::Kotlin),
             "lua" => Some(Language::Lua),
             "swift" => Some(Language::Swift),
+            "svelte" => Some(Language::Svelte),
             _ => None,
         }
     }
@@ -142,6 +146,7 @@ impl Language {
             Language::Kotlin => &["kt", "kts"],
             Language::Lua => &["lua"],
             Language::Swift => &["swift"],
+            Language::Svelte => &["svelte"],
         }
     }
 
@@ -163,6 +168,7 @@ impl Language {
             Language::Kotlin => "kotlin",
             Language::Lua => "lua",
             Language::Swift => "swift",
+            Language::Svelte => "svelte",
         }
     }
 
@@ -184,6 +190,7 @@ impl Language {
             Language::Kotlin => "Kotlin",
             Language::Lua => "Lua",
             Language::Swift => "Swift",
+            Language::Svelte => "Svelte",
         }
     }
 }

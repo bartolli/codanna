@@ -8,8 +8,8 @@ use super::{
     CppParser, GdscriptBehavior, GdscriptParser, GoBehavior, GoParser, JavaBehavior, JavaParser,
     JavaScriptBehavior, JavaScriptParser, KotlinBehavior, KotlinParser, Language, LanguageBehavior,
     LanguageId, LanguageParser, LuaBehavior, LuaParser, PhpBehavior, PhpParser, PythonBehavior,
-    PythonParser, RustBehavior, RustParser, SwiftBehavior, SwiftParser, TypeScriptBehavior,
-    TypeScriptParser, get_registry,
+    PythonParser, RustBehavior, RustParser, SvelteBehavior, SvelteParser, SwiftBehavior,
+    SwiftParser, TypeScriptBehavior, TypeScriptParser, get_registry,
 };
 use crate::{IndexError, IndexResult, Settings};
 use std::sync::Arc;
@@ -336,6 +336,14 @@ impl ParserFactory {
                     behavior: Box::new(SwiftBehavior::new()),
                 }
             }
+            Language::Svelte => {
+                let parser =
+                    SvelteParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                ParserWithBehavior {
+                    parser: Box::new(parser),
+                    behavior: Box::new(SvelteBehavior::new()),
+                }
+            }
         };
 
         Ok(result)
@@ -376,6 +384,7 @@ impl ParserFactory {
             Language::Php,
             Language::Python,
             Language::Rust,
+            Language::Svelte,
             Language::Swift,
             Language::TypeScript,
         ]
