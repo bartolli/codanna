@@ -1905,7 +1905,7 @@ impl CodeIntelligenceServer {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for CodeIntelligenceServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(

@@ -836,7 +836,7 @@ impl DocumentIndex {
             let query = TermQuery::new(symbol_id_term.clone(), IndexRecordOption::Basic);
 
             // Search for the document
-            let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+            let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
             if let Some((_score, doc_address)) = top_docs.first() {
                 // Retrieve the stored document
@@ -1193,7 +1193,8 @@ impl DocumentIndex {
 
         let final_query = BooleanQuery::new(all_clauses);
 
-        let top_docs = searcher.search(&final_query, &TopDocs::with_limit(limit))?;
+        let top_docs =
+            searcher.search(&final_query, &TopDocs::with_limit(limit).order_by_score())?;
 
         let mut results = Vec::new();
         for (score, doc_address) in top_docs {
@@ -1318,7 +1319,7 @@ impl DocumentIndex {
             IndexRecordOption::Basic,
         );
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
         if let Some((_score, doc_address)) = top_docs.first() {
             let doc = searcher.doc::<Document>(*doc_address)?;
@@ -1354,7 +1355,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
         if let Some((_score, doc_address)) = top_docs.first() {
             let doc = searcher.doc::<Document>(*doc_address)?;
@@ -1404,7 +1405,7 @@ impl DocumentIndex {
 
         let final_query = BooleanQuery::new(query_clauses);
 
-        let top_docs = searcher.search(&final_query, &TopDocs::with_limit(100))?;
+        let top_docs = searcher.search(&final_query, &TopDocs::with_limit(100).order_by_score())?;
         let mut symbols = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -1459,7 +1460,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(10).order_by_score())?;
 
         for (_score, doc_address) in top_docs {
             let doc = searcher.doc::<Document>(doc_address)?;
@@ -1493,7 +1494,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
         let mut symbols = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -1528,7 +1529,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
         let mut symbols = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -1553,7 +1554,7 @@ impl DocumentIndex {
             )) as Box<dyn Query>,
         )]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(limit).order_by_score())?;
 
         let mut symbols = Vec::new();
 
@@ -1775,7 +1776,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
         if let Some((_score, doc_address)) = top_docs.first() {
             let doc = searcher.doc::<Document>(*doc_address)?;
@@ -1940,7 +1941,7 @@ impl DocumentIndex {
 
         // Use TopDocs to get all file_info documents
         // Note: Adjust limit if you have more than 100k files
-        let collector = TopDocs::with_limit(100_000);
+        let collector = TopDocs::with_limit(100_000).order_by_score();
         let top_docs = searcher.search(&query, &collector)?;
 
         let mut paths = Vec::new();
@@ -2031,7 +2032,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
         let mut relationships = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -2088,7 +2089,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
         let mut relationships = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -2137,7 +2138,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(10000).order_by_score())?;
         let mut relationships = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -2187,7 +2188,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
         if let Some((_score, doc_address)) = top_docs.first() {
             let doc = searcher.doc::<Document>(*doc_address)?;
@@ -2404,7 +2405,7 @@ impl DocumentIndex {
 
         let searcher = self.reader.searcher();
         let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(1000))
+            .search(&query, &TopDocs::with_limit(1000).order_by_score())
             .map_err(|e| StorageError::General(format!("Import search failed: {e}")))?;
 
         let mut imports = Vec::new();
@@ -2522,7 +2523,7 @@ impl DocumentIndex {
         );
 
         // Use a collector that retrieves all documents
-        let collector = TopDocs::with_limit(1_000_000); // Adjust limit as needed
+        let collector = TopDocs::with_limit(1_000_000).order_by_score(); // Adjust limit as needed
         let top_docs = searcher.search(&query, &collector)?;
 
         let mut relationships = Vec::new();
@@ -2598,7 +2599,7 @@ impl DocumentIndex {
             IndexRecordOption::Basic,
         );
 
-        let collector = TopDocs::with_limit(100_000); // Adjust as needed
+        let collector = TopDocs::with_limit(100_000).order_by_score(); // Adjust as needed
         let top_docs = searcher.search(&query, &collector)?;
 
         let mut files = Vec::new();
@@ -2677,7 +2678,7 @@ impl DocumentIndex {
             (Occur::Must, Box::new(key_query) as Box<dyn Query>),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
 
         if let Some((_score, doc_address)) = top_docs.into_iter().next() {
             let doc: Document = searcher.doc(doc_address)?;

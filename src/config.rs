@@ -186,6 +186,14 @@ pub struct McpConfig {
     /// Maximum context size in bytes
     #[serde(default = "default_max_context_size")]
     pub max_context_size: usize,
+
+    /// `Host` allowlist for Streamable HTTP inbound. None ⇒ loopback-only default.
+    #[serde(default)]
+    pub allowed_hosts: Option<Vec<String>>,
+
+    /// `Origin` allowlist for Streamable HTTP inbound. None ⇒ no Origin check.
+    #[serde(default)]
+    pub allowed_origins: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -431,6 +439,8 @@ impl Default for McpConfig {
     fn default() -> Self {
         Self {
             max_context_size: default_max_context_size(),
+            allowed_hosts: None,
+            allowed_origins: None,
         }
     }
 }
@@ -927,6 +937,21 @@ impl Settings {
                 continue;
             } else if line.starts_with("max_context_size = ") {
                 result.push_str("# Maximum context size in bytes for MCP server\n");
+                result.push_str(line);
+                result.push('\n');
+                result.push_str(
+                    "\n# Host allowlist for Streamable HTTP inbound. None = loopback-only (localhost, 127.0.0.1, ::1).\n",
+                );
+                result.push_str("# Required for non-loopback binds (0.0.0.0, public hostnames).\n");
+                result.push_str(
+                    "# allowed_hosts = [\"codanna.example.com\", \"codanna.example.com:8080\"]\n",
+                );
+                result.push_str(
+                    "\n# Origin allowlist for Streamable HTTP inbound. None = no Origin check. MCP clients are not browsers.\n",
+                );
+                result.push_str("# Set when serving browser clients that send Origin headers.\n");
+                result.push_str("# allowed_origins = [\"https://app.example.com\"]\n");
+                continue;
             } else if line == "[semantic_search]" {
                 result.push_str("\n[semantic_search]\n");
                 result.push_str("# Semantic search for natural language code queries\n");

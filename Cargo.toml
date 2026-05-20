@@ -38,9 +38,9 @@ bin-dir = "{ name }-{ version }-windows-x64/{ bin }{ binary-ext }"
 [dependencies]
 anyhow = "1.0.102"
 bitflags = "2.11.0"
-clap = { version = "4.6.0", features = ["derive", "color", "env"] }
+clap = { version = "4.6.1", features = ["derive", "color", "env"] }
 crossbeam-channel = "0.5.15"
-dashmap = "6.1.0"
+dashmap = "6.2.1"
 dirs = "6.0.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
 ignore = "0.4.25"
@@ -48,18 +48,19 @@ memmap2 = "0.9.10"
 notify = "8.2.0"
 num_cpus = "1.17.0"
 parking_lot = "0.12.5"
-rayon = "1.11.0"
-rmcp = { version = "1.2.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
+rayon = "1.12.0"
+rmcp = { version = "1.7.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-sha2 = "0.10"
-tantivy = "0.25.0"
+sha2 = "0.11.0"
+hex = "0.4"
+tantivy = "0.26.1"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["full"] }
-toml = { version = "0.9.8", features = ["preserve_order"] }
+tokio = { version = "1.52.3", features = ["full"] }
+toml = { version = "1.1.2", features = ["preserve_order"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-tree-sitter = "0.26.7"
+tree-sitter = "0.26.9"
 tree-sitter-go = "0.25.0"
 tree-sitter-gdscript = "6.1.0"
 tree-sitter-java = "0.23.5"
@@ -67,7 +68,7 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-kotlin-codanna = "0.3.9"
 tree-sitter-php = "0.24.1"
 tree-sitter-python = "0.25.0"
-tree-sitter-rust = "0.24.0"
+tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
 walkdir = "2.5.0"
 # Pinned: fastembed >=5.7 uses ort 2.0.0-rc.11 (ONNX Runtime 1.23) whose
@@ -80,35 +81,35 @@ indicatif = "0.18.4"
 comfy-table = "7.2.2"
 console = "0.16.3"
 owo-colors = "4.3.0"
-axum = { version = "0.8.8", optional = true }
+axum = { version = "0.8.9", optional = true }
 tower = { version = "0.5.3", optional = true }
-tower-http = { version = "0.6.8", features = ["cors"], optional = true }
+tower-http = { version = "0.6.11", features = ["cors"], optional = true }
 serde_urlencoded = "0.7"
 tokio-util = "0.7.18"
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
-rustls = { version = "0.23.37", default-features = false, features = ["ring"], optional = true }
-rcgen = { version = "0.14.7", optional = true }
+rustls = { version = "0.23.40", default-features = false, features = ["ring"], optional = true }
+rcgen = { version = "0.14.8", optional = true }
 is-terminal = "0.4.17"
 regex = "1.12.3"
-tree-sitter-c = "0.24.1"
-tree-sitter-c-sharp = "0.23.1"
+tree-sitter-c = "0.24.2"
+tree-sitter-c-sharp = "0.23.5"
 tree-sitter-cpp = "0.23.4"
 chrono = "0.4.44"
 tempfile = "3.27.0"
 serde_json5 = "0.2.1"
-tree-sitter-swift = "0.7.1"
+tree-sitter-swift = "0.7.2"
 tree-sitter-lua = "0.5.0"
 tree-sitter-clojure-orchard = "0.2.5"
 glob = "0.3.3"
 async-trait = "0.1.89"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-sysinfo = "0.38.4"
-indexmap = { version = "2.13.0", features = ["serde"] }
+sysinfo = "0.39.2"
+indexmap = { version = "2.14.0", features = ["serde"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
 ort = { version = "=2.0.0-rc.10", default-features = false }
-testcontainers = "0.27.1"
+testcontainers = "0.27.3"
 thread-id = "5.1.0"
 
 [features]

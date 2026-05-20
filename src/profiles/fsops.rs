@@ -26,7 +26,7 @@ pub fn calculate_integrity(file_paths: &[String]) -> ProfileResult<String> {
     }
 
     let result = hasher.finalize();
-    Ok(format!("{result:x}"))
+    Ok(hex::encode(result))
 }
 
 /// Collect all files from a profile directory

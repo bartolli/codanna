@@ -165,7 +165,7 @@ pub fn verify_file_integrity(file_path: &Path, expected_checksum: &str) -> Plugi
     let mut hasher = Sha256::new();
     hasher.update(&content);
     let result = hasher.finalize();
-    let checksum = format!("{result:x}");
+    let checksum = hex::encode(result);
 
     Ok(checksum == expected_checksum)
 }
@@ -186,7 +186,7 @@ pub fn calculate_integrity(file_paths: &[String]) -> PluginResult<String> {
     }
 
     let result = hasher.finalize();
-    Ok(format!("{result:x}"))
+    Ok(hex::encode(result))
 }
 
 #[cfg(test)]

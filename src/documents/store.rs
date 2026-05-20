@@ -749,7 +749,7 @@ impl DocumentStore {
         let term = Term::from_field_text(self.schema.collection_name, name);
         let query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(100_000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(100_000).order_by_score())?;
         let count = top_docs.len();
 
         // Delete from tantivy
@@ -1169,7 +1169,8 @@ impl DocumentStore {
         let filter_query = BooleanQuery::new(subqueries);
 
         // Execute query
-        let top_docs = searcher.search(&filter_query, &TopDocs::with_limit(10_000))?;
+        let top_docs =
+            searcher.search(&filter_query, &TopDocs::with_limit(10_000).order_by_score())?;
 
         // Extract chunk IDs
         let mut chunk_ids = Vec::new();
@@ -1242,7 +1243,8 @@ impl DocumentStore {
             let term = Term::from_field_u64(self.schema.chunk_id, chunk_id.get() as u64);
             let tantivy_query = TermQuery::new(term, tantivy::schema::IndexRecordOption::Basic);
 
-            let top_docs = searcher.search(&tantivy_query, &TopDocs::with_limit(1))?;
+            let top_docs =
+                searcher.search(&tantivy_query, &TopDocs::with_limit(1).order_by_score())?;
 
             if let Some((_score, doc_address)) = top_docs.first() {
                 let doc: Document = searcher.doc(*doc_address)?;

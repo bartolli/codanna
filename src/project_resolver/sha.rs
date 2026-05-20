@@ -11,7 +11,7 @@ pub fn compute_sha256(content: &str) -> Sha256Hash {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     let result = hasher.finalize();
-    Sha256Hash(format!("{result:x}"))
+    Sha256Hash(hex::encode(result))
 }
 
 /// Compute SHA-256 hash of a file's contents

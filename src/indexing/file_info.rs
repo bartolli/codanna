@@ -55,7 +55,7 @@ pub fn get_file_mtime(path: &Path) -> Option<u64> {
 pub fn calculate_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Get current UTC timestamp in seconds since UNIX_EPOCH TEST 5

@@ -214,7 +214,7 @@ impl ProjectId {
         let result = hasher.finalize();
 
         // Take first 32 chars of hex for a shorter ID (still 128 bits of entropy)
-        Self(format!("{result:x}")[..32].to_string())
+        Self(hex::encode(result)[..32].to_string())
     }
 
     /// Create from existing string (for deserialization)
