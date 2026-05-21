@@ -1,6 +1,6 @@
 //! Nix grammar audit.
 
-use super::helpers::{run_comprehensive_analysis, AuditData, LanguageAuditConfig};
+use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
 use codanna::parsing::nix::audit::NixParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {

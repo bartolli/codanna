@@ -5,7 +5,7 @@ mod parser;
 mod resolution;
 
 pub use behavior::NixBehavior;
-pub(crate) use definition::register;
 pub use definition::NixLanguage;
+pub(crate) use definition::register;
 pub use parser::NixParser;
 pub use resolution::{NixInheritanceResolver, NixResolutionContext};

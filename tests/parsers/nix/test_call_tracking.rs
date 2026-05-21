@@ -1,5 +1,5 @@
-use codanna::parsing::nix::NixParser;
 use codanna::parsing::LanguageParser;
+use codanna::parsing::nix::NixParser;
 
 fn find_calls(code: &str) -> Vec<(String, String)> {
     let mut parser = NixParser::new().expect("Failed to create NixParser");

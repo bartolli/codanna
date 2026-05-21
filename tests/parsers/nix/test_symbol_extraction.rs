@@ -1,8 +1,8 @@
-use codanna::parsing::nix::NixParser;
+use codanna::SymbolKind;
 use codanna::parsing::Language;
 use codanna::parsing::LanguageParser;
+use codanna::parsing::nix::NixParser;
 use codanna::types::{FileId, SymbolCounter};
-use codanna::SymbolKind;
 
 fn parse(code: &str) -> Vec<codanna::Symbol> {
     let mut parser = NixParser::new().expect("Failed to create NixParser");
