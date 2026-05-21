@@ -15,6 +15,7 @@ pub mod language;
 pub mod language_behavior;
 pub mod lua;
 pub mod method_call;
+pub mod nix;
 pub mod parser;
 pub mod paths;
 pub mod php;
@@ -43,6 +44,7 @@ pub use language_behavior::{
 };
 pub use lua::{LuaBehavior, LuaParser};
 pub use method_call::{MethodCall, MethodCallResolver};
+pub use nix::{NixBehavior, NixParser};
 pub use parser::{
     HandledNode, LanguageParser, NodeTracker, NodeTrackingState, safe_substring_window,
     safe_truncate_str, truncate_for_display,

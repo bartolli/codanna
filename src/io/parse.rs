@@ -264,6 +264,7 @@ pub fn execute_parse(
         Language::Java => tree_sitter_java::LANGUAGE.into(),
         Language::Kotlin => tree_sitter_kotlin::language(),
         Language::Lua => tree_sitter_lua::LANGUAGE.into(),
+        Language::Nix => tree_sitter_nix::LANGUAGE.into(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
     };
 

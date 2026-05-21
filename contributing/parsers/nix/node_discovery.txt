@@ -1,0 +1,87 @@
+=== Nix Language NODE MAPPING ===
+  Generated: 2026-05-21 12:23:48 UTC
+  ABI Version: 13
+  Node kind count: 63
+
+=== ROOT NODES ===
+  + source_code                         -> ID: 62
+
+=== BINDING NODES ===
+  + binding_set                         -> ID: 91
+  + binding                             -> ID: 92
+  + attrpath                            -> ID: 95
+  + identifier                          -> ID: 2
+
+=== ATTRSET NODES ===
+  + attrset_expression                  -> ID: 86
+  + rec_attrset_expression              -> ID: 88
+
+=== FUNCTION NODES ===
+  + function_expression                 -> ID: 68
+  + formals                             -> ID: 69
+  + formal                              -> ID: 70
+  + apply_expression                    -> ID: 81
+
+=== SCOPE NODES ===
+  + let_expression                      -> ID: 73
+  + with_expression                     -> ID: 72
+  + inherit                             -> ID: 50
+  + inherit_from                        -> ID: 94
+  + inherited_attrs                     -> ID: 96
+
+=== EXPRESSION NODES ===
+  + if_expression                       -> ID: 75
+  + assert_expression                   -> ID: 71
+  + select_expression                   -> ID: 83
+  + binary_expression                   -> ID: 79
+  + parenthesized_expression            -> ID: 85
+  + list_expression                     -> ID: 99
+  + variable_expression                 -> ID: 64
+
+=== LITERAL NODES ===
+  + integer_expression                  -> ID: 3
+  + string_expression                   -> ID: 89
+  + indented_string_expression          -> ID: 90
+  + path_expression                     -> ID: 65
+  + spath_expression                    -> ID: 6
+  + interpolation                       -> ID: 98
+
+=== COMMENT NODES ===
+  + comment                             -> ID: 55
+
+=== UNCATEGORIZED NODES ===
+  + !=                                  -> ID: 26
+  + "                                   -> ID: 44
+  + ${                                  -> ID: 51
+  + ''                                  -> ID: 47
+  + (                                   -> ID: 41
+  + )                                   -> ID: 42
+  + *                                   -> ID: 34
+  + +                                   -> ID: 33
+  + ,                                   -> ID: 12
+  + .                                   -> ID: 39
+  + /                                   -> ID: 35
+  + :                                   -> ID: 8
+  + ;                                   -> ID: 16
+  + <                                   -> ID: 27
+  + =                                   -> ID: 49
+  + ==                                  -> ID: 25
+  + ?                                   -> ID: 13
+  + @                                   -> ID: 9
+  + [                                   -> ID: 53
+  + ]                                   -> ID: 54
+  + assert                              -> ID: 15
+  + ellipses                            -> ID: 14
+  + else                                -> ID: 22
+  + if                                  -> ID: 20
+  + in                                  -> ID: 19
+  + let                                 -> ID: 18
+  + path_fragment                       -> ID: 59
+  + rec                                 -> ID: 43
+  + string_fragment                     -> ID: 56
+  + then                                -> ID: 21
+  + with                                -> ID: 17
+  + {                                   -> ID: 10
+  + }                                   -> ID: 11
+
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar
