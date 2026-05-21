@@ -190,6 +190,10 @@ impl ParserFactory {
                 let parser = SwiftParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 Ok(Box::new(parser))
             }
+            Language::Svelte => {
+                let parser = SvelteParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                Ok(Box::new(parser))
+            }
         }
     }
 

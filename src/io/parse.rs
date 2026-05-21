@@ -265,6 +265,7 @@ pub fn execute_parse(
         Language::Kotlin => tree_sitter_kotlin::language(),
         Language::Lua => tree_sitter_lua::LANGUAGE.into(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::Svelte => tree_sitter_svelte_next::LANGUAGE.into(),
     };
 
     parser
