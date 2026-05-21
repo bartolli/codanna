@@ -1,5 +1,5 @@
-use codanna::parsing::LanguageParser;
 use codanna::parsing::nix::NixParser;
+use codanna::parsing::LanguageParser;
 
 fn find_calls(code: &str) -> Vec<(String, String)> {
     let mut parser = NixParser::new().expect("Failed to create NixParser");
@@ -32,7 +32,9 @@ fn test_callpackage_pattern() {
     let calls = find_calls(code);
     println!("callPackage calls: {calls:?}");
     assert!(
-        calls.iter().any(|(_, callee)| callee.contains("callPackage")),
+        calls
+            .iter()
+            .any(|(_, callee)| callee.contains("callPackage")),
         "expected callPackage call, got {calls:?}"
     );
 }
@@ -69,7 +71,10 @@ fn test_find_imports_basic() {
     let file_id = FileId::new(1).unwrap();
     let imports = parser.find_imports(code, file_id);
     println!("imports: {imports:?}");
-    assert!(!imports.is_empty(), "expected at least one import, got none");
+    assert!(
+        !imports.is_empty(),
+        "expected at least one import, got none"
+    );
 }
 
 #[test]

@@ -1,8 +1,8 @@
-use crate::Visibility;
-use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
+use crate::parsing::LanguageBehavior;
 use crate::types::FileId;
+use crate::Visibility;
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
 
@@ -133,8 +133,8 @@ impl LanguageBehavior for NixBehavior {
     }
 
     fn is_resolvable_symbol(&self, symbol: &crate::Symbol) -> bool {
-        use crate::SymbolKind;
         use crate::symbol::ScopeContext;
+        use crate::SymbolKind;
 
         let module_level = matches!(
             symbol.kind,

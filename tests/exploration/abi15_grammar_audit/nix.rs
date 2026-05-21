@@ -1,6 +1,6 @@
 //! Nix grammar audit.
 
-use super::helpers::{AuditData, LanguageAuditConfig, run_comprehensive_analysis};
+use super::helpers::{run_comprehensive_analysis, AuditData, LanguageAuditConfig};
 use codanna::parsing::nix::audit::NixParserAudit;
 
 const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
@@ -13,25 +13,14 @@ const CONFIG: LanguageAuditConfig = LanguageAuditConfig {
 
 fn node_categories() -> Vec<(&'static str, Vec<&'static str>)> {
     vec![
-        (
-            "ROOT NODES",
-            vec!["source_code"],
-        ),
+        ("ROOT NODES", vec!["source_code"]),
         (
             "BINDING NODES",
-            vec![
-                "binding_set",
-                "binding",
-                "attrpath",
-                "identifier",
-            ],
+            vec!["binding_set", "binding", "attrpath", "identifier"],
         ),
         (
             "ATTRSET NODES",
-            vec![
-                "attrset_expression",
-                "rec_attrset_expression",
-            ],
+            vec!["attrset_expression", "rec_attrset_expression"],
         ),
         (
             "FUNCTION NODES",

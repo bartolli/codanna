@@ -1,6 +1,6 @@
+use codanna::parsing::nix::NixParser;
 use codanna::parsing::Language;
 use codanna::parsing::LanguageParser;
-use codanna::parsing::nix::NixParser;
 use codanna::types::{FileId, SymbolCounter};
 use codanna::SymbolKind;
 
@@ -95,7 +95,10 @@ fn test_let_bindings() {
 #[test]
 fn test_let_function_binding() {
     let symbols = parse(r#"let double = x: x * 2; in double 5"#);
-    let double = symbols.iter().find(|s| s.name.as_ref() == "double").unwrap();
+    let double = symbols
+        .iter()
+        .find(|s| s.name.as_ref() == "double")
+        .unwrap();
     assert_eq!(double.kind, SymbolKind::Function);
 }
 
@@ -116,7 +119,10 @@ fn test_inherit_emits_variables() {
     let symbols = parse(r#"{ inherit stdenv fetchurl; }"#);
     let names: Vec<&str> = symbols.iter().map(|s| s.name.as_ref()).collect();
     assert!(names.contains(&"stdenv"), "expected stdenv, got {names:?}");
-    assert!(names.contains(&"fetchurl"), "expected fetchurl, got {names:?}");
+    assert!(
+        names.contains(&"fetchurl"),
+        "expected fetchurl, got {names:?}"
+    );
 }
 
 #[test]
@@ -124,7 +130,10 @@ fn test_inherit_from_emits_variables() {
     let symbols = parse(r#"{ inherit (pkgs) stdenv fetchurl; }"#);
     let names: Vec<&str> = symbols.iter().map(|s| s.name.as_ref()).collect();
     assert!(names.contains(&"stdenv"), "expected stdenv, got {names:?}");
-    assert!(names.contains(&"fetchurl"), "expected fetchurl, got {names:?}");
+    assert!(
+        names.contains(&"fetchurl"),
+        "expected fetchurl, got {names:?}"
+    );
 }
 
 // ── nested attrsets ──────────────────────────────────────────────────────────
