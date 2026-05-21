@@ -337,8 +337,7 @@ impl ParserFactory {
                 }
             }
             Language::Svelte => {
-                let parser =
-                    SvelteParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+                let parser = SvelteParser::new().map_err(|e| IndexError::General(e.to_string()))?;
                 ParserWithBehavior {
                     parser: Box::new(parser),
                     behavior: Box::new(SvelteBehavior::new()),

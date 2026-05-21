@@ -1,7 +1,7 @@
 //! Svelte language behavior
 
-use crate::parsing::LanguageBehavior;
 use crate::Visibility;
+use crate::parsing::LanguageBehavior;
 use tree_sitter::Language;
 
 pub struct SvelteBehavior;

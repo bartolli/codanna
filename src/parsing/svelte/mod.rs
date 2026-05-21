@@ -6,5 +6,5 @@ pub mod parser;
 
 pub use behavior::SvelteBehavior;
 pub use definition::SvelteLanguage;
-pub use parser::SvelteParser;
 pub(crate) use definition::register;
+pub use parser::SvelteParser;
