@@ -197,6 +197,16 @@ fn seed_indexer_with_config_paths(
 async fn main() {
     let cli = Cli::parse();
 
+    // Shell completions are pure stdout output: emit and exit before any
+    // config loading, index opening, or provider setup runs.
+    if let Commands::Completions { shell } = &cli.command {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        let bin_name = cmd.get_name().to_string();
+        clap_complete::generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
+        return;
+    }
+
     // For index command, auto-initialize if needed (but not when using --config)
     if matches!(cli.command, Commands::Index { .. }) && cli.config.is_none() {
         if Settings::check_init().is_err() {
@@ -785,6 +795,9 @@ async fn main() {
         Commands::Profile { action } => {
             codanna::cli::commands::profile::run(action);
         }
+
+        // Handled immediately after argument parsing, before any setup runs.
+        Commands::Completions { .. } => unreachable!("completions are emitted before dispatch"),
     }
 }
 
