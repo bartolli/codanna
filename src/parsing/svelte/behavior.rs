@@ -1,7 +1,8 @@
 //! Svelte language behavior
 
-use crate::Visibility;
-use crate::parsing::LanguageBehavior;
+use super::resolution::{SvelteInheritanceResolver, SvelteResolutionContext};
+use crate::parsing::{InheritanceResolver, LanguageBehavior, ResolutionScope};
+use crate::{FileId, Visibility};
 use tree_sitter::Language;
 
 pub struct SvelteBehavior;
@@ -53,5 +54,13 @@ impl LanguageBehavior for SvelteBehavior {
         } else {
             Visibility::Private
         }
+    }
+
+    fn create_resolution_context(&self, file_id: FileId) -> Box<dyn ResolutionScope> {
+        Box::new(SvelteResolutionContext::new(file_id))
+    }
+
+    fn create_inheritance_resolver(&self) -> Box<dyn InheritanceResolver> {
+        Box::new(SvelteInheritanceResolver::new())
     }
 }
