@@ -14,7 +14,9 @@
 //! - [`definition`]: language registration
 //! - [`resolution`]: symbol resolution, delegating to the JS resolver since
 //!   `<script>` blocks are JS/TS
+//! - [`audit`]: grammar node coverage tracking for the ABI audit pipeline
 
+pub mod audit;
 pub mod behavior;
 pub mod definition;
 pub mod parser;

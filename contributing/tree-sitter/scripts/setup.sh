@@ -38,10 +38,11 @@ if [ -n "$LANG" ]; then
         java) REPO="https://github.com/tree-sitter/tree-sitter-java" ;;
         clojure) REPO="https://codeberg.org/grammar-orchard/tree-sitter-clojure-orchard" ;;
         lua) REPO="https://github.com/tree-sitter-grammars/tree-sitter-lua" ;;
+        svelte) REPO="https://github.com/PRRPCHT/tree-sitter-svelte-next" ;;
         swift) REPO="https://github.com/alex-pinkus/tree-sitter-swift" ;;
         *)
             echo "❌ Unknown language: $LANG"
-            echo "Supported: typescript, javascript, python, rust, go, php, c, clojure, cpp, csharp, gdscript, kotlin, java, lua, swift"
+            echo "Supported: typescript, javascript, python, rust, go, php, c, clojure, cpp, csharp, gdscript, kotlin, java, lua, svelte, swift"
             exit 1
             ;;
     esac

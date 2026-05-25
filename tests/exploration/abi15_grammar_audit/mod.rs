@@ -32,5 +32,6 @@ mod lua;
 mod php;
 mod python;
 mod rust_lang;
+mod svelte;
 mod swift;
 mod typescript;
