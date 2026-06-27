@@ -107,7 +107,7 @@ See [Integration Guides](https://docs.codanna.sh/reference/mcp-quick) for setup 
 
 ## Requirements
 
-- ~150MB for embedding model (downloaded on first use)
+- ~150MB for default embedding model AllMiniLML6V2 (downloaded on first use)
 - **Build from source:** Rust 1.85+, Linux needs `pkg-config libssl-dev`
 - Windows support is experimental
 
