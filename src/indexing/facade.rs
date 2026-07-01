@@ -1029,8 +1029,10 @@ impl IndexFacade {
         let path = path.as_ref();
 
         if force {
-            // Remove first to force re-index
-            let _ = self.remove_file(path);
+            // Remove first to force re-index. Not-indexed files return Ok,
+            // so any error here is a real cleanup failure and must not be
+            // masked: swallowing it desyncs the semantic store from Tantivy.
+            self.remove_file(path)?;
         }
 
         self.index_file(path)
@@ -1344,5 +1346,24 @@ mod tests {
 
         let result = IndexFacade::new(std::sync::Arc::new(settings));
         assert!(result.is_err());
+    }
+
+    // Regression: force re-index of a not-yet-indexed file must still
+    // succeed after remove_file errors stopped being swallowed.
+    #[test]
+    fn index_file_with_force_succeeds_on_unindexed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+
+        let source = dir.path().join("sample.rs");
+        std::fs::write(&source, "fn main() {}\n").unwrap();
+
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        let result = facade.index_file_with_force(&source, true);
+        assert!(result.is_ok(), "force on unindexed file: {result:?}");
     }
 }

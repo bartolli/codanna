@@ -64,6 +64,12 @@ pub enum ProfileError {
 
     #[error("IO error: {0}\nSuggestion: Check file permissions and disk space")]
     IoError(#[from] io::Error),
+
+    #[error("{primary}\nRollback also failed:\n{}", .failures.join("\n"))]
+    RollbackFailed {
+        primary: Box<ProfileError>,
+        failures: Vec<String>,
+    },
 }
 
 /// Result type for profile operations
@@ -105,6 +111,7 @@ impl ProfileError {
             ProfileError::GitOperationFailed { .. } | ProfileError::IoError(_) => {
                 ExitCode::GeneralError
             }
+            ProfileError::RollbackFailed { primary, .. } => primary.exit_code(),
         }
     }
 }
@@ -112,6 +119,21 @@ impl ProfileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollback_failed_delegates_exit_code_and_shows_both_errors() {
+        let primary = ProfileError::InvalidManifest {
+            reason: "bad schema".to_string(),
+        };
+        let err = ProfileError::RollbackFailed {
+            primary: Box::new(primary),
+            failures: vec!["backup restore failed: boom".to_string()],
+        };
+        assert_eq!(err.exit_code(), ExitCode::ConfigError);
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid profile manifest"));
+        assert!(msg.contains("backup restore failed: boom"));
+    }
 
     #[test]
     fn test_error_messages_include_suggestions() {
