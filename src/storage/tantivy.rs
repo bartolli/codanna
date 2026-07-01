@@ -987,6 +987,34 @@ impl DocumentIndex {
         Ok(())
     }
 
+    /// Discard the current batch: staged adds/deletes never reach a commit.
+    ///
+    /// Without this, an error path that abandons a started batch leaves the
+    /// writer (with staged delete_terms) in place for the next start_batch,
+    /// and a later commit applies deletions for files that were never
+    /// reprocessed.
+    pub fn rollback_batch(&self) -> StorageResult<()> {
+        let mut writer_lock = match self.writer.write() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                eprintln!("Warning: Recovering from poisoned writer rwlock in rollback_batch");
+                poisoned.into_inner()
+            }
+        };
+        if let Some(mut writer) = writer_lock.take() {
+            writer.rollback()?;
+        }
+
+        if let Ok(mut pending_guard) = self.pending_symbol_counter.lock() {
+            *pending_guard = None;
+        }
+        if let Ok(mut pending_guard) = self.pending_file_counter.lock() {
+            *pending_guard = None;
+        }
+
+        Ok(())
+    }
+
     /// Commit the current batch and reload the reader
     pub fn commit_batch(&self) -> StorageResult<()> {
         let mut writer_lock = match self.writer.write() {
@@ -2859,6 +2887,36 @@ mod tests {
         // Now try with a small typo
         let results = index.search("handl", 10, None, None, None).unwrap();
         assert!(!results.is_empty(), "Should find with fuzzy search");
+    }
+
+    #[test]
+    fn test_rollback_batch_discards_staged_deletes() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+        let from_id = SymbolId::new(1).unwrap();
+        let to_id = SymbolId::new(2).unwrap();
+        let rel = crate::Relationship::new(crate::RelationKind::Calls);
+        index.store_relationship(from_id, to_id, &rel).unwrap();
+        index.commit_batch().unwrap();
+
+        // Stage a delete, then roll back: the delete must not survive into
+        // a later batch's commit.
+        index.start_batch().unwrap();
+        index.delete_relationships_for_symbol(from_id).unwrap();
+        index.rollback_batch().unwrap();
+
+        index.start_batch().unwrap();
+        index.commit_batch().unwrap();
+
+        let relationships = index.query_relationships().unwrap();
+        assert_eq!(
+            relationships.len(),
+            1,
+            "staged delete must be discarded by rollback"
+        );
     }
 
     #[test]
