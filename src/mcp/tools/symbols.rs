@@ -44,7 +44,7 @@ impl CodeIntelligenceServer {
             let mut output = format!("No symbols found with name: {name}");
             // Add guidance for no results
             if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "find_symbol", 0) {
-                output.push_str("\n\n---\n💡 ");
+                output.push_str("\n\n---\nGuidance: ");
                 output.push_str(&guidance);
                 output.push('\n');
             }
@@ -245,7 +245,7 @@ impl CodeIntelligenceServer {
         if let Some(guidance) =
             generate_mcp_guidance(indexer.settings(), "find_symbol", symbols.len())
         {
-            result.push_str("\n---\n💡 ");
+            result.push_str("\n---\nGuidance: ");
             result.push_str(&guidance);
             result.push('\n');
         }
@@ -299,7 +299,7 @@ impl CodeIntelligenceServer {
             let mut output = format!("{identifier} doesn't call any functions");
             // Add guidance for no results
             if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "get_calls", 0) {
-                output.push_str("\n\n---\n💡 ");
+                output.push_str("\n\n---\nGuidance: ");
                 output.push_str(&guidance);
                 output.push('\n');
             }
@@ -340,7 +340,7 @@ impl CodeIntelligenceServer {
         // Add system guidance
         if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "get_calls", result_count)
         {
-            result.push_str("\n---\n💡 ");
+            result.push_str("\n---\nGuidance: ");
             result.push_str(&guidance);
             result.push('\n');
         }
@@ -393,7 +393,7 @@ impl CodeIntelligenceServer {
             let mut output = format!("No functions call {identifier}");
             // Add guidance for no results
             if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "find_callers", 0) {
-                output.push_str("\n\n---\n💡 ");
+                output.push_str("\n\n---\nGuidance: ");
                 output.push_str(&guidance);
                 output.push('\n');
             }
@@ -443,7 +443,7 @@ impl CodeIntelligenceServer {
         if let Some(guidance) =
             generate_mcp_guidance(indexer.settings(), "find_callers", result_count)
         {
-            result.push_str("\n---\n💡 ");
+            result.push_str("\n---\nGuidance: ");
             result.push_str(&guidance);
             result.push('\n');
         }
@@ -499,7 +499,7 @@ impl CodeIntelligenceServer {
             let mut output = format!("No symbols would be impacted by changing {identifier}");
             // Add guidance for no results
             if let Some(guidance) = generate_mcp_guidance(indexer.settings(), "analyze_impact", 0) {
-                output.push_str("\n\n---\n💡 ");
+                output.push_str("\n\n---\nGuidance: ");
                 output.push_str(&guidance);
                 output.push('\n');
             }
@@ -606,7 +606,7 @@ impl CodeIntelligenceServer {
         if let Some(guidance) =
             generate_mcp_guidance(indexer.settings(), "analyze_impact", impact_count)
         {
-            result.push_str("\n---\n💡 ");
+            result.push_str("\n---\nGuidance: ");
             result.push_str(&guidance);
             result.push('\n');
         }

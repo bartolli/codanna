@@ -89,7 +89,7 @@ fn initialize_providers(
         if !invalid_paths.is_empty() {
             // Collect all invalid paths for error reporting
             for path in &invalid_paths {
-                eprintln!("  ✗ {} config file not found: {}", lang_id, path.display());
+                eprintln!("  - {} config file not found: {}", lang_id, path.display());
             }
             validation_errors.push((lang_id.to_string(), invalid_paths));
             continue;
@@ -116,7 +116,7 @@ fn initialize_providers(
         for (lang, paths) in &validation_errors {
             error_details.push_str(&format!("\n{lang} configuration:\n"));
             for path in paths {
-                error_details.push_str(&format!("  • {} not found\n", path.display()));
+                error_details.push_str(&format!("  - {} not found\n", path.display()));
             }
         }
         error_details.push_str("\nSuggestion: Check paths in .codanna/settings.toml");
@@ -196,7 +196,7 @@ fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
         if !suggestions.is_empty() {
             eprintln!("\nSuggestions:");
             for suggestion in suggestions {
-                eprintln!("  • {suggestion}");
+                eprintln!("  - {suggestion}");
             }
         }
         std::process::exit(codanna::io::ExitCode::from_error(&e) as i32);
@@ -292,7 +292,7 @@ async fn main() {
                 if !suggestions.is_empty() {
                     eprintln!("\nSuggestions:");
                     for suggestion in suggestions {
-                        eprintln!("  • {suggestion}");
+                        eprintln!("  - {suggestion}");
                     }
                 }
                 std::process::exit(1);
@@ -589,7 +589,7 @@ async fn main() {
                             if !suggestions.is_empty() {
                                 eprintln!("\nRecovery steps:");
                                 for suggestion in suggestions {
-                                    eprintln!("  • {suggestion}");
+                                    eprintln!("  - {suggestion}");
                                 }
                             }
                             use codanna::io::ExitCode;
@@ -609,13 +609,13 @@ async fn main() {
                     eprintln!("\nRecovery steps:");
                     let suggestions = e.recovery_suggestions();
                     if suggestions.is_empty() {
-                        eprintln!("  • Run 'codanna index' to rebuild metadata");
+                        eprintln!("  - Run 'codanna index' to rebuild metadata");
                     } else {
                         for suggestion in suggestions {
-                            eprintln!("  • {suggestion}");
+                            eprintln!("  - {suggestion}");
                         }
                     }
-                    eprintln!("  • Or use 'codanna index --force' for a full rebuild");
+                    eprintln!("  - Or use 'codanna index --force' for a full rebuild");
 
                     sync_made_changes = None;
                 }

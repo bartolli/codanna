@@ -126,7 +126,7 @@ impl CodeIntelligenceServer {
                     if let Some(guidance) =
                         generate_mcp_guidance(indexer.settings(), "semantic_search_docs", 0)
                     {
-                        output.push_str("\n\n---\n💡 ");
+                        output.push_str("\n\n---\nGuidance: ");
                         output.push_str(&guidance);
                         output.push('\n');
                     }
@@ -175,7 +175,7 @@ impl CodeIntelligenceServer {
                 if let Some(guidance) =
                     generate_mcp_guidance(indexer.settings(), "semantic_search_docs", results.len())
                 {
-                    result.push_str("\n---\n💡 ");
+                    result.push_str("\n---\nGuidance: ");
                     result.push_str(&guidance);
                     result.push('\n');
                 }
@@ -245,7 +245,7 @@ impl CodeIntelligenceServer {
                     if let Some(guidance) =
                         generate_mcp_guidance(indexer.settings(), "semantic_search_with_context", 0)
                     {
-                        output.push_str("\n\n---\n💡 ");
+                        output.push_str("\n\n---\nGuidance: ");
                         output.push_str(&guidance);
                         output.push('\n');
                     }
@@ -706,7 +706,7 @@ impl CodeIntelligenceServer {
                     "semantic_search_with_context",
                     results.len(),
                 ) {
-                    output.push_str("\n---\n💡 ");
+                    output.push_str("\n---\nGuidance: ");
                     output.push_str(&guidance);
                     output.push('\n');
                 }
@@ -758,7 +758,7 @@ impl CodeIntelligenceServer {
                     if let Some(guidance) =
                         generate_mcp_guidance(indexer.settings(), "search_symbols", 0)
                     {
-                        output.push_str("\n\n---\n💡 ");
+                        output.push_str("\n\n---\nGuidance: ");
                         output.push_str(&guidance);
                         output.push('\n');
                     }
@@ -805,7 +805,7 @@ impl CodeIntelligenceServer {
                 if let Some(guidance) =
                     generate_mcp_guidance(indexer.settings(), "search_symbols", results.len())
                 {
-                    result.push_str("\n---\n💡 ");
+                    result.push_str("\n---\nGuidance: ");
                     result.push_str(&guidance);
                     result.push('\n');
                 }
