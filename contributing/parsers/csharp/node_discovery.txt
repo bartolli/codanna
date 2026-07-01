@@ -1,38 +1,38 @@
 === C# Language NODE MAPPING ===
-  Generated: 2026-03-15 18:41:01 UTC
-  ABI Version: 14
+  Generated: 2026-07-01 20:51:39 UTC
+  ABI Version: 15
   Node kind count: 142
 
 === NAMESPACE & USING NODES ===
   + using_directive                     -> ID: 221
-  + namespace_declaration               -> ID: 228
+  + namespace_declaration               -> ID: 229
   x file_scoped_namespace_declaration   NOT FOUND
-  + qualified_name                      -> ID: 282
+  + qualified_name                      -> ID: 291
 
 === TYPE DEFINITION NODES ===
-  + class_declaration                   -> ID: 231
-  + struct_declaration                  -> ID: 232
-  + interface_declaration               -> ID: 236
-  + enum_declaration                    -> ID: 233
-  + record_declaration                  -> ID: 238
-  + delegate_declaration                -> ID: 237
-  + type_parameter_list                 -> ID: 242
-  + type_parameter                      -> ID: 243
+  + class_declaration                   -> ID: 232
+  + struct_declaration                  -> ID: 234
+  + interface_declaration               -> ID: 240
+  + enum_declaration                    -> ID: 236
+  + record_declaration                  -> ID: 244
+  + delegate_declaration                -> ID: 242
+  + type_parameter_list                 -> ID: 250
+  + type_parameter                      -> ID: 251
   x type_parameter_constraint           NOT FOUND
 
 === MEMBER NODES ===
-  + method_declaration                  -> ID: 255
-  + property_declaration                -> ID: 262
-  + field_declaration                   -> ID: 252
-  + event_declaration                   -> ID: 256
-  + indexer_declaration                 -> ID: 260
-  + constructor_declaration             -> ID: 253
-  + destructor_declaration              -> ID: 254
-  + operator_declaration                -> ID: 248
-  + accessor_declaration                -> ID: 259
+  + method_declaration                  -> ID: 264
+  + property_declaration                -> ID: 271
+  + field_declaration                   -> ID: 260
+  + event_declaration                   -> ID: 265
+  + indexer_declaration                 -> ID: 269
+  + constructor_declaration             -> ID: 261
+  + destructor_declaration              -> ID: 263
+  + operator_declaration                -> ID: 256
+  + accessor_declaration                -> ID: 268
 
 === STATEMENT NODES ===
-  + if_statement                        -> ID: 328
+  + if_statement                        -> ID: 339
   x switch_statement                    NOT FOUND
   x switch_expression                   NOT FOUND
   x for_statement                       NOT FOUND
@@ -44,30 +44,30 @@
   x finally_clause                      NOT FOUND
   x using_statement                     NOT FOUND
   x lock_statement                      NOT FOUND
-  + return_statement                    -> ID: 311
-  + throw_statement                     -> ID: 317
+  + return_statement                    -> ID: 321
+  + throw_statement                     -> ID: 327
   x yield_statement                     NOT FOUND
   x break_statement                     NOT FOUND
   x continue_statement                  NOT FOUND
 
 === EXPRESSION NODES ===
-  + invocation_expression               -> ID: 380
-  + member_access_expression            -> ID: 394
-  + assignment_expression               -> ID: 353
-  + binary_expression                   -> ID: 354
-  + prefix_unary_expression             -> ID: 356
+  + invocation_expression               -> ID: 395
+  + member_access_expression            -> ID: 410
+  + assignment_expression               -> ID: 368
+  + binary_expression                   -> ID: 369
+  + prefix_unary_expression             -> ID: 371
   x postfix_unary_expression            NOT FOUND
-  + conditional_expression              -> ID: 373
+  + conditional_expression              -> ID: 388
   x lambda_expression                   NOT FOUND
-  + object_creation_expression          -> ID: 396
-  + array_creation_expression           -> ID: 401
-  + element_access_expression           -> ID: 386
+  + object_creation_expression          -> ID: 412
+  + array_creation_expression           -> ID: 418
+  + element_access_expression           -> ID: 402
   x cast_expression                     NOT FOUND
   x as_expression                       NOT FOUND
   x is_expression                       NOT FOUND
-  + await_expression                    -> ID: 384
+  + await_expression                    -> ID: 400
   x query_expression                    NOT FOUND
-  + interpolated_string_expression      -> ID: 387
+  + interpolated_string_expression      -> ID: 403
 
 === ASYNC & LINQ NODES ===
   x query_expression                    NOT FOUND
@@ -77,7 +77,7 @@
   x order_by_clause                     NOT FOUND
   x group_clause                        NOT FOUND
   x join_clause                         NOT FOUND
-  + await_expression                    -> ID: 384
+  + await_expression                    -> ID: 400
 
 === PATTERN NODES ===
   x switch_expression_arm               NOT FOUND
@@ -88,126 +88,126 @@
   x discard_pattern                     NOT FOUND
 
 === TYPE NODES ===
-  + predefined_type                     -> ID: 103
+  + predefined_type                     -> ID: 104
   x nullable_type                       NOT FOUND
-  + array_type                          -> ID: 287
+  + array_type                          -> ID: 296
   x tuple_type                          NOT FOUND
   x pointer_type                        NOT FOUND
-  + generic_name                        -> ID: 283
+  + generic_name                        -> ID: 292
 
 === LITERAL NODES ===
-  + integer_literal                     -> ID: 171
+  + integer_literal                     -> ID: 172
   x real_literal                        NOT FOUND
-  + string_literal                      -> ID: 424
+  + string_literal                      -> ID: 446
   x verbatim_string_literal             NOT FOUND
   x interpolated_string_text            NOT FOUND
   x character_literal                   NOT FOUND
-  + boolean_literal                     -> ID: 427
-  + null_literal                        -> ID: 168
+  + boolean_literal                     -> ID: 448
+  + null_literal                        -> ID: 169
 
 === COMMENT & DOCUMENTATION NODES ===
   + comment                             -> ID: 204
 
 === UNCATEGORIZED NODES ===
-  + !                                   -> ID: 62
-  + !=                                  -> ID: 80
-  + "                                   -> ID: 173
-  + %                                   -> ID: 72
+  + !                                   -> ID: 63
+  + !=                                  -> ID: 81
+  + "                                   -> ID: 174
+  + %                                   -> ID: 73
   + (                                   -> ID: 16
   + )                                   -> ID: 17
-  + *                                   -> ID: 70
-  + +                                   -> ID: 68
-  + +=                                  -> ID: 130
+  + *                                   -> ID: 71
+  + +                                   -> ID: 69
+  + +=                                  -> ID: 131
   + ,                                   -> ID: 14
-  + -                                   -> ID: 69
-  + -=                                  -> ID: 131
-  + .                                   -> ID: 91
+  + -                                   -> ID: 70
+  + -=                                  -> ID: 132
+  + .                                   -> ID: 92
   + :                                   -> ID: 13
   + ;                                   -> ID: 4
-  + <                                   -> ID: 52
+  + <                                   -> ID: 53
   + =                                   -> ID: 8
-  + ==                                  -> ID: 79
-  + =>                                  -> ID: 95
-  + >                                   -> ID: 53
-  + ?                                   -> ID: 57
+  + ==                                  -> ID: 80
+  + =>                                  -> ID: 96
+  + >                                   -> ID: 54
+  + ?                                   -> ID: 58
   + [                                   -> ID: 10
   + ]                                   -> ID: 15
-  + abstract                            -> ID: 35
-  + accessor_list                       -> ID: 258
-  + add                                 -> ID: 87
+  + abstract                            -> ID: 36
+  + accessor_list                       -> ID: 267
+  + add                                 -> ID: 88
   + alias                               -> ID: 3
-  + argument                            -> ID: 270
-  + argument_list                       -> ID: 268
-  + array_rank_specifier                -> ID: 289
-  + arrow_expression_clause             -> ID: 272
-  + async                               -> ID: 36
-  + await                               -> ID: 120
-  + base_list                           -> ID: 244
-  + block                               -> ID: 271
-  + bracketed_argument_list             -> ID: 278
-  + bracketed_parameter_list            -> ID: 261
-  + class                               -> ID: 26
+  + argument                            -> ID: 279
+  + argument_list                       -> ID: 277
+  + array_rank_specifier                -> ID: 298
+  + arrow_expression_clause             -> ID: 281
+  + async                               -> ID: 37
+  + await                               -> ID: 121
+  + base_list                           -> ID: 252
+  + block                               -> ID: 280
+  + bracketed_argument_list             -> ID: 287
+  + bracketed_parameter_list            -> ID: 270
+  + class                               -> ID: 27
   + compilation_unit                    -> ID: 217
-  + conditional_access_expression       -> ID: 374
-  + const                               -> ID: 37
-  + conversion_operator_declaration     -> ID: 249
-  + declaration_list                    -> ID: 250
-  + default                             -> ID: 114
-  + default_expression                  -> ID: 410
-  + delegate                            -> ID: 33
-  + enum                                -> ID: 29
-  + enum_member_declaration             -> ID: 235
-  + enum_member_declaration_list        -> ID: 234
+  + conditional_access_expression       -> ID: 389
+  + const                               -> ID: 38
+  + conversion_operator_declaration     -> ID: 257
+  + declaration_list                    -> ID: 258
+  + default                             -> ID: 115
+  + default_expression                  -> ID: 431
+  + delegate                            -> ID: 34
+  + enum                                -> ID: 30
+  + enum_member_declaration             -> ID: 239
+  + enum_member_declaration_list        -> ID: 238
   + event                               -> ID: 19
-  + event_field_declaration             -> ID: 257
-  + explicit                            -> ID: 84
-  + expression_statement                -> ID: 308
+  + event_field_declaration             -> ID: 266
+  + explicit                            -> ID: 85
+  + expression_statement                -> ID: 317
   + extern                              -> ID: 2
   + extern_alias_directive              -> ID: 220
-  + false                               -> ID: 67
-  + get                                 -> ID: 85
-  + identifier                          -> ID: 428
-  + if                                  -> ID: 123
-  + implicit                            -> ID: 83
-  + implicit_type                       -> ID: 286
-  + initializer_expression              -> ID: 408
-  + interface                           -> ID: 32
-  + interpolation                       -> ID: 391
+  + false                               -> ID: 68
+  + get                                 -> ID: 86
+  + identifier                          -> ID: 449
+  + if                                  -> ID: 124
+  + implicit                            -> ID: 84
+  + implicit_type                       -> ID: 295
+  + initializer_expression              -> ID: 429
+  + interface                           -> ID: 33
+  + interpolation                       -> ID: 407
   + interpolation_brace                 -> ID: 211
   + interpolation_start                 -> ID: 206
-  + local_declaration_statement         -> ID: 330
-  + member_binding_expression           -> ID: 395
-  + modifier                            -> ID: 241
-  + namespace                           -> ID: 25
-  + new                                 -> ID: 41
-  + operator                            -> ID: 60
-  + override                            -> ID: 42
-  + parameter                           -> ID: 265
-  + parameter_list                      -> ID: 264
-  + primary_constructor_base_type       -> ID: 240
-  + private                             -> ID: 44
-  + protected                           -> ID: 45
-  + public                              -> ID: 46
-  + readonly                            -> ID: 47
-  + record                              -> ID: 34
-  + remove                              -> ID: 88
+  + local_declaration_statement         -> ID: 341
+  + member_binding_expression           -> ID: 411
+  + modifier                            -> ID: 249
+  + namespace                           -> ID: 26
+  + new                                 -> ID: 42
+  + operator                            -> ID: 61
+  + override                            -> ID: 43
+  + parameter                           -> ID: 274
+  + parameter_list                      -> ID: 273
+  + primary_constructor_base_type       -> ID: 248
+  + private                             -> ID: 45
+  + protected                           -> ID: 46
+  + public                              -> ID: 47
+  + readonly                            -> ID: 48
+  + record                              -> ID: 35
+  + remove                              -> ID: 89
   + return                              -> ID: 23
-  + set                                 -> ID: 86
+  + set                                 -> ID: 87
   + static                              -> ID: 9
   + string_content                      -> ID: 213
-  + string_literal_content              -> ID: 425
-  + struct                              -> ID: 28
-  + this                                -> ID: 90
-  + throw                               -> ID: 115
-  + true                                -> ID: 66
-  + type_argument_list                  -> ID: 284
+  + string_literal_content              -> ID: 175
+  + struct                              -> ID: 29
+  + this                                -> ID: 91
+  + throw                               -> ID: 116
+  + true                                -> ID: 67
+  + type_argument_list                  -> ID: 293
   + using                               -> ID: 6
-  + var                                 -> ID: 97
-  + variable_declaration                -> ID: 274
-  + variable_declarator                 -> ID: 276
-  + virtual                             -> ID: 50
-  + {                                   -> ID: 30
-  + }                                   -> ID: 31
-  + ~                                   -> ID: 63
+  + var                                 -> ID: 98
+  + variable_declaration                -> ID: 283
+  + variable_declarator                 -> ID: 285
+  + virtual                             -> ID: 51
+  + {                                   -> ID: 31
+  + }                                   -> ID: 32
+  + ~                                   -> ID: 64
 
 Legend: + = found in file, o = in grammar but not in file, x = not in grammar

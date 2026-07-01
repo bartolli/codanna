@@ -1321,3 +1321,28 @@ pub fn build_embedding_backend(
 
     Ok(EmbeddingBackend::Local(pool))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: facade construction on a corrupt tantivy dir must return
+    // Err, not panic. The CLI/server fallback paths call this exactly when
+    // the index dir failed to load.
+    #[test]
+    fn new_returns_err_on_corrupt_tantivy_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let tantivy_dir = dir.path().join("tantivy");
+        std::fs::create_dir_all(&tantivy_dir).unwrap();
+        std::fs::write(tantivy_dir.join("meta.json"), b"not valid json").unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().to_path_buf(),
+            workspace_root: None,
+            ..Default::default()
+        };
+
+        let result = IndexFacade::new(std::sync::Arc::new(settings));
+        assert!(result.is_err());
+    }
+}

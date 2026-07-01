@@ -189,6 +189,20 @@ fn seed_indexer_with_config_paths(
     report
 }
 
+fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
+    IndexFacade::new(settings).unwrap_or_else(|e| {
+        eprintln!("Error: Failed to create index: {e}");
+        let suggestions = e.recovery_suggestions();
+        if !suggestions.is_empty() {
+            eprintln!("\nSuggestions:");
+            for suggestion in suggestions {
+                eprintln!("  • {suggestion}");
+            }
+        }
+        std::process::exit(codanna::io::ExitCode::from_error(&e) as i32);
+    })
+}
+
 /// Entry point with tokio async runtime.
 ///
 /// Handles config initialization, index loading/creation, and command dispatch.
@@ -365,7 +379,7 @@ async fn main() {
                     }
                     Err(e) => {
                         eprintln!("Warning: Could not load index: {e}. Creating new index.");
-                        IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+                        create_facade_or_exit(settings.clone())
                     }
                 }
             } else {
@@ -388,7 +402,7 @@ async fn main() {
                 }
 
                 // Create a new indexer with the given settings (after clearing)
-                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+                create_facade_or_exit(settings.clone())
             }
         })
     };

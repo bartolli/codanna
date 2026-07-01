@@ -1,6 +1,6 @@
 # Lua Grammar Analysis
 
-*Generated: 2026-03-15 18:41:01 UTC*
+*Generated: 2026-07-01 20:51:39 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 0

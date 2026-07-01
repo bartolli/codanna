@@ -1,6 +1,6 @@
 # TypeScript Parser Coverage Report
 
-*Generated: 2026-03-15 18:41:01 UTC*
+*Generated: 2026-07-01 20:51:39 UTC*
 
 ## Summary
 - Key nodes: 28/28 (100%)

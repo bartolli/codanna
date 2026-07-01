@@ -37,7 +37,7 @@ bin-dir = "{ name }-{ version }-windows-x64/{ bin }{ binary-ext }"
 
 [dependencies]
 anyhow = "1.0.102"
-bitflags = "2.11.0"
+bitflags = "2.11.1"
 clap = { version = "4.6.1", features = ["derive", "color", "env"] }
 crossbeam-channel = "0.5.15"
 dashmap = "6.2.1"
@@ -51,7 +51,7 @@ parking_lot = "0.12.5"
 rayon = "1.12.0"
 rmcp = { version = "1.7.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 sha2 = "0.11.0"
 hex = "0.4"
 tantivy = "0.26.1"
@@ -76,7 +76,7 @@ walkdir = "2.5.0"
 # (glibc 2.35), so the bottle build fails with undefined __isoc23_strtol.
 # Upgrade when ort ships glibc 2.35 binaries or Homebrew moves to Ubuntu 24.04.
 fastembed = "=5.6.0"
-rand = "0.10.0"
+rand = "0.10.1"
 indicatif = "0.18.4"
 comfy-table = "7.2.2"
 console = "0.16.3"

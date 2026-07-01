@@ -1,5 +1,5 @@
 === Rust Language NODE MAPPING ===
-  Generated: 2026-03-15 18:41:01 UTC
+  Generated: 2026-07-01 20:51:39 UTC
   ABI Version: 15
   Node kind count: 147
 
@@ -95,7 +95,7 @@
 
 === UNCATEGORIZED NODES ===
   + !                                   -> ID: 53
-  + "                                   -> ID: 129
+  + "                                   -> ID: 147
   + #                                   -> ID: 86
   + &                                   -> ID: 54
   + '                                   -> ID: 87
@@ -107,7 +107,7 @@
   + ->                                  -> ID: 85
   + .                                   -> ID: 79
   + /                                   -> ID: 50
-  + //                                  -> ID: 134
+  + //                                  -> ID: 133
   + :                                   -> ID: 11
   + ::                                  -> ID: 84
   + ;                                   -> ID: 2
@@ -154,7 +154,7 @@
   + lifetime_parameter                  -> ID: 202
   + line_comment                        -> ID: 314
   + macro_rules!                        -> ID: 3
-  + metavariable                        -> ID: 146
+  + metavariable                        -> ID: 145
   + mod                                 -> ID: 104
   + mutable_specifier                   -> ID: 122
   + outer_doc_comment_marker            -> ID: 152
@@ -163,18 +163,18 @@
   + reference_expression                -> ID: 249
   + scoped_identifier                   -> ID: 243
   + scoped_type_identifier              -> ID: 245
-  + self                                -> ID: 143
+  + self                                -> ID: 142
   + shorthand_field_initializer         -> ID: 264
   + source_file                         -> ID: 157
   + static                              -> ID: 107
-  + string_content                      -> ID: 147
+  + string_content                      -> ID: 146
   + string_literal                      -> ID: 311
   + struct                              -> ID: 108
-  + super                               -> ID: 144
+  + super                               -> ID: 143
   + token_binding_pattern               -> ID: 165
   + token_tree_pattern                  -> ID: 164
   + trait                               -> ID: 109
-  + true                                -> ID: 132
+  + true                                -> ID: 131
   + tuple_expression                    -> ID: 260
   + type                                -> ID: 110
   + type_arguments                      -> ID: 230
