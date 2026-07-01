@@ -607,22 +607,12 @@ pub fn retrieve_search(
 ) -> ExitCode {
     use crate::symbol::context::ContextIncludes;
 
-    // Parse the kind filter if provided
-    let kind_filter = kind.and_then(|k| match k.to_lowercase().as_str() {
-        "function" => Some(crate::SymbolKind::Function),
-        "struct" => Some(crate::SymbolKind::Struct),
-        "trait" => Some(crate::SymbolKind::Trait),
-        "interface" => Some(crate::SymbolKind::Interface),
-        "class" => Some(crate::SymbolKind::Class),
-        "method" => Some(crate::SymbolKind::Method),
-        "field" => Some(crate::SymbolKind::Field),
-        "variable" => Some(crate::SymbolKind::Variable),
-        "constant" => Some(crate::SymbolKind::Constant),
-        "module" => Some(crate::SymbolKind::Module),
-        "typealias" => Some(crate::SymbolKind::TypeAlias),
-        "enum" => Some(crate::SymbolKind::Enum),
-        _ => {
-            eprintln!("Warning: Unknown symbol kind '{k}', ignoring filter");
+    // One kind vocabulary (SymbolKind::from_str) shared with the MCP and
+    // CLI JSON surfaces; retrieve keeps its warn-and-ignore policy.
+    let kind_filter = kind.and_then(|k| match k.parse::<crate::SymbolKind>() {
+        Ok(parsed) => Some(parsed),
+        Err(e) => {
+            eprintln!("Warning: {e}, ignoring filter");
             None
         }
     });

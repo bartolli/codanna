@@ -59,6 +59,25 @@ pub enum SymbolKind {
     Macro,
 }
 
+/// Unknown kind string passed to a `kind` filter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownSymbolKind {
+    pub input: String,
+}
+
+impl std::fmt::Display for UnknownSymbolKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unknown symbol kind '{}'; expected one of: function, method, struct, enum, trait, \
+             interface, class, module, variable, constant, field, parameter, typealias, macro",
+            self.input
+        )
+    }
+}
+
+impl std::error::Error for UnknownSymbolKind {}
+
 impl SymbolId {
     pub fn new(value: u32) -> Option<Self> {
         if value == 0 { None } else { Some(Self(value)) }
@@ -116,26 +135,32 @@ impl Range {
     }
 }
 
+/// One kind vocabulary for every `kind:` filter surface (MCP, CLI JSON,
+/// retrieve) AND the storage decode path (Debug-format PascalCase). Silent
+/// per-surface subsets let a filter no-op while the client believes it
+/// applied. Case-insensitive: accepts both `class` and `Class`.
 impl FromStr for SymbolKind {
-    type Err = &'static str;
+    type Err = UnknownSymbolKind;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Function" => Ok(SymbolKind::Function),
-            "Method" => Ok(SymbolKind::Method),
-            "Struct" => Ok(SymbolKind::Struct),
-            "Enum" => Ok(SymbolKind::Enum),
-            "Trait" => Ok(SymbolKind::Trait),
-            "Interface" => Ok(SymbolKind::Interface),
-            "Class" => Ok(SymbolKind::Class),
-            "Module" => Ok(SymbolKind::Module),
-            "Variable" => Ok(SymbolKind::Variable),
-            "Constant" => Ok(SymbolKind::Constant),
-            "Field" => Ok(SymbolKind::Field),
-            "Parameter" => Ok(SymbolKind::Parameter),
-            "TypeAlias" => Ok(SymbolKind::TypeAlias),
-            "Macro" => Ok(SymbolKind::Macro),
-            _ => Err("Unknown symbol kind"),
+        match s.to_lowercase().as_str() {
+            "function" => Ok(SymbolKind::Function),
+            "method" => Ok(SymbolKind::Method),
+            "struct" => Ok(SymbolKind::Struct),
+            "enum" => Ok(SymbolKind::Enum),
+            "trait" => Ok(SymbolKind::Trait),
+            "interface" => Ok(SymbolKind::Interface),
+            "class" => Ok(SymbolKind::Class),
+            "module" => Ok(SymbolKind::Module),
+            "variable" => Ok(SymbolKind::Variable),
+            "constant" => Ok(SymbolKind::Constant),
+            "field" => Ok(SymbolKind::Field),
+            "parameter" => Ok(SymbolKind::Parameter),
+            "typealias" | "type_alias" => Ok(SymbolKind::TypeAlias),
+            "macro" => Ok(SymbolKind::Macro),
+            _ => Err(UnknownSymbolKind {
+                input: s.to_string(),
+            }),
         }
     }
 }

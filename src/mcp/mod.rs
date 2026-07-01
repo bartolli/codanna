@@ -21,6 +21,9 @@ pub mod client;
 pub mod http_server;
 pub mod https_server;
 pub mod notifications;
+pub mod service;
+
+use service::{SymbolResolution, parse_receiver_context, qualified_call, render_ambiguity};
 
 use rmcp::{
     ServerHandler,
@@ -546,58 +549,32 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.facade.read().await;
 
-        // Get the symbol either by ID or by name
-        let (symbol, identifier) = if let Some(id) = symbol_id {
-            // Direct lookup by symbol ID
-            match indexer.get_symbol(crate::SymbolId(id)) {
-                Some(sym) => (sym, format!("symbol_id:{id}")),
-                None => {
+        // Resolution policy is shared with the CLI JSON path via the
+        // service layer; text renderings stay byte-identical.
+        let (symbol, identifier) =
+            match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
+                SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
+                SymbolResolution::NotFoundById(id) => {
                     return Ok(CallToolResult::success(vec![Content::text(format!(
                         "Symbol not found: symbol_id:{id}"
                     ))]));
                 }
-            }
-        } else if let Some(name) = function_name {
-            // Lookup by name
-            let symbols = indexer.find_symbols_by_name(&name, None);
-
-            if symbols.is_empty() {
-                return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Function not found: {name}"
-                ))]));
-            }
-
-            if symbols.len() > 1 {
-                // Multiple symbols found - return error with list
-                let mut msg = format!(
-                    "Ambiguous: found {} symbol(s) named '{}':\n",
-                    symbols.len(),
-                    name
-                );
-                for (i, sym) in symbols.iter().take(10).enumerate() {
-                    msg.push_str(&format!(
-                        "  {}. symbol_id:{} - {:?} at {}:{}\n",
-                        i + 1,
-                        sym.id.value(),
-                        sym.kind,
-                        sym.file_path,
-                        sym.range.start_line + 1
-                    ));
+                SymbolResolution::NotFoundByName(name) => {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Function not found: {name}"
+                    ))]));
                 }
-                if symbols.len() > 10 {
-                    msg.push_str(&format!("  ... and {} more\n", symbols.len() - 10));
+                SymbolResolution::Ambiguous { name, candidates } => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        render_ambiguity("get_calls", &name, &candidates),
+                    )]));
                 }
-                msg.push_str("\nUse: get_calls symbol_id:<id> for specific symbol");
-                return Ok(CallToolResult::success(vec![Content::text(msg)]));
-            }
-
-            // Single match - use it
-            (symbols.into_iter().next().unwrap(), name)
-        } else {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Error: Either function_name or symbol_id must be provided".to_string(),
-            )]));
-        };
+                SymbolResolution::MissingParam => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Error: Either function_name or symbol_id must be provided".to_string(),
+                    )]));
+                }
+            };
 
         // Get calls for this specific symbol
         let all_called_with_metadata = indexer.get_called_functions_with_metadata(symbol.id);
@@ -618,36 +595,12 @@ impl CodeIntelligenceServer {
         for (callee, metadata) in all_called_with_metadata {
             // Parse metadata to extract receiver info and call site location
             let (call_display, call_line) = if let Some(ref meta) = metadata {
-                let display = if let Some(context) = &meta.context {
-                    if context.contains("receiver:") && context.contains("static:") {
-                        // Parse "receiver:{receiver},static:{is_static}"
-                        let parts: Vec<&str> = context.split(',').collect();
-                        let mut receiver = "";
-                        let mut is_static = false;
-
-                        for part in parts {
-                            if let Some(r) = part.strip_prefix("receiver:") {
-                                receiver = r;
-                            } else if let Some(s) = part.strip_prefix("static:") {
-                                is_static = s == "true";
-                            }
-                        }
-
-                        if !receiver.is_empty() {
-                            if is_static {
-                                format!("{}::{}", receiver, callee.name)
-                            } else {
-                                format!("{}.{}", receiver, callee.name)
-                            }
-                        } else {
-                            callee.name.to_string()
-                        }
-                    } else {
-                        callee.name.to_string()
-                    }
-                } else {
-                    callee.name.to_string()
-                };
+                let display = meta
+                    .context
+                    .as_deref()
+                    .and_then(parse_receiver_context)
+                    .map(|(receiver, is_static)| qualified_call(receiver, is_static, &callee.name))
+                    .unwrap_or_else(|| callee.name.to_string());
 
                 // Use call site line if available, otherwise definition line
                 let line = meta
@@ -691,57 +644,31 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.facade.read().await;
 
-        // Get the symbol either by ID or by name
-        let (symbol, identifier) = if let Some(id) = symbol_id {
-            // Direct lookup by symbol ID - UNAMBIGUOUS
-            match indexer.get_symbol(crate::SymbolId(id)) {
-                Some(sym) => (sym, format!("symbol_id:{id}")),
-                None => {
+        // Shared resolution policy; see service.rs.
+        let (symbol, identifier) =
+            match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
+                SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
+                SymbolResolution::NotFoundById(id) => {
                     return Ok(CallToolResult::success(vec![Content::text(format!(
                         "Symbol not found: symbol_id:{id}"
                     ))]));
                 }
-            }
-        } else if let Some(name) = function_name {
-            let symbols = indexer.find_symbols_by_name(&name, None);
-
-            if symbols.is_empty() {
-                return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Function not found: {name}"
-                ))]));
-            }
-
-            if symbols.len() > 1 {
-                // MULTIPLE MATCHES - Return error with list of symbol IDs
-                let mut msg = format!(
-                    "Ambiguous: found {} symbol(s) named '{}':\n",
-                    symbols.len(),
-                    name
-                );
-                for (i, sym) in symbols.iter().take(10).enumerate() {
-                    msg.push_str(&format!(
-                        "  {}. symbol_id:{} - {:?} at {}:{}\n",
-                        i + 1,
-                        sym.id.value(),
-                        sym.kind,
-                        sym.file_path,
-                        sym.range.start_line + 1
-                    ));
+                SymbolResolution::NotFoundByName(name) => {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Function not found: {name}"
+                    ))]));
                 }
-                if symbols.len() > 10 {
-                    msg.push_str(&format!("  ... and {} more\n", symbols.len() - 10));
+                SymbolResolution::Ambiguous { name, candidates } => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        render_ambiguity("find_callers", &name, &candidates),
+                    )]));
                 }
-                msg.push_str("\nUse: find_callers symbol_id:<id> for specific symbol");
-                return Ok(CallToolResult::success(vec![Content::text(msg)]));
-            }
-
-            // SINGLE MATCH - use it
-            (symbols.into_iter().next().unwrap(), name)
-        } else {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Error: Either function_name or symbol_id must be provided".to_string(),
-            )]));
-        };
+                SymbolResolution::MissingParam => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Error: Either function_name or symbol_id must be provided".to_string(),
+                    )]));
+                }
+            };
 
         // Get callers for THIS SPECIFIC symbol only (no aggregation)
         let all_callers_with_metadata = indexer.get_calling_functions_with_metadata(symbol.id);
@@ -764,37 +691,17 @@ impl CodeIntelligenceServer {
         for (caller, metadata) in all_callers_with_metadata {
             // Parse metadata to extract receiver info and call site location
             let (call_info, call_line) = if let Some(ref meta) = metadata {
-                let info = if let Some(context) = &meta.context {
-                    if context.contains("receiver:") && context.contains("static:") {
-                        // Parse "receiver:{receiver},static:{is_static}"
-                        let parts: Vec<&str> = context.split(',').collect();
-                        let mut receiver = "";
-                        let mut is_static = false;
-
-                        for part in parts {
-                            if let Some(r) = part.strip_prefix("receiver:") {
-                                receiver = r;
-                            } else if let Some(s) = part.strip_prefix("static:") {
-                                is_static = s == "true";
-                            }
-                        }
-
-                        if !receiver.is_empty() {
-                            let qualified_name = if is_static {
-                                format!("{receiver}::{}", symbol.name)
-                            } else {
-                                format!("{receiver}.{}", symbol.name)
-                            };
-                            format!(" (calls {qualified_name})")
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
+                let info = meta
+                    .context
+                    .as_deref()
+                    .and_then(parse_receiver_context)
+                    .map(|(receiver, is_static)| {
+                        format!(
+                            " (calls {})",
+                            qualified_call(receiver, is_static, &symbol.name)
+                        )
+                    })
+                    .unwrap_or_default();
 
                 // Use call site line if available, otherwise definition line
                 let line = meta
@@ -843,57 +750,31 @@ impl CodeIntelligenceServer {
 
         let indexer = self.facade.read().await;
 
-        // Get the symbol either by ID or by name
-        let (symbol, identifier) = if let Some(id) = symbol_id {
-            // Direct lookup by symbol ID - UNAMBIGUOUS
-            match indexer.get_symbol(crate::SymbolId(id)) {
-                Some(sym) => (sym, format!("symbol_id:{id}")),
-                None => {
+        // Shared resolution policy; see service.rs.
+        let (symbol, identifier) =
+            match service::resolve_symbol_or_id(&indexer, symbol_id, symbol_name) {
+                SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
+                SymbolResolution::NotFoundById(id) => {
                     return Ok(CallToolResult::success(vec![Content::text(format!(
                         "Symbol not found: symbol_id:{id}"
                     ))]));
                 }
-            }
-        } else if let Some(name) = symbol_name {
-            let symbols = indexer.find_symbols_by_name(&name, None);
-
-            if symbols.is_empty() {
-                return Ok(CallToolResult::success(vec![Content::text(format!(
-                    "Symbol not found: {name}"
-                ))]));
-            }
-
-            if symbols.len() > 1 {
-                // MULTIPLE MATCHES - Return error with list of symbol IDs
-                let mut msg = format!(
-                    "Ambiguous: found {} symbol(s) named '{}':\n",
-                    symbols.len(),
-                    name
-                );
-                for (i, sym) in symbols.iter().take(10).enumerate() {
-                    msg.push_str(&format!(
-                        "  {}. symbol_id:{} - {:?} at {}:{}\n",
-                        i + 1,
-                        sym.id.value(),
-                        sym.kind,
-                        sym.file_path,
-                        sym.range.start_line + 1
-                    ));
+                SymbolResolution::NotFoundByName(name) => {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Symbol not found: {name}"
+                    ))]));
                 }
-                if symbols.len() > 10 {
-                    msg.push_str(&format!("  ... and {} more\n", symbols.len() - 10));
+                SymbolResolution::Ambiguous { name, candidates } => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        render_ambiguity("analyze_impact", &name, &candidates),
+                    )]));
                 }
-                msg.push_str("\nUse: analyze_impact symbol_id:<id> for specific symbol");
-                return Ok(CallToolResult::success(vec![Content::text(msg)]));
-            }
-
-            // SINGLE MATCH - use it
-            (symbols.into_iter().next().unwrap(), name)
-        } else {
-            return Ok(CallToolResult::success(vec![Content::text(
-                "Error: Either symbol_name or symbol_id must be provided".to_string(),
-            )]));
-        };
+                SymbolResolution::MissingParam => {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "Error: Either symbol_name or symbol_id must be provided".to_string(),
+                    )]));
+                }
+            };
 
         // Analyze impact for THIS SPECIFIC symbol only (no aggregation)
         let impacted = indexer.get_impact_radius(symbol.id, Some(max_depth as usize));
@@ -1734,17 +1615,17 @@ impl CodeIntelligenceServer {
     ) -> Result<CallToolResult, McpError> {
         let indexer = self.facade.read().await;
 
-        // Parse the kind filter if provided
-        let kind_filter = kind.as_ref().and_then(|k| match k.to_lowercase().as_str() {
-            "function" => Some(crate::SymbolKind::Function),
-            "struct" => Some(crate::SymbolKind::Struct),
-            "trait" => Some(crate::SymbolKind::Trait),
-            "method" => Some(crate::SymbolKind::Method),
-            "field" => Some(crate::SymbolKind::Field),
-            "module" => Some(crate::SymbolKind::Module),
-            "constant" => Some(crate::SymbolKind::Constant),
-            _ => None,
-        });
+        // One kind vocabulary (SymbolKind::from_str); unknown kinds error
+        // instead of silently returning unfiltered results.
+        let kind_filter = match kind.as_deref().map(str::parse::<crate::SymbolKind>) {
+            None => None,
+            Some(Ok(k)) => Some(k),
+            Some(Err(e)) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: {e}"
+                ))]));
+            }
+        };
 
         match indexer.search(
             &query,
