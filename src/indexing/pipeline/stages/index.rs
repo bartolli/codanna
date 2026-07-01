@@ -13,13 +13,17 @@
 
 use crate::indexing::IndexStats;
 use crate::indexing::pipeline::types::{
-    IndexBatch, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
+    IndexBatch, PipelineError, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
 };
 use crate::io::status_line::ProgressBar;
 use crate::storage::DocumentIndex;
 use crossbeam_channel::Receiver;
 use rayon::prelude::*;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Index stage for Tantivy writes.
 ///
@@ -83,6 +87,7 @@ impl IndexStage {
         let mut stats = IndexStats::new();
         let mut pending_relationships: Vec<UnresolvedRelationship> = Vec::new();
         let mut batch_count = 0;
+        let mut failed_files_total = 0usize;
         let mut input_wait = Duration::ZERO;
 
         // Pre-allocate cache based on expected symbols (will grow if needed)
@@ -100,7 +105,7 @@ impl IndexStage {
             };
             input_wait += recv_start.elapsed();
 
-            self.process_batch(&batch, &mut stats, &symbol_cache)?;
+            failed_files_total += self.process_batch(&batch, &mut stats, &symbol_cache)?;
 
             // Accumulate relationships for Phase 2
             pending_relationships.extend(batch.unresolved_relationships);
@@ -116,6 +121,19 @@ impl IndexStage {
         // Final commit
         self.index.commit_batch()?;
 
+        // Clean work is committed and durable; failed files are unregistered
+        // (no content hash) so the next run re-visits them. The stage still
+        // fails so the run does not report success over a known gap.
+        if failed_files_total > 0 {
+            return Err(PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: format!(
+                    "{failed_files_total} file(s) had failed index writes and were left \
+                     unregistered; re-run indexing to fill the gap"
+                ),
+            });
+        }
+
         Ok((stats, pending_relationships, symbol_cache, input_wait))
     }
 
@@ -123,42 +141,64 @@ impl IndexStage {
     ///
     /// Writes symbols, imports, and file registrations to Tantivy in parallel.
     /// Accumulates symbols in cache for Phase 2 resolution.
+    ///
+    /// Returns the number of files in this batch that were left unregistered
+    /// because a write failed.
     fn process_batch(
         &self,
         batch: &IndexBatch,
         stats: &mut IndexStats,
         symbol_cache: &SymbolLookupCache,
-    ) -> PipelineResult<()> {
-        // Write file registrations in parallel
-        batch
-            .file_registrations
-            .par_iter()
-            .for_each(|registration| {
-                if let Err(e) = self.index.store_file_registration(registration) {
-                    tracing::warn!(
-                        target: "pipeline",
-                        "Failed to store file registration for {}: {e}",
-                        registration.path.display()
-                    );
-                }
-            });
-        let files_in_batch = batch.file_registrations.len();
-        stats.files_indexed += files_in_batch;
+    ) -> PipelineResult<usize> {
+        // Symbols are written before file registrations: a file whose symbol
+        // writes fail must not be registered with its content hash, or the
+        // next incremental run treats it as up-to-date and the gap becomes
+        // permanent. COLLECT keeps a file's registration and symbols in one
+        // batch, so the skip below covers every registration for the file.
+        let failed_files: Mutex<HashSet<PathBuf>> = Mutex::new(HashSet::new());
 
         // Write symbols to Tantivy in parallel
         // SymbolLookupCache uses DashMap which is concurrent-safe
         batch.symbols.par_iter().for_each(|(symbol, path)| {
             if let Err(e) = self.index.index_symbol(symbol, &path.to_string_lossy()) {
-                tracing::warn!(
+                tracing::error!(
                     target: "pipeline",
                     "Failed to index symbol {}: {e}",
                     symbol.name
                 );
+                if let Ok(mut failed) = failed_files.lock() {
+                    failed.insert(path.clone());
+                }
             }
             // Insert into cache for O(1) Phase 2 resolution (DashMap is concurrent)
             symbol_cache.insert(symbol.clone());
         });
         stats.symbols_found += batch.symbols.len();
+
+        let failed = failed_files
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // Write file registrations in parallel, skipping failed files
+        let registration_failures = AtomicUsize::new(0);
+        batch
+            .file_registrations
+            .par_iter()
+            .filter(|registration| !failed.contains(&registration.path))
+            .for_each(|registration| {
+                if let Err(e) = self.index.store_file_registration(registration) {
+                    tracing::error!(
+                        target: "pipeline",
+                        "Failed to store file registration for {}: {e}",
+                        registration.path.display()
+                    );
+                    registration_failures.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        let files_in_batch = batch.file_registrations.len();
+        let files_failed = failed.len() + registration_failures.load(Ordering::Relaxed);
+        stats.files_indexed += files_in_batch - files_failed;
+        stats.files_failed += files_failed;
 
         // Write imports in parallel
         batch.imports.par_iter().for_each(|import| {
@@ -185,7 +225,7 @@ impl IndexStage {
             callback(files_in_batch as u64);
         }
 
-        Ok(())
+        Ok(files_failed)
     }
 
     /// Commit current batch and start a new one.
@@ -202,7 +242,16 @@ impl IndexStage {
     pub fn index_batch(&self, batch: IndexBatch) -> PipelineResult<()> {
         let symbol_cache = SymbolLookupCache::new();
         let mut stats = IndexStats::new();
-        self.process_batch(&batch, &mut stats, &symbol_cache)
+        let failed = self.process_batch(&batch, &mut stats, &symbol_cache)?;
+        if failed > 0 {
+            return Err(PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: format!(
+                    "{failed} file(s) had failed index writes and were left unregistered"
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
