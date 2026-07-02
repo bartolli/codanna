@@ -1,5 +1,4 @@
 pub mod error;
-pub mod memory;
 pub mod metadata;
 pub mod metadata_keys;
 pub mod persistence;

@@ -5,14 +5,12 @@
 
 use super::{MetadataKey, StorageError, StorageResult};
 use crate::relationship::RelationshipMetadata;
-use crate::vector::{ClusterId, EmbeddingGenerator, SegmentOrdinal, VectorId, VectorSearchEngine};
+use crate::vector::{ClusterId, VectorId};
 use crate::{FileId, RelationKind, Relationship, SymbolId, SymbolKind};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::{Arc, RwLock};
-use tantivy::DocId;
+use std::sync::RwLock;
 use tantivy::{
     Index, IndexReader, IndexSettings, IndexWriter, ReloadPolicy, TantivyDocument as Document,
     Term,
@@ -291,88 +289,6 @@ impl VectorMetadata {
     }
 }
 
-/// Cache for cluster assignments to enable efficient vector search
-///
-/// This cache maintains mappings from cluster IDs to document IDs within each segment,
-/// enabling the vector search to quickly find relevant documents without scanning
-/// all vectors. The cache is rebuilt when the index reader generation changes.
-#[derive(Debug, Clone)]
-struct ClusterCache {
-    /// The reader generation this cache was built for
-    generation: u64,
-    /// Mappings per segment: SegmentOrdinal -> (ClusterId -> [DocId])
-    segment_mappings: HashMap<SegmentOrdinal, HashMap<ClusterId, Vec<DocId>>>,
-}
-
-impl ClusterCache {
-    /// Creates a new empty cache
-    fn new(generation: u64) -> Self {
-        Self {
-            generation,
-            segment_mappings: HashMap::new(),
-        }
-    }
-
-    /// Checks if the cache is valid for the given generation
-    fn is_valid_for_generation(&self, generation: u64) -> bool {
-        self.generation == generation
-    }
-
-    /// Adds a document to the cache
-    fn add_document(&mut self, segment_ord: SegmentOrdinal, cluster_id: ClusterId, doc_id: DocId) {
-        self.segment_mappings
-            .entry(segment_ord)
-            .or_default()
-            .entry(cluster_id)
-            .or_default()
-            .push(doc_id);
-    }
-
-    /// Gets all documents in a cluster for a specific segment
-    fn get_documents(
-        &self,
-        segment_ord: SegmentOrdinal,
-        cluster_id: ClusterId,
-    ) -> Option<&[DocId]> {
-        self.segment_mappings
-            .get(&segment_ord)
-            .and_then(|clusters| clusters.get(&cluster_id))
-            .map(|docs| docs.as_slice())
-    }
-
-    /// Sorts all document lists for efficient searching
-    fn sort_all(&mut self) {
-        for segment_map in self.segment_mappings.values_mut() {
-            for doc_list in segment_map.values_mut() {
-                doc_list.sort_unstable();
-            }
-        }
-    }
-
-    /// Gets the total number of cached documents
-    #[cfg(test)]
-    fn total_documents(&self) -> usize {
-        self.segment_mappings
-            .values()
-            .flat_map(|clusters| clusters.values())
-            .map(|docs| docs.len())
-            .sum()
-    }
-
-    /// Gets all unique cluster IDs across all segments
-    fn all_cluster_ids(&self) -> Vec<ClusterId> {
-        let mut cluster_ids: Vec<ClusterId> = self
-            .segment_mappings
-            .values()
-            .flat_map(|clusters| clusters.keys())
-            .copied()
-            .collect();
-        cluster_ids.sort_unstable_by_key(|id| id.get());
-        cluster_ids.dedup();
-        cluster_ids
-    }
-}
-
 /// Search result with rich metadata
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -409,16 +325,6 @@ pub struct DocumentIndex {
     heap_size: usize,
     /// Maximum retry attempts for transient errors
     max_retry_attempts: u32,
-    /// Optional path for vector storage files
-    vector_storage_path: Option<PathBuf>,
-    /// Optional vector search engine for semantic search
-    vector_engine: Option<Arc<Mutex<VectorSearchEngine>>>,
-    /// Cache for cluster assignments (protected by RwLock for concurrent reads)
-    cluster_cache: Arc<RwLock<Option<ClusterCache>>>,
-    /// Optional embedding generator for vector search
-    embedding_generator: Option<Arc<dyn EmbeddingGenerator>>,
-    /// Symbols pending vector processing (SymbolId, symbol_text)
-    pub(crate) pending_embeddings: Mutex<Vec<(SymbolId, String)>>,
     /// Pending symbol counter during batch operations
     pending_symbol_counter: Mutex<Option<u32>>,
     /// Pending file counter during batch operations
@@ -430,20 +336,6 @@ impl std::fmt::Debug for DocumentIndex {
         f.debug_struct("DocumentIndex")
             .field("index_path", &self.index_path)
             .field("schema", &self.schema)
-            .field("vector_storage_path", &self.vector_storage_path)
-            .field("has_vector_engine", &self.vector_engine.is_some())
-            .field(
-                "has_embedding_generator",
-                &self.embedding_generator.is_some(),
-            )
-            .field(
-                "has_cluster_cache",
-                &self.cluster_cache.read().unwrap().is_some(),
-            )
-            .field(
-                "pending_embeddings_count",
-                &self.pending_embeddings.lock().unwrap().len(),
-            )
             .finish()
     }
 }
@@ -497,11 +389,6 @@ impl DocumentIndex {
             writer: RwLock::new(None),
             heap_size,
             max_retry_attempts,
-            vector_storage_path: None,
-            vector_engine: None,
-            cluster_cache: Arc::new(RwLock::new(None)),
-            embedding_generator: None,
-            pending_embeddings: Mutex::new(Vec::new()),
             pending_symbol_counter: Mutex::new(None),
             pending_file_counter: Mutex::new(None),
         })
@@ -542,331 +429,6 @@ impl DocumentIndex {
             }
         }
         unreachable!()
-    }
-
-    /// Enable vector search support with the given engine and storage path
-    pub fn with_vector_support(
-        mut self,
-        vector_engine: Arc<Mutex<VectorSearchEngine>>,
-        vector_storage_path: impl AsRef<Path>,
-    ) -> Self {
-        self.vector_storage_path = Some(vector_storage_path.as_ref().to_path_buf());
-        self.vector_engine = Some(vector_engine);
-        self
-    }
-
-    /// Set the embedding generator for vector search
-    pub fn with_embedding_generator(mut self, generator: Arc<dyn EmbeddingGenerator>) -> Self {
-        self.embedding_generator = Some(generator);
-        self
-    }
-
-    /// Check if vector search is enabled
-    pub fn has_vector_support(&self) -> bool {
-        self.vector_engine.is_some()
-    }
-
-    /// Get the vector storage path if configured
-    pub fn vector_storage_path(&self) -> Option<&Path> {
-        self.vector_storage_path.as_deref()
-    }
-
-    /// Get a reference to the vector engine if configured
-    pub fn vector_engine(&self) -> Option<&Arc<Mutex<VectorSearchEngine>>> {
-        self.vector_engine.as_ref()
-    }
-
-    /// Process pending embeddings after a successful Tantivy commit
-    fn post_commit_vector_processing(&self) -> StorageResult<()> {
-        // Get pending embeddings
-        let pending_embeddings = {
-            let mut pending = self
-                .pending_embeddings
-                .lock()
-                .map_err(|_| StorageError::LockPoisoned)?;
-            std::mem::take(&mut *pending)
-        };
-
-        if pending_embeddings.is_empty() {
-            return Ok(());
-        }
-
-        // Get references to engine and generator
-        let vector_engine = self
-            .vector_engine
-            .as_ref()
-            .ok_or_else(|| StorageError::General("Vector engine not configured".to_string()))?;
-        let embedding_generator = self.embedding_generator.as_ref().ok_or_else(|| {
-            StorageError::General("Embedding generator not configured".to_string())
-        })?;
-
-        // Extract texts for embedding generation
-        let texts: Vec<&str> = pending_embeddings
-            .iter()
-            .map(|(_, text)| text.as_str())
-            .collect();
-
-        // Generate embeddings
-        let embeddings = embedding_generator
-            .generate_embeddings(&texts)
-            .map_err(|e| StorageError::General(format!("Embedding generation failed: {e}")))?;
-
-        if embeddings.len() != pending_embeddings.len() {
-            return Err(StorageError::General(format!(
-                "Embedding count mismatch: expected {}, got {}",
-                pending_embeddings.len(),
-                embeddings.len()
-            )));
-        }
-
-        // Create vector IDs and embeddings pairs
-        let mut vectors = Vec::with_capacity(pending_embeddings.len());
-        for (i, (symbol_id, _)) in pending_embeddings.iter().enumerate() {
-            // Convert SymbolId to VectorId (both wrap u32)
-            if let Some(vector_id) = crate::vector::VectorId::new(symbol_id.value()) {
-                vectors.push((vector_id, embeddings[i].clone()));
-            }
-        }
-
-        // Index vectors in the engine
-        let mut engine = vector_engine
-            .lock()
-            .map_err(|_| StorageError::LockPoisoned)?;
-        engine
-            .index_vectors(&vectors)
-            .map_err(|e| StorageError::General(format!("Vector indexing failed: {e}")))?;
-
-        // Now we need to mark documents as having vectors
-        // Since we can't do this in the same transaction, we'll need to do it separately
-        // Store the pending updates for later processing
-        drop(engine); // Release the lock
-
-        // Call update_cluster_assignments to sync the cluster IDs
-        // This will be done in a separate batch to avoid writer conflicts
-
-        Ok(())
-    }
-
-    /// Build or rebuild the cluster cache from current segments
-    /// This should be called after commits when vector support is enabled
-    fn build_cluster_cache(&self) -> StorageResult<()> {
-        if !self.has_vector_support() {
-            return Ok(());
-        }
-
-        let searcher = self.reader.searcher();
-        let generation = searcher.segment_readers().len() as u64; // Simple generation tracking
-
-        // Check if cache is already valid
-        {
-            let cache = self
-                .cluster_cache
-                .read()
-                .map_err(|_| StorageError::LockPoisoned)?;
-            if let Some(ref existing_cache) = *cache {
-                if existing_cache.is_valid_for_generation(generation) {
-                    return Ok(());
-                }
-            }
-        }
-
-        // Build new cache
-        let mut new_cache = ClusterCache::new(generation);
-
-        // Iterate through all segments
-        for (segment_ord, segment_reader) in searcher.segment_readers().iter().enumerate() {
-            let segment_ord = SegmentOrdinal::new(segment_ord as u32);
-
-            // Get the fast fields for this segment
-            let fast_fields = segment_reader.fast_fields();
-            let cluster_id_reader = fast_fields.u64("cluster_id")?.first_or_default_col(0);
-            let has_vector_reader = fast_fields.u64("has_vector")?.first_or_default_col(0);
-
-            // Scan all documents in the segment
-            for doc_id in 0..segment_reader.num_docs() {
-                // Check if document has a vector
-                let has_vector_val = has_vector_reader.get_val(doc_id);
-                if has_vector_val == 1 {
-                    // Get cluster assignment
-                    let cluster_val = cluster_id_reader.get_val(doc_id);
-                    if let Some(cluster_id) = ClusterId::new(cluster_val as u32) {
-                        new_cache.add_document(segment_ord, cluster_id, doc_id);
-                    }
-                }
-            }
-        }
-
-        // Sort all document lists for efficient searching
-        new_cache.sort_all();
-
-        // Store the new cache
-        let mut cache = self
-            .cluster_cache
-            .write()
-            .map_err(|_| StorageError::LockPoisoned)?;
-        *cache = Some(new_cache);
-
-        Ok(())
-    }
-
-    /// Get documents in a specific cluster for a segment
-    pub fn get_cluster_documents(
-        &self,
-        segment_ord: SegmentOrdinal,
-        cluster_id: ClusterId,
-    ) -> StorageResult<Vec<DocId>> {
-        let cache = self
-            .cluster_cache
-            .read()
-            .map_err(|_| StorageError::LockPoisoned)?;
-
-        if let Some(ref cluster_cache) = *cache {
-            Ok(cluster_cache
-                .get_documents(segment_ord, cluster_id)
-                .map(|docs| docs.to_vec())
-                .unwrap_or_default())
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    /// Get all unique cluster IDs in the index
-    pub fn get_all_cluster_ids(&self) -> StorageResult<Vec<ClusterId>> {
-        let cache = self
-            .cluster_cache
-            .read()
-            .map_err(|_| StorageError::LockPoisoned)?;
-
-        if let Some(ref cluster_cache) = *cache {
-            Ok(cluster_cache.all_cluster_ids())
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    /// Warm the cluster cache by forcing a rebuild
-    /// This is useful after major index changes or reader reloads
-    pub fn warm_cluster_cache(&self) -> StorageResult<()> {
-        if !self.has_vector_support() {
-            return Ok(());
-        }
-
-        // Force cache invalidation by setting an invalid generation
-        {
-            let mut cache = self
-                .cluster_cache
-                .write()
-                .map_err(|_| StorageError::LockPoisoned)?;
-            *cache = None; // Clear existing cache to force rebuild
-        }
-
-        // Rebuild the cache
-        self.build_cluster_cache()
-    }
-
-    /// Get current cache generation for monitoring
-    pub fn get_cache_generation(&self) -> StorageResult<Option<u64>> {
-        let cache = self
-            .cluster_cache
-            .read()
-            .map_err(|_| StorageError::LockPoisoned)?;
-        Ok(cache.as_ref().map(|c| c.generation))
-    }
-
-    /// Reload the reader and warm caches
-    /// This ensures the index is ready for high-performance queries
-    pub fn reload_and_warm(&self) -> StorageResult<()> {
-        // Reload the reader to see latest changes
-        self.reader.reload()?;
-
-        // Warm the cluster cache if vector support is enabled
-        if self.has_vector_support() {
-            self.warm_cluster_cache()?;
-        }
-
-        Ok(())
-    }
-
-    /// Update documents with cluster assignments from the vector engine
-    /// This should be called after vector processing to sync cluster IDs
-    pub fn update_cluster_assignments(&self) -> StorageResult<()> {
-        if !self.has_vector_support() {
-            return Ok(());
-        }
-
-        let vector_engine = self
-            .vector_engine
-            .as_ref()
-            .ok_or_else(|| StorageError::General("Vector engine not configured".to_string()))?;
-
-        let engine = vector_engine
-            .lock()
-            .map_err(|_| StorageError::LockPoisoned)?;
-
-        // Get all vectors that have cluster assignments
-        let cluster_assignments = engine.get_all_cluster_assignments();
-
-        drop(engine); // Release the lock before we start updating
-
-        // Convert VectorIds to SymbolIds
-        let mut updates_needed = Vec::new();
-        for (vector_id, cluster_id) in cluster_assignments {
-            // Convert VectorId back to SymbolId
-            if let Some(symbol_id) = SymbolId::new(vector_id.get()) {
-                updates_needed.push((symbol_id, cluster_id));
-            }
-        }
-
-        if updates_needed.is_empty() {
-            return Ok(());
-        }
-
-        // Get the current searcher
-        let searcher = self.reader.searcher();
-
-        // Perform batch update
-        self.start_batch()?;
-        let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
-        let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
-
-        for (symbol_id, cluster_id) in updates_needed {
-            // Find the document by symbol_id
-            let symbol_id_term =
-                Term::from_field_u64(self.schema.symbol_id, symbol_id.value() as u64);
-            let query = TermQuery::new(symbol_id_term.clone(), IndexRecordOption::Basic);
-
-            // Search for the document
-            let top_docs = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
-
-            if let Some((_score, doc_address)) = top_docs.first() {
-                // Retrieve the stored document
-                if let Ok(old_doc) = searcher.doc::<Document>(*doc_address) {
-                    // Delete old document
-                    writer.delete_term(symbol_id_term);
-
-                    // Create new document with updated cluster_id
-                    let mut new_doc = Document::new();
-
-                    // Copy all fields except cluster_id and has_vector
-                    for (field, value) in old_doc.field_values() {
-                        if field != self.schema.cluster_id && field != self.schema.has_vector {
-                            new_doc.add_field_value(field, value);
-                        }
-                    }
-
-                    // Add updated vector fields
-                    new_doc.add_u64(self.schema.cluster_id, cluster_id.get() as u64);
-                    new_doc.add_u64(self.schema.has_vector, 1);
-
-                    writer.add_document(new_doc)?;
-                }
-            }
-        }
-
-        drop(writer_lock);
-        self.commit_batch()?;
-
-        Ok(())
     }
 
     /// Start a batch operation for adding multiple documents
@@ -963,26 +525,7 @@ impl DocumentIndex {
             doc.add_text(self.schema.language, "");
         }
 
-        // Add default vector fields - these will be updated later if vectors are generated
-        if self.has_vector_support() {
-            doc.add_u64(self.schema.cluster_id, 0); // 0 means not yet assigned
-            doc.add_u64(self.schema.vector_id, symbol_id.value() as u64);
-            doc.add_u64(self.schema.has_vector, 0); // Will be set to 1 after vector processing
-        }
-
         writer.add_document(doc)?;
-
-        // Track symbol for vector embedding if vector support is enabled
-        if self.has_vector_support() && self.embedding_generator.is_some() {
-            // Create symbol text representation for embedding
-            let symbol_text = format!("{} {:?} {}", name, kind, signature.unwrap_or(""));
-
-            let mut pending = self
-                .pending_embeddings
-                .lock()
-                .map_err(|_| StorageError::LockPoisoned)?;
-            pending.push((symbol_id, symbol_text));
-        }
 
         Ok(())
     }
@@ -1067,14 +610,6 @@ impl DocumentIndex {
             if let Ok(mut pending_guard) = self.pending_file_counter.lock() {
                 *pending_guard = None;
             }
-
-            // Process pending vector embeddings if enabled
-            if self.has_vector_support() && self.embedding_generator.is_some() {
-                self.post_commit_vector_processing()?;
-            }
-
-            // Build cluster cache if vector support is enabled
-            self.build_cluster_cache()?;
         }
         Ok(())
     }
@@ -2540,7 +2075,7 @@ impl DocumentIndex {
     }
 
     /// Query all relationships from the index
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn query_relationships(
         &self,
     ) -> StorageResult<Vec<(SymbolId, SymbolId, crate::Relationship)>> {
@@ -2619,7 +2154,7 @@ impl DocumentIndex {
     }
 
     /// Query all file information from the index
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn query_file_info(&self) -> StorageResult<Vec<(FileId, String, String, u64)>> {
         let searcher = self.reader.searcher();
         let query = TermQuery::new(
@@ -2664,27 +2199,6 @@ impl DocumentIndex {
         }
 
         Ok(files)
-    }
-
-    /// Count symbols in Tantivy index
-    #[allow(dead_code)]
-    pub(crate) fn count_symbol_documents(&self) -> StorageResult<u64> {
-        let searcher = self.reader.searcher();
-        let query = TermQuery::new(
-            Term::from_field_text(self.schema.doc_type, "symbol"),
-            IndexRecordOption::Basic,
-        );
-
-        let count = searcher.search(&query, &tantivy::collector::Count)?;
-        Ok(count as u64)
-    }
-
-    /// DEPRECATED: This method is no longer needed with Tantivy-only architecture
-    #[deprecated(note = "Use Tantivy queries directly instead of rebuilding IndexData")]
-    #[allow(dead_code)]
-    pub(crate) fn rebuild_index_data(&self) -> StorageResult<()> {
-        // This method is kept temporarily for compatibility but does nothing
-        Ok(())
     }
 
     /// Query metadata value by key
@@ -2735,9 +2249,6 @@ mod tests {
         let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
 
         assert_eq!(index.document_count().unwrap(), 0);
-        assert!(!index.has_vector_support());
-        assert!(index.vector_storage_path().is_none());
-        assert!(index.vector_engine().is_none());
     }
 
     #[test]
@@ -3475,121 +2986,7 @@ mod tests {
     }
 
     #[test]
-    fn test_document_index_with_vector_support() {
-        use crate::vector::{VectorDimension, VectorSearchEngine};
-
-        let temp_dir = TempDir::new().unwrap();
-        let vector_dir = temp_dir.path().join("vectors");
-
-        // Create vector engine
-        let vector_engine =
-            VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap()).unwrap();
-        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
-
-        // Create index with vector support
-        let settings = crate::config::Settings::default();
-        let index = DocumentIndex::new(temp_dir.path(), &settings)
-            .unwrap()
-            .with_vector_support(vector_engine_arc.clone(), &vector_dir);
-
-        // Verify vector support is enabled
-        assert!(index.has_vector_support());
-        assert_eq!(index.vector_storage_path(), Some(vector_dir.as_ref()));
-        assert!(index.vector_engine().is_some());
-
-        // Verify the engine reference is the same
-        let engine_ref = index.vector_engine().unwrap();
-        assert!(Arc::ptr_eq(engine_ref, &vector_engine_arc));
-    }
-
-    #[test]
-    fn test_document_index_operations_with_and_without_vectors() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Test 1: Create index without vector support
-        let settings = crate::config::Settings::default();
-        let index_no_vectors =
-            DocumentIndex::new(temp_dir.path().join("no_vectors"), &settings).unwrap();
-
-        // Basic operations should work
-        index_no_vectors.start_batch().unwrap();
-        index_no_vectors
-            .add_document(
-                SymbolId::new(1).unwrap(),
-                "test_func",
-                SymbolKind::Function,
-                FileId::new(1).unwrap(),
-                "test.rs",
-                1,
-                1,
-                10, // end_line
-                0,  // end_column
-                None,
-                None,
-                "test",
-                None,
-                crate::Visibility::Public,
-                Some(crate::ScopeContext::Module),
-                None, // No language_id for this test
-            )
-            .unwrap();
-        index_no_vectors.commit_batch().unwrap();
-
-        let results = index_no_vectors
-            .search("test_func", 10, None, None, None)
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(!index_no_vectors.has_vector_support());
-
-        // Test 2: Create index with vector support
-        use crate::vector::{VectorDimension, VectorSearchEngine};
-
-        let vector_dir = temp_dir.path().join("vectors");
-        let vector_engine =
-            VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap()).unwrap();
-        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
-
-        let settings = crate::config::Settings::default();
-        let index_with_vectors =
-            DocumentIndex::new(temp_dir.path().join("with_vectors"), &settings)
-                .unwrap()
-                .with_vector_support(vector_engine_arc, &vector_dir);
-
-        // Same operations should work with vector support
-        index_with_vectors.start_batch().unwrap();
-        index_with_vectors
-            .add_document(
-                SymbolId::new(2).unwrap(),
-                "vector_func",
-                SymbolKind::Function,
-                FileId::new(1).unwrap(),
-                "test.rs",
-                10,
-                1,
-                20, // end_line
-                0,  // end_column
-                None,
-                None,
-                "test",
-                None,
-                crate::Visibility::Public,
-                Some(crate::ScopeContext::Module),
-                None, // No language_id for this test
-            )
-            .unwrap();
-        index_with_vectors.commit_batch().unwrap();
-
-        let results = index_with_vectors
-            .search("vector_func", 10, None, None, None)
-            .unwrap();
-        assert_eq!(results.len(), 1);
-        assert!(index_with_vectors.has_vector_support());
-    }
-
-    #[test]
     fn test_document_index_debug_impl() {
-        use crate::vector::{VectorDimension, VectorSearchEngine};
-
         let temp_dir = TempDir::new().unwrap();
 
         // Test Debug without vector support
@@ -3598,259 +2995,6 @@ mod tests {
         let debug_str = format!("{index:?}");
         assert!(debug_str.contains("DocumentIndex"));
         assert!(debug_str.contains("index_path"));
-        assert!(debug_str.contains("vector_storage_path: None"));
-        assert!(debug_str.contains("has_vector_engine: false"));
-
-        // Test Debug with vector support
-        let vector_dir = temp_dir.path().join("vectors");
-        let vector_engine =
-            VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap()).unwrap();
-        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
-
-        let settings = crate::config::Settings::default();
-        let index_with_vectors = DocumentIndex::new(temp_dir.path(), &settings)
-            .unwrap()
-            .with_vector_support(vector_engine_arc, &vector_dir);
-
-        let debug_str = format!("{index_with_vectors:?}");
-        assert!(debug_str.contains("DocumentIndex"));
-        assert!(debug_str.contains("has_vector_engine: true"));
-        // Check vector_storage_path is Some (platform-agnostic, handles Windows backslash escaping)
-        assert!(debug_str.contains("vector_storage_path: Some("));
-        assert!(debug_str.contains("vectors"));
-    }
-
-    #[test]
-    fn test_cluster_cache_operations() {
-        use crate::vector::{VectorDimension, VectorSearchEngine};
-        use std::time::Instant;
-
-        let temp_dir = TempDir::new().unwrap();
-        let vector_dir = temp_dir.path().join("vectors");
-
-        // Create vector engine
-        let vector_engine =
-            VectorSearchEngine::new(&vector_dir, VectorDimension::new(384).unwrap()).unwrap();
-        let vector_engine_arc = Arc::new(Mutex::new(vector_engine));
-
-        // Create index with vector support
-        let settings = crate::config::Settings::default();
-        let index = DocumentIndex::new(temp_dir.path(), &settings)
-            .unwrap()
-            .with_vector_support(vector_engine_arc, &vector_dir);
-
-        // Start batch and add documents with cluster assignments
-        index.start_batch().unwrap();
-
-        // Add documents to different clusters
-        let test_docs = vec![
-            (1, "parse_string", 0), // cluster 0
-            (2, "parse_number", 0), // cluster 0
-            (3, "parse_json", 0),   // cluster 0
-            (4, "Parser", 1),       // cluster 1
-            (5, "JsonParser", 1),   // cluster 1
-            (6, "handle_error", 2), // cluster 2
-            (7, "ParseError", 2),   // cluster 2
-        ];
-
-        for (id, name, cluster) in &test_docs {
-            let mut doc = Document::new();
-            doc.add_text(index.schema.doc_type, "symbol");
-            doc.add_u64(index.schema.symbol_id, *id);
-            doc.add_text(index.schema.name, name);
-            doc.add_text(index.schema.kind, "function");
-            doc.add_u64(index.schema.file_id, 1);
-            doc.add_text(index.schema.file_path, "test.rs");
-            doc.add_u64(index.schema.line_number, *id * 10);
-            doc.add_u64(index.schema.column, 1);
-            doc.add_text(index.schema.module_path, "test");
-
-            // Add vector fields - cluster IDs need to be non-zero
-            doc.add_u64(index.schema.cluster_id, *cluster + 1); // Make 1-based
-            doc.add_u64(index.schema.vector_id, *id);
-            doc.add_u64(index.schema.has_vector, 1);
-
-            index
-                .writer
-                .read()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .add_document(doc)
-                .unwrap();
-        }
-
-        // Commit and trigger cache building
-        index.commit_batch().unwrap();
-
-        // Verify cache was built
-        {
-            let cache = index.cluster_cache.read().unwrap();
-            assert!(cache.is_some(), "Cache should be built after commit");
-
-            let cluster_cache = cache.as_ref().unwrap();
-            println!(
-                "Total documents in cache: {}",
-                cluster_cache.total_documents()
-            );
-
-            // Check cluster IDs
-            let cluster_ids = cluster_cache.all_cluster_ids();
-            println!(
-                "Found cluster IDs: {:?}",
-                cluster_ids.iter().map(|id| id.get()).collect::<Vec<_>>()
-            );
-
-            // Debug: print mappings
-            for (_seg_ord, clusters) in &cluster_cache.segment_mappings {
-                println!(
-                    "Segment {}: clusters={:?}",
-                    _seg_ord.get(),
-                    clusters.keys().map(|c| c.get()).collect::<Vec<_>>()
-                );
-                for (cluster_id, docs) in clusters {
-                    println!("  Cluster {}: {} docs", cluster_id.get(), docs.len());
-                }
-            }
-        }
-
-        // Test document lookups - need to collect from all segments
-        let all_cluster_ids = index.get_all_cluster_ids().unwrap();
-        assert_eq!(all_cluster_ids.len(), 3);
-
-        // Count total documents per cluster across all segments
-        let mut cluster1_total = 0;
-        let mut cluster2_total = 0;
-        let mut cluster3_total = 0;
-
-        {
-            let cache = index.cluster_cache.read().unwrap();
-            let cluster_cache = cache.as_ref().unwrap();
-
-            for clusters in cluster_cache.segment_mappings.values() {
-                if let Some(docs) = clusters.get(&ClusterId::new(1).unwrap()) {
-                    cluster1_total += docs.len();
-                }
-                if let Some(docs) = clusters.get(&ClusterId::new(2).unwrap()) {
-                    cluster2_total += docs.len();
-                }
-                if let Some(docs) = clusters.get(&ClusterId::new(3).unwrap()) {
-                    cluster3_total += docs.len();
-                }
-            }
-        }
-
-        assert_eq!(cluster1_total, 3);
-        assert_eq!(cluster2_total, 2);
-        assert_eq!(cluster3_total, 2);
-
-        // Test performance of lookups (should be <10μs)
-        let cluster_id = ClusterId::new(1).unwrap();
-        let segment_ord = SegmentOrdinal::new(0);
-        let start = Instant::now();
-        for _ in 0..1000 {
-            let _ = index
-                .get_cluster_documents(segment_ord, cluster_id)
-                .unwrap();
-        }
-        let elapsed = start.elapsed();
-        let per_lookup = elapsed / 1000;
-        println!("Cluster lookup performance: {per_lookup:?} per lookup");
-        assert!(
-            per_lookup.as_micros() < 10,
-            "Lookup should be <10μs, was {per_lookup:?}"
-        );
-
-        // Test cache invalidation - add more documents
-        index.start_batch().unwrap();
-
-        let mut doc = Document::new();
-        doc.add_text(index.schema.doc_type, "symbol");
-        doc.add_u64(index.schema.symbol_id, 8);
-        doc.add_text(index.schema.name, "new_function");
-        doc.add_text(index.schema.kind, "function");
-        doc.add_u64(index.schema.file_id, 1);
-        doc.add_text(index.schema.file_path, "test.rs");
-        doc.add_u64(index.schema.line_number, 80);
-        doc.add_u64(index.schema.column, 1);
-        doc.add_text(index.schema.module_path, "test");
-        doc.add_u64(index.schema.cluster_id, 1); // cluster_id must be non-zero
-        doc.add_u64(index.schema.vector_id, 8);
-        doc.add_u64(index.schema.has_vector, 1);
-
-        index
-            .writer
-            .read()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .add_document(doc)
-            .unwrap();
-
-        index.commit_batch().unwrap();
-
-        // Verify cache was rebuilt
-        {
-            let cache = index.cluster_cache.read().unwrap();
-            let cluster_cache = cache.as_ref().unwrap();
-            assert_eq!(cluster_cache.total_documents(), 8);
-        }
-
-        // Count documents again after update
-        {
-            let cache = index.cluster_cache.read().unwrap();
-            let cluster_cache = cache.as_ref().unwrap();
-
-            let mut cluster1_updated = 0;
-            for clusters in cluster_cache.segment_mappings.values() {
-                if let Some(docs) = clusters.get(&ClusterId::new(1).unwrap()) {
-                    cluster1_updated += docs.len();
-                }
-            }
-            assert_eq!(cluster1_updated, 4); // Should have one more
-        }
-    }
-
-    #[test]
-    fn test_cluster_cache_unit_operations() {
-        // Test ClusterCache directly
-        let mut cache = ClusterCache::new(1);
-
-        let seg0 = SegmentOrdinal::new(0);
-        let seg1 = SegmentOrdinal::new(1);
-        let cluster0 = ClusterId::new(1).unwrap();
-        let cluster1 = ClusterId::new(2).unwrap();
-
-        // Add documents
-        cache.add_document(seg0, cluster0, 0);
-        cache.add_document(seg0, cluster0, 2);
-        cache.add_document(seg0, cluster0, 1);
-        cache.add_document(seg0, cluster1, 3);
-        cache.add_document(seg1, cluster0, 0);
-
-        // Sort
-        cache.sort_all();
-
-        // Test retrieval
-        let docs = cache.get_documents(seg0, cluster0).unwrap();
-        assert_eq!(docs, &[0, 1, 2]); // Should be sorted
-
-        let docs = cache.get_documents(seg0, cluster1).unwrap();
-        assert_eq!(docs, &[3]);
-
-        let docs = cache.get_documents(seg1, cluster0).unwrap();
-        assert_eq!(docs, &[0]);
-
-        // Test missing lookups
-        assert!(cache.get_documents(seg1, cluster1).is_none());
-
-        // Test metadata
-        assert_eq!(cache.total_documents(), 5);
-        assert_eq!(cache.all_cluster_ids().len(), 2);
-
-        // Test generation check
-        assert!(cache.is_valid_for_generation(1));
-        assert!(!cache.is_valid_for_generation(2));
     }
 
     // ==================== Language Filtering Tests ====================
