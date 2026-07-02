@@ -243,7 +243,7 @@ pub struct UnresolvedRelationship {
 #[derive(Debug)]
 pub struct IndexBatch {
     /// Symbols with their file paths (for Tantivy document creation)
-    pub symbols: Vec<(Symbol, PathBuf)>,
+    pub symbols: Vec<Symbol>,
     /// Imports ready to store
     pub imports: Vec<Import>,
     /// Relationships to resolve after all symbols are indexed

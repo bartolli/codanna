@@ -341,10 +341,7 @@ impl CollectStage {
                 parsed.language_id,
             );
 
-            state
-                .current_batch
-                .symbols
-                .push((symbol, parsed.path.clone()));
+            state.current_batch.symbols.push(symbol);
         }
 
         // Process imports
@@ -474,13 +471,13 @@ mod tests {
 
         println!("Processed {files} files, {symbols} symbols");
         for batch in &batches {
-            for (sym, path) in &batch.symbols {
+            for sym in &batch.symbols {
                 println!(
                     "  - {} (id={}, file_id={}) in {}",
                     sym.name,
                     sym.id.value(),
                     sym.file_id.value(),
-                    path.display()
+                    sym.file_path
                 );
             }
         }
@@ -491,7 +488,7 @@ mod tests {
         // Collect all symbol IDs
         let all_ids: Vec<u32> = batches
             .iter()
-            .flat_map(|b| b.symbols.iter().map(|(s, _)| s.id.value()))
+            .flat_map(|b| b.symbols.iter().map(|s| s.id.value()))
             .collect();
 
         assert_eq!(all_ids, vec![1, 2, 3], "IDs should be sequential 1, 2, 3");
@@ -734,7 +731,7 @@ mod tests {
         assert_eq!(symbols.len(), 3);
 
         // Verify doc_comment is preserved on Symbol
-        let (sym1, _) = &symbols[0];
+        let sym1 = &symbols[0];
         assert_eq!(sym1.name.as_ref(), "documented_fn");
         assert!(
             sym1.doc_comment.is_some(),
@@ -745,24 +742,24 @@ mod tests {
             Some("This function does important work.\n\nIt handles the core logic.")
         );
 
-        let (sym2, _) = &symbols[1];
+        let sym2 = &symbols[1];
         assert_eq!(sym2.name.as_ref(), "plain_fn");
         assert!(
             sym2.doc_comment.is_none(),
             "Symbol without doc should have None"
         );
 
-        let (sym3, _) = &symbols[2];
+        let sym3 = &symbols[2];
         assert_eq!(sym3.name.as_ref(), "helper");
         assert_eq!(sym3.doc_comment.as_deref(), Some("Helper utility"));
 
         println!("doc_comment preservation verified:");
-        for (sym, path) in symbols {
+        for sym in symbols {
             println!(
                 "  {} (id={}) in {} doc={:?}",
                 sym.name,
                 sym.id.value(),
-                path.display(),
+                sym.file_path,
                 sym.doc_comment.as_ref().map(|d| if d.len() > 30 {
                     format!("{}...", &d[..30])
                 } else {

@@ -155,20 +155,20 @@ impl IndexStage {
         // next incremental run treats it as up-to-date and the gap becomes
         // permanent. COLLECT keeps a file's registration and symbols in one
         // batch, so the skip below covers every registration for the file.
-        let failed_files: Mutex<HashSet<PathBuf>> = Mutex::new(HashSet::new());
+        let failed_files: Mutex<HashSet<Box<str>>> = Mutex::new(HashSet::new());
 
         // Write symbols to Tantivy in parallel
         // SymbolLookupCache uses DashMap which is concurrent-safe
         let symbols_in_batch = batch.symbols.len();
-        batch.symbols.into_par_iter().for_each(|(symbol, path)| {
-            if let Err(e) = self.index.index_symbol(&symbol, &path.to_string_lossy()) {
+        batch.symbols.into_par_iter().for_each(|symbol| {
+            if let Err(e) = self.index.index_symbol(&symbol, &symbol.file_path) {
                 tracing::error!(
                     target: "pipeline",
                     "Failed to index symbol {}: {e}",
                     symbol.name
                 );
                 if let Ok(mut failed) = failed_files.lock() {
-                    failed.insert(path);
+                    failed.insert(symbol.file_path.clone());
                 }
             }
             // Insert into cache for O(1) Phase 2 resolution (DashMap is concurrent)
@@ -185,7 +185,7 @@ impl IndexStage {
         batch
             .file_registrations
             .par_iter()
-            .filter(|registration| !failed.contains(&registration.path))
+            .filter(|registration| !failed.contains(registration.path.to_string_lossy().as_ref()))
             .for_each(|registration| {
                 if let Err(e) = self.index.store_file_registration(registration) {
                     tracing::error!(
@@ -277,6 +277,7 @@ mod tests {
             FileId::new(file_id).unwrap(),
             Range::new(1, 0, 1, 10),
         )
+        .with_file_path(format!("test_{file_id}.rs"))
     }
 
     fn make_test_batch(file_id: u32, symbol_count: usize) -> IndexBatch {
@@ -294,9 +295,7 @@ mod tests {
         for i in 0..symbol_count {
             let sym_id = (file_id - 1) * symbol_count as u32 + i as u32 + 1;
             let symbol = make_test_symbol(sym_id, &format!("sym_{sym_id}"), file_id);
-            batch
-                .symbols
-                .push((symbol, PathBuf::from(format!("test_{file_id}.rs"))));
+            batch.symbols.push(symbol);
         }
 
         batch
@@ -436,9 +435,9 @@ mod tests {
         let sym2 = make_test_symbol(2, "process_data", 1); // Duplicate name, different ID
         let sym3 = make_test_symbol(3, "validate_input", 1);
 
-        batch.symbols.push((sym1, PathBuf::from("test.rs")));
-        batch.symbols.push((sym2, PathBuf::from("test.rs")));
-        batch.symbols.push((sym3, PathBuf::from("test.rs")));
+        batch.symbols.push(sym1);
+        batch.symbols.push(sym2);
+        batch.symbols.push(sym3);
 
         batch_tx.send(batch).unwrap();
         drop(batch_tx);
