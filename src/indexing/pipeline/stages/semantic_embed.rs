@@ -142,7 +142,13 @@ impl SemanticEmbedStage {
             .collect();
 
         // Generate embeddings in parallel using pool
-        let embeddings = self.pool.embed_parallel(&items);
+        let embeddings = self
+            .pool
+            .embed_parallel(&items)
+            .map_err(|e| PipelineError::Parse {
+                path: std::path::PathBuf::new(),
+                reason: format!("Embedding generation failed: {e}"),
+            })?;
 
         // Store in semantic search; use the returned count which excludes any
         // embeddings dropped due to dimension mismatch (store_embeddings warns).

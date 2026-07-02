@@ -977,7 +977,12 @@ impl Pipeline {
                     .collect();
 
                 // Generate embeddings
-                let embeddings = pool.embed_parallel(&items);
+                let embeddings = pool
+                    .embed_parallel(&items)
+                    .map_err(|e| PipelineError::Parse {
+                        path: path.to_path_buf(),
+                        reason: format!("Embedding generation failed: {e}"),
+                    })?;
 
                 // store_embeddings warns internally on any dropped embeddings.
                 if !embeddings.is_empty() {

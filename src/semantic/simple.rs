@@ -30,6 +30,14 @@ pub enum SemanticSearchError {
 
     #[error("Invalid ID: {id}\nSuggestion: {suggestion}")]
     InvalidId { id: u32, suggestion: String },
+
+    #[error(
+        "Embedding pool exhausted: no instance available after {waited:?} (pool size {pool_size})\nSuggestion: An embedder is wedged or leaked. Sample the process to capture stacks, then restart the run."
+    )]
+    PoolExhausted {
+        pool_size: usize,
+        waited: std::time::Duration,
+    },
 }
 
 /// Advanced semantic search engine for documentation analysis
