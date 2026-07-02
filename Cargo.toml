@@ -50,7 +50,7 @@ num_cpus = "1.17.0"
 parking_lot = "0.12.5"
 rayon = "1.12.0"
 rmcp = { version = "1.7.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
 hex = "0.4"

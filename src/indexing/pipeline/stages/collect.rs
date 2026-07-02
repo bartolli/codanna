@@ -317,7 +317,7 @@ impl CollectStage {
             let symbol_id = state.next_symbol_id();
 
             // Cache for relationship resolution
-            let name: Arc<str> = raw_sym.name.as_ref().into();
+            let name: Arc<str> = raw_sym.name.clone();
             state
                 .caches
                 .insert(name.clone(), file_id, raw_sym.range, symbol_id);

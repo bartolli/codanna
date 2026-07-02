@@ -25,7 +25,7 @@ pub struct RawSymbol {
     pub kind: SymbolKind,
     pub range: Range,
     pub signature: Option<Box<str>>,
-    pub doc_comment: Option<Box<str>>,
+    pub doc_comment: Option<CompactString>,
     pub visibility: Visibility,
     pub scope_context: Option<ScopeContext>,
 }
@@ -48,7 +48,7 @@ impl RawSymbol {
         self
     }
 
-    pub fn with_doc_comment(mut self, doc: impl Into<Box<str>>) -> Self {
+    pub fn with_doc_comment(mut self, doc: impl Into<CompactString>) -> Self {
         self.doc_comment = Some(doc.into());
         self
     }
@@ -302,7 +302,7 @@ impl Default for IndexBatch {
 #[derive(Debug)]
 pub struct EmbeddingBatch {
     /// Embedding candidates: (symbol_id, doc_comment, language)
-    pub candidates: Vec<(SymbolId, Box<str>, Box<str>)>,
+    pub candidates: Vec<(SymbolId, CompactString, Box<str>)>,
 }
 
 impl EmbeddingBatch {

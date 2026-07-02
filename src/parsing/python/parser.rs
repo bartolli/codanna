@@ -18,7 +18,7 @@ use crate::parsing::{
     ParserContext, ScopeType,
 };
 use crate::types::SymbolCounter;
-use crate::{FileId, Range, Symbol, SymbolKind};
+use crate::{CompactString, FileId, Range, Symbol, SymbolKind};
 use std::any::Any;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -301,7 +301,7 @@ impl PythonParser {
         // Extract docstring
         let doc_comment = self
             .extract_function_docstring(node, code)
-            .map(|s| s.into_boxed_str());
+            .map(CompactString::from);
 
         // Build function signature with type annotations
         let signature = self.build_function_signature(node, code);
@@ -353,7 +353,7 @@ impl PythonParser {
         // Extract docstring
         let doc_comment = self
             .extract_class_docstring(node, code)
-            .map(|s| s.into_boxed_str());
+            .map(CompactString::from);
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Class, file_id, range);
         symbol.doc_comment = doc_comment;

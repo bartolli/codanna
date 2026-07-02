@@ -172,7 +172,7 @@ impl SymbolKind {
     }
 }
 
-pub type CompactString = Box<str>;
+pub type CompactString = std::sync::Arc<str>;
 
 pub fn compact_string(s: &str) -> CompactString {
     s.into()
