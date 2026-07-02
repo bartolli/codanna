@@ -1,7 +1,7 @@
 use crate::relationship::RelationshipMetadata;
 use crate::storage::{StorageError, StorageResult};
 use crate::vector::{ClusterId, VectorId};
-use crate::{FileId, SymbolId, SymbolKind};
+use crate::{FileId, SymbolId};
 use serde::{Deserialize, Serialize};
 use tantivy::{TantivyDocument as Document, schema::Value};
 
@@ -91,70 +91,52 @@ fn decode_scope_context(s: &str) -> Option<crate::ScopeContext> {
 }
 
 impl DocumentIndex {
-    /// Add a document to the index (must call start_batch first)
-    #[allow(clippy::too_many_arguments)]
-    pub fn add_document(
-        &self,
-        symbol_id: SymbolId,
-        name: &str,
-        kind: SymbolKind,
-        file_id: FileId,
-        file_path: &str,
-        line: u32,
-        column: u16,
-        end_line: u32,
-        end_column: u16,
-        doc_comment: Option<&str>,
-        signature: Option<&str>,
-        module_path: &str,
-        context: Option<&str>,
-        visibility: crate::Visibility,
-        scope_context: Option<crate::ScopeContext>,
-        language_id: Option<&str>, // Language identifier for the symbol
-    ) -> StorageResult<()> {
+    /// Add a symbol document to the index (must call start_batch first)
+    pub fn add_document(&self, symbol: &crate::Symbol, file_path: &str) -> StorageResult<()> {
         let writer_lock = self.writer.read().map_err(|_| StorageError::LockPoisoned)?;
         let writer = writer_lock.as_ref().ok_or(StorageError::NoActiveBatch)?;
 
         let mut doc = Document::new();
         doc.add_text(self.schema.doc_type, "symbol");
-        doc.add_u64(self.schema.symbol_id, symbol_id.value() as u64);
-        doc.add_u64(self.schema.file_id, file_id.value() as u64);
-        doc.add_text(self.schema.name, name);
-        doc.add_text(self.schema.name_text, name); // Also add to full-text searchable field
+        doc.add_u64(self.schema.symbol_id, symbol.id.value() as u64);
+        doc.add_u64(self.schema.file_id, symbol.file_id.value() as u64);
+        doc.add_text(self.schema.name, &symbol.name);
+        doc.add_text(self.schema.name_text, &symbol.name); // Also add to full-text searchable field
         doc.add_text(self.schema.file_path, file_path);
-        doc.add_u64(self.schema.line_number, line as u64);
-        doc.add_u64(self.schema.column, column as u64);
-        doc.add_u64(self.schema.end_line, end_line as u64);
-        doc.add_u64(self.schema.end_column, end_column as u64);
+        doc.add_u64(self.schema.line_number, symbol.range.start_line as u64);
+        doc.add_u64(self.schema.column, symbol.range.start_column as u64);
+        doc.add_u64(self.schema.end_line, symbol.range.end_line as u64);
+        doc.add_u64(self.schema.end_column, symbol.range.end_column as u64);
 
-        if let Some(comment) = doc_comment {
+        if let Some(comment) = symbol.doc_comment.as_deref() {
             doc.add_text(self.schema.doc_comment, comment);
         }
 
-        if let Some(sig) = signature {
+        if let Some(sig) = symbol.signature.as_deref() {
             doc.add_text(self.schema.signature, sig);
         }
 
-        if let Some(ctx) = context {
-            doc.add_text(self.schema.context, ctx);
-        }
-
         // Add string fields for filtering
-        doc.add_text(self.schema.module_path, module_path);
-        doc.add_text(self.schema.kind, format!("{kind:?}"));
-        doc.add_u64(self.schema.visibility, visibility as u64);
+        doc.add_text(
+            self.schema.module_path,
+            symbol.module_path.as_deref().unwrap_or(""),
+        );
+        doc.add_text(self.schema.kind, format!("{:?}", symbol.kind));
+        doc.add_u64(self.schema.visibility, symbol.visibility as u64);
 
         doc.add_text(
             self.schema.scope_context,
-            encode_scope_context(scope_context.as_ref()),
+            encode_scope_context(symbol.scope_context.as_ref()),
         );
 
-        // Store language identifier
-        if let Some(lang) = language_id {
-            doc.add_text(self.schema.language, lang);
-        } else {
-            doc.add_text(self.schema.language, "");
-        }
+        doc.add_text(
+            self.schema.language,
+            symbol
+                .language_id
+                .as_ref()
+                .map(|id| id.as_str())
+                .unwrap_or(""),
+        );
 
         writer.add_document(doc)?;
 
@@ -341,6 +323,7 @@ impl DocumentIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SymbolKind;
 
     use tempfile::TempDir;
 

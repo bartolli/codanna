@@ -292,42 +292,7 @@ impl DocumentIndex {
 
     /// Index a symbol from a Symbol struct
     pub fn index_symbol(&self, symbol: &crate::Symbol, file_path: &str) -> StorageResult<()> {
-        self.add_document(
-            symbol.id,
-            &symbol.name,
-            symbol.kind,
-            symbol.file_id,
-            file_path,
-            symbol.range.start_line,
-            symbol.range.start_column,
-            symbol.range.end_line,
-            symbol.range.end_column,
-            symbol.doc_comment.as_ref().map(|s| s.as_ref()),
-            symbol.signature.as_ref().map(|s| s.as_ref()),
-            symbol
-                .module_path
-                .as_ref()
-                .map(|s| s.as_ref())
-                .unwrap_or(""),
-            None, // context (old field, different from scope_context)
-            symbol.visibility,
-            // NOTE: We clone scope_context here because ScopeContext now contains CompactString
-            // (for parent_name) which doesn't implement Copy. This clone happens during indexing
-            // where we process thousands of symbols per second.
-            //
-            // PERFORMANCE TRADEOFF: Each clone allocates for the parent_name string. For a typical
-            // function name of ~20 chars, this is a small allocation. At 10,000 symbols/sec, this
-            // could add measurable overhead.
-            //
-            // TODO: Benchmark impact and consider:
-            // 1. Changing add_document to accept &Option<ScopeContext> to avoid the clone
-            // 2. Using Arc<str> for parent_name to make cloning cheaper
-            // 3. Accepting the overhead if it's <5% performance impact
-            //
-            // This should be tested with real workloads to ensure we maintain our performance targets.
-            symbol.scope_context.clone(),
-            symbol.language_id.as_ref().map(|id| id.as_str()),
-        )
+        self.add_document(symbol, file_path)
     }
 
     /// Store file registration from the indexing pipeline.

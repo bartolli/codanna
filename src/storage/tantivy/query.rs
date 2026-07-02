@@ -1098,26 +1098,19 @@ mod tests {
         // Add a document
         let symbol_id = SymbolId::new(1).unwrap();
         let file_id = FileId::new(1).unwrap();
-        index
-            .add_document(
-                symbol_id,
-                "parse_json",
-                SymbolKind::Function,
-                file_id,
-                "src/parser.rs",
-                42,
-                5,
-                50, // end_line
-                0,  // end_column
-                Some("Parse JSON string into a Value"),
-                Some("fn parse_json(input: &str) -> StorageResult<Value, Error>"),
-                "crate::parser",
-                None,
-                crate::Visibility::Public,
-                Some(crate::ScopeContext::Module),
-                None, // No language_id for this test
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            symbol_id,
+            "parse_json",
+            SymbolKind::Function,
+            file_id,
+            crate::Range::new(42, 5, 50, 0),
+        )
+        .with_doc("Parse JSON string into a Value")
+        .with_signature("fn parse_json(input: &str) -> StorageResult<Value, Error>")
+        .with_module_path("crate::parser")
+        .with_visibility(crate::Visibility::Public)
+        .with_scope(crate::ScopeContext::Module);
+        index.add_document(&sym, "src/parser.rs").unwrap();
 
         // Commit batch
         index.commit_batch().unwrap();
@@ -1184,26 +1177,18 @@ mod tests {
 
         let symbol_id = SymbolId::new(1).unwrap();
         let file_id = FileId::new(1).unwrap();
-        index
-            .add_document(
-                symbol_id,
-                "handle_request",
-                SymbolKind::Function,
-                file_id,
-                "src/server.rs",
-                100,
-                0,
-                120, // end_line
-                0,   // end_column
-                Some("Handle incoming HTTP request"),
-                None,
-                "crate::server",
-                None,
-                crate::Visibility::Private,
-                Some(crate::ScopeContext::Module),
-                None, // No language_id for this test
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            symbol_id,
+            "handle_request",
+            SymbolKind::Function,
+            file_id,
+            crate::Range::new(100, 0, 120, 0),
+        )
+        .with_doc("Handle incoming HTTP request")
+        .with_module_path("crate::server")
+        .with_visibility(crate::Visibility::Private)
+        .with_scope(crate::ScopeContext::Module);
+        index.add_document(&sym, "src/server.rs").unwrap();
 
         // Commit batch
         index.commit_batch().unwrap();
@@ -1530,26 +1515,19 @@ mod tests {
 
         let symbol_id = SymbolId::new(100).unwrap();
         let file_id = FileId::new(1).unwrap();
-        index
-            .add_document(
-                symbol_id,
-                "test_function",
-                SymbolKind::Function,
-                file_id,
-                "src/main.rs",
-                42,
-                5,
-                50, // end_line
-                0,  // end_column
-                Some("Test function"),
-                Some("fn test_function()"),
-                "crate",
-                None,
-                crate::Visibility::Public,
-                Some(crate::ScopeContext::Module),
-                None, // No language_id for this test
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            symbol_id,
+            "test_function",
+            SymbolKind::Function,
+            file_id,
+            crate::Range::new(42, 5, 50, 0),
+        )
+        .with_doc("Test function")
+        .with_signature("fn test_function()")
+        .with_module_path("crate")
+        .with_visibility(crate::Visibility::Public)
+        .with_scope(crate::ScopeContext::Module);
+        index.add_document(&sym, "src/main.rs").unwrap();
 
         index.commit_batch().unwrap();
         println!("  - Added symbol document");
@@ -1601,70 +1579,49 @@ mod tests {
 
         // Add symbols in different languages
         // Rust main function
-        index
-            .add_document(
-                SymbolId::new(1).unwrap(),
-                "main",
-                SymbolKind::Function,
-                FileId::new(1).unwrap(),
-                "src/main.rs",
-                0,                         // line
-                0,                         // column
-                5,                         // end_line
-                0,                         // end_column
-                Some("Entry point"),       // doc_comment
-                Some("fn main() {}"),      // signature
-                "crate",                   // module_path
-                None,                      // context
-                crate::Visibility::Public, // visibility
-                None,                      // scope_context
-                Some("rust"),              // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(1).unwrap(),
+            "main",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 5, 0),
+        )
+        .with_doc("Entry point")
+        .with_signature("fn main() {}")
+        .with_module_path("crate")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("rust"));
+        index.add_document(&sym, "src/main.rs").unwrap();
 
         // Python main function
-        index
-            .add_document(
-                SymbolId::new(2).unwrap(),
-                "main",
-                SymbolKind::Function,
-                FileId::new(2).unwrap(),
-                "src/main.py",
-                0,                          // line
-                0,                          // column
-                5,                          // end_line
-                0,                          // end_column
-                Some("Python entry point"), // doc_comment
-                Some("def main():"),        // signature
-                "__main__",                 // module_path
-                None,                       // context
-                crate::Visibility::Public,  // visibility
-                None,                       // scope_context
-                Some("python"),             // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(2).unwrap(),
+            "main",
+            SymbolKind::Function,
+            FileId::new(2).unwrap(),
+            crate::Range::new(0, 0, 5, 0),
+        )
+        .with_doc("Python entry point")
+        .with_signature("def main():")
+        .with_module_path("__main__")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("python"));
+        index.add_document(&sym, "src/main.py").unwrap();
 
         // TypeScript main function
-        index
-            .add_document(
-                SymbolId::new(3).unwrap(),
-                "main",
-                SymbolKind::Function,
-                FileId::new(3).unwrap(),
-                "src/main.ts",
-                0,                             // line
-                0,                             // column
-                5,                             // end_line
-                0,                             // end_column
-                Some("TypeScript entry"),      // doc_comment
-                Some("function main(): void"), // signature
-                "app",                         // module_path
-                None,                          // context
-                crate::Visibility::Public,     // visibility
-                None,                          // scope_context
-                Some("typescript"),            // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(3).unwrap(),
+            "main",
+            SymbolKind::Function,
+            FileId::new(3).unwrap(),
+            crate::Range::new(0, 0, 5, 0),
+        )
+        .with_doc("TypeScript entry")
+        .with_signature("function main(): void")
+        .with_module_path("app")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("typescript"));
+        index.add_document(&sym, "src/main.ts").unwrap();
 
         // Commit the batch
         index.commit_batch().unwrap();
@@ -1757,70 +1714,49 @@ mod tests {
 
         // Add symbols with "parse" in different languages
         // Rust parse function
-        index
-            .add_document(
-                SymbolId::new(10).unwrap(),
-                "parse_config",
-                SymbolKind::Function,
-                FileId::new(1).unwrap(),
-                "src/config.rs",
-                10,                                            // line
-                0,                                             // column
-                20,                                            // end_line
-                0,                                             // end_column
-                Some("Parse configuration from file"),         // doc_comment
-                Some("fn parse_config(path: &str) -> Config"), // signature
-                "crate::config",                               // module_path
-                None,                                          // context
-                crate::Visibility::Public,                     // visibility
-                None,                                          // scope_context
-                Some("rust"),                                  // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(10).unwrap(),
+            "parse_config",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(10, 0, 20, 0),
+        )
+        .with_doc("Parse configuration from file")
+        .with_signature("fn parse_config(path: &str) -> Config")
+        .with_module_path("crate::config")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("rust"));
+        index.add_document(&sym, "src/config.rs").unwrap();
 
         // Python parse function
-        index
-            .add_document(
-                SymbolId::new(11).unwrap(),
-                "parse_json",
-                SymbolKind::Function,
-                FileId::new(2).unwrap(),
-                "src/parser.py",
-                5,                                         // line
-                0,                                         // column
-                10,                                        // end_line
-                0,                                         // end_column
-                Some("Parse JSON data"),                   // doc_comment
-                Some("def parse_json(data: str) -> dict"), // signature
-                "parser",                                  // module_path
-                None,                                      // context
-                crate::Visibility::Public,                 // visibility
-                None,                                      // scope_context
-                Some("python"),                            // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(11).unwrap(),
+            "parse_json",
+            SymbolKind::Function,
+            FileId::new(2).unwrap(),
+            crate::Range::new(5, 0, 10, 0),
+        )
+        .with_doc("Parse JSON data")
+        .with_signature("def parse_json(data: str) -> dict")
+        .with_module_path("parser")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("python"));
+        index.add_document(&sym, "src/parser.py").unwrap();
 
         // TypeScript parse function
-        index
-            .add_document(
-                SymbolId::new(12).unwrap(),
-                "parseXML",
-                SymbolKind::Function,
-                FileId::new(3).unwrap(),
-                "src/parser.ts",
-                1,                                                // line
-                0,                                                // column
-                8,                                                // end_line
-                0,                                                // end_column
-                Some("Parse XML string"),                         // doc_comment
-                Some("function parseXML(xml: string): Document"), // signature
-                "utils.parser",                                   // module_path
-                None,                                             // context
-                crate::Visibility::Public,                        // visibility
-                None,                                             // scope_context
-                Some("typescript"),                               // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(12).unwrap(),
+            "parseXML",
+            SymbolKind::Function,
+            FileId::new(3).unwrap(),
+            crate::Range::new(1, 0, 8, 0),
+        )
+        .with_doc("Parse XML string")
+        .with_signature("function parseXML(xml: string): Document")
+        .with_module_path("utils.parser")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("typescript"));
+        index.add_document(&sym, "src/parser.ts").unwrap();
 
         // Commit the batch
         index.commit_batch().unwrap();
@@ -1916,47 +1852,33 @@ mod tests {
         index.start_batch().unwrap();
 
         // Add symbols with same module name but different languages
-        index
-            .add_document(
-                SymbolId::new(20).unwrap(),
-                "Handler",
-                SymbolKind::Struct,
-                FileId::new(1).unwrap(),
-                "src/server.rs",
-                1,                         // line
-                0,                         // column
-                10,                        // end_line
-                0,                         // end_column
-                Some("Request handler"),   // doc_comment
-                Some("struct Handler"),    // signature
-                "server",                  // module_path
-                None,                      // context
-                crate::Visibility::Public, // visibility
-                None,                      // scope_context
-                Some("rust"),              // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(20).unwrap(),
+            "Handler",
+            SymbolKind::Struct,
+            FileId::new(1).unwrap(),
+            crate::Range::new(1, 0, 10, 0),
+        )
+        .with_doc("Request handler")
+        .with_signature("struct Handler")
+        .with_module_path("server")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("rust"));
+        index.add_document(&sym, "src/server.rs").unwrap();
 
-        index
-            .add_document(
-                SymbolId::new(21).unwrap(),
-                "Handler",
-                SymbolKind::Class,
-                FileId::new(2).unwrap(),
-                "src/server.py",
-                1,                             // line
-                0,                             // column
-                12,                            // end_line
-                0,                             // end_column
-                Some("Request handler class"), // doc_comment
-                Some("class Handler"),         // signature
-                "server",                      // module_path
-                None,                          // context
-                crate::Visibility::Public,     // visibility
-                None,                          // scope_context
-                Some("python"),                // language_id
-            )
-            .unwrap();
+        let sym = crate::Symbol::new(
+            SymbolId::new(21).unwrap(),
+            "Handler",
+            SymbolKind::Class,
+            FileId::new(2).unwrap(),
+            crate::Range::new(1, 0, 12, 0),
+        )
+        .with_doc("Request handler class")
+        .with_signature("class Handler")
+        .with_module_path("server")
+        .with_visibility(crate::Visibility::Public)
+        .with_language_id(LanguageId::new("python"));
+        index.add_document(&sym, "src/server.py").unwrap();
 
         // Commit the batch
         index.commit_batch().unwrap();
