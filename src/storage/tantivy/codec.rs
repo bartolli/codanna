@@ -76,6 +76,20 @@ impl VectorMetadata {
     }
 }
 
+/// Encode the stored scope_context field. Explicit JSON, `null` when absent;
+/// exhaustive over variants by serde derivation.
+fn encode_scope_context(scope: Option<&crate::ScopeContext>) -> String {
+    serde_json::to_string(&scope)
+        .expect("ScopeContext is a closed enum of strings and bools; serialization is infallible")
+}
+
+/// Decode the stored scope_context field. Undecodable values (including
+/// pre-JSON legacy strings) read as no-scope-info: the index is session-scoped
+/// and rebuilt, never migrated.
+fn decode_scope_context(s: &str) -> Option<crate::ScopeContext> {
+    serde_json::from_str(s).ok().flatten()
+}
+
 impl DocumentIndex {
     /// Add a document to the index (must call start_batch first)
     #[allow(clippy::too_many_arguments)]
@@ -130,12 +144,10 @@ impl DocumentIndex {
         doc.add_text(self.schema.kind, format!("{kind:?}"));
         doc.add_u64(self.schema.visibility, visibility as u64);
 
-        // Store scope_context as a string (serialized enum)
-        if let Some(scope) = scope_context {
-            doc.add_text(self.schema.scope_context, format!("{scope:?}"));
-        } else {
-            doc.add_text(self.schema.scope_context, "None");
-        }
+        doc.add_text(
+            self.schema.scope_context,
+            encode_scope_context(scope_context.as_ref()),
+        );
 
         // Store language identifier
         if let Some(lang) = language_id {
@@ -235,68 +247,10 @@ impl DocumentIndex {
             })
             .unwrap_or(Visibility::Private);
 
-        // Get scope_context from stored field
         let scope_context = doc
             .get_first(self.schema.scope_context)
             .and_then(|v| v.as_str())
-            .and_then(|s| {
-                // Parse the serialized scope context
-                match s {
-                    "None" => None,
-                    "Module" => Some(crate::ScopeContext::Module),
-                    "Global" => Some(crate::ScopeContext::Global),
-                    "Package" => Some(crate::ScopeContext::Package),
-                    "Parameter" => Some(crate::ScopeContext::Parameter),
-                    s if s.starts_with("ClassMember") => {
-                        // Handle ClassMember { class_name: Option<String> } format
-                        let class_name = if s.contains("class_name: Some(") {
-                            // Extract class_name value
-                            s.split("class_name: Some(\"")
-                                .nth(1)
-                                .and_then(|rest| rest.split("\")").next())
-                                .map(|name| name.to_string().into())
-                        } else {
-                            None
-                        };
-                        Some(crate::ScopeContext::ClassMember { class_name })
-                    }
-                    s if s.starts_with("Local") => {
-                        // Handle Local { hoisted: bool, parent_name: Option<String>, parent_kind: Option<SymbolKind> } format
-                        let hoisted = s.contains("hoisted: true") || s.contains("hoisted:true");
-
-                        // Extract parent_name if present
-                        let parent_name = if s.contains("parent_name: Some(") {
-                            let start = s.find("parent_name: Some(\"").map(|i| i + 19)?;
-                            let end = s[start..].find('"').map(|i| start + i)?;
-                            Some(s[start..end].to_string().into())
-                        } else {
-                            None
-                        };
-
-                        // Extract parent_kind if present
-                        let parent_kind = if s.contains("parent_kind: Some(") {
-                            let start = s.find("parent_kind: Some(").map(|i| i + 18)?;
-                            let end = s[start..].find(')').map(|i| start + i)?;
-                            let kind_str = &s[start..end];
-                            match kind_str {
-                                "Function" => Some(crate::SymbolKind::Function),
-                                "Class" => Some(crate::SymbolKind::Class),
-                                "Method" => Some(crate::SymbolKind::Method),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
-
-                        Some(crate::ScopeContext::Local {
-                            hoisted,
-                            parent_name,
-                            parent_kind,
-                        })
-                    }
-                    _ => None,
-                }
-            });
+            .and_then(decode_scope_context);
 
         Ok(Symbol {
             id: SymbolId(symbol_id as u32),
@@ -570,5 +524,92 @@ mod tests {
 
         assert_eq!(metadata, retrieved_metadata);
         assert_eq!(json, stored_json);
+    }
+
+    #[test]
+    fn test_scope_context_codec_round_trips_every_variant() {
+        use crate::{ScopeContext, SymbolKind};
+
+        const ALL_KINDS: [SymbolKind; 14] = [
+            SymbolKind::Function,
+            SymbolKind::Method,
+            SymbolKind::Struct,
+            SymbolKind::Enum,
+            SymbolKind::Trait,
+            SymbolKind::Interface,
+            SymbolKind::Class,
+            SymbolKind::Module,
+            SymbolKind::Variable,
+            SymbolKind::Constant,
+            SymbolKind::Field,
+            SymbolKind::Parameter,
+            SymbolKind::TypeAlias,
+            SymbolKind::Macro,
+        ];
+
+        let mut cases: Vec<Option<ScopeContext>> = vec![
+            None,
+            Some(ScopeContext::Module),
+            Some(ScopeContext::Global),
+            Some(ScopeContext::Package),
+            Some(ScopeContext::Parameter),
+            Some(ScopeContext::ClassMember { class_name: None }),
+            Some(ScopeContext::ClassMember {
+                class_name: Some("com.example.MyClass".into()),
+            }),
+        ];
+        for hoisted in [false, true] {
+            for parent_name in [None, Some("outer_fn")] {
+                cases.push(Some(ScopeContext::Local {
+                    hoisted,
+                    parent_name: parent_name.map(Into::into),
+                    parent_kind: None,
+                }));
+                for kind in ALL_KINDS {
+                    cases.push(Some(ScopeContext::Local {
+                        hoisted,
+                        parent_name: parent_name.map(Into::into),
+                        parent_kind: Some(kind),
+                    }));
+                }
+            }
+        }
+
+        for case in cases {
+            let encoded = encode_scope_context(case.as_ref());
+            let decoded = decode_scope_context(&encoded);
+            assert_eq!(decoded, case, "round-trip failed via {encoded:?}");
+        }
+    }
+
+    #[test]
+    fn test_scope_context_survives_tantivy_roundtrip() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        let scope = crate::ScopeContext::Local {
+            hoisted: true,
+            parent_name: Some("run_pipeline".into()),
+            parent_kind: Some(SymbolKind::Struct),
+        };
+        let symbol = crate::Symbol::new(
+            SymbolId::new(7).unwrap(),
+            "worker",
+            SymbolKind::Variable,
+            FileId::new(1).unwrap(),
+            crate::Range::new(4, 8, 4, 14),
+        )
+        .with_scope(scope.clone());
+
+        index.start_batch().unwrap();
+        index.index_symbol(&symbol, "src/lib.rs").unwrap();
+        index.commit_batch().unwrap();
+
+        let retrieved = index
+            .find_symbol_by_id(SymbolId::new(7).unwrap())
+            .unwrap()
+            .expect("symbol stored by this test");
+        assert_eq!(retrieved.scope_context, Some(scope));
     }
 }
