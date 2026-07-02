@@ -72,8 +72,8 @@ pub(super) fn default_watch_interval() -> u64 {
     5
 }
 
-pub(super) fn default_guidance_templates() -> HashMap<String, GuidanceTemplate> {
-    let mut templates = HashMap::new();
+pub(super) fn default_guidance_templates() -> IndexMap<String, GuidanceTemplate> {
+    let mut templates = IndexMap::new();
 
     // Semantic search docs
     templates.insert("semantic_search_docs".to_string(), GuidanceTemplate {
@@ -164,8 +164,8 @@ pub(super) fn default_guidance_templates() -> HashMap<String, GuidanceTemplate> 
     templates
 }
 
-pub(super) fn default_guidance_variables() -> HashMap<String, String> {
-    let mut vars = HashMap::new();
+pub(super) fn default_guidance_variables() -> IndexMap<String, String> {
+    let mut vars = IndexMap::new();
     vars.insert("project".to_string(), "codanna".to_string());
     vars
 }

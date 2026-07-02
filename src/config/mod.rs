@@ -295,11 +295,11 @@ pub struct GuidanceConfig {
 
     /// Templates for specific tools
     #[serde(default)]
-    pub templates: HashMap<String, GuidanceTemplate>,
+    pub templates: IndexMap<String, GuidanceTemplate>,
 
     /// Global template variables
     #[serde(default)]
-    pub variables: HashMap<String, String>,
+    pub variables: IndexMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -572,6 +572,38 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_guidance_templates_serialize_in_insertion_order() {
+        let settings = Settings::default();
+        let toml_string = toml::to_string_pretty(&settings).unwrap();
+
+        let expected_order = [
+            "semantic_search_docs",
+            "find_symbol",
+            "get_calls",
+            "find_callers",
+            "analyze_impact",
+            "search_symbols",
+            "semantic_search_with_context",
+            "get_index_info",
+        ];
+
+        let positions: Vec<usize> = expected_order
+            .iter()
+            .map(|name| {
+                let header = format!("[guidance.templates.{name}]");
+                toml_string
+                    .find(&header)
+                    .unwrap_or_else(|| panic!("missing table header {header}"))
+            })
+            .collect();
+
+        assert!(
+            positions.windows(2).all(|w| w[0] < w[1]),
+            "guidance templates serialized out of insertion order: {positions:?}"
+        );
+    }
 
     #[test]
     fn test_default_settings() {
