@@ -13,7 +13,6 @@ use crate::project_resolver::{
         compute_config_shas, extract_language_config_paths, is_language_enabled,
         module_for_file_generic, parse_gradle_source_roots,
     },
-    memo::ResolutionMemo,
     persist::{ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -36,11 +35,7 @@ impl JavaProjectPath {
 ///
 /// Handles Maven (pom.xml) and Gradle (build.gradle) project configurations
 /// to determine source roots for package path resolution.
-pub struct JavaProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)] // Used for future caching optimizations
-    memo: ResolutionMemo<HashMap<JavaProjectPath, Sha256Hash>>,
-}
+pub struct JavaProvider {}
 
 impl Default for JavaProvider {
     fn default() -> Self {
@@ -49,11 +44,9 @@ impl Default for JavaProvider {
 }
 
 impl JavaProvider {
-    /// Create a new Java provider with empty memoization cache
+    /// Create a new Java provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get module path for a Java source file

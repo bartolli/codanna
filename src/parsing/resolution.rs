@@ -382,8 +382,6 @@ pub trait InheritanceResolver: Send + Sync {
 /// This provides a default implementation that maintains backward compatibility
 /// while allowing languages to override with their own logic.
 pub struct GenericResolutionContext {
-    #[allow(dead_code)]
-    file_id: FileId, // Kept for future use when we need file-specific resolution
     symbols: HashMap<ScopeLevel, HashMap<String, SymbolId>>,
     scope_stack: Vec<ScopeType>,
     import_bindings: HashMap<String, ImportBinding>,
@@ -391,7 +389,7 @@ pub struct GenericResolutionContext {
 
 impl GenericResolutionContext {
     /// Create a new generic resolution context
-    pub fn new(file_id: FileId) -> Self {
+    pub fn new(_file_id: FileId) -> Self {
         let mut symbols = HashMap::new();
         symbols.insert(ScopeLevel::Local, HashMap::new());
         symbols.insert(ScopeLevel::Module, HashMap::new());
@@ -399,7 +397,6 @@ impl GenericResolutionContext {
         symbols.insert(ScopeLevel::Global, HashMap::new());
 
         Self {
-            file_id,
             symbols,
             scope_stack: vec![ScopeType::Global],
             import_bindings: HashMap::new(),

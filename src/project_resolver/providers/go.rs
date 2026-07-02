@@ -10,7 +10,6 @@ use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
     helpers::{compute_config_shas, extract_language_config_paths, is_language_enabled},
-    memo::ResolutionMemo,
     persist::{ResolutionIndex, ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -43,11 +42,7 @@ pub struct GoModInfo {
 ///
 /// Handles go.mod parsing to determine module paths for import resolution.
 /// Go modules use URL-like paths (e.g., github.com/user/repo/pkg/auth).
-pub struct GoProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)]
-    memo: ResolutionMemo<HashMap<GoModPath, Sha256Hash>>,
-}
+pub struct GoProvider {}
 
 impl Default for GoProvider {
     fn default() -> Self {
@@ -56,11 +51,9 @@ impl Default for GoProvider {
 }
 
 impl GoProvider {
-    /// Create a new Go provider with empty memoization cache
+    /// Create a new Go provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get full module path for a Go source file

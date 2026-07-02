@@ -8,7 +8,6 @@
 //! - parsing::resolution: "What does the identifier 'foo' refer to in this scope?"
 
 pub mod helpers;
-pub mod memo;
 pub mod persist;
 pub mod provider;
 pub mod providers;

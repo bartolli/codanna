@@ -62,12 +62,6 @@ impl CollectorCaches {
         self.file_ids.insert(path, file_id);
     }
 
-    /// Lookup FileId by path (for Phase 2 cross-file resolution).
-    #[allow(dead_code)] // Used in Phase 2
-    fn lookup_file(&self, path: &PathBuf) -> Option<FileId> {
-        self.file_ids.get(path).copied()
-    }
-
     /// Insert a symbol into the cache. Uses Arc::clone for zero-copy.
     fn insert(&mut self, name: Arc<str>, file_id: FileId, range: Range, symbol_id: SymbolId) {
         self.symbol_lookup

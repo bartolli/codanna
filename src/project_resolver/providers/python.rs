@@ -56,7 +56,6 @@ use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
     helpers::{compute_config_shas, extract_language_config_paths, is_language_enabled},
-    memo::ResolutionMemo,
     persist::{ResolutionIndex, ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -90,11 +89,7 @@ pub struct PyProjectInfo {
 ///
 /// Handles pyproject.toml parsing to determine package name and source roots
 /// for module path resolution.
-pub struct PythonProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)]
-    memo: ResolutionMemo<HashMap<PyProjectPath, Sha256Hash>>,
-}
+pub struct PythonProvider {}
 
 impl Default for PythonProvider {
     fn default() -> Self {
@@ -103,11 +98,9 @@ impl Default for PythonProvider {
 }
 
 impl PythonProvider {
-    /// Create a new Python provider with empty memoization cache
+    /// Create a new Python provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get module path for a Python source file

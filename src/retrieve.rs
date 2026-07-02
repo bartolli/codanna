@@ -5,13 +5,11 @@
 use crate::Symbol;
 use crate::indexing::facade::IndexFacade;
 use crate::io::{
-    EntityType, ExitCode, OutputFormat, OutputManager, OutputStatus,
+    ExitCode, OutputFormat,
     envelope::{EntityType as EnvelopeEntityType, Envelope, ResultCode},
-    schema::{OutputData, OutputMetadata, UnifiedOutput, UnifiedOutputBuilder},
 };
 use crate::symbol::context::SymbolContext;
 use serde::Serialize;
-use std::borrow::Cow;
 use std::fmt::Display;
 
 // =============================================================================
@@ -680,86 +678,6 @@ pub fn retrieve_search(
                 println!("{ctx}");
             }
             ExitCode::Success
-        }
-    }
-}
-
-/// Execute retrieve impact command
-// DEPRECATED: This function has been disabled.
-// Use MCP semantic_search_with_context or slash commands instead.
-// The impact command had fundamental flaws:
-// - Only worked for functions, not structs/traits/enums
-// - Returned empty results for valid symbols
-// - Conceptually wrong (not all symbols have "impact")
-#[allow(dead_code)]
-pub fn retrieve_impact(
-    indexer: &IndexFacade,
-    symbol_name: &str,
-    max_depth: usize,
-    format: OutputFormat,
-) -> ExitCode {
-    let mut output = OutputManager::new(format);
-    let symbols = indexer.find_symbols_by_name(symbol_name, None);
-
-    if symbols.is_empty() {
-        let unified = UnifiedOutput {
-            status: OutputStatus::NotFound,
-            entity_type: EntityType::Impact,
-            count: 0,
-            data: OutputData::<SymbolContext>::Empty,
-            metadata: Some(OutputMetadata {
-                query: Some(Cow::Borrowed(symbol_name)),
-                tool: None,
-                timing_ms: None,
-                truncated: None,
-                extra: Default::default(),
-            }),
-            guidance: None,
-            exit_code: ExitCode::NotFound,
-        };
-
-        match output.unified(unified) {
-            Ok(code) => code,
-            Err(e) => {
-                eprintln!("Error writing output: {e}");
-                ExitCode::GeneralError
-            }
-        }
-    } else {
-        // Get impact analysis for the first matching symbol
-        let symbol = &symbols[0];
-        let impact_symbol_ids = indexer.get_impact_radius(symbol.id, Some(max_depth));
-
-        // Transform impact symbols to SymbolContext with relationships
-        use crate::symbol::context::ContextIncludes;
-
-        let impact_with_path: Vec<SymbolContext> = impact_symbol_ids
-            .into_iter()
-            .filter_map(|symbol_id| {
-                // Get full context for each impacted symbol
-                indexer.get_symbol_context(
-                    symbol_id,
-                    ContextIncludes::CALLERS | ContextIncludes::CALLS,
-                )
-            })
-            .collect();
-
-        let unified = UnifiedOutputBuilder::items(impact_with_path, EntityType::Impact)
-            .with_metadata(OutputMetadata {
-                query: Some(Cow::Borrowed(symbol_name)),
-                tool: None,
-                timing_ms: None,
-                truncated: None,
-                extra: Default::default(),
-            })
-            .build();
-
-        match output.unified(unified) {
-            Ok(code) => code,
-            Err(e) => {
-                eprintln!("Error writing output: {e}");
-                ExitCode::GeneralError
-            }
         }
     }
 }

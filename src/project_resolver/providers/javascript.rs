@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
-    memo::ResolutionMemo,
     persist::{ResolutionIndex, ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
     sha::compute_file_sha,
@@ -33,11 +32,7 @@ impl JsConfigPath {
 ///
 /// Handles jsconfig.json parsing, path alias resolution, and SHA-based invalidation
 /// for JavaScript projects using path aliases.
-pub struct JavaScriptProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)] // Will be used in future iterations
-    memo: ResolutionMemo<HashMap<JsConfigPath, Sha256Hash>>,
-}
+pub struct JavaScriptProvider {}
 
 impl Default for JavaScriptProvider {
     fn default() -> Self {
@@ -46,11 +41,9 @@ impl Default for JavaScriptProvider {
 }
 
 impl JavaScriptProvider {
-    /// Create a new JavaScript provider with empty memoization cache
+    /// Create a new JavaScript provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Extract config file paths from JavaScript language settings

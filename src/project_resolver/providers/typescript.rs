@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
-    memo::ResolutionMemo,
     persist::{ResolutionIndex, ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
     sha::compute_file_sha,
@@ -33,11 +32,7 @@ impl TsConfigPath {
 ///
 /// Handles tsconfig.json parsing, path alias resolution, and SHA-based invalidation
 /// following Sprint 1 requirements for basic TypeScript support.
-pub struct TypeScriptProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)] // Will be used in future iterations
-    memo: ResolutionMemo<HashMap<TsConfigPath, Sha256Hash>>,
-}
+pub struct TypeScriptProvider {}
 
 impl Default for TypeScriptProvider {
     fn default() -> Self {
@@ -46,11 +41,9 @@ impl Default for TypeScriptProvider {
 }
 
 impl TypeScriptProvider {
-    /// Create a new TypeScript provider with empty memoization cache
+    /// Create a new TypeScript provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Extract config file paths from TypeScript language settings
