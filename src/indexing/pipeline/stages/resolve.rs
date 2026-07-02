@@ -107,11 +107,10 @@ impl ResolveStage {
                 batch.push(resolved);
             } else {
                 // Track why resolution failed
-                let candidates = self.symbol_cache.lookup_candidates(&unresolved.to_name);
-                if candidates.is_empty() {
-                    stats.unresolved_no_candidates += 1;
-                } else {
+                if self.symbol_cache.has_candidates(&unresolved.to_name) {
                     stats.unresolved_ambiguous += 1;
+                } else {
+                    stats.unresolved_no_candidates += 1;
                 }
             }
         }
@@ -134,9 +133,9 @@ impl ResolveStage {
 
         let from_id = unresolved.from_id?;
 
-        let caller_symbol = self.symbol_cache.get(from_id);
+        let caller_symbol = self.symbol_cache.get_ref(from_id);
         let caller = caller_symbol
-            .as_ref()
+            .as_deref()
             .map(|sym| {
                 CallerContext::new(
                     sym.file_id,
@@ -145,7 +144,8 @@ impl ResolveStage {
                 )
             })
             .unwrap_or_else(|| CallerContext::from_file(context.file_id, context.language_id));
-        let from_kind = caller_symbol.as_ref().map(|sym| sym.kind);
+        let from_kind = caller_symbol.as_deref().map(|sym| sym.kind);
+        drop(caller_symbol);
 
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
             if self.is_compatible(
@@ -226,13 +226,13 @@ impl ResolveStage {
         let Some(from_kind) = from_kind else {
             return true;
         };
-        let Some(to_sym) = self.symbol_cache.get(to_id) else {
+        let Some(to_kind) = self.symbol_cache.get_ref(to_id).map(|sym| sym.kind) else {
             return true;
         };
         let Some(behavior) = self.get_behavior(language_id) else {
             return true;
         };
-        behavior.is_compatible_relationship(from_kind, to_sym.kind, rel_kind, file_id)
+        behavior.is_compatible_relationship(from_kind, to_kind, rel_kind, file_id)
     }
 
     /// Filter candidates by static-call receiver type.
@@ -253,14 +253,16 @@ impl ResolveStage {
         }
         let receiver = metadata.receiver.as_deref()?;
         let behavior = self.get_behavior(language_id)?;
-        let caller = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
+        let caller = unresolved
+            .from_id
+            .and_then(|id| self.symbol_cache.get_ref(id));
 
         let matches: Vec<SymbolId> = candidates
             .iter()
             .copied()
             .filter(|&id| {
-                self.symbol_cache.get(id).is_some_and(|sym| {
-                    behavior.is_receiver_compatible(&sym, receiver, caller.as_ref())
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    behavior.is_receiver_compatible(&sym, receiver, caller.as_deref())
                 })
             })
             .collect();
@@ -277,18 +279,18 @@ impl ResolveStage {
     /// Caller-signature is read directly off the `Function`/`Method` symbol;
     /// bypasses per-parser `SymbolKind::Parameter` emission (today only
     /// C/C++/Go/Lua emit Parameter symbols).
-    fn infer_receiver_type(
-        &self,
+    fn infer_receiver_type<'a>(
+        &'a self,
         unresolved: &UnresolvedRelationship,
         language_id: &LanguageId,
-    ) -> Option<(String, crate::Symbol)> {
+    ) -> Option<(String, impl std::ops::Deref<Target = crate::Symbol> + 'a)> {
         let metadata = unresolved.metadata.as_ref()?;
         if metadata.static_call {
             return None;
         }
         let receiver = metadata.receiver.as_deref()?;
         let behavior = self.get_behavior(language_id)?;
-        let caller = self.symbol_cache.get(unresolved.from_id?)?;
+        let caller = self.symbol_cache.get_ref(unresolved.from_id?)?;
         let signature = caller.signature.as_deref()?;
         let type_name = behavior.extract_parameter_type(signature, receiver)?;
         Some((type_name, caller))
@@ -310,10 +312,10 @@ impl ResolveStage {
         let Some(behavior) = self.get_behavior(language_id) else {
             return true;
         };
-        let Some(candidate) = self.symbol_cache.get(to_id) else {
+        let Some(candidate) = self.symbol_cache.get_ref(to_id) else {
             return true;
         };
-        behavior.is_receiver_compatible(&candidate, &type_name, Some(&caller))
+        behavior.is_receiver_compatible(&candidate, &type_name, Some(&*caller))
     }
 
     /// Filter candidates by inferred parameter-type for instance calls.
@@ -332,8 +334,8 @@ impl ResolveStage {
             .iter()
             .copied()
             .filter(|&id| {
-                self.symbol_cache.get(id).is_some_and(|sym| {
-                    behavior.is_receiver_compatible(&sym, &type_name, Some(&caller))
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    behavior.is_receiver_compatible(&sym, &type_name, Some(&*caller))
                 })
             })
             .collect();
@@ -372,7 +374,9 @@ impl ResolveStage {
     ) -> Option<ResolvedRelationship> {
         let raw_receiver = unresolved.metadata.as_ref()?.receiver.as_deref()?;
         let behavior = self.get_behavior(&caller.language_id)?;
-        let caller_symbol = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
+        let caller_symbol = unresolved
+            .from_id
+            .and_then(|id| self.symbol_cache.get_ref(id));
 
         let fallback;
         let resolver: &dyn InheritanceResolver =
@@ -384,7 +388,7 @@ impl ResolveStage {
                 }
             };
         let expanded =
-            behavior.expand_static_class_keyword(raw_receiver, caller_symbol.as_ref(), resolver);
+            behavior.expand_static_class_keyword(raw_receiver, caller_symbol.as_deref(), resolver);
         let receiver: &str = expanded.as_deref().unwrap_or(raw_receiver);
 
         let filtered: Vec<SymbolId> = self
@@ -401,8 +405,8 @@ impl ResolveStage {
                 ) {
                     return false;
                 }
-                self.symbol_cache.get(id).is_some_and(|sym| {
-                    behavior.is_receiver_compatible(&sym, receiver, caller_symbol.as_ref())
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    behavior.is_receiver_compatible(&sym, receiver, caller_symbol.as_deref())
                 })
             })
             .collect();
@@ -440,14 +444,16 @@ impl ResolveStage {
         let Some(receiver) = metadata.receiver.as_deref() else {
             return true;
         };
-        let Some(candidate) = self.symbol_cache.get(to_id) else {
+        let Some(candidate) = self.symbol_cache.get_ref(to_id) else {
             return true;
         };
         let Some(behavior) = self.get_behavior(language_id) else {
             return true;
         };
-        let caller = unresolved.from_id.and_then(|id| self.symbol_cache.get(id));
-        behavior.is_receiver_compatible(&candidate, receiver, caller.as_ref())
+        let caller = unresolved
+            .from_id
+            .and_then(|id| self.symbol_cache.get_ref(id));
+        behavior.is_receiver_compatible(&candidate, receiver, caller.as_deref())
     }
 
     /// Disambiguate among multiple candidates.
@@ -469,7 +475,7 @@ impl ResolveStage {
 
         let from_kind = unresolved
             .from_id
-            .and_then(|id| self.symbol_cache.get(id))
+            .and_then(|id| self.symbol_cache.get_ref(id))
             .map(|sym| sym.kind);
 
         let filtered: Vec<SymbolId> = candidates
@@ -517,7 +523,7 @@ impl ResolveStage {
         let mut language_matches: Vec<SymbolId> = Vec::new();
 
         for &candidate_id in candidates {
-            if let Some(symbol) = self.symbol_cache.get(candidate_id) {
+            if let Some(symbol) = self.symbol_cache.get_ref(candidate_id) {
                 // Priority 1: Local symbol (same file)
                 if symbol.file_id == file_id {
                     local_matches.push(candidate_id);
@@ -585,7 +591,7 @@ impl ResolveStage {
         let mut best: Option<(SymbolId, u32)> = None; // (id, definition_line)
 
         for &candidate_id in candidates {
-            if let Some(symbol) = self.symbol_cache.get(candidate_id) {
+            if let Some(symbol) = self.symbol_cache.get_ref(candidate_id) {
                 // Only consider symbols in the same file
                 if symbol.file_id != file_id {
                     continue;
@@ -631,7 +637,7 @@ impl ResolveStage {
         let importing_module = context
             .local_symbols
             .first()
-            .and_then(|id| self.symbol_cache.get(*id))
+            .and_then(|id| self.symbol_cache.get_ref(*id))
             .and_then(|s| s.module_path.as_deref().map(String::from));
         let importing_mod_ref = importing_module.as_deref();
 

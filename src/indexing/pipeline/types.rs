@@ -443,6 +443,11 @@ impl SymbolLookupCache {
             .unwrap_or_default()
     }
 
+    /// Whether any candidate exists for `name` (O(1), no clone).
+    pub fn has_candidates(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
     /// Get symbol IDs defined in a file (O(1)).
     ///
     /// Used by CONTEXT stage to find local symbols for a file.

@@ -99,16 +99,16 @@ impl IndexStage {
         loop {
             // Track input wait (time blocked on recv)
             let recv_start = Instant::now();
-            let batch = match receiver.recv() {
+            let mut batch = match receiver.recv() {
                 Ok(b) => b,
                 Err(_) => break, // Channel closed
             };
             input_wait += recv_start.elapsed();
 
-            failed_files_total += self.process_batch(&batch, &mut stats, &symbol_cache)?;
-
             // Accumulate relationships for Phase 2
-            pending_relationships.extend(batch.unresolved_relationships);
+            pending_relationships.extend(std::mem::take(&mut batch.unresolved_relationships));
+
+            failed_files_total += self.process_batch(batch, &mut stats, &symbol_cache)?;
 
             batch_count += 1;
 
@@ -146,7 +146,7 @@ impl IndexStage {
     /// because a write failed.
     fn process_batch(
         &self,
-        batch: &IndexBatch,
+        batch: IndexBatch,
         stats: &mut IndexStats,
         symbol_cache: &SymbolLookupCache,
     ) -> PipelineResult<usize> {
@@ -159,21 +159,22 @@ impl IndexStage {
 
         // Write symbols to Tantivy in parallel
         // SymbolLookupCache uses DashMap which is concurrent-safe
-        batch.symbols.par_iter().for_each(|(symbol, path)| {
-            if let Err(e) = self.index.index_symbol(symbol, &path.to_string_lossy()) {
+        let symbols_in_batch = batch.symbols.len();
+        batch.symbols.into_par_iter().for_each(|(symbol, path)| {
+            if let Err(e) = self.index.index_symbol(&symbol, &path.to_string_lossy()) {
                 tracing::error!(
                     target: "pipeline",
                     "Failed to index symbol {}: {e}",
                     symbol.name
                 );
                 if let Ok(mut failed) = failed_files.lock() {
-                    failed.insert(path.clone());
+                    failed.insert(path);
                 }
             }
             // Insert into cache for O(1) Phase 2 resolution (DashMap is concurrent)
-            symbol_cache.insert(symbol.clone());
+            symbol_cache.insert(symbol);
         });
-        stats.symbols_found += batch.symbols.len();
+        stats.symbols_found += symbols_in_batch;
 
         let failed = failed_files
             .into_inner()
@@ -242,7 +243,7 @@ impl IndexStage {
     pub fn index_batch(&self, batch: IndexBatch) -> PipelineResult<()> {
         let symbol_cache = SymbolLookupCache::new();
         let mut stats = IndexStats::new();
-        let failed = self.process_batch(&batch, &mut stats, &symbol_cache)?;
+        let failed = self.process_batch(batch, &mut stats, &symbol_cache)?;
         if failed > 0 {
             return Err(PipelineError::Parse {
                 path: PathBuf::new(),

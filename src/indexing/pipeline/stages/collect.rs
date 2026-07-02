@@ -100,7 +100,7 @@ impl CollectorState {
             file_counter: 0,
             symbol_counter: 0,
             caches: CollectorCaches::new(),
-            current_batch: IndexBatch::new(),
+            current_batch: IndexBatch::with_capacity(batch_size, 0, 0),
             current_embed_batch: EmbeddingBatch::new(),
             batch_size,
             current_language: "unknown".into(),
@@ -122,7 +122,10 @@ impl CollectorState {
     }
 
     fn take_batch(&mut self) -> IndexBatch {
-        std::mem::take(&mut self.current_batch)
+        std::mem::replace(
+            &mut self.current_batch,
+            IndexBatch::with_capacity(self.batch_size, 0, 0),
+        )
     }
 
     fn take_embed_batch(&mut self) -> EmbeddingBatch {
@@ -331,7 +334,7 @@ impl CollectStage {
             // Create Symbol
             let symbol = create_symbol(
                 symbol_id,
-                &raw_sym,
+                raw_sym,
                 file_id,
                 file_path.clone(),
                 parsed.module_path.as_deref(),
@@ -364,27 +367,27 @@ impl CollectStage {
 /// Create a Symbol from RawSymbol.
 fn create_symbol(
     id: SymbolId,
-    raw: &RawSymbol,
+    raw: RawSymbol,
     file_id: FileId,
     file_path: Box<str>,
     module_path: Option<&str>,
     language_id: crate::parsing::LanguageId,
 ) -> Symbol {
-    let mut symbol = Symbol::new(id, raw.name.clone(), raw.kind, file_id, raw.range)
+    let mut symbol = Symbol::new(id, raw.name, raw.kind, file_id, raw.range)
         .with_file_path(file_path)
         .with_visibility(raw.visibility)
         .with_language_id(language_id);
 
-    if let Some(sig) = &raw.signature {
-        symbol = symbol.with_signature(sig.clone());
+    if let Some(sig) = raw.signature {
+        symbol = symbol.with_signature(sig);
     }
-    if let Some(doc) = &raw.doc_comment {
-        symbol = symbol.with_doc(doc.clone());
+    if let Some(doc) = raw.doc_comment {
+        symbol = symbol.with_doc(doc);
     }
     if let Some(path) = module_path {
         symbol = symbol.with_module_path(path);
     }
-    if let Some(scope) = raw.scope_context.clone() {
+    if let Some(scope) = raw.scope_context {
         symbol = symbol.with_scope(scope);
     }
 

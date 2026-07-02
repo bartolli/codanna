@@ -157,7 +157,7 @@ fn parse_with_parser(
     let raw_symbols: Vec<RawSymbol> = symbols
         .into_iter()
         .map(|sym| {
-            let mut raw = RawSymbol::new(sym.name.clone(), sym.kind, sym.range);
+            let mut raw = RawSymbol::new(sym.name, sym.kind, sym.range);
             if let Some(sig) = sym.signature {
                 raw = raw.with_signature(sig);
             }
