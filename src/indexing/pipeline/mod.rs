@@ -82,9 +82,6 @@ type ReadJoinHandle =
 /// Returns (files, errors, symbols, input_wait, output_wait, wall_time).
 type ParseJoinHandle = thread::JoinHandle<(usize, usize, usize, Duration, Duration, Duration)>;
 
-/// Thread join handle type for simple PARSE workers (no timing).
-type ParseSimpleJoinHandle = thread::JoinHandle<(usize, usize)>;
-
 /// The parallel indexing pipeline.
 ///
 /// [PIPELINE API] Orchestrates multiple stages to efficiently index source code
@@ -146,6 +143,31 @@ impl Pipeline {
         index.store_metadata(MetadataKey::SymbolCounter, u64::from(symbol_count))?;
         index.commit_batch()?;
         Ok(())
+    }
+
+    /// Save embeddings to disk.
+    ///
+    /// One policy for every composition path: log at error and propagate.
+    /// A poisoned lock propagates the same way. No-op without semantic search.
+    fn persist_embeddings(
+        &self,
+        semantic: Option<&Arc<Mutex<SimpleSemanticSearch>>>,
+        semantic_path: &Path,
+    ) -> PipelineResult<()> {
+        let Some(sem) = semantic else {
+            return Ok(());
+        };
+        let guard = sem.lock().map_err(|_| PipelineError::Parse {
+            path: PathBuf::new(),
+            reason: "Failed to lock semantic search".to_string(),
+        })?;
+        guard.save(semantic_path).map_err(|e| {
+            tracing::error!(target: "pipeline", "Failed to save embeddings: {e}");
+            PipelineError::Parse {
+                path: semantic_path.to_path_buf(),
+                reason: format!("Failed to save embeddings: {e}"),
+            }
+        })
     }
 
     /// Join READ worker threads and aggregate results.
@@ -231,30 +253,6 @@ impl Pipeline {
             output_wait,
             max_wall_time,
         )
-    }
-
-    /// Join simple PARSE worker threads (no timing tracking).
-    ///
-    /// Used by `index_files` which doesn't need wait time metrics.
-    /// Returns (files_parsed, errors).
-    fn join_parse_workers_simple(&self, handles: Vec<ParseSimpleJoinHandle>) -> (usize, usize) {
-        let mut files = 0;
-        let mut errors = 0;
-
-        for handle in handles {
-            match handle.join() {
-                Ok((f, e)) => {
-                    files += f;
-                    errors += e;
-                }
-                Err(_) => {
-                    tracing::error!(target: "pipeline", "PARSE worker panicked");
-                    errors += 1;
-                }
-            }
-        }
-
-        (files, errors)
     }
 
     /// Index a directory using the parallel pipeline (Phase 1).
@@ -905,6 +903,52 @@ impl Pipeline {
         Ok(stats)
     }
 
+    /// Run Phase 2 behind an optional LINKS progress bar.
+    ///
+    /// With progress requested and work pending, renders the LINKS bar and
+    /// prints its final state after the StatusLine drops. Otherwise delegates
+    /// straight to `run_phase2`.
+    fn run_phase2_maybe_bar(
+        &self,
+        unresolved: Vec<UnresolvedRelationship>,
+        symbol_cache: Arc<SymbolLookupCache>,
+        index: Arc<DocumentIndex>,
+        show_progress: bool,
+    ) -> PipelineResult<Phase2Stats> {
+        use crate::io::status_line::{
+            ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
+        };
+
+        if !show_progress || unresolved.is_empty() {
+            return self.run_phase2(unresolved, symbol_cache, index);
+        }
+
+        let options = ProgressBarOptions::default()
+            .with_style(ProgressBarStyle::VerticalSolid)
+            .with_width(28)
+            .with_label("LINKS")
+            .show_rate(false); // Rate not meaningful for relationships
+        let phase2_bar = Arc::new(ProgressBar::with_options(
+            unresolved.len() as u64,
+            "relationships",
+            "resolved",
+            "skipped",
+            options,
+        ));
+        let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
+
+        let stats = self.run_phase2_with_progress(
+            unresolved,
+            symbol_cache,
+            index,
+            Some(phase2_bar.clone()),
+        )?;
+
+        drop(phase2_status);
+        eprintln!("{phase2_bar}");
+        Ok(stats)
+    }
+
     /// Run full pipeline: Phase 1 (indexing) + Phase 2 (resolution).
     ///
     /// Convenience method that runs both phases in sequence.
@@ -1082,13 +1126,7 @@ impl Pipeline {
         let phase2_stats = self.run_phase2(unresolved, symbol_cache, index)?;
 
         // Save embeddings
-        if let Some(sem) = semantic {
-            if let Ok(guard) = sem.lock() {
-                if let Err(e) = guard.save(&semantic_path) {
-                    tracing::warn!(target: "pipeline", "Failed to save embeddings: {e}");
-                }
-            }
-        }
+        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
 
         Ok(SingleFileStats {
             file_id,
@@ -1176,13 +1214,22 @@ impl Pipeline {
                 ));
                 let dual_status = StatusLine::new(Arc::clone(&dual_bar));
 
-                let (stats, unresolved, cache, metrics) = self.index_directory_with_semantic(
-                    root,
+                let (stats, unresolved, cache, metrics) = self.run_phase1(
+                    FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
-                    Arc::clone(semantic.as_ref().unwrap()),
-                    embedding_pool.clone(),
-                    None, // No single progress bar
-                    Some(dual_bar.clone()),
+                    Phase1Options {
+                        progress: ProgressSink::Dual(dual_bar.clone()),
+                        embed: Some(EmbedOptions {
+                            pool: embedding_pool
+                                .clone()
+                                .expect("has_embedding checked pool.is_some()"),
+                            semantic: Arc::clone(
+                                semantic
+                                    .as_ref()
+                                    .expect("has_embedding checked semantic.is_some()"),
+                            ),
+                        }),
+                    },
                 )?;
 
                 // Drop StatusLine BEFORE logging to avoid stderr race condition
@@ -1212,25 +1259,16 @@ impl Pipeline {
                 ));
                 let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
 
-                let (stats, unresolved, cache, metrics) = if let Some(ref sem) = semantic {
-                    self.index_directory_with_semantic(
-                        root,
-                        Arc::clone(&index),
-                        Arc::clone(sem),
-                        embedding_pool.clone(),
-                        Some(phase1_bar.clone()),
-                        None,
-                    )?
-                } else {
-                    self.run_phase1(
-                        FileSource::Walk(root.to_path_buf()),
-                        Arc::clone(&index),
-                        Phase1Options {
-                            progress: ProgressSink::Bar(phase1_bar.clone()),
-                            embed: None,
-                        },
-                    )?
-                };
+                // has_embedding is false here, so semantic and pool are never
+                // both present: the embed stage cannot run in this arm.
+                let (stats, unresolved, cache, metrics) = self.run_phase1(
+                    FileSource::Walk(root.to_path_buf()),
+                    Arc::clone(&index),
+                    Phase1Options {
+                        progress: ProgressSink::Bar(phase1_bar.clone()),
+                        embed: None,
+                    },
+                )?;
 
                 // Drop StatusLine BEFORE logging to avoid stderr race condition
                 drop(phase1_status);
@@ -1305,15 +1343,27 @@ impl Pipeline {
             ));
             let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
 
-            let (stats, unresolved, cache) = self.index_files(
-                &files_to_index,
+            let embed = match (&semantic, &embedding_pool) {
+                (Some(sem), Some(pool)) => Some(EmbedOptions {
+                    pool: Arc::clone(pool),
+                    semantic: Arc::clone(sem),
+                }),
+                _ => None,
+            };
+            let (stats, unresolved, cache, metrics) = self.run_phase1(
+                FileSource::List(files_to_index),
                 Arc::clone(&index),
-                semantic.clone(),
-                embedding_pool.clone(),
-                Some(phase1_bar.clone()),
+                Phase1Options {
+                    progress: ProgressSink::Bar(phase1_bar.clone()),
+                    embed,
+                },
             )?;
 
+            // Drop StatusLine BEFORE logging to avoid stderr race condition
             drop(phase1_status);
+            if let Some(m) = metrics {
+                m.log();
+            }
             eprintln!("{phase1_bar}");
 
             let counts = (
@@ -1324,41 +1374,13 @@ impl Pipeline {
             (stats, unresolved, cache, cleanup_stats, counts)
         };
 
-        // Run Phase 2 with separate progress bar (no rate - not meaningful for relationships)
+        // Run Phase 2 with separate progress bar
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = if !unresolved.is_empty() {
-            let phase2_options = bar_options.show_rate(false).with_label("LINKS");
-            let phase2_bar = Arc::new(ProgressBar::with_options(
-                unresolved.len() as u64,
-                "relationships",
-                "resolved",
-                "skipped",
-                phase2_options,
-            ));
-            let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
-
-            let stats = self.run_phase2_with_progress(
-                unresolved,
-                symbol_cache,
-                Arc::clone(&index),
-                Some(phase2_bar.clone()),
-            )?;
-
-            drop(phase2_status);
-            eprintln!("{phase2_bar}");
-            stats
-        } else {
-            Phase2Stats::default()
-        };
+        let phase2_stats =
+            self.run_phase2_maybe_bar(unresolved, symbol_cache, Arc::clone(&index), true)?;
 
         // Save embeddings
-        if let Some(sem) = semantic {
-            if let Ok(guard) = sem.lock() {
-                if let Err(e) = guard.save(&semantic_path) {
-                    tracing::warn!(target: "pipeline", "Failed to save embeddings: {e}");
-                }
-            }
-        }
+        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
 
         Ok(IncrementalStats {
             new_files: discover_counts.0,
@@ -1455,66 +1477,35 @@ impl Pipeline {
             .collect();
 
         // Run Phase 1 on the files to index
-        let (index_stats, unresolved, symbol_cache) = self.index_files(
-            &files_to_index,
+        let show_progress = progress.is_some();
+        let embed = match (&semantic, &embedding_pool) {
+            (Some(sem), Some(pool)) => Some(EmbedOptions {
+                pool: Arc::clone(pool),
+                semantic: Arc::clone(sem),
+            }),
+            _ => None,
+        };
+        let (index_stats, unresolved, symbol_cache, metrics) = self.run_phase1(
+            FileSource::List(files_to_index),
             Arc::clone(&index),
-            semantic.clone(),
-            embedding_pool.clone(),
-            progress.clone(),
+            Phase1Options {
+                progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
+                embed,
+            },
         )?;
+
+        // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
+        if let Some(m) = metrics {
+            m.log();
+        }
 
         // Run Phase 2 resolution with progress if Phase 1 had progress
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = if progress.is_some() && !unresolved.is_empty() {
-            // Create Phase 2 progress bar
-            use crate::io::status_line::{
-                ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
-            };
-
-            let options = ProgressBarOptions::default()
-                .with_style(ProgressBarStyle::VerticalSolid)
-                .with_width(28)
-                .with_label("LINKS")
-                .show_rate(false); // Rate not meaningful for relationships
-            let phase2_bar = Arc::new(ProgressBar::with_options(
-                unresolved.len() as u64,
-                "relationships",
-                "resolved",
-                "skipped",
-                options,
-            ));
-            let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
-
-            let stats = self.run_phase2_with_progress(
-                unresolved,
-                symbol_cache,
-                Arc::clone(&index),
-                Some(phase2_bar.clone()),
-            )?;
-
-            // Finalize Phase 2 progress bar
-            drop(phase2_status);
-            eprintln!("{phase2_bar}");
-
-            stats
-        } else {
-            self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?
-        };
+        let phase2_stats =
+            self.run_phase2_maybe_bar(unresolved, symbol_cache, Arc::clone(&index), show_progress)?;
 
         // Save embeddings
-        if let Some(sem) = semantic {
-            let semantic_guard = sem.lock().map_err(|_| PipelineError::Parse {
-                path: PathBuf::new(),
-                reason: "Failed to lock semantic search".to_string(),
-            })?;
-
-            semantic_guard
-                .save(&semantic_path)
-                .map_err(|e| PipelineError::Parse {
-                    path: semantic_path.clone(),
-                    reason: format!("Failed to save embeddings: {e}"),
-                })?;
-        }
+        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
 
         Ok(IncrementalStats {
             new_files: discover_result.new_files.len(),
@@ -1525,226 +1516,6 @@ impl Pipeline {
             phase2_stats,
             elapsed: start.elapsed(),
         })
-    }
-
-    /// Index a specific list of files (for incremental mode).
-    fn index_files(
-        &self,
-        files: &[PathBuf],
-        index: Arc<DocumentIndex>,
-        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
-        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
-    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
-        if files.is_empty() {
-            return Ok((
-                IndexStats::new(),
-                Vec::new(),
-                SymbolLookupCache::with_capacity(0),
-            ));
-        }
-
-        let start = Instant::now();
-
-        // Query existing ID counters BEFORE spawning threads
-        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
-
-        // Create bounded channels
-        let (content_tx, content_rx) = bounded(self.config.content_channel_size);
-        let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
-        let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
-
-        let settings = Arc::clone(&self.settings);
-        let parse_threads = self.config.parse_threads;
-        let batch_size = self.config.batch_size;
-        let batches_per_commit = self.config.batches_per_commit;
-
-        // Stage 1: READ - Send files directly (already have the paths)
-        let files_to_read = files.to_vec();
-        let workspace_root = settings.workspace_root.clone();
-        let read_handle = thread::spawn(move || {
-            let stage = ReadStage::new(1);
-            let mut count = 0;
-            let mut errors = 0;
-
-            for path in files_to_read {
-                match stage.read_single(&path) {
-                    Ok(mut content) => {
-                        // Normalize path to relative if workspace_root is set
-                        if let Some(ref root) = workspace_root {
-                            if let Ok(relative) = content.path.strip_prefix(root) {
-                                content.path = relative.to_path_buf();
-                            }
-                        }
-                        if content_tx.send(content).is_err() {
-                            break;
-                        }
-                        count += 1;
-                    }
-                    Err(_) => {
-                        errors += 1;
-                    }
-                }
-            }
-
-            (count, errors)
-        });
-
-        // Stage 2: PARSE
-        let parse_handles: Vec<_> = (0..parse_threads)
-            .map(|_| {
-                let rx = content_rx.clone();
-                let tx = parsed_tx.clone();
-                let settings = Arc::clone(&settings);
-                thread::spawn(move || {
-                    init_parser_cache(settings.clone());
-                    let stage = ParseStage::new(settings);
-                    let mut parsed = 0;
-                    let mut errors = 0;
-
-                    for content in rx {
-                        match stage.parse(content) {
-                            Ok(p) => {
-                                parsed += 1;
-                                if tx.send(p).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(_) => errors += 1,
-                        }
-                    }
-                    (parsed, errors)
-                })
-            })
-            .collect();
-        drop(content_rx);
-        drop(parsed_tx);
-
-        // Create embed channel for parallel EMBED stage (if semantic enabled)
-        let (embed_tx, embed_rx) = bounded(self.config.batch_channel_size);
-        let embed_sender = if semantic.is_some() && embedding_pool.is_some() {
-            Some(embed_tx)
-        } else {
-            drop(embed_tx);
-            None
-        };
-
-        // Stage 3: COLLECT (with starting counters for incremental indexing)
-        // Sends IndexBatch to INDEX, EmbeddingBatch to EMBED (parallel)
-        let collect_handle = thread::spawn(move || {
-            let stage = CollectStage::new(batch_size)
-                .with_start_counters(start_file_counter, start_symbol_counter);
-            stage.run(parsed_rx, batch_tx, embed_sender, None)
-        });
-
-        // Stage 4a: EMBED (parallel with INDEX) - if semantic + pool are provided
-        let embed_handle = if let (Some(sem), Some(pool)) = (semantic, embedding_pool) {
-            Some(thread::spawn(move || {
-                let stage = SemanticEmbedStage::new(pool, sem);
-                stage.run(embed_rx)
-            }))
-        } else {
-            drop(embed_rx);
-            None
-        };
-
-        // Stage 4b: INDEX (parallel with EMBED)
-        // Clone index Arc for metadata update after pipeline completes
-        let index_for_metadata = Arc::clone(&index);
-        let mut index_stage = IndexStage::new(index, batches_per_commit);
-        if let Some(prog) = progress {
-            index_stage = index_stage.with_progress(prog);
-        }
-        let index_handle = thread::spawn(move || index_stage.run(batch_rx));
-
-        // Wait for READ stage and capture errors
-        let (_, read_errors) = match read_handle.join() {
-            Ok((count, errors)) => (count, errors),
-            Err(_) => {
-                tracing::error!(target: "pipeline", "READ thread panicked in index_files");
-                (0, 1)
-            }
-        };
-
-        // Wait for PARSE stages and aggregate errors
-        let (_, parse_errors) = self.join_parse_workers_simple(parse_handles);
-
-        // Join all remaining threads first (COLLECT, EMBED, INDEX)
-        let collect_join = collect_handle.join();
-        let embed_join = embed_handle.map(|h| h.join());
-        let index_join = index_handle.join();
-
-        // CRITICAL: Unwrap INDEX first - this is the critical path.
-        // If INDEX succeeded, we MUST save counters regardless of EMBED status.
-        let index_result = match index_join {
-            Ok(result) => result,
-            Err(_) => return Err(PipelineError::ChannelRecv("INDEX panicked".into())),
-        };
-        let (mut stats, pending, cache, _) = index_result?;
-
-        // Unwrap COLLECT (needed for counters)
-        let collect_result = match collect_join {
-            Ok(result) => result,
-            Err(_) => return Err(PipelineError::ChannelRecv("COLLECT panicked".into())),
-        };
-        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_result?;
-
-        // CRITICAL: Save counters NOW, before checking EMBED.
-        // INDEX succeeded, so we MUST persist the new ID pointers.
-        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
-
-        // Handle EMBED results (Soft Failure - log but don't fail pipeline)
-        if let Some(join_result) = embed_join {
-            match join_result {
-                Ok(Ok(embed_stats)) => {
-                    // Validate COLLECT/EMBED data flow integrity
-                    if embed_stats.received != embed_candidates as usize {
-                        tracing::warn!(
-                            target: "pipeline",
-                            "EMBED data flow mismatch: COLLECT sent {} candidates, EMBED received {}",
-                            embed_candidates,
-                            embed_stats.received
-                        );
-                    }
-
-                    // Track any symbols that failed embedding
-                    let failed = embed_stats.received.saturating_sub(embed_stats.embedded);
-                    if failed > 0 {
-                        stats.embeddings_failed = failed;
-                    }
-
-                    tracing::info!(
-                        target: "semantic",
-                        "EMBED: {}/{} embedded ({} candidates from COLLECT)",
-                        embed_stats.embedded,
-                        embed_stats.received,
-                        embed_candidates
-                    );
-                }
-                Ok(Err(e)) => {
-                    // All candidates failed embedding
-                    stats.embeddings_failed = embed_candidates as usize;
-                    tracing::error!(
-                        target: "pipeline",
-                        "Embedding generation failed: {e}. Index is valid but semantic search may be incomplete."
-                    );
-                }
-                Err(_) => {
-                    // All candidates failed embedding
-                    stats.embeddings_failed = embed_candidates as usize;
-                    tracing::error!(
-                        target: "pipeline",
-                        "EMBED thread panicked. Index is valid but semantic search may be incomplete."
-                    );
-                }
-            }
-        }
-
-        // Update stats with timing and error counts
-        stats.elapsed = start.elapsed();
-        stats.files_failed = read_errors + parse_errors;
-
-        Ok((stats, pending, cache))
     }
 
     /// Full index (force mode): index all files without incremental detection.
@@ -1760,26 +1531,22 @@ impl Pipeline {
         let start = Instant::now();
         let show_progress = progress.is_some();
 
-        // Run Phase 1 with semantic search integrated
-        let (index_stats, unresolved, symbol_cache, metrics) = if let Some(ref sem) = semantic {
-            self.index_directory_with_semantic(
-                root,
-                Arc::clone(&index),
-                Arc::clone(sem),
-                embedding_pool,
-                progress,
-                None, // TODO: Wire DualProgressBar
-            )?
-        } else {
-            self.run_phase1(
-                FileSource::Walk(root.to_path_buf()),
-                Arc::clone(&index),
-                Phase1Options {
-                    progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
-                    embed: None,
-                },
-            )?
+        // Run Phase 1 with embedding iff semantic search and pool are both present
+        let embed = match (&semantic, &embedding_pool) {
+            (Some(sem), Some(pool)) => Some(EmbedOptions {
+                pool: Arc::clone(pool),
+                semantic: Arc::clone(sem),
+            }),
+            _ => None,
         };
+        let (index_stats, unresolved, symbol_cache, metrics) = self.run_phase1(
+            FileSource::Walk(root.to_path_buf()),
+            Arc::clone(&index),
+            Phase1Options {
+                progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
+                embed,
+            },
+        )?;
 
         // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
         if let Some(m) = metrics {
@@ -1788,56 +1555,11 @@ impl Pipeline {
 
         // Run Phase 2 resolution with progress if Phase 1 had progress
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = if show_progress && !unresolved.is_empty() {
-            // Create Phase 2 progress bar
-            use crate::io::status_line::{
-                ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
-            };
-
-            let options = ProgressBarOptions::default()
-                .with_style(ProgressBarStyle::VerticalSolid)
-                .with_width(28)
-                .with_label("LINKS")
-                .show_rate(false); // Rate not meaningful for relationships
-            let phase2_bar = Arc::new(ProgressBar::with_options(
-                unresolved.len() as u64,
-                "relationships",
-                "resolved",
-                "skipped",
-                options,
-            ));
-            let phase2_status = StatusLine::new(Arc::clone(&phase2_bar));
-
-            let stats = self.run_phase2_with_progress(
-                unresolved,
-                symbol_cache,
-                Arc::clone(&index),
-                Some(phase2_bar.clone()),
-            )?;
-
-            // Finalize Phase 2 progress bar
-            drop(phase2_status);
-            eprintln!("{phase2_bar}");
-
-            stats
-        } else {
-            self.run_phase2(unresolved, symbol_cache, Arc::clone(&index))?
-        };
+        let phase2_stats =
+            self.run_phase2_maybe_bar(unresolved, symbol_cache, Arc::clone(&index), show_progress)?;
 
         // Save embeddings
-        if let Some(sem) = semantic {
-            let semantic_guard = sem.lock().map_err(|_| PipelineError::Parse {
-                path: PathBuf::new(),
-                reason: "Failed to lock semantic search".to_string(),
-            })?;
-
-            semantic_guard
-                .save(semantic_path)
-                .map_err(|e| PipelineError::Parse {
-                    path: semantic_path.to_path_buf(),
-                    reason: format!("Failed to save embeddings: {e}"),
-                })?;
-        }
+        self.persist_embeddings(semantic.as_ref(), semantic_path)?;
 
         Ok(IncrementalStats {
             new_files: index_stats.files_indexed,
@@ -1848,407 +1570,6 @@ impl Pipeline {
             phase2_stats,
             elapsed: start.elapsed(),
         })
-    }
-
-    /// Index directory with semantic search integration.
-    ///
-    /// # Parameters
-    /// - `dual_progress`: If provided, displays parallel progress for EMBED and INDEX stages.
-    ///   Takes precedence over `progress` when both are specified.
-    fn index_directory_with_semantic(
-        &self,
-        root: &Path,
-        index: Arc<DocumentIndex>,
-        semantic: Arc<Mutex<SimpleSemanticSearch>>,
-        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
-        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
-        dual_progress: Option<Arc<DualProgressBar>>,
-    ) -> PipelineResult<Phase1Result> {
-        let start = Instant::now();
-
-        // Create metrics collector if tracing is enabled
-        let metrics = if self.config.pipeline_tracing {
-            Some(PipelineMetrics::new(root.display().to_string(), true))
-        } else {
-            None
-        };
-
-        // Query existing ID counters BEFORE spawning threads
-        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
-
-        // Create bounded channels
-        let (path_tx, path_rx) = bounded(self.config.path_channel_size);
-        let (content_tx, content_rx) = bounded(self.config.content_channel_size);
-        let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
-        let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
-        // Embed channel for parallel EMBED stage
-        let (embed_tx, embed_rx) = bounded(self.config.batch_channel_size);
-        let embed_sender = if embedding_pool.is_some() {
-            Some(embed_tx)
-        } else {
-            drop(embed_tx);
-            None
-        };
-
-        let settings = Arc::clone(&self.settings);
-        let parse_threads = self.config.parse_threads;
-        let read_threads = self.config.read_threads;
-        let discover_threads = self.config.discover_threads;
-        let batch_size = self.config.batch_size;
-        let batches_per_commit = self.config.batches_per_commit;
-        let tracing_enabled = self.config.pipeline_tracing;
-
-        // Stage 1: DISCOVER
-        let discover_root = root.to_path_buf();
-        let discover_handle = thread::spawn(move || {
-            let tracker = if tracing_enabled {
-                Some(StageTracker::new("DISCOVER", discover_threads))
-            } else {
-                None
-            };
-
-            let stage = DiscoverStage::new(discover_root, discover_threads);
-            let result = stage.run(path_tx);
-
-            if let (Some(tracker), Ok(count)) = (&tracker, &result) {
-                tracker.record_items(*count);
-            }
-
-            (result, tracker.map(|t| t.finalize()))
-        });
-
-        // Stage 2: READ
-        let workspace_root = settings.workspace_root.clone();
-        let read_handles: Vec<_> = (0..read_threads)
-            .map(|_| {
-                let rx = path_rx.clone();
-                let tx = content_tx.clone();
-                let workspace_root = workspace_root.clone();
-                thread::spawn(move || {
-                    let stage = ReadStage::with_workspace_root(1, workspace_root);
-                    stage.run(rx, tx)
-                })
-            })
-            .collect();
-        drop(path_rx);
-        drop(content_tx);
-
-        // Stage 3: PARSE - with wait time tracking
-        let parse_handles: Vec<_> = (0..parse_threads)
-            .map(|_| {
-                let rx = content_rx.clone();
-                let tx = parsed_tx.clone();
-                let settings = Arc::clone(&settings);
-                thread::spawn(move || {
-                    let start = Instant::now();
-                    init_parser_cache(settings.clone());
-                    let stage = ParseStage::new(settings);
-                    let mut parsed = 0;
-                    let mut errors = 0;
-                    let mut symbol_count = 0;
-                    let mut input_wait = std::time::Duration::ZERO;
-                    let mut output_wait = std::time::Duration::ZERO;
-
-                    loop {
-                        // Track input wait (time blocked on recv)
-                        let recv_start = Instant::now();
-                        let content = match rx.recv() {
-                            Ok(c) => c,
-                            Err(_) => break, // Channel closed
-                        };
-                        input_wait += recv_start.elapsed();
-
-                        match stage.parse(content) {
-                            Ok(p) => {
-                                parsed += 1;
-                                symbol_count += p.raw_symbols.len();
-
-                                // Track output wait (time blocked on send)
-                                let send_start = Instant::now();
-                                if tx.send(p).is_err() {
-                                    break;
-                                }
-                                output_wait += send_start.elapsed();
-                            }
-                            Err(_) => errors += 1,
-                        }
-                    }
-                    (
-                        parsed,
-                        errors,
-                        symbol_count,
-                        input_wait,
-                        output_wait,
-                        start.elapsed(),
-                    )
-                })
-            })
-            .collect();
-        drop(content_rx);
-        drop(parsed_tx);
-
-        // Stage 4: COLLECT (with starting counters for multi-directory support)
-        // Sends IndexBatch to INDEX, EmbeddingBatch to EMBED (parallel)
-        // Create callback to update embed total for progress display
-        let embed_total_callback = dual_progress.as_ref().map(|dp| {
-            let dp = Arc::clone(dp);
-            Arc::new(move |count: u64| dp.add_bar1_total(count)) as Arc<dyn Fn(u64) + Send + Sync>
-        });
-        let collect_handle = thread::spawn(move || {
-            let tracker = if tracing_enabled {
-                Some(StageTracker::new("COLLECT", 1).with_secondary("batches"))
-            } else {
-                None
-            };
-
-            let stage = CollectStage::new(batch_size)
-                .with_start_counters(start_file_counter, start_symbol_counter);
-            let result = stage.run(parsed_rx, batch_tx, embed_sender, embed_total_callback);
-
-            // Record items and wait times before finalizing
-            if let (Some(t), Ok((_, symbol_count, _, input_wait, output_wait))) =
-                (&tracker, &result)
-            {
-                t.record_items(*symbol_count as usize);
-                t.record_input_wait(*input_wait);
-                t.record_output_wait(*output_wait);
-            }
-
-            (result, tracker.map(|t| t.finalize()))
-        });
-
-        // Stage 5a: EMBED (parallel with INDEX) - if embedding pool provided
-        let embed_handle = if let Some(pool) = embedding_pool {
-            // Create progress callback for EMBED bar (bar1)
-            let embed_callback = dual_progress.as_ref().map(|dp| {
-                let dp = Arc::clone(dp);
-                Arc::new(move |count: u64| dp.add_bar1(count)) as Arc<dyn Fn(u64) + Send + Sync>
-            });
-            // Completion callback to freeze timer when EMBED finishes
-            let embed_complete = dual_progress.as_ref().map(Arc::clone);
-
-            Some(thread::spawn(move || {
-                let mut stage = SemanticEmbedStage::new(pool, semantic);
-                if let Some(callback) = embed_callback {
-                    stage = stage.with_progress(callback);
-                }
-                let result = stage.run(embed_rx);
-                // Freeze EMBED timer immediately when done
-                if let Some(dp) = embed_complete {
-                    dp.complete_bar1();
-                }
-                result
-            }))
-        } else {
-            drop(embed_rx);
-            None
-        };
-
-        // Stage 5b: INDEX (parallel with EMBED)
-        // Clone index Arc for metadata update after pipeline completes
-        let index_for_metadata = Arc::clone(&index);
-        // Completion callback to freeze timer when INDEX finishes
-        let index_complete = dual_progress.as_ref().map(Arc::clone);
-        let index_handle = {
-            let mut index_stage = IndexStage::new(index, batches_per_commit);
-
-            // Prefer dual_progress callback over single progress bar
-            if let Some(ref dp) = dual_progress {
-                let dp = Arc::clone(dp);
-                let callback = Arc::new(move |count: u64| dp.add_bar2(count))
-                    as Arc<dyn Fn(u64) + Send + Sync>;
-                index_stage = index_stage.with_progress_callback(callback);
-            } else if let Some(prog) = progress {
-                index_stage = index_stage.with_progress(prog);
-            }
-
-            thread::spawn(move || {
-                let tracker = if tracing_enabled {
-                    Some(StageTracker::new("INDEX", 1).with_secondary("commits"))
-                } else {
-                    None
-                };
-
-                let result = index_stage.run(batch_rx);
-
-                // Freeze INDEX timer immediately when done
-                if let Some(dp) = index_complete {
-                    dp.complete_bar2();
-                }
-
-                // Record items and wait times before finalizing
-                if let (Some(t), Ok((stats, _, _, input_wait))) = (&tracker, &result) {
-                    t.record_items(stats.symbols_found);
-                    t.record_input_wait(*input_wait);
-                }
-
-                (result, tracker.map(|t| t.finalize()))
-            })
-        };
-
-        // Wait for all stages
-        let (discover_result, discover_metrics) = discover_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("DISCOVER panicked".to_string()))?;
-        let _files_discovered = discover_result?;
-
-        // Add DISCOVER metrics
-        if let (Some(m), Some(dm)) = (&metrics, discover_metrics) {
-            m.add_stage(dm);
-        }
-
-        // READ stage metrics (aggregate across threads)
-        let (read_files, read_errors, read_input_wait, read_output_wait, read_wall_time) =
-            self.join_read_workers(read_handles);
-        if let Some(m) = &metrics {
-            m.add_stage(StageMetrics {
-                name: "READ",
-                threads: read_threads,
-                wall_time: read_wall_time,
-                input_wait: read_input_wait,
-                output_wait: read_output_wait,
-                items_processed: read_files,
-                secondary_count: 0,
-                secondary_label: "MB",
-            });
-        }
-
-        // PARSE stage metrics (aggregate across threads)
-        let (
-            parsed_files,
-            parse_errors,
-            total_symbols,
-            total_input_wait,
-            total_output_wait,
-            parse_wall_time,
-        ) = self.join_parse_workers(parse_handles);
-        if let Some(m) = &metrics {
-            m.add_stage(StageMetrics {
-                name: "PARSE",
-                threads: parse_threads,
-                wall_time: parse_wall_time,
-                input_wait: total_input_wait,
-                output_wait: total_output_wait,
-                items_processed: parsed_files,
-                secondary_count: total_symbols,
-                secondary_label: "symbols",
-            });
-        }
-
-        // Join ALL threads first to ensure cleanup, then check results
-        // This ensures progress bars are completed even on error paths
-        let collect_join = collect_handle.join();
-        let embed_join = embed_handle.map(|h| h.join());
-        let index_join = index_handle.join();
-
-        // Complete progress bars (idempotent - safe even if threads already completed them)
-        if let Some(ref dp) = dual_progress {
-            dp.complete_bar1();
-            dp.complete_bar2();
-        }
-
-        // CRITICAL: Unwrap INDEX first - this is the critical path.
-        // If INDEX succeeded, we MUST save counters regardless of EMBED status.
-        let (index_result, index_metrics) = match index_join {
-            Ok(result) => result,
-            Err(_) => return Err(PipelineError::ChannelRecv("INDEX panicked".into())),
-        };
-        let (mut stats, pending, cache, _) = index_result?;
-
-        // Add INDEX metrics
-        if let (Some(m), Some(im)) = (&metrics, index_metrics) {
-            m.add_stage(im);
-        }
-
-        // Unwrap COLLECT (needed for counters)
-        let (collect_result, collect_metrics) = match collect_join {
-            Ok(result) => result,
-            Err(_) => return Err(PipelineError::ChannelRecv("COLLECT panicked".into())),
-        };
-        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_result?;
-
-        // Add COLLECT metrics
-        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
-            m.add_stage(cm);
-        }
-
-        // CRITICAL: Save counters NOW, before checking EMBED.
-        // INDEX succeeded, so we MUST persist the new ID pointers to prevent
-        // duplicate IDs on the next run.
-        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
-
-        // Handle EMBED results (Soft Failure - log but don't fail pipeline)
-        // The index is valid even if embeddings failed; semantic search will be incomplete.
-        if let Some(join_result) = embed_join {
-            match join_result {
-                Ok(Ok(embed_stats)) => {
-                    // Validate COLLECT/EMBED data flow integrity
-                    if embed_stats.received != embed_candidates as usize {
-                        tracing::warn!(
-                            target: "pipeline",
-                            "EMBED data flow mismatch: COLLECT sent {} candidates, EMBED received {}",
-                            embed_candidates,
-                            embed_stats.received
-                        );
-                    }
-
-                    // Track any symbols that failed embedding
-                    let failed = embed_stats.received.saturating_sub(embed_stats.embedded);
-                    if failed > 0 {
-                        stats.embeddings_failed = failed;
-                    }
-
-                    // Add EMBED metrics to pipeline report
-                    if let Some(m) = &metrics {
-                        m.add_stage(StageMetrics {
-                            name: "EMBED",
-                            threads: 1, // Single coordinator thread (pool parallelizes internally)
-                            wall_time: embed_stats.elapsed,
-                            input_wait: embed_stats.input_wait,
-                            output_wait: Duration::ZERO, // EMBED has no output channel
-                            items_processed: embed_stats.embedded,
-                            secondary_count: embed_stats.skipped,
-                            secondary_label: "skipped",
-                        });
-                    }
-
-                    tracing::info!(
-                        target: "semantic",
-                        "EMBED: {}/{} embedded ({} candidates from COLLECT)",
-                        embed_stats.embedded,
-                        embed_stats.received,
-                        embed_candidates
-                    );
-                }
-                Ok(Err(e)) => {
-                    // All candidates failed embedding
-                    stats.embeddings_failed = embed_candidates as usize;
-                    tracing::error!(
-                        target: "pipeline",
-                        "Embedding generation failed: {e}. Index is valid but semantic search may be incomplete. Run with --force to regenerate."
-                    );
-                }
-                Err(_) => {
-                    // All candidates failed embedding
-                    stats.embeddings_failed = embed_candidates as usize;
-                    tracing::error!(
-                        target: "pipeline",
-                        "EMBED thread panicked. Index is valid but semantic search may be incomplete."
-                    );
-                }
-            }
-        }
-
-        // Update stats with timing and error counts
-        stats.elapsed = start.elapsed();
-        stats.files_failed = read_errors + parse_errors;
-
-        // Finalize metrics but don't log (caller logs after StatusLine drop)
-        if let Some(ref m) = metrics {
-            m.finalize(start.elapsed());
-        }
-
-        Ok((stats, pending, cache, metrics))
     }
 
     /// Synchronize index with configuration (directory-level change detection).
