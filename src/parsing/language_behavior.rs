@@ -1130,6 +1130,59 @@ mod tests {
     }
 
     #[test]
+    fn scope_winner_is_insertion_order_independent() {
+        use crate::indexing::pipeline::types::SymbolLookupCache;
+        use crate::symbol::ScopeContext;
+        use crate::types::{Range, SymbolId};
+
+        // Two same-name Module-scope symbols in one file feed the scope's
+        // last-wins name map; the winner must be the last-declared symbol
+        // (identity order), not whichever the cache saw last.
+        let build = |insert_low_first: bool| {
+            let mk = |id: u32, line: u32| {
+                let mut sym = crate::Symbol::new(
+                    SymbolId::new(id).unwrap(),
+                    "new",
+                    SymbolKind::Method,
+                    FileId::new(1).unwrap(),
+                    Range::new(line, 0, line + 2, 0),
+                );
+                sym.scope_context = Some(ScopeContext::Module);
+                sym.language_id = Some(crate::parsing::registry::LanguageId::new("test"));
+                sym
+            };
+            let cache = SymbolLookupCache::new();
+            let (low, high) = (mk(1, 10), mk(2, 50));
+            if insert_low_first {
+                cache.insert(low);
+                cache.insert(high);
+            } else {
+                cache.insert(high);
+                cache.insert(low);
+            }
+            let (context, _) = TestBehavior.build_resolution_context_with_pipeline_cache(
+                FileId::new(1).unwrap(),
+                &[],
+                &cache,
+                &[],
+            );
+            let winner = context.resolve("new");
+            (winner, cache)
+        };
+
+        let (forward, fwd_cache) = build(true);
+        let (reverse, _) = build(false);
+        assert_eq!(
+            forward, reverse,
+            "winner must not depend on insertion order"
+        );
+        let winner_line = forward
+            .and_then(|id| fwd_cache.get(id))
+            .map(|sym| sym.range.start_line);
+        assert_eq!(winner_line, Some(50), "last-declared symbol wins");
+    }
+
+    #[test]
     fn test_default_compatibility_function_calls_function() {
         let behavior = TestBehavior;
         assert!(behavior.is_compatible_relationship(

@@ -405,12 +405,14 @@ impl PartialOrd for NameCandidate {
 /// (file_path, start_line, id): insertion order is parse-completion
 /// order and ids are assigned in collect-arrival order — both vary run
 /// to run — so first-match consumers need a tree-stable order to pick
-/// deterministically.
+/// deterministically. `by_file_id` lists stay sorted by (start_line, id)
+/// for the same reason: scope registration iterates them into last-wins
+/// name maps, so their order decides same-name winners.
 #[derive(Debug)]
 pub struct SymbolLookupCache {
     by_id: dashmap::DashMap<crate::types::SymbolId, crate::Symbol>,
     by_name: dashmap::DashMap<Box<str>, Vec<NameCandidate>>,
-    by_file_id: dashmap::DashMap<crate::types::FileId, Vec<crate::types::SymbolId>>,
+    by_file_id: dashmap::DashMap<crate::types::FileId, Vec<(u32, crate::types::SymbolId)>>,
     /// Re-exported paths: "pkg.helper" -> the symbol defined at "pkg.a.helper"
     /// when pkg's namespace imports it. Populated by the Phase 2 pre-pass.
     module_aliases: dashmap::DashMap<Box<str>, crate::types::SymbolId>,
@@ -447,10 +449,11 @@ impl SymbolLookupCache {
     pub fn insert(&self, symbol: crate::Symbol) {
         let id = symbol.id;
         let file_id = symbol.file_id;
+        let start_line = symbol.range.start_line;
         let name: Box<str> = symbol.name.as_ref().into();
         let candidate = NameCandidate {
             file_path: symbol.file_path.clone(),
-            start_line: symbol.range.start_line,
+            start_line,
             id,
         };
 
@@ -466,8 +469,15 @@ impl SymbolLookupCache {
             entry.insert(pos, candidate);
         }
 
-        // Insert into by_file_id (append to file's symbols)
-        self.by_file_id.entry(file_id).or_default().push(id);
+        // Insert into by_file_id at the (start_line, id)-sorted position;
+        // file_path is constant within a file, so this is identity order
+        {
+            let mut entry = self.by_file_id.entry(file_id).or_default();
+            let pos = entry
+                .binary_search_by_key(&(start_line, id.0), |&(line, sid)| (line, sid.0))
+                .unwrap_or_else(|insert_at| insert_at);
+            entry.insert(pos, (start_line, id));
+        }
     }
 
     /// Get symbol by ID (O(1)).
@@ -496,13 +506,13 @@ impl SymbolLookupCache {
         self.by_name.contains_key(name)
     }
 
-    /// Get symbol IDs defined in a file (O(1)).
+    /// Get symbol IDs defined in a file, in identity (source) order.
     ///
     /// Used by CONTEXT stage to find local symbols for a file.
     pub fn symbols_in_file(&self, file_id: crate::types::FileId) -> Vec<crate::types::SymbolId> {
         self.by_file_id
             .get(&file_id)
-            .map(|r| r.value().clone())
+            .map(|r| r.value().iter().map(|&(_, id)| id).collect())
             .unwrap_or_default()
     }
 
@@ -808,10 +818,7 @@ impl PipelineSymbolCache for SymbolLookupCache {
     }
 
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {
-        self.by_file_id
-            .get(&file_id)
-            .map(|r| r.value().clone())
-            .unwrap_or_default()
+        SymbolLookupCache::symbols_in_file(self, file_id)
     }
 
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId> {
@@ -1388,6 +1395,39 @@ mod tests {
             cache.find_by_import_path("app::util", rust),
             Some(SymbolId::new(1).unwrap())
         );
+    }
+
+    #[test]
+    fn symbols_in_file_returns_identity_order() {
+        let mk = |id: u32, line: u32| {
+            let mut sym = Symbol::new(
+                SymbolId::new(id).unwrap(),
+                "sym",
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                Range::new(line, 0, line + 1, 0),
+            );
+            sym.language_id = Some(LanguageId::new("rust"));
+            sym
+        };
+        let expected: Vec<SymbolId> = [(1, 10), (3, 30), (2, 50)]
+            .iter()
+            .map(|&(id, _)| SymbolId::new(id).unwrap())
+            .collect();
+
+        // Insertion order varies run to run (collect-arrival); the
+        // returned order must be source order either way.
+        let forward = SymbolLookupCache::new();
+        for &(id, line) in &[(1u32, 10u32), (3, 30), (2, 50)] {
+            forward.insert(mk(id, line));
+        }
+        let reverse = SymbolLookupCache::new();
+        for &(id, line) in &[(2u32, 50u32), (3, 30), (1, 10)] {
+            reverse.insert(mk(id, line));
+        }
+
+        assert_eq!(forward.symbols_in_file(FileId::new(1).unwrap()), expected);
+        assert_eq!(reverse.symbols_in_file(FileId::new(1).unwrap()), expected);
     }
 
     #[test]
