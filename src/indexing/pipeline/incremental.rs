@@ -398,7 +398,7 @@ impl Pipeline {
                 }),
                 _ => None,
             };
-            let (stats, unresolved, cache, metrics) = self.run_phase1(
+            let (stats, unresolved, _run_cache, metrics) = self.run_phase1(
                 FileSource::List(files_to_index),
                 Arc::clone(&index),
                 Phase1Options {
@@ -413,6 +413,11 @@ impl Pipeline {
                 m.log();
             }
             eprintln!("{phase1_bar}");
+
+            // Seed Phase 2 from the persisted index: the run-scoped cache
+            // holds only this run's files, hiding unchanged files' symbols
+            // and re-export aliases from resolution.
+            let cache = SymbolLookupCache::from_index(&index)?;
 
             let counts = (
                 discover_result.new_files.len(),
@@ -533,7 +538,7 @@ impl Pipeline {
             }),
             _ => None,
         };
-        let (index_stats, unresolved, symbol_cache, metrics) = self.run_phase1(
+        let (index_stats, unresolved, _run_cache, metrics) = self.run_phase1(
             FileSource::List(files_to_index),
             Arc::clone(&index),
             Phase1Options {
@@ -547,8 +552,11 @@ impl Pipeline {
             m.log();
         }
 
-        // Run Phase 2 resolution with progress if Phase 1 had progress
-        let symbol_cache = Arc::new(symbol_cache);
+        // Run Phase 2 resolution with progress if Phase 1 had progress.
+        // Seed the cache from the persisted index: the run-scoped cache
+        // holds only this run's files, hiding unchanged files' symbols
+        // and re-export aliases from resolution.
+        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
         let phase2_stats =
             self.run_phase2_maybe_bar(unresolved, symbol_cache, Arc::clone(&index), show_progress)?;
 
@@ -744,5 +752,81 @@ impl Pipeline {
         );
 
         Ok(stats)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RelationKind, Settings};
+
+    fn calls_edge_exists(index: &DocumentIndex, from: &str, to: &str) -> bool {
+        let callers = index.find_symbols_by_name(from, None).unwrap();
+        let callees = index.find_symbols_by_name(to, None).unwrap();
+        let (Some(caller), Some(callee)) = (callers.first(), callees.first()) else {
+            return false;
+        };
+        index
+            .get_relationships_from(caller.id, RelationKind::Calls)
+            .unwrap()
+            .iter()
+            .any(|(_, to_id, _)| *to_id == callee.id)
+    }
+
+    // Regression: batch-incremental Phase 2 resolved against a cache scoped
+    // to the run's files, so a consumer touched alone lost its edge through
+    // an unchanged __init__.py re-export (and any candidate in an unchanged
+    // file). Full rebuilds and the single-file watcher path were unaffected.
+    #[test]
+    fn batch_incremental_keeps_edges_through_unchanged_reexports() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fixture");
+        let pkg = root.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("__init__.py"), "from pkg.a import helper\n").unwrap();
+        std::fs::write(pkg.join("a.py"), "def helper(x):\n    return x\n").unwrap();
+        let consumer =
+            "from pkg import helper\n\n\ndef reexport_caller(x):\n    return helper(x)\n";
+        std::fs::write(pkg.join("c.py"), consumer).unwrap();
+
+        let settings = Arc::new(Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        });
+        let index =
+            Arc::new(DocumentIndex::new(settings.index_path.join("tantivy"), &settings).unwrap());
+        let pipeline = Pipeline::with_settings(Arc::clone(&settings));
+
+        pipeline
+            .index_incremental(&root, Arc::clone(&index), None, None, false)
+            .unwrap();
+        assert!(
+            calls_edge_exists(&index, "reexport_caller", "helper"),
+            "first pass must resolve the re-export edge"
+        );
+
+        // Touch only the consumer; the __init__.py re-export stays unchanged.
+        // Discovery short-circuits on second-granularity mtime equality, so
+        // bump mtime past the first pass explicitly instead of racing it.
+        std::fs::write(pkg.join("c.py"), format!("{consumer}\n# touched\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(pkg.join("c.py"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        let stats = pipeline
+            .index_incremental(&root, Arc::clone(&index), None, None, false)
+            .unwrap();
+        assert_eq!(
+            (stats.new_files, stats.modified_files, stats.deleted_files),
+            (0, 1, 0),
+            "touch must register as modified"
+        );
+        assert!(
+            calls_edge_exists(&index, "reexport_caller", "helper"),
+            "incremental pass must keep the edge through the unchanged re-export"
+        );
     }
 }

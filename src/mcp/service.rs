@@ -80,8 +80,11 @@ pub fn find_dotted_members(name: &str, find: impl Fn(&str) -> Vec<Symbol>) -> Ve
 
 /// Whether `sym` is a member of type `class`: ClassMember scope with a
 /// matching class name (rightmost segment matches for nested classes), or
-/// a module_path ending in the type for languages that record the
-/// containing type there (mirrors the `is_receiver_compatible` default).
+/// a member-kind symbol whose module_path ends in the type for languages
+/// that record the containing type there (mirrors the
+/// `is_receiver_compatible` default). The kind bound keeps the vocabulary
+/// at Type.member: without it, module-scoped queries like
+/// "components.Button" resolve by accident of the suffix predicate.
 fn is_member_of(sym: &Symbol, class: &str) -> bool {
     if let Some(crate::symbol::ScopeContext::ClassMember {
         class_name: Some(c),
@@ -91,7 +94,10 @@ fn is_member_of(sym: &Symbol, class: &str) -> bool {
             return true;
         }
     }
-    sym.module_path.as_deref().is_some_and(|mp| {
+    matches!(
+        sym.kind,
+        crate::SymbolKind::Method | crate::SymbolKind::Field | crate::SymbolKind::Constant
+    ) && sym.module_path.as_deref().is_some_and(|mp| {
         mp.strip_suffix(class)
             .is_some_and(|rest| rest.ends_with("::") || rest.ends_with('.'))
     })
@@ -221,6 +227,24 @@ mod tests {
             }
         });
         assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn dotted_lookup_rejects_module_scoped_symbols() {
+        // "components.Button" where Button is a class in module
+        // src.components: module-scoped queries are not Type.member
+        // vocabulary and stay NOT_FOUND.
+        let mut sym = method_symbol(1, "Button", None, "src.components");
+        sym.scope_context = None;
+        sym.kind = crate::SymbolKind::Class;
+        let found = find_dotted_members("components.Button", |n| {
+            if n == "Button" {
+                vec![sym.clone()]
+            } else {
+                vec![]
+            }
+        });
+        assert!(found.is_empty());
     }
 
     #[test]
