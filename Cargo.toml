@@ -134,6 +134,10 @@ name = "simple_progress_demo"
 path = "examples/simple_progress_demo.rs"
 
 [[example]]
+name = "dump_edges"
+path = "examples/dump_edges.rs"
+
+[[example]]
 name = "pipeline_metrics_demo"
 path = "examples/pipeline_metrics_demo.rs"
 
