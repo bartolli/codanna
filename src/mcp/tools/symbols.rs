@@ -37,7 +37,13 @@ impl CodeIntelligenceServer {
                 ))]));
             }
         } else {
-            indexer.find_symbols_by_name(&name, lang.as_deref())
+            let mut found = indexer.find_symbols_by_name(&name, lang.as_deref());
+            if found.is_empty() {
+                found = crate::mcp::service::find_dotted_members(&name, |n| {
+                    indexer.find_symbols_by_name(n, lang.as_deref())
+                });
+            }
+            found
         };
 
         if symbols.is_empty() {

@@ -56,6 +56,10 @@ impl Pipeline {
             });
         }
 
+        // Pre-pass: register re-export aliases before any context is built,
+        // so both context-time import bindings and Tier 2 matching see them.
+        populate_reexport_aliases(&symbol_cache, &index);
+
         // Create stages
         let factory = Arc::new(ParserFactory::new(Arc::clone(&self.settings)));
         let context_stage = ContextStage::new(
@@ -211,4 +215,48 @@ impl Pipeline {
         eprintln!("{phase2_bar}");
         Ok(stats)
     }
+}
+
+/// Register re-export aliases from python module namespaces.
+///
+/// An import binds its name in the importing module's namespace, so
+/// `pkg/__init__.py: from pkg.a import helper` exposes `pkg.helper`
+/// (`__init__` maps to the package via module_path stripping; plain modules
+/// re-export the same way). Alias resolution itself is language-agnostic in
+/// the cache; only collection is python-gated here because python is the
+/// language whose canonical public API surface is re-export-shaped. Read
+/// failures degrade to fewer aliases, never an error: a missing alias means
+/// an unresolved edge, same as before the pre-pass existed.
+fn populate_reexport_aliases(cache: &SymbolLookupCache, index: &DocumentIndex) {
+    let python = crate::parsing::LanguageId::new("python");
+
+    let mut entries: Vec<(String, Vec<crate::parsing::Import>)> = Vec::new();
+    for file_id in cache.file_ids() {
+        let symbol_ids = cache.symbols_in_file(file_id);
+        let Some(first) = symbol_ids.first().and_then(|&id| cache.get_ref(id)) else {
+            continue;
+        };
+        if first.language_id.as_ref() != Some(&python) {
+            continue;
+        }
+        let Some(module_path) = first.module_path.as_deref().map(String::from) else {
+            continue;
+        };
+        drop(first);
+
+        let imports = index.get_imports_for_file(file_id).unwrap_or_default();
+        if !imports.is_empty() {
+            entries.push((module_path, imports));
+        }
+    }
+
+    if entries.is_empty() {
+        return;
+    }
+    cache.populate_module_aliases(&entries, &python);
+    tracing::debug!(
+        target: "pipeline",
+        "Re-export pre-pass: {} python modules with imports scanned",
+        entries.len()
+    );
 }

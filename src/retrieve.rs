@@ -73,8 +73,13 @@ impl<'a> QueryContext<'a> {
                 Err(_) => ResolveResult::InvalidId(id_str.to_string()),
             }
         } else {
-            // Name-based lookup
-            let symbols = self.indexer.find_symbols_by_name(query, language);
+            // Name-based lookup, with class-scoped fallback for "Class.method"
+            let mut symbols = self.indexer.find_symbols_by_name(query, language);
+            if symbols.is_empty() {
+                symbols = crate::mcp::service::find_dotted_members(query, |n| {
+                    self.indexer.find_symbols_by_name(n, language)
+                });
+            }
             match symbols.len() {
                 0 => ResolveResult::NotFound,
                 1 => ResolveResult::Found(symbols.into_iter().next().unwrap()),
@@ -293,8 +298,14 @@ pub fn retrieve_symbol(
             }
         }
     } else {
-        // Name-based lookup
-        indexer.find_symbols_by_name(name, language)
+        // Name-based lookup, with class-scoped fallback for "Class.method"
+        let mut found = indexer.find_symbols_by_name(name, language);
+        if found.is_empty() {
+            found = crate::mcp::service::find_dotted_members(name, |n| {
+                indexer.find_symbols_by_name(n, language)
+            });
+        }
+        found
     };
 
     if symbols.is_empty() {

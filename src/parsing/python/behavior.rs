@@ -99,44 +99,48 @@ impl PythonBehavior {
     }
 
     /// Resolve Python relative imports (., .., etc.)
-    fn resolve_python_relative_import(&self, import_path: &str, from_module: &str) -> String {
+    ///
+    /// One dot is the containing package: the module's parent, or the package
+    /// itself when importing from `__init__` (`from_is_package`). Each extra
+    /// dot goes up one more level.
+    fn resolve_python_relative_import(
+        &self,
+        import_path: &str,
+        from_module: &str,
+        from_is_package: bool,
+    ) -> String {
         let dots = import_path.chars().take_while(|&c| c == '.').count();
         let remaining = &import_path[dots..];
 
-        // Split the current module path
-        let mut parts: Vec<_> = from_module.split('.').collect();
+        let mut parts: Vec<_> = if from_module.is_empty() {
+            Vec::new()
+        } else {
+            from_module.split('.').collect()
+        };
 
-        // In Python relative imports:
-        // . = current package (same directory)
-        // .. = parent package (go up 1 level from current package)
-        // ... = grandparent package (go up 2 levels from current package)
-        //
-        // From module parent.child:
-        // .sibling gives parent.sibling (same package as child)
-        // ..sibling gives sibling (parent of parent.child is root)
-        //
-        // The key insight: we go up 'dots' levels from the current module
-        for _ in 0..dots {
+        let pops = if from_is_package {
+            dots.saturating_sub(1)
+        } else {
+            dots
+        };
+        for _ in 0..pops {
             if !parts.is_empty() {
                 parts.pop();
             }
         }
 
-        // Add the remaining path if any
-        if !remaining.is_empty() {
-            // Skip the leading dot if present
-            let remaining = remaining.trim_start_matches('.');
-            if !remaining.is_empty() {
-                // Split the remaining path and add each part
-                for part in remaining.split('.') {
-                    if !part.is_empty() {
-                        parts.push(part);
-                    }
-                }
+        for part in remaining.split('.') {
+            if !part.is_empty() {
+                parts.push(part);
             }
         }
 
         parts.join(".")
+    }
+
+    /// `__init__.py` / `__init__.pyi` files are the package itself.
+    fn file_is_package(file_path: &Path) -> bool {
+        file_path.file_stem().is_some_and(|s| s == "__init__")
     }
 }
 
@@ -229,6 +233,22 @@ impl LanguageBehavior for PythonBehavior {
             // Everything else is public in Python
             Visibility::Public
         }
+    }
+
+    fn normalize_import_path(
+        &self,
+        import_path: &str,
+        importing_module: Option<&str>,
+        file_path: &Path,
+    ) -> Option<String> {
+        if !import_path.starts_with('.') {
+            return None;
+        }
+        Some(self.resolve_python_relative_import(
+            import_path,
+            importing_module.unwrap_or(""),
+            Self::file_is_package(file_path),
+        ))
     }
 
     fn module_separator(&self) -> &'static str {
@@ -466,39 +486,46 @@ impl LanguageBehavior for PythonBehavior {
         let mut enhanced_imports = Vec::with_capacity(imports.len());
 
         for import in imports {
-            // 1. Extract module and symbol from import path
-            // For "from pydantic.v1.error_wrappers import ValidationError":
-            //   module_part = "pydantic.v1.error_wrappers"
-            //   symbol_name = "ValidationError"
-            let (module_part, symbol_name) = if let Some(pos) = import.path.rfind('.') {
-                (
-                    import.path[..pos].to_string(),
-                    import.path[pos + 1..].to_string(),
-                )
-            } else {
-                // Simple import like "import os"
-                (String::new(), import.path.clone())
-            };
-
-            // 2. Get local name (alias or symbol_name)
-            let local_name = import.alias.clone().unwrap_or_else(|| symbol_name.clone());
-
-            // 3. Resolve relative imports or use module portion
-            let target_module = if import.path.starts_with('.') {
-                // Relative import: resolve against importing module
+            // 1. Canonicalize to absolute form. Imports are normalized at
+            // parse time; a relative path arriving through another route is
+            // resolved best-effort here (behavior state may be empty).
+            let effective_path = if import.path.starts_with('.') {
+                let is_package = self
+                    .state
+                    .get_file_path(file_id)
+                    .is_some_and(|p| Self::file_is_package(&p));
                 self.resolve_python_relative_import(
                     &import.path,
                     importing_module.as_deref().unwrap_or(""),
+                    is_package,
                 )
             } else {
-                // Absolute import: use extracted module portion (NOT full path)
-                module_part.clone()
+                import.path.clone()
             };
 
-            // 4. Collect enhanced import - keep full path for Tier 2 matching
-            // Python includes symbol name in path: "module.symbol"
+            // 2. Extract module and symbol from the absolute path
+            // For "from pydantic.v1.error_wrappers import ValidationError":
+            //   module_part = "pydantic.v1.error_wrappers"
+            //   symbol_name = "ValidationError"
+            let (module_part, symbol_name) = if let Some(pos) = effective_path.rfind('.') {
+                (
+                    effective_path[..pos].to_string(),
+                    effective_path[pos + 1..].to_string(),
+                )
+            } else {
+                // Simple import like "import os"
+                (String::new(), effective_path.clone())
+            };
+
+            // 3. Get local name (alias or symbol_name)
+            let local_name = import.alias.clone().unwrap_or_else(|| symbol_name.clone());
+
+            let target_module = module_part;
+
+            // 4. Collect enhanced import - absolute full path for Tier 2
+            // matching. Python includes symbol name in path: "module.symbol"
             enhanced_imports.push(crate::parsing::Import {
-                path: import.path.clone(),
+                path: effective_path.clone(),
                 file_id: import.file_id,
                 alias: import.alias.clone(),
                 is_glob: import.is_glob,
@@ -518,7 +545,9 @@ impl LanguageBehavior for PythonBehavior {
                         // For "from pydantic.v1.error_wrappers import ValidationError":
                         //   target_module = "pydantic.v1.error_wrappers"
                         //   sym_module should equal "pydantic.v1.error_wrappers"
-                        if sym_mod == target_module {
+                        // The full path equals a module's own path when the
+                        // imported name is a module ("from pkg import a").
+                        if sym_mod == target_module || sym_mod == effective_path {
                             // Exact match - best
                             resolved_symbol = Some(id);
                             break;
@@ -552,7 +581,14 @@ impl LanguageBehavior for PythonBehavior {
                 }
             }
 
-            // 6. Register binding
+            // 6. Re-exported path: "from pkg import helper" where pkg's
+            // namespace imports helper from pkg.a (alias map built by the
+            // Phase 2 pre-pass).
+            if resolved_symbol.is_none() {
+                resolved_symbol = cache.resolve_module_alias(&effective_path);
+            }
+
+            // 7. Register binding
             let origin = if resolved_symbol.is_some() {
                 ImportOrigin::Internal
             } else {
@@ -571,10 +607,10 @@ impl LanguageBehavior for PythonBehavior {
             }
         }
 
-        // 7. Populate context with enhanced imports
+        // 8. Populate context with enhanced imports
         context.populate_imports(&enhanced_imports);
 
-        // 8. Add local symbols from this file
+        // 9. Add local symbols from this file
         for sym_id in cache.symbols_in_file(file_id) {
             if let Some(symbol) = cache.get(sym_id) {
                 if self.is_resolvable_symbol(&symbol) {
@@ -606,11 +642,23 @@ impl LanguageBehavior for PythonBehavior {
             tracing::debug!(
                 "[python] import_matches_symbol: import='{import_path}', symbol='{symbol_module_path}', from='{importing_mod}'"
             );
-            // Handle relative imports starting with dots
+            // Handle relative imports starting with dots. Paths are
+            // normalized to absolute form at parse time; this is a backstop
+            // for imports that bypass it (module interpretation only - no
+            // file context here to detect __init__).
             if import_path.starts_with('.') {
-                let resolved = self.resolve_python_relative_import(import_path, importing_mod);
+                let resolved =
+                    self.resolve_python_relative_import(import_path, importing_mod, false);
                 if resolved == symbol_module_path {
                     return true;
+                }
+                // "from .a import helper" resolves to "pkg.a.helper" while
+                // the symbol's module is "pkg.a" - same module+symbol shape
+                // as the absolute arm below.
+                if let Some(remainder) = resolved.strip_prefix(&format!("{symbol_module_path}.")) {
+                    if !remainder.contains('.') {
+                        return true;
+                    }
                 }
             }
 
@@ -799,6 +847,100 @@ mod tests {
 
         // Invalid node kind
         assert!(!behavior.validate_node_kind("struct_item")); // Rust-specific
+    }
+
+    #[test]
+    fn test_resolve_relative_import_from_module() {
+        let behavior = PythonBehavior::new();
+
+        // One dot from a module = its containing package
+        assert_eq!(
+            behavior.resolve_python_relative_import(".a.helper", "pkg.d", false),
+            "pkg.a.helper"
+        );
+        assert_eq!(
+            behavior.resolve_python_relative_import(".a", "pkg.d", false),
+            "pkg.a"
+        );
+        // Two dots = parent of the containing package
+        assert_eq!(
+            behavior.resolve_python_relative_import("..other.x", "pkg.sub.m", false),
+            "pkg.other.x"
+        );
+        // Top-level module: package is the root
+        assert_eq!(
+            behavior.resolve_python_relative_import(".a.helper", "d", false),
+            "a.helper"
+        );
+    }
+
+    #[test]
+    fn test_resolve_relative_import_from_package_init() {
+        let behavior = PythonBehavior::new();
+
+        // One dot from __init__ = the package itself
+        assert_eq!(
+            behavior.resolve_python_relative_import(".main.BaseModel", "pydantic", true),
+            "pydantic.main.BaseModel"
+        );
+        assert_eq!(
+            behavior.resolve_python_relative_import(".a", "pkg", true),
+            "pkg.a"
+        );
+        // Two dots from a subpackage __init__ = its parent package
+        assert_eq!(
+            behavior.resolve_python_relative_import("..x", "pkg.sub", true),
+            "pkg.x"
+        );
+        // Root __init__ has no module path
+        assert_eq!(
+            behavior.resolve_python_relative_import(".a.helper", "", true),
+            "a.helper"
+        );
+    }
+
+    #[test]
+    fn test_normalize_import_path() {
+        let behavior = PythonBehavior::new();
+
+        // Absolute passes through untouched
+        assert_eq!(
+            behavior.normalize_import_path("pkg.a.helper", Some("pkg.d"), Path::new("pkg/d.py")),
+            None
+        );
+        // Relative from a module
+        assert_eq!(
+            behavior
+                .normalize_import_path(".a.helper", Some("pkg.d"), Path::new("pkg/d.py"))
+                .as_deref(),
+            Some("pkg.a.helper")
+        );
+        // Relative from __init__ anchors at the package itself
+        assert_eq!(
+            behavior
+                .normalize_import_path(".a.helper", Some("pkg"), Path::new("pkg/__init__.py"))
+                .as_deref(),
+            Some("pkg.a.helper")
+        );
+        // Stub packages behave the same
+        assert_eq!(
+            behavior
+                .normalize_import_path(".a", Some("pkg"), Path::new("pkg/__init__.pyi"))
+                .as_deref(),
+            Some("pkg.a")
+        );
+    }
+
+    #[test]
+    fn test_import_matches_symbol_relative_backstop() {
+        let behavior = PythonBehavior::new();
+
+        // Resolved path equals the symbol's module (module import)
+        assert!(behavior.import_matches_symbol(".a", "pkg.a", Some("pkg.d")));
+        // Resolved path is module + symbol name
+        assert!(behavior.import_matches_symbol(".a.helper", "pkg.a", Some("pkg.d")));
+        // Different package does not match
+        assert!(!behavior.import_matches_symbol(".a.helper", "other.a", Some("pkg.d")));
     }
 
     #[test]

@@ -379,6 +379,9 @@ pub struct SymbolLookupCache {
     by_id: dashmap::DashMap<crate::types::SymbolId, crate::Symbol>,
     by_name: dashmap::DashMap<Box<str>, Vec<crate::types::SymbolId>>,
     by_file_id: dashmap::DashMap<crate::types::FileId, Vec<crate::types::SymbolId>>,
+    /// Re-exported paths: "pkg.helper" -> the symbol defined at "pkg.a.helper"
+    /// when pkg's namespace imports it. Populated by the Phase 2 pre-pass.
+    module_aliases: dashmap::DashMap<Box<str>, crate::types::SymbolId>,
 }
 
 impl Default for SymbolLookupCache {
@@ -394,6 +397,7 @@ impl SymbolLookupCache {
             by_id: dashmap::DashMap::new(),
             by_name: dashmap::DashMap::new(),
             by_file_id: dashmap::DashMap::new(),
+            module_aliases: dashmap::DashMap::new(),
         }
     }
 
@@ -403,6 +407,7 @@ impl SymbolLookupCache {
             by_id: dashmap::DashMap::with_capacity(symbols),
             by_name: dashmap::DashMap::with_capacity(symbols / 10), // Fewer unique names
             by_file_id: dashmap::DashMap::with_capacity(symbols / 50), // ~50 symbols/file avg
+            module_aliases: dashmap::DashMap::new(),
         }
     }
 
@@ -476,6 +481,174 @@ impl SymbolLookupCache {
     /// Number of unique names in cache.
     pub fn unique_names(&self) -> usize {
         self.by_name.len()
+    }
+
+    /// All file ids present in the cache.
+    pub fn file_ids(&self) -> Vec<crate::types::FileId> {
+        self.by_file_id.iter().map(|e| *e.key()).collect()
+    }
+
+    /// Register a re-exported path for a symbol.
+    pub fn register_module_alias(&self, path: &str, id: crate::types::SymbolId) {
+        self.module_aliases.insert(path.into(), id);
+    }
+
+    /// Resolve a re-exported path ("pkg.helper") to the defining symbol.
+    pub fn resolve_module_alias(&self, path: &str) -> Option<crate::types::SymbolId> {
+        self.module_aliases.get(path).map(|r| *r.value())
+    }
+
+    /// Populate module aliases from per-module import lists.
+    ///
+    /// Python semantics: an import binds the name in the importing module's
+    /// namespace, so `pkg/__init__.py: from pkg.a import helper` exposes
+    /// `pkg.helper` (module_path stripping already maps `__init__` to the
+    /// package itself; plain modules re-export the same way). Glob imports
+    /// (`from pkg.a import *`) expose the source module's public
+    /// module-level names. Entries are (module_path, imports) pairs with
+    /// paths already normalized to absolute form at parse time. Iterates so
+    /// re-export chains converge.
+    pub fn populate_module_aliases(
+        &self,
+        entries: &[(String, Vec<Import>)],
+        language: &LanguageId,
+    ) {
+        // Chains are shallow in practice; the cap only guards degenerate cycles.
+        const MAX_ROUNDS: usize = 8;
+
+        for _ in 0..MAX_ROUNDS {
+            let mut progressed = false;
+
+            for (module, imports) in entries {
+                for import in imports {
+                    if import.is_glob || import.path.starts_with('.') {
+                        continue;
+                    }
+                    let (module_part, name) = match import.path.rfind('.') {
+                        Some(pos) => (&import.path[..pos], &import.path[pos + 1..]),
+                        None => continue,
+                    };
+                    let local = import.alias.as_deref().unwrap_or(name);
+                    let alias_key = format!("{module}.{local}");
+                    if alias_key == import.path {
+                        continue;
+                    }
+                    if self.module_aliases.contains_key(alias_key.as_str()) {
+                        continue;
+                    }
+
+                    // The imported path may itself be a re-export (chain hop).
+                    let target = self.resolve_module_alias(&import.path).or_else(|| {
+                        self.lookup_candidates(name).into_iter().find(|&id| {
+                            self.by_id.get(&id).is_some_and(|sym| {
+                                sym.language_id.as_ref() == Some(language)
+                                    && (sym.module_path.as_deref() == Some(module_part)
+                                        || (sym.kind == crate::types::SymbolKind::Module
+                                            && sym.module_path.as_deref() == Some(&import.path)))
+                            })
+                        })
+                    });
+
+                    if let Some(id) = target {
+                        self.module_aliases.insert(alias_key.into(), id);
+                        progressed = true;
+                    }
+                }
+            }
+
+            progressed |= self.expand_glob_reexports(entries, language);
+
+            if !progressed {
+                break;
+            }
+        }
+    }
+
+    /// Expand `from module import *` re-exports.
+    ///
+    /// Exposes each public module-level name of the glob source under the
+    /// importing module, plus names the source itself re-exports (chained
+    /// globs converge through the caller's fixpoint loop). Inserts only
+    /// missing keys, so explicit imports of the same name win.
+    fn expand_glob_reexports(
+        &self,
+        entries: &[(String, Vec<Import>)],
+        language: &LanguageId,
+    ) -> bool {
+        use std::collections::HashMap;
+
+        // Glob source module -> importing modules
+        let mut globs: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (module, imports) in entries {
+            for import in imports {
+                if import.is_glob && !import.path.starts_with('.') {
+                    globs
+                        .entry(import.path.as_str())
+                        .or_default()
+                        .push(module.as_str());
+                }
+            }
+        }
+        if globs.is_empty() {
+            return false;
+        }
+
+        let mut progressed = false;
+
+        // Names defined in the glob source module. `import *` without
+        // __all__ skips underscore-prefixed names; __all__ contents are not
+        // modeled (an alias is only consulted for paths source code
+        // actually imports).
+        for entry in self.by_id.iter() {
+            let sym = entry.value();
+            if sym.language_id.as_ref() != Some(language)
+                || sym.kind == crate::types::SymbolKind::Module
+                || sym.name.starts_with('_')
+                || !matches!(
+                    sym.scope_context,
+                    None | Some(crate::symbol::ScopeContext::Module)
+                        | Some(crate::symbol::ScopeContext::Global)
+                )
+            {
+                continue;
+            }
+            let Some(targets) = sym.module_path.as_deref().and_then(|mp| globs.get(mp)) else {
+                continue;
+            };
+            for module in targets {
+                let key = format!("{module}.{}", sym.name);
+                if !self.module_aliases.contains_key(key.as_str()) {
+                    self.module_aliases.insert(key.into(), sym.id);
+                    progressed = true;
+                }
+            }
+        }
+
+        // Names the glob source exposes via its own aliases (re-export chains).
+        let existing: Vec<(Box<str>, crate::types::SymbolId)> = self
+            .module_aliases
+            .iter()
+            .map(|e| (e.key().clone(), *e.value()))
+            .collect();
+        for (key, id) in existing {
+            let Some(pos) = key.rfind('.') else { continue };
+            let (src, name) = (&key[..pos], &key[pos + 1..]);
+            if name.starts_with('_') {
+                continue;
+            }
+            let Some(targets) = globs.get(src) else {
+                continue;
+            };
+            for module in targets {
+                let new_key = format!("{module}.{name}");
+                if !self.module_aliases.contains_key(new_key.as_str()) {
+                    self.module_aliases.insert(new_key.into(), id);
+                    progressed = true;
+                }
+            }
+        }
+
+        progressed
     }
 }
 
@@ -587,6 +760,10 @@ impl PipelineSymbolCache for SymbolLookupCache {
         self.by_id.get(&id).map(|r| r.value().clone())
     }
 
+    fn resolve_module_alias(&self, path: &str) -> Option<SymbolId> {
+        SymbolLookupCache::resolve_module_alias(self, path)
+    }
+
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {
         self.by_file_id
             .get(&file_id)
@@ -630,6 +807,12 @@ impl SymbolLookupCache {
 
     /// Find symbol by import path and language.
     fn find_by_import_path(&self, path: &str, language_id: LanguageId) -> Option<SymbolId> {
+        // Re-exported path registered by the Phase 2 pre-pass - exact match
+        // ahead of the approximate module comparison below.
+        if let Some(id) = self.resolve_module_alias(path) {
+            return Some(id);
+        }
+
         // Extract the symbol name from path (last segment)
         let name = path
             .rsplit("::")
@@ -957,5 +1140,136 @@ mod tests {
 
         batch1.merge(batch2);
         assert_eq!(batch1.imports.len(), 1);
+    }
+
+    fn python_symbol(id: u32, file: u32, name: &str, module_path: &str) -> Symbol {
+        let mut sym = Symbol::new(
+            SymbolId::new(id).unwrap(),
+            name,
+            SymbolKind::Function,
+            FileId::new(file).unwrap(),
+            Range::new(1, 0, 1, 10),
+        );
+        sym.module_path = Some(module_path.into());
+        sym.language_id = Some(LanguageId::new("python"));
+        sym
+    }
+
+    fn import(path: &str, alias: Option<&str>) -> Import {
+        Import {
+            file_id: FileId::new(1).unwrap(),
+            path: path.to_string(),
+            alias: alias.map(String::from),
+            is_glob: false,
+            is_type_only: false,
+        }
+    }
+
+    fn python_id() -> LanguageId {
+        LanguageId::new("python")
+    }
+
+    #[test]
+    fn test_module_alias_reexport() {
+        let cache = SymbolLookupCache::new();
+        cache.insert(python_symbol(1, 1, "helper", "pkg.a"));
+
+        // pkg/__init__.py: from pkg.a import helper  => exposes pkg.helper
+        let entries = vec![("pkg".to_string(), vec![import("pkg.a.helper", None)])];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        assert_eq!(
+            cache.resolve_module_alias("pkg.helper"),
+            Some(SymbolId::new(1).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_module_alias_reexport_aliased_and_chain() {
+        let cache = SymbolLookupCache::new();
+        cache.insert(python_symbol(1, 1, "helper", "pkg.inner.a"));
+
+        // pkg/inner/__init__.py: from pkg.inner.a import helper
+        // pkg/__init__.py:       from pkg.inner import helper as h
+        // Chain converges regardless of entry order.
+        let entries = vec![
+            (
+                "pkg".to_string(),
+                vec![import("pkg.inner.helper", Some("h"))],
+            ),
+            (
+                "pkg.inner".to_string(),
+                vec![import("pkg.inner.a.helper", None)],
+            ),
+        ];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        let id = SymbolId::new(1).unwrap();
+        assert_eq!(cache.resolve_module_alias("pkg.inner.helper"), Some(id));
+        assert_eq!(cache.resolve_module_alias("pkg.h"), Some(id));
+        assert_eq!(cache.resolve_module_alias("pkg.helper"), None);
+    }
+
+    #[test]
+    fn test_module_alias_glob_reexport() {
+        let cache = SymbolLookupCache::new();
+        let mut public = python_symbol(1, 1, "BaseModel", "pkg.main");
+        public.scope_context = Some(crate::symbol::ScopeContext::Module);
+        cache.insert(public);
+        let mut private = python_symbol(2, 1, "_internal", "pkg.main");
+        private.scope_context = Some(crate::symbol::ScopeContext::Module);
+        cache.insert(private);
+
+        // pkg/__init__.py: from pkg.main import *
+        let mut glob = import("pkg.main", None);
+        glob.is_glob = true;
+        let entries = vec![("pkg".to_string(), vec![glob])];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        assert_eq!(
+            cache.resolve_module_alias("pkg.BaseModel"),
+            Some(SymbolId::new(1).unwrap())
+        );
+        // Underscore names are not glob-exported
+        assert_eq!(cache.resolve_module_alias("pkg._internal"), None);
+    }
+
+    #[test]
+    fn test_module_alias_glob_chain() {
+        let cache = SymbolLookupCache::new();
+        let mut sym = python_symbol(1, 1, "thing", "pkg.sub.impl");
+        sym.scope_context = Some(crate::symbol::ScopeContext::Module);
+        cache.insert(sym);
+
+        // pkg/sub/__init__.py: from pkg.sub.impl import *
+        // pkg/__init__.py:     from pkg.sub import *
+        let mut inner_glob = import("pkg.sub.impl", None);
+        inner_glob.is_glob = true;
+        let mut outer_glob = import("pkg.sub", None);
+        outer_glob.is_glob = true;
+        let entries = vec![
+            ("pkg".to_string(), vec![outer_glob]),
+            ("pkg.sub".to_string(), vec![inner_glob]),
+        ];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        let id = SymbolId::new(1).unwrap();
+        assert_eq!(cache.resolve_module_alias("pkg.sub.thing"), Some(id));
+        assert_eq!(cache.resolve_module_alias("pkg.thing"), Some(id));
+    }
+
+    #[test]
+    fn test_module_alias_skips_unresolved() {
+        let cache = SymbolLookupCache::new();
+        cache.insert(python_symbol(1, 1, "helper", "pkg.a"));
+
+        let entries = vec![(
+            "pkg".to_string(),
+            vec![import("os.path", None), import("pkg.b.missing", None)],
+        )];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        assert_eq!(cache.resolve_module_alias("pkg.path"), None);
+        assert_eq!(cache.resolve_module_alias("pkg.missing"), None);
     }
 }

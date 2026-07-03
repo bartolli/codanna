@@ -730,6 +730,13 @@ pub trait PipelineSymbolCache: Send + Sync {
     ///
     /// Returns all symbols with the given name for module path matching.
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId>;
+
+    /// Resolve a re-exported path ("pkg.helper") to the defining symbol.
+    ///
+    /// Default: no alias tracking.
+    fn resolve_module_alias(&self, _path: &str) -> Option<SymbolId> {
+        None
+    }
 }
 
 /// Result of multi-tier symbol resolution.

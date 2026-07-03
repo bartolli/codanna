@@ -7,7 +7,9 @@ use crate::Settings;
 use crate::indexing::pipeline::types::{
     FileContent, ParsedFile, PipelineError, PipelineResult, RawImport, RawRelationship, RawSymbol,
 };
-use crate::parsing::{LanguageId, LanguageParser, get_registry, normalize_for_module_path};
+use crate::parsing::{
+    LanguageBehavior, LanguageId, LanguageParser, get_registry, normalize_for_module_path,
+};
 use crate::types::{FileId, SymbolCounter};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -168,8 +170,14 @@ fn parse_with_parser(
     let dummy_file_id = FileId::new(1).unwrap();
     let mut counter = SymbolCounter::new();
 
+    // One behavior instance serves module_path computation and import
+    // normalization below
+    let behavior = create_behavior(language_id);
+
     // Compute module_path using the language behavior
-    let module_path = compute_module_path(&content.path, language_id, settings, module_root);
+    let module_path = behavior
+        .as_deref()
+        .and_then(|b| compute_module_path(b, &content.path, settings, module_root));
 
     // Parse symbols
     let symbols = parser.parse(&content.content, dummy_file_id, &mut counter);
@@ -193,12 +201,19 @@ fn parse_with_parser(
         })
         .collect();
 
-    // Extract imports (without FileId)
+    // Extract imports (without FileId), normalized to canonical form
+    // (e.g. Python relative imports resolved against the file's module path)
     let imports = parser.find_imports(&content.content, dummy_file_id);
     let raw_imports: Vec<RawImport> = imports
         .into_iter()
         .map(|imp| {
-            let mut raw = RawImport::new(&imp.path);
+            let path = behavior
+                .as_deref()
+                .and_then(|b| {
+                    b.normalize_import_path(&imp.path, module_path.as_deref(), &content.path)
+                })
+                .unwrap_or(imp.path);
+            let mut raw = RawImport::new(&path);
             if let Some(alias) = imp.alias {
                 raw = raw.with_alias(alias);
             }
@@ -226,6 +241,14 @@ fn parse_with_parser(
     })
 }
 
+/// Create the language behavior for a registered language.
+fn create_behavior(language_id: LanguageId) -> Option<Box<dyn LanguageBehavior>> {
+    let registry = get_registry();
+    let registry_guard = registry.lock().ok()?;
+    let definition = registry_guard.get(language_id)?;
+    Some(definition.create_behavior())
+}
+
 /// Compute module_path for a file using the language behavior.
 ///
 /// This calls behavior.module_path_from_file() which uses:
@@ -234,20 +257,15 @@ fn parse_with_parser(
 /// - For TypeScript/JavaScript: path relative to tsconfig/jsconfig
 /// - For other languages: path relative to project root
 fn compute_module_path(
+    behavior: &dyn LanguageBehavior,
     file_path: &Path,
-    language_id: LanguageId,
     settings: &Settings,
     module_root: Option<&Path>,
 ) -> Option<String> {
-    let registry = get_registry();
-    let registry_guard = registry.lock().ok()?;
-    let definition = registry_guard.get(language_id)?;
-    let behavior = definition.create_behavior();
-
     // Get extensions from settings.toml (single source of truth)
     let extensions: Vec<&str> = settings
         .languages
-        .get(language_id.as_str())
+        .get(behavior.language_id().as_str())
         .map(|config| config.extensions.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 

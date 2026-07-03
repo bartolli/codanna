@@ -42,6 +42,9 @@ pub fn resolve_symbol_or_id(
         }
     } else if let Some(name) = name {
         let mut symbols = facade.find_symbols_by_name(&name, None);
+        if symbols.is_empty() {
+            symbols = find_dotted_members(&name, |n| facade.find_symbols_by_name(n, None));
+        }
         match symbols.len() {
             0 => SymbolResolution::NotFoundByName(name),
             1 => SymbolResolution::Resolved {
@@ -56,6 +59,42 @@ pub fn resolve_symbol_or_id(
     } else {
         SymbolResolution::MissingParam
     }
+}
+
+/// Class-scoped fallback for dotted queries: "Class.method" resolves the
+/// method within the named type when no symbol matches the literal name.
+/// Uniform across languages; `find` supplies name candidates (typically a
+/// `find_symbols_by_name` closure so language filters carry through).
+pub fn find_dotted_members(name: &str, find: impl Fn(&str) -> Vec<Symbol>) -> Vec<Symbol> {
+    let Some((class, member)) = name.rsplit_once('.') else {
+        return Vec::new();
+    };
+    if class.is_empty() || member.is_empty() {
+        return Vec::new();
+    }
+    find(member)
+        .into_iter()
+        .filter(|sym| is_member_of(sym, class))
+        .collect()
+}
+
+/// Whether `sym` is a member of type `class`: ClassMember scope with a
+/// matching class name (rightmost segment matches for nested classes), or
+/// a module_path ending in the type for languages that record the
+/// containing type there (mirrors the `is_receiver_compatible` default).
+fn is_member_of(sym: &Symbol, class: &str) -> bool {
+    if let Some(crate::symbol::ScopeContext::ClassMember {
+        class_name: Some(c),
+    }) = &sym.scope_context
+    {
+        if c.as_ref() == class || c.rsplit('.').next() == Some(class) {
+            return true;
+        }
+    }
+    sym.module_path.as_deref().is_some_and(|mp| {
+        mp.strip_suffix(class)
+            .is_some_and(|rest| rest.ends_with("::") || rest.ends_with('.'))
+    })
 }
 
 /// Text rendering of the ambiguity listing. `tool` appears in the trailing
@@ -137,6 +176,58 @@ mod tests {
     fn qualified_call_separator_follows_static_flag() {
         assert_eq!(qualified_call("Foo", true, "new"), "Foo::new");
         assert_eq!(qualified_call("foo", false, "run"), "foo.run");
+    }
+
+    fn method_symbol(id: u32, name: &str, class: Option<&str>, module_path: &str) -> Symbol {
+        let mut sym = Symbol::new(
+            crate::SymbolId::new(id).unwrap(),
+            name,
+            crate::SymbolKind::Method,
+            crate::FileId::new(1).unwrap(),
+            crate::Range::new(1, 0, 1, 10),
+        );
+        sym.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: class.map(Into::into),
+        });
+        sym.module_path = Some(module_path.into());
+        sym
+    }
+
+    #[test]
+    fn dotted_lookup_filters_by_class_member() {
+        let a = method_symbol(1, "model_dump", Some("BaseModel"), "pydantic.main");
+        let b = method_symbol(2, "model_dump", Some("RootModel"), "pydantic.root_model");
+        let found = find_dotted_members("BaseModel.model_dump", |n| {
+            if n == "model_dump" {
+                vec![a.clone(), b.clone()]
+            } else {
+                vec![]
+            }
+        });
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, a.id);
+    }
+
+    #[test]
+    fn dotted_lookup_matches_module_path_suffix() {
+        // Languages recording the containing type via module_path
+        let mut sym = method_symbol(1, "new", None, "crate::types::RawSymbol");
+        sym.scope_context = None;
+        let found = find_dotted_members("RawSymbol.new", |n| {
+            if n == "new" {
+                vec![sym.clone()]
+            } else {
+                vec![]
+            }
+        });
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn dotted_lookup_ignores_undotted_and_empty_segments() {
+        assert!(find_dotted_members("plain", |_| unreachable!("no dot, no lookup")).is_empty());
+        assert!(find_dotted_members(".x", |_| Vec::new()).is_empty());
+        assert!(find_dotted_members("x.", |_| Vec::new()).is_empty());
     }
 
     #[test]

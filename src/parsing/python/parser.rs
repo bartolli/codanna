@@ -306,14 +306,10 @@ impl PythonParser {
         // Build function signature with type annotations
         let signature = self.build_function_signature(node, code);
 
-        // For methods inside nested classes, use the full qualified name
-        let symbol_name = if let Some(class_name) = context.current_class() {
-            format!("{class_name}.{name}")
-        } else {
-            name.to_string()
-        };
-
-        let mut symbol = Symbol::new(symbol_id, symbol_name.as_str(), kind, file_id, range);
+        // Methods store bare names; the containing class lives in
+        // scope_context (ClassMember). Dotted "Class.method" lookup is a
+        // query-layer convenience, uniform across languages.
+        let mut symbol = Symbol::new(symbol_id, name, kind, file_id, range);
         symbol.doc_comment = doc_comment;
         symbol.signature = signature.map(|s| s.into_boxed_str());
         // Set the scope context based on where the function is defined
@@ -1012,14 +1008,29 @@ impl PythonParser {
     }
 
     /// Extract module path from 'from' import statement
+    ///
+    /// The module_name field is a `dotted_name` (absolute) or a
+    /// `relative_import` (leading dots, e.g. ".a", "..", "..sub.mod").
+    /// Scanning children for the first `dotted_name` instead would pick up
+    /// the imported NAME when the module is relative.
     fn extract_from_module_path<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
-        // Find the first dotted_name node (the module path comes after 'from')
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "dotted_name" {
-                return Some(&code[child.byte_range()]);
-            }
+        let module = node.child_by_field_name("module_name")?;
+        match module.kind() {
+            "dotted_name" | "relative_import" => Some(&code[module.byte_range()]),
+            _ => None,
         }
-        None
+    }
+
+    /// Join a `from` module base with an imported name.
+    ///
+    /// A pure-dots base ("." or "..") already ends at a package boundary;
+    /// inserting another dot would read as one more relative level.
+    fn join_from_import(base_path: &str, name: &str) -> String {
+        if base_path.ends_with('.') {
+            format!("{base_path}{name}")
+        } else {
+            format!("{base_path}.{name}")
+        }
     }
 
     /// Check if import statement has wildcard (*)
@@ -1054,7 +1065,7 @@ impl PythonParser {
                 "dotted_name" if found_import_keyword => {
                     // This is an import name
                     let name = &code[child.byte_range()];
-                    let full_path = format!("{base_path}.{name}");
+                    let full_path = Self::join_from_import(base_path, name);
                     imports.push(Import {
                         path: full_path,
                         alias: None,
@@ -1088,7 +1099,7 @@ impl PythonParser {
             .map(|n| &code[n.byte_range()]);
 
         if let Some(import_name) = name {
-            let full_path = format!("{base_path}.{import_name}");
+            let full_path = Self::join_from_import(base_path, import_name);
             imports.push(Import {
                 path: full_path,
                 alias: alias.map(|s| s.to_string()),
@@ -1161,6 +1172,10 @@ impl PythonParser {
     }
 
     /// Extract individual base class names from superclasses list
+    ///
+    /// Direct children only. keyword_argument entries (metaclass=...,
+    /// total=...) are not bases; a subscript's value is the base
+    /// (Generic[T] -> Generic), never its type parameters.
     fn extract_base_class_names<'a>(node: Node, code: &'a str, base_classes: &mut Vec<&'a str>) {
         for child in node.children(&mut node.walk()) {
             match child.kind() {
@@ -1172,14 +1187,15 @@ impl PythonParser {
                     // Qualified base class: class Child(parent.Base)
                     base_classes.push(&code[child.byte_range()]);
                 }
-                "argument_list" => {
-                    // Nested argument list - recurse
-                    Self::extract_base_class_names(child, code, base_classes);
+                "subscript" => {
+                    // Generic base: class Model(Base[T])
+                    if let Some(value) = child.child_by_field_name("value") {
+                        if matches!(value.kind(), "identifier" | "attribute") {
+                            base_classes.push(&code[value.byte_range()]);
+                        }
+                    }
                 }
-                _ => {
-                    // Continue processing children for other node types
-                    Self::extract_base_class_names(child, code, base_classes);
-                }
+                _ => {}
             }
         }
     }
@@ -1381,17 +1397,25 @@ impl LanguageParser for PythonParser {
         method_calls
     }
 
-    fn find_implementations<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+    fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        // Python has no trait/interface implementation relationship.
+        // Class inheritance is emitted via find_extends: Implements edges
+        // require a Trait/Interface target and were vetoed by the
+        // relationship compatibility filter for Class bases.
+        Vec::new()
+    }
+
+    fn find_extends<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
             None => return Vec::new(),
         };
 
         let root_node = tree.root_node();
-        let mut implementations = Vec::new();
+        let mut extends = Vec::new();
 
-        self.find_implementations_in_node(root_node, code, &mut implementations);
-        implementations
+        self.find_implementations_in_node(root_node, code, &mut extends);
+        extends
     }
 
     fn find_uses<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
@@ -1560,16 +1584,22 @@ class Calculator:
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
 
         assert_eq!(symbols.len(), 4); // <module>, Calculator, __init__, add
-        assert!(
-            symbols
-                .iter()
-                .any(|s| s.name.as_ref() == "Calculator.__init__" && s.kind == SymbolKind::Method)
-        );
-        assert!(
-            symbols
-                .iter()
-                .any(|s| s.name.as_ref() == "Calculator.add" && s.kind == SymbolKind::Method)
-        );
+
+        // Methods store bare names; the class lives in ClassMember scope
+        let is_calculator_member = |s: &Symbol| {
+            matches!(
+                s.scope_context.as_ref(),
+                Some(crate::symbol::ScopeContext::ClassMember {
+                    class_name: Some(c)
+                }) if c.as_ref() == "Calculator"
+            )
+        };
+        assert!(symbols.iter().any(|s| s.name.as_ref() == "__init__"
+            && s.kind == SymbolKind::Method
+            && is_calculator_member(s)));
+        assert!(symbols.iter().any(|s| s.name.as_ref() == "add"
+            && s.kind == SymbolKind::Method
+            && is_calculator_member(s)));
 
         let class = symbols
             .iter()
@@ -1577,12 +1607,9 @@ class Calculator:
             .unwrap();
         let init_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "Calculator.__init__")
+            .find(|s| s.name.as_ref() == "__init__")
             .unwrap();
-        let add_method = symbols
-            .iter()
-            .find(|s| s.name.as_ref() == "Calculator.add")
-            .unwrap();
+        let add_method = symbols.iter().find(|s| s.name.as_ref() == "add").unwrap();
 
         println!(
             "✓ Found class_definition \"{}\" at {}:{}-{}:{}",
@@ -2085,7 +2112,7 @@ class Dog(Animal):
 "#;
         println!("Finding class inheritance relationships...");
         println!("---");
-        let implementations = parser.find_implementations(code);
+        let implementations = parser.find_extends(code);
 
         assert_eq!(implementations.len(), 1);
         assert_eq!(implementations[0].0, "Dog");
@@ -2109,6 +2136,22 @@ class Dog(Animal):
             implementations[0].2.start_column,
             implementations[0].2.end_line,
             implementations[0].2.end_column
+        );
+    }
+
+    #[test]
+    fn test_extends_skips_keyword_arguments_and_type_params() {
+        let mut parser = PythonParser::new().unwrap();
+        let code = r#"
+class Model(Base, Generic[T], metaclass=Meta):
+    pass
+"#;
+        let extends = parser.find_extends(code);
+        let bases: Vec<&str> = extends.iter().map(|(_, b, _)| *b).collect();
+        assert_eq!(
+            bases,
+            vec!["Base", "Generic"],
+            "keyword arguments and subscript type params are not bases"
         );
     }
 
@@ -2386,7 +2429,7 @@ class Duck(Animal, Flyable, Swimmable):
 "#;
         println!("Finding multiple inheritance...");
         println!("---");
-        let implementations = parser.find_implementations(code);
+        let implementations = parser.find_extends(code);
 
         assert!(
             implementations
@@ -2485,13 +2528,10 @@ class APIClient:
         // Should find module, class, both methods, and response variable (enhanced extraction)
         assert_eq!(symbols.len(), 5);
 
-        let fetch_method = symbols
-            .iter()
-            .find(|s| s.name.as_ref() == "APIClient.fetch")
-            .unwrap();
+        let fetch_method = symbols.iter().find(|s| s.name.as_ref() == "fetch").unwrap();
         let sync_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "APIClient.sync_method")
+            .find(|s| s.name.as_ref() == "sync_method")
             .unwrap();
 
         // Both should be methods (inside class)
@@ -2642,11 +2682,11 @@ async def process_batch(items: List[str]) -> Dict[str, Any]:
             .unwrap();
         let async_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "AsyncWebService.fetch_user")
+            .find(|s| s.name.as_ref() == "fetch_user")
             .unwrap();
         let sync_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "AsyncWebService.get_cache_key")
+            .find(|s| s.name.as_ref() == "get_cache_key")
             .unwrap();
         let async_func = symbols
             .iter()
@@ -2710,7 +2750,7 @@ async def process_batch(items: List[str]) -> Dict[str, Any]:
 class SimpleClass:
     pass
 "#;
-        let implementations1 = parser.find_implementations(code1);
+        let implementations1 = parser.find_extends(code1);
         assert_eq!(implementations1.len(), 0);
 
         // Qualified base class names
@@ -2718,7 +2758,7 @@ class SimpleClass:
 class Child(parent.Base):
     pass
 "#;
-        let implementations2 = parser.find_implementations(code2);
+        let implementations2 = parser.find_extends(code2);
         assert_eq!(implementations2.len(), 1);
         assert_eq!(implementations2[0].0, "Child");
         assert_eq!(implementations2[0].1, "parent.Base");
@@ -2728,7 +2768,7 @@ class Child(parent.Base):
 class Complex(SimpleBase, module.QualifiedBase, another.pkg.DeepBase):
     pass
 "#;
-        let implementations3 = parser.find_implementations(code3);
+        let implementations3 = parser.find_extends(code3);
         assert_eq!(implementations3.len(), 3);
         assert!(
             implementations3
@@ -2759,7 +2799,7 @@ class Outer:
     class AnotherInner(Outer.Inner):
         pass
 "#;
-        let implementations = parser.find_implementations(code);
+        let implementations = parser.find_extends(code);
 
         // Debug what we actually found
         println!("Found implementations:");

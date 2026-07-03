@@ -304,7 +304,12 @@ pub async fn run(
             .and_then(|v| v.as_str());
 
         if let Some(symbol_name) = name {
-            let symbols = facade.find_symbols_by_name(symbol_name, language);
+            let mut symbols = facade.find_symbols_by_name(symbol_name, language);
+            if symbols.is_empty() {
+                symbols = crate::mcp::service::find_dotted_members(symbol_name, |n| {
+                    facade.find_symbols_by_name(n, language)
+                });
+            }
             if !symbols.is_empty() {
                 use crate::symbol::context::ContextIncludes;
                 let mut results = Vec::new();

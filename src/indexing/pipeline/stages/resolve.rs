@@ -657,6 +657,12 @@ impl ResolveStage {
                     return true;
                 }
 
+                // Re-exported path: the import names a module namespace
+                // binding that resolves to this symbol's definition site.
+                if self.symbol_cache.resolve_module_alias(&import.path) == Some(symbol.id) {
+                    return true;
+                }
+
                 // Also check alias
                 if let Some(alias) = &import.alias {
                     if alias == symbol_name {

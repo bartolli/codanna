@@ -762,6 +762,22 @@ pub trait LanguageBehavior: Send + Sync {
         Vec::new()
     }
 
+    /// Rewrite an import path into canonical absolute form at parse time.
+    ///
+    /// Called before imports are persisted, with the importing file's module
+    /// path and location. Resolution tiers then match on absolute paths
+    /// without re-deriving per-file context.
+    ///
+    /// Returns `None` when the path is already canonical (the default).
+    fn normalize_import_path(
+        &self,
+        _import_path: &str,
+        _importing_module: Option<&str>,
+        _file_path: &Path,
+    ) -> Option<String> {
+        None
+    }
+
     /// Check if an import path matches a symbol's module path
     ///
     /// This allows each language to implement custom matching rules.
