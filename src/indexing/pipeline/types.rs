@@ -860,14 +860,25 @@ impl SymbolLookupCache {
             .or_else(|| path.rsplit('.').next())
             .or_else(|| path.rsplit('/').next())?;
 
+        // Qualifier: the import path minus its last segment
+        let qualifier = path
+            .rsplit_once("::")
+            .or_else(|| path.rsplit_once('.'))
+            .or_else(|| path.rsplit_once('/'))
+            .map(|(q, _)| q);
+
         // Look up candidates and filter by module path + language
         let candidates = self.lookup_candidates(name);
         for id in candidates {
             if let Some(sym) = self.by_id.get(&id) {
                 if sym.language_id.as_ref() == Some(&language_id) {
-                    // Check if module_path matches (approximately)
+                    // Module path matches at segment boundaries: against the
+                    // qualifier for symbols inside a module, against the full
+                    // path for module symbols imported by name.
                     if let Some(ref module_path) = sym.module_path {
-                        if path.contains(module_path.as_ref()) || module_path.contains(path) {
+                        if segment_suffix_match(module_path, path)
+                            || qualifier.is_some_and(|q| segment_suffix_match(module_path, q))
+                        {
                             return Some(id);
                         }
                     }
@@ -876,6 +887,20 @@ impl SymbolLookupCache {
         }
         None
     }
+}
+
+/// True when the two paths are equal, or the shorter is a suffix of the
+/// longer starting at a segment boundary (`::`, `.`, or `/`). Replaces
+/// bidirectional substring contains, which admitted mid-segment matches
+/// (`util` vs `xutil`) and mid-path infixes.
+fn segment_suffix_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (longer, shorter) = if a.len() > b.len() { (a, b) } else { (b, a) };
+    longer
+        .strip_suffix(shorter)
+        .is_some_and(|prefix| prefix.ends_with("::") || prefix.ends_with(['.', '/']))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1311,5 +1336,71 @@ mod tests {
 
         assert_eq!(cache.resolve_module_alias("pkg.path"), None);
         assert_eq!(cache.resolve_module_alias("pkg.missing"), None);
+    }
+
+    fn rust_symbol(id: u32, name: &str, module_path: &str) -> Symbol {
+        let mut sym = Symbol::new(
+            SymbolId::new(id).unwrap(),
+            name,
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            Range::new(1, 0, 1, 10),
+        );
+        sym.module_path = Some(module_path.into());
+        sym.language_id = Some(LanguageId::new("rust"));
+        sym
+    }
+
+    #[test]
+    fn find_by_import_path_matches_at_segment_boundaries_only() {
+        let rust = LanguageId::new("rust");
+
+        // Substring-colliding module paths must not match (old
+        // bidirectional contains admitted both).
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "helper", "util"));
+        assert_eq!(cache.find_by_import_path("xutil::helper", rust), None);
+
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "helper", "app::core"));
+        assert_eq!(cache.find_by_import_path("myapp::core::helper", rust), None);
+
+        // Exact qualifier match survives.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "helper", "app::util"));
+        assert_eq!(
+            cache.find_by_import_path("app::util::helper", rust),
+            Some(SymbolId::new(1).unwrap())
+        );
+
+        // Relative import: qualifier is a segment-suffix of the module path.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "func", "crate::module::helpers"));
+        assert_eq!(
+            cache.find_by_import_path("helpers::func", rust),
+            Some(SymbolId::new(1).unwrap())
+        );
+
+        // Module symbol imported by its full path.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "util", "app::util"));
+        assert_eq!(
+            cache.find_by_import_path("app::util", rust),
+            Some(SymbolId::new(1).unwrap())
+        );
+    }
+
+    #[test]
+    fn segment_suffix_match_boundary_cases() {
+        assert!(segment_suffix_match("app.util", "app.util"));
+        assert!(segment_suffix_match("app.util", "util"));
+        assert!(segment_suffix_match("util", "app.util"));
+        assert!(segment_suffix_match("app::util", "util"));
+        assert!(segment_suffix_match("a/b/c", "c"));
+
+        assert!(!segment_suffix_match("app.xutil", "util"));
+        assert!(!segment_suffix_match("xutil", "util"));
+        assert!(!segment_suffix_match("myapp.core", "app.core"));
+        assert!(!segment_suffix_match("app.core.util", "app.core"));
     }
 }
