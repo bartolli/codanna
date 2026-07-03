@@ -31,6 +31,8 @@ pub struct CollectStage {
     start_symbol_counter: u32,
 }
 
+type NameInFileCandidates = HashMap<(Arc<str>, FileId), Vec<(Range, SymbolId)>>;
+
 /// Ephemeral caches for relationship reconnection.
 ///
 /// Design from decisions.md:
@@ -42,8 +44,9 @@ pub struct CollectStage {
 struct CollectorCaches {
     /// Primary lookup: (name, file_id, range) -> SymbolId
     symbol_lookup: HashMap<(Arc<str>, FileId, Range), SymbolId>,
-    /// Fallback: (name, file_id) -> SymbolId for when range doesn't match exactly
-    name_in_file: HashMap<(Arc<str>, FileId), SymbolId>,
+    /// Fallback candidates per (name, file_id), with declared ranges so
+    /// the call site can pick the enclosing symbol among same-name ones
+    name_in_file: NameInFileCandidates,
     /// Path to FileId mapping for Phase 2 resolution
     file_ids: HashMap<PathBuf, FileId>,
 }
@@ -66,7 +69,10 @@ impl CollectorCaches {
     fn insert(&mut self, name: Arc<str>, file_id: FileId, range: Range, symbol_id: SymbolId) {
         self.symbol_lookup
             .insert((Arc::clone(&name), file_id, range), symbol_id);
-        self.name_in_file.insert((name, file_id), symbol_id);
+        self.name_in_file
+            .entry((name, file_id))
+            .or_default()
+            .push((range, symbol_id));
     }
 
     /// Lookup by exact (name, file_id, range) match.
@@ -77,8 +83,26 @@ impl CollectorCaches {
     }
 
     /// Fallback lookup by (name, file_id) when range doesn't match.
-    fn lookup_by_name_in_file(&self, name: &Arc<str>, file_id: FileId) -> Option<SymbolId> {
-        self.name_in_file.get(&(Arc::clone(name), file_id)).copied()
+    ///
+    /// Among same-name symbols the caller is the one whose declared range
+    /// encloses the call site, innermost on nesting. When none encloses
+    /// (e.g. a parser emits name-node-only symbol ranges), keep the
+    /// previous last-declared pick rather than dropping the attribution.
+    fn lookup_by_name_in_file(
+        &self,
+        name: &Arc<str>,
+        file_id: FileId,
+        call_site: Range,
+    ) -> Option<SymbolId> {
+        let candidates = self.name_in_file.get(&(Arc::clone(name), file_id))?;
+        candidates
+            .iter()
+            .filter(|(range, _)| {
+                range.start_line <= call_site.start_line && call_site.start_line <= range.end_line
+            })
+            .max_by_key(|(range, _)| range.start_line)
+            .or_else(|| candidates.last())
+            .map(|&(_, id)| id)
     }
 }
 
@@ -401,7 +425,7 @@ fn create_unresolved_relationship(
     // Try to resolve from_id using the cache (zero-copy: pass Arc reference)
     let from_id = caches
         .lookup(&raw.from_name, file_id, raw.from_range)
-        .or_else(|| caches.lookup_by_name_in_file(&raw.from_name, file_id));
+        .or_else(|| caches.lookup_by_name_in_file(&raw.from_name, file_id, raw.to_range));
 
     UnresolvedRelationship {
         from_id,
@@ -579,6 +603,120 @@ mod tests {
         assert_eq!(rel.from_id.unwrap().value(), 1, "caller should have id=1");
         assert_eq!(rel.from_name.as_ref(), "caller");
         assert_eq!(rel.to_name.as_ref(), "callee");
+    }
+
+    #[test]
+    fn from_id_fallback_attributes_to_enclosing_same_name_symbol() {
+        // Two same-name symbols in one file (production method + test-mod
+        // stub). When the exact (name, file, range) lookup misses, the
+        // caller is the symbol whose range encloses the call site — not
+        // whichever same-name symbol the cache saw last.
+        let (parsed_tx, parsed_rx) = bounded(100);
+        let (batch_tx, batch_rx) = bounded(100);
+
+        let mut parsed = make_parsed_file(
+            "test.rs",
+            vec![
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(5, 4, 30, 5)),
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(50, 4, 52, 5)),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "resolve",
+            Range::new(12, 8, 12, 20), // from_range: not a declared range -> fallback
+            "resolve_one",
+            Range::new(12, 8, 12, 30), // call site inside the FIRST symbol's body
+            RelationKind::Calls,
+        ));
+
+        parsed_tx.send(parsed).unwrap();
+        drop(parsed_tx);
+
+        let stage = CollectStage::new(100);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
+
+        let batches: Vec<_> = batch_rx.iter().collect();
+        let rel = &batches[0].unresolved_relationships[0];
+        assert_eq!(
+            rel.from_id.map(|id| id.value()),
+            Some(1),
+            "caller must be the enclosing symbol, not the later same-name stub"
+        );
+    }
+
+    fn collect_single_rel(parsed: ParsedFile) -> Option<u32> {
+        let (parsed_tx, parsed_rx) = bounded(100);
+        let (batch_tx, batch_rx) = bounded(100);
+        parsed_tx.send(parsed).unwrap();
+        drop(parsed_tx);
+        let stage = CollectStage::new(100);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
+        let batches: Vec<_> = batch_rx.iter().collect();
+        batches[0].unresolved_relationships[0]
+            .from_id
+            .map(|id| id.value())
+    }
+
+    #[test]
+    fn from_id_fallback_encloses_by_range_not_declaration_order() {
+        // Call site inside the SECOND same-name symbol attributes there.
+        let mut parsed = make_parsed_file(
+            "test.rs",
+            vec![
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(5, 4, 30, 5)),
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(50, 4, 60, 5)),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "resolve",
+            Range::new(55, 8, 55, 20),
+            "helper",
+            Range::new(55, 8, 55, 30),
+            RelationKind::Calls,
+        ));
+        assert_eq!(collect_single_rel(parsed), Some(2));
+    }
+
+    #[test]
+    fn from_id_fallback_picks_innermost_enclosing_on_nesting() {
+        // Nested same-name symbols (outer 5-40, inner 10-20): a call at
+        // line 15 belongs to the inner one.
+        let mut parsed = make_parsed_file(
+            "test.rs",
+            vec![
+                RawSymbol::new("run", SymbolKind::Function, Range::new(5, 0, 40, 1)),
+                RawSymbol::new("run", SymbolKind::Function, Range::new(10, 4, 20, 5)),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "run",
+            Range::new(15, 8, 15, 20),
+            "helper",
+            Range::new(15, 8, 15, 30),
+            RelationKind::Calls,
+        ));
+        assert_eq!(collect_single_rel(parsed), Some(2));
+    }
+
+    #[test]
+    fn from_id_fallback_without_enclosing_range_still_attributes() {
+        // Name-node-only symbol ranges (single line) never enclose a call
+        // site on another line; attribution must not drop to None.
+        let mut parsed = make_parsed_file(
+            "test.py",
+            vec![
+                make_raw_symbol("handler", SymbolKind::Function, 1),
+                make_raw_symbol("handler", SymbolKind::Function, 20),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "handler",
+            Range::new(3, 4, 3, 12),
+            "helper",
+            Range::new(3, 4, 3, 20),
+            RelationKind::Calls,
+        ));
+        assert!(collect_single_rel(parsed).is_some());
     }
 
     #[test]
