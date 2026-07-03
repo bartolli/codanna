@@ -147,16 +147,14 @@ impl LanguageBehavior for JavaScriptBehavior {
 
         // Try jsconfig-based resolution first
         if let Ok(index) = persistence.load("javascript") {
-            // get_config_for_file() expects a relative path (relative to workspace root)
-            let relative_to_workspace = file_path
-                .strip_prefix(project_root)
-                .ok()
-                .unwrap_or(file_path);
-
-            // Find which jsconfig applies to this file
-            if let Some(config_path) = index.get_config_for_file(relative_to_workspace) {
+            // get_config_for_file() canonicalizes its input; pass the absolute
+            // path so the lookup matches whether the mapping globs were
+            // persisted absolute (config entries outside the workspace) or
+            // workspace-relative. A workspace-relative path fails against
+            // absolute globs and silently drops to the path-based fallback.
+            if let Some(config_path) = index.get_config_for_file(file_path) {
                 tracing::debug!(
-                    "[javascript] module_path_from_file relative_to_workspace={relative_to_workspace:?} config_path={config_path:?}"
+                    "[javascript] module_path_from_file file_path={file_path:?} config_path={config_path:?}"
                 );
 
                 // Get the jsconfig's directory (the project root for this file)
