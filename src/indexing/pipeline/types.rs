@@ -10,7 +10,7 @@ use crate::symbol::ScopeContext;
 use crate::types::{CompactString, FileId, Range, SymbolId};
 use crate::{RelationKind, Symbol, SymbolKind, Visibility};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PARSE stage output - no IDs assigned yet
@@ -795,6 +795,45 @@ impl DiscoverResult {
     pub fn is_empty(&self) -> bool {
         self.new_files.is_empty() && self.modified_files.is_empty() && self.deleted_files.is_empty()
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 1 orchestration options
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// File input for `Pipeline::run_phase1`.
+pub enum FileSource {
+    /// DISCOVER stage walks the root.
+    Walk(PathBuf),
+    /// Feeder thread sends the list; an empty list short-circuits to empty stats.
+    List(Vec<PathBuf>),
+}
+
+/// Progress rendering for `Pipeline::run_phase1`.
+#[derive(Default)]
+pub enum ProgressSink {
+    #[default]
+    Silent,
+    /// Single bar attached to the INDEX stage.
+    Bar(Arc<crate::io::status_line::ProgressBar>),
+    /// bar1 = EMBED, bar2 = INDEX. Pair with `Phase1Options::embed`;
+    /// bar1 has no producer otherwise.
+    Dual(Arc<crate::io::status_line::DualProgressBar>),
+}
+
+/// Embedding generation for `Pipeline::run_phase1`.
+///
+/// The EMBED stage runs iff present; pool and store are required together.
+pub struct EmbedOptions {
+    pub pool: Arc<crate::semantic::EmbeddingBackend>,
+    pub semantic: Arc<Mutex<crate::semantic::SimpleSemanticSearch>>,
+}
+
+/// Per-run options for `Pipeline::run_phase1`.
+#[derive(Default)]
+pub struct Phase1Options {
+    pub progress: ProgressSink,
+    pub embed: Option<EmbedOptions>,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

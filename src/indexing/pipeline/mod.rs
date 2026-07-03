@@ -44,10 +44,10 @@ pub use stages::resolve::{ResolveStage, ResolveStats};
 pub use stages::semantic_embed::{SemanticEmbedStage, SemanticEmbedStats};
 pub use stages::write::{WriteStage, WriteStats};
 pub use types::{
-    DiscoverResult, EmbeddingBatch, FileContent, FileRegistration, IndexBatch, ParsedFile,
-    PipelineError, PipelineResult, RawImport, RawRelationship, RawSymbol, ResolutionContext,
-    ResolvedBatch, ResolvedRelationship, SingleFileStats, SymbolLookupCache,
-    UnresolvedRelationship,
+    DiscoverResult, EmbedOptions, EmbeddingBatch, FileContent, FileRegistration, FileSource,
+    IndexBatch, ParsedFile, Phase1Options, PipelineError, PipelineResult, ProgressSink, RawImport,
+    RawRelationship, RawSymbol, ResolutionContext, ResolvedBatch, ResolvedRelationship,
+    SingleFileStats, SymbolLookupCache, UnresolvedRelationship,
 };
 
 use crate::FileId;
@@ -275,11 +275,55 @@ impl Pipeline {
         root: &Path,
         index: Arc<DocumentIndex>,
     ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
+        let (stats, pending_relationships, symbol_cache, metrics) = self.run_phase1(
+            FileSource::Walk(root.to_path_buf()),
+            index,
+            Phase1Options::default(),
+        )?;
+
+        // Log pipeline metrics report (no StatusLine in this path)
+        if let Some(m) = metrics {
+            m.log();
+        }
+
+        Ok((stats, pending_relationships, symbol_cache))
+    }
+
+    /// Run the Phase 1 skeleton: source -> READ -> PARSE -> COLLECT -> INDEX (+ EMBED).
+    ///
+    /// Sequencing contract lives in the architecture spec (Phase 1 orchestration):
+    /// counters bracket the run, every stage handle joins before result
+    /// inspection, results inspect source -> INDEX -> COLLECT -> counter save ->
+    /// EMBED (soft-fail), metrics return for deferred logging, and the
+    /// orchestrator ends at Phase 1 (no resolution, no embeddings save).
+    fn run_phase1(
+        &self,
+        source: FileSource,
+        index: Arc<DocumentIndex>,
+        opts: Phase1Options,
+    ) -> PipelineResult<Phase1Result> {
+        // Empty file list short-circuits: no counters read, no threads spawned.
+        if let FileSource::List(files) = &source {
+            if files.is_empty() {
+                return Ok((
+                    IndexStats::new(),
+                    Vec::new(),
+                    SymbolLookupCache::with_capacity(0),
+                    None,
+                ));
+            }
+        }
+
         let start = Instant::now();
+        let Phase1Options { progress, embed } = opts;
 
         // Create metrics collector if tracing is enabled
         let metrics = if self.config.pipeline_tracing {
-            Some(PipelineMetrics::new(root.display().to_string(), true))
+            let label = match &source {
+                FileSource::Walk(root) => root.display().to_string(),
+                FileSource::List(files) => format!("{} files", files.len()),
+            };
+            Some(PipelineMetrics::new(label, true))
         } else {
             None
         };
@@ -292,6 +336,14 @@ impl Pipeline {
         let (content_tx, content_rx) = bounded(self.config.content_channel_size);
         let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
         let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
+        // Embed channel for parallel EMBED stage
+        let (embed_tx, embed_rx) = bounded(self.config.batch_channel_size);
+        let embed_sender = if embed.is_some() {
+            Some(embed_tx)
+        } else {
+            drop(embed_tx);
+            None
+        };
 
         // Clone settings for threads
         let settings = Arc::clone(&self.settings);
@@ -302,25 +354,37 @@ impl Pipeline {
         let batches_per_commit = self.config.batches_per_commit;
         let tracing_enabled = self.config.pipeline_tracing;
 
-        // Stage 1: DISCOVER - parallel file walk
-        let discover_root = root.to_path_buf();
-        let discover_handle = thread::spawn(move || {
-            let tracker = if tracing_enabled {
-                Some(StageTracker::new("DISCOVER", discover_threads))
-            } else {
-                None
-            };
+        // Stage 1: SOURCE - directory walk or explicit file list
+        type SourceJoinHandle = thread::JoinHandle<(PipelineResult<usize>, Option<StageMetrics>)>;
+        let source_handle: SourceJoinHandle = match source {
+            FileSource::Walk(root) => thread::spawn(move || {
+                let tracker = if tracing_enabled {
+                    Some(StageTracker::new("DISCOVER", discover_threads))
+                } else {
+                    None
+                };
 
-            let stage = DiscoverStage::new(discover_root, discover_threads);
-            let result = stage.run(path_tx);
+                let stage = DiscoverStage::new(root, discover_threads);
+                let result = stage.run(path_tx);
 
-            // Record metrics
-            if let (Some(tracker), Ok(count)) = (&tracker, &result) {
-                tracker.record_items(*count);
-            }
+                // Record metrics
+                if let (Some(tracker), Ok(count)) = (&tracker, &result) {
+                    tracker.record_items(*count);
+                }
 
-            (result, tracker.map(|t| t.finalize()))
-        });
+                (result, tracker.map(|t| t.finalize()))
+            }),
+            FileSource::List(files) => thread::spawn(move || {
+                let mut sent = 0;
+                for path in files {
+                    if path_tx.send(path).is_err() {
+                        break;
+                    }
+                    sent += 1;
+                }
+                (Ok(sent), None)
+            }),
+        };
 
         // Stage 2: READ - multi-threaded file reading
         let workspace_root = settings.workspace_root.clone();
@@ -399,6 +463,15 @@ impl Pipeline {
         drop(parsed_tx);
 
         // Stage 4: COLLECT - single-threaded ID assignment (with starting counters)
+        // Sends IndexBatch to INDEX, EmbeddingBatch to EMBED (parallel)
+        let embed_total_callback = match &progress {
+            ProgressSink::Dual(dp) => {
+                let dp = Arc::clone(dp);
+                Some(Arc::new(move |count: u64| dp.add_bar1_total(count))
+                    as Arc<dyn Fn(u64) + Send + Sync>)
+            }
+            _ => None,
+        };
         let collect_handle = thread::spawn(move || {
             let tracker = if tracing_enabled {
                 Some(StageTracker::new("COLLECT", 1).with_secondary("batches"))
@@ -408,7 +481,7 @@ impl Pipeline {
 
             let stage = CollectStage::new(batch_size)
                 .with_start_counters(start_file_counter, start_symbol_counter);
-            let result = stage.run(parsed_rx, batch_tx, None, None);
+            let result = stage.run(parsed_rx, batch_tx, embed_sender, embed_total_callback);
 
             // Record items and wait times before finalizing
             if let (Some(t), Ok((_, symbol_count, _, input_wait, output_wait))) =
@@ -422,42 +495,121 @@ impl Pipeline {
             (result, tracker.map(|t| t.finalize()))
         });
 
-        // Stage 5: INDEX - single-threaded Tantivy writes
-        // Clone index Arc for metadata update after pipeline completes
-        let index_for_metadata = Arc::clone(&index);
-        let index_handle = thread::spawn(move || {
-            let tracker = if tracing_enabled {
-                Some(StageTracker::new("INDEX", 1).with_secondary("commits"))
-            } else {
-                None
+        // Stage 5a: EMBED (parallel with INDEX) - iff embedding options provided
+        let embed_handle = if let Some(EmbedOptions { pool, semantic }) = embed {
+            let embed_callback = match &progress {
+                ProgressSink::Dual(dp) => {
+                    let dp = Arc::clone(dp);
+                    Some(Arc::new(move |count: u64| dp.add_bar1(count))
+                        as Arc<dyn Fn(u64) + Send + Sync>)
+                }
+                _ => None,
+            };
+            // Completion callback to freeze timer when EMBED finishes
+            let embed_complete = match &progress {
+                ProgressSink::Dual(dp) => Some(Arc::clone(dp)),
+                _ => None,
             };
 
-            let stage = IndexStage::new(index, batches_per_commit);
-            let result = stage.run(batch_rx);
+            Some(thread::spawn(move || {
+                let mut stage = SemanticEmbedStage::new(pool, semantic);
+                if let Some(callback) = embed_callback {
+                    stage = stage.with_progress(callback);
+                }
+                let result = stage.run(embed_rx);
+                // Freeze EMBED timer immediately when done
+                if let Some(dp) = embed_complete {
+                    dp.complete_bar1();
+                }
+                result
+            }))
+        } else {
+            drop(embed_rx);
+            None
+        };
 
-            // Record items and wait times before finalizing
-            if let (Some(t), Ok((stats, _, _, input_wait))) = (&tracker, &result) {
-                t.record_items(stats.symbols_found);
-                t.record_input_wait(*input_wait);
+        // Stage 5b: INDEX (parallel with EMBED) - single-threaded Tantivy writes
+        // Clone index Arc for metadata update after pipeline completes
+        let index_for_metadata = Arc::clone(&index);
+        // Completion callback to freeze timer when INDEX finishes
+        let index_complete = match &progress {
+            ProgressSink::Dual(dp) => Some(Arc::clone(dp)),
+            _ => None,
+        };
+        let index_handle = {
+            let mut index_stage = IndexStage::new(index, batches_per_commit);
+            match &progress {
+                ProgressSink::Silent => {}
+                ProgressSink::Bar(bar) => {
+                    index_stage = index_stage.with_progress(Arc::clone(bar));
+                }
+                ProgressSink::Dual(dp) => {
+                    let dp = Arc::clone(dp);
+                    let callback = Arc::new(move |count: u64| dp.add_bar2(count))
+                        as Arc<dyn Fn(u64) + Send + Sync>;
+                    index_stage = index_stage.with_progress_callback(callback);
+                }
             }
 
-            (result, tracker.map(|t| t.finalize()))
-        });
+            thread::spawn(move || {
+                let tracker = if tracing_enabled {
+                    Some(StageTracker::new("INDEX", 1).with_secondary("commits"))
+                } else {
+                    None
+                };
 
-        // Wait for all stages to complete and collect results
-        let (discover_result, discover_metrics) = discover_handle
-            .join()
+                let result = index_stage.run(batch_rx);
+
+                // Freeze INDEX timer immediately when done
+                if let Some(dp) = index_complete {
+                    dp.complete_bar2();
+                }
+
+                // Record items and wait times before finalizing
+                if let (Some(t), Ok((stats, _, _, input_wait))) = (&tracker, &result) {
+                    t.record_items(stats.symbols_found);
+                    t.record_input_wait(*input_wait);
+                }
+
+                (result, tracker.map(|t| t.finalize()))
+            })
+        };
+
+        // Join every stage handle before inspecting any result, so progress
+        // bars complete on error paths too. Channel closure cascades shutdown,
+        // so all joins terminate regardless of individual stage failures.
+        let source_join = source_handle.join();
+        let (read_files, read_errors, read_input_wait, read_output_wait, read_wall_time) =
+            self.join_read_workers(read_handles);
+        let (
+            parsed_files,
+            parse_errors,
+            total_symbols,
+            parse_input_wait,
+            parse_output_wait,
+            parse_wall_time,
+        ) = self.join_parse_workers(parse_handles);
+        let collect_join = collect_handle.join();
+        let embed_join = embed_handle.map(|h| h.join());
+        let index_join = index_handle.join();
+
+        // Complete progress bars (idempotent - safe even if threads already completed them)
+        if let ProgressSink::Dual(ref dp) = progress {
+            dp.complete_bar1();
+            dp.complete_bar2();
+        }
+
+        // Inspect SOURCE first: a partial walk must fail the run before counters save
+        let (source_result, source_metrics) = source_join
             .map_err(|_| PipelineError::ChannelRecv("DISCOVER thread panicked".to_string()))?;
-        let files_discovered = discover_result?;
+        let files_discovered = source_result?;
 
         // Add DISCOVER metrics
-        if let (Some(m), Some(dm)) = (&metrics, discover_metrics) {
-            m.add_stage(dm);
+        if let (Some(m), Some(sm)) = (&metrics, source_metrics) {
+            m.add_stage(sm);
         }
 
         // READ stage metrics (aggregate across threads)
-        let (read_files, read_errors, read_input_wait, read_output_wait, read_wall_time) =
-            self.join_read_workers(read_handles);
         if let Some(m) = &metrics {
             m.add_stage(StageMetrics {
                 name: "READ",
@@ -472,14 +624,6 @@ impl Pipeline {
         }
 
         // PARSE stage metrics (aggregate across threads)
-        let (
-            parsed_files,
-            parse_errors,
-            total_symbols,
-            parse_input_wait,
-            parse_output_wait,
-            parse_wall_time,
-        ) = self.join_parse_workers(parse_handles);
         if let Some(m) = &metrics {
             m.add_stage(StageMetrics {
                 name: "PARSE",
@@ -493,19 +637,9 @@ impl Pipeline {
             });
         }
 
-        // Get final counter values from COLLECT stage
-        let (collect_result, collect_metrics) = collect_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("COLLECT thread panicked".to_string()))?;
-        let (final_file_count, final_symbol_count, _, _, _) = collect_result?;
-
-        // Add COLLECT metrics
-        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
-            m.add_stage(cm);
-        }
-
-        let (index_result, index_metrics) = index_handle
-            .join()
+        // CRITICAL: Unwrap INDEX next - this is the critical path.
+        // If INDEX succeeded, we MUST save counters regardless of EMBED status.
+        let (index_result, index_metrics) = index_join
             .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
         let (mut stats, pending_relationships, symbol_cache, _) = index_result?;
 
@@ -514,16 +648,90 @@ impl Pipeline {
             m.add_stage(im);
         }
 
-        // Store final counter values to metadata
+        // Unwrap COLLECT (needed for counters)
+        let (collect_result, collect_metrics) = collect_join
+            .map_err(|_| PipelineError::ChannelRecv("COLLECT thread panicked".to_string()))?;
+        let (final_file_count, final_symbol_count, embed_candidates, _, _) = collect_result?;
+
+        // Add COLLECT metrics
+        if let (Some(m), Some(cm)) = (&metrics, collect_metrics) {
+            m.add_stage(cm);
+        }
+
+        // CRITICAL: Save counters NOW, before checking EMBED.
+        // INDEX succeeded, so we MUST persist the new ID pointers to prevent
+        // duplicate IDs on the next run.
         self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
+
+        // Handle EMBED results (Soft Failure - log but don't fail pipeline)
+        // The index is valid even if embeddings failed; semantic search will be incomplete.
+        if let Some(join_result) = embed_join {
+            match join_result {
+                Ok(Ok(embed_stats)) => {
+                    // Validate COLLECT/EMBED data flow integrity
+                    if embed_stats.received != embed_candidates as usize {
+                        tracing::warn!(
+                            target: "pipeline",
+                            "EMBED data flow mismatch: COLLECT sent {} candidates, EMBED received {}",
+                            embed_candidates,
+                            embed_stats.received
+                        );
+                    }
+
+                    // Track any symbols that failed embedding
+                    let failed = embed_stats.received.saturating_sub(embed_stats.embedded);
+                    if failed > 0 {
+                        stats.embeddings_failed = failed;
+                    }
+
+                    // Add EMBED metrics to pipeline report
+                    if let Some(m) = &metrics {
+                        m.add_stage(StageMetrics {
+                            name: "EMBED",
+                            threads: 1, // Single coordinator thread (pool parallelizes internally)
+                            wall_time: embed_stats.elapsed,
+                            input_wait: embed_stats.input_wait,
+                            output_wait: Duration::ZERO, // EMBED has no output channel
+                            items_processed: embed_stats.embedded,
+                            secondary_count: embed_stats.skipped,
+                            secondary_label: "skipped",
+                        });
+                    }
+
+                    tracing::info!(
+                        target: "semantic",
+                        "EMBED: {}/{} embedded ({} candidates from COLLECT)",
+                        embed_stats.embedded,
+                        embed_stats.received,
+                        embed_candidates
+                    );
+                }
+                Ok(Err(e)) => {
+                    // All candidates failed embedding
+                    stats.embeddings_failed = embed_candidates as usize;
+                    tracing::error!(
+                        target: "pipeline",
+                        "Embedding generation failed: {e}. Index is valid but semantic search may be incomplete. Run with --force to regenerate."
+                    );
+                }
+                Err(_) => {
+                    // All candidates failed embedding
+                    stats.embeddings_failed = embed_candidates as usize;
+                    tracing::error!(
+                        target: "pipeline",
+                        "EMBED thread panicked. Index is valid but semantic search may be incomplete."
+                    );
+                }
+            }
+        }
 
         // Update stats with timing and error counts
         stats.elapsed = start.elapsed();
         stats.files_failed = read_errors + parse_errors;
 
-        // Log pipeline metrics report
-        if let Some(m) = metrics {
-            m.finalize_and_log(start.elapsed());
+        // Finalize metrics but don't log (caller logs after StatusLine drop)
+        if let Some(ref m) = metrics {
+            m.finalize(start.elapsed());
         }
 
         tracing::info!(
@@ -539,133 +747,7 @@ impl Pipeline {
             stats.elapsed
         );
 
-        Ok((stats, pending_relationships, symbol_cache))
-    }
-
-    /// Index a directory with progress reporting (Phase 1).
-    fn index_directory_with_progress(
-        &self,
-        root: &Path,
-        index: Arc<DocumentIndex>,
-        progress: Option<Arc<crate::io::status_line::ProgressBar>>,
-    ) -> PipelineResult<(IndexStats, Vec<UnresolvedRelationship>, SymbolLookupCache)> {
-        let start = Instant::now();
-
-        // Query existing ID counters BEFORE spawning threads
-        let (start_file_counter, start_symbol_counter) = self.get_start_counters(&index)?;
-
-        // Create bounded channels
-        let (path_tx, path_rx) = bounded(self.config.path_channel_size);
-        let (content_tx, content_rx) = bounded(self.config.content_channel_size);
-        let (parsed_tx, parsed_rx) = bounded(self.config.parsed_channel_size);
-        let (batch_tx, batch_rx) = bounded(self.config.batch_channel_size);
-
-        let settings = Arc::clone(&self.settings);
-        let parse_threads = self.config.parse_threads;
-        let read_threads = self.config.read_threads;
-        let discover_threads = self.config.discover_threads;
-        let batch_size = self.config.batch_size;
-        let batches_per_commit = self.config.batches_per_commit;
-
-        // Stage 1: DISCOVER
-        let discover_root = root.to_path_buf();
-        let discover_handle = thread::spawn(move || {
-            let stage = DiscoverStage::new(discover_root, discover_threads);
-            stage.run(path_tx)
-        });
-
-        // Stage 2: READ
-        let workspace_root = settings.workspace_root.clone();
-        let read_handles: Vec<_> = (0..read_threads)
-            .map(|_| {
-                let rx = path_rx.clone();
-                let tx = content_tx.clone();
-                let workspace_root = workspace_root.clone();
-                thread::spawn(move || {
-                    let stage = ReadStage::with_workspace_root(1, workspace_root);
-                    stage.run(rx, tx)
-                })
-            })
-            .collect();
-        drop(path_rx);
-        drop(content_tx);
-
-        // Stage 3: PARSE
-        let parse_handles: Vec<_> = (0..parse_threads)
-            .map(|_| {
-                let rx = content_rx.clone();
-                let tx = parsed_tx.clone();
-                let settings = Arc::clone(&settings);
-                thread::spawn(move || {
-                    init_parser_cache(settings.clone());
-                    let stage = ParseStage::new(settings);
-                    let mut parsed = 0;
-                    let mut errors = 0;
-
-                    for content in rx {
-                        match stage.parse(content) {
-                            Ok(p) => {
-                                parsed += 1;
-                                if tx.send(p).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(_) => errors += 1,
-                        }
-                    }
-                    (parsed, errors)
-                })
-            })
-            .collect();
-        drop(content_rx);
-        drop(parsed_tx);
-
-        // Stage 4: COLLECT (with starting counters for multi-directory support)
-        let collect_handle = thread::spawn(move || {
-            let stage = CollectStage::new(batch_size)
-                .with_start_counters(start_file_counter, start_symbol_counter);
-            stage.run(parsed_rx, batch_tx, None, None)
-        });
-
-        // Stage 5: INDEX with optional progress
-        // Clone index Arc for metadata update after pipeline completes
-        let index_for_metadata = Arc::clone(&index);
-        let mut index_stage = IndexStage::new(index, batches_per_commit);
-        if let Some(prog) = progress {
-            index_stage = index_stage.with_progress(prog);
-        }
-        let index_handle = thread::spawn(move || index_stage.run(batch_rx));
-
-        // Wait for all stages
-        let discover_result = discover_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("DISCOVER panicked".to_string()))?;
-        let _files_discovered = discover_result?;
-
-        // Join READ workers and capture errors
-        let (_, read_errors, _, _, _) = self.join_read_workers(read_handles);
-
-        // Join PARSE workers and capture errors
-        let (_, parse_errors) = self.join_parse_workers_simple(parse_handles);
-
-        // Get final counter values from COLLECT stage
-        let (final_file_count, final_symbol_count, _, _, _) = collect_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("COLLECT panicked".to_string()))??;
-
-        let index_result = index_handle
-            .join()
-            .map_err(|_| PipelineError::ChannelRecv("INDEX panicked".to_string()))?;
-        let (mut stats, pending_relationships, symbol_cache, _) = index_result?;
-
-        // Store final counter values to metadata
-        self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
-
-        // Update stats with timing and error counts
-        stats.elapsed = start.elapsed();
-        stats.files_failed = read_errors + parse_errors;
-
-        Ok((stats, pending_relationships, symbol_cache))
+        Ok((stats, pending_relationships, symbol_cache, metrics))
     }
 
     /// Run Phase 2: Resolve relationships using two-pass strategy.
@@ -1140,12 +1222,14 @@ impl Pipeline {
                         None,
                     )?
                 } else {
-                    let (s, u, c) = self.index_directory_with_progress(
-                        root,
+                    self.run_phase1(
+                        FileSource::Walk(root.to_path_buf()),
                         Arc::clone(&index),
-                        Some(phase1_bar.clone()),
-                    )?;
-                    (s, u, c, None)
+                        Phase1Options {
+                            progress: ProgressSink::Bar(phase1_bar.clone()),
+                            embed: None,
+                        },
+                    )?
                 };
 
                 // Drop StatusLine BEFORE logging to avoid stderr race condition
@@ -1687,9 +1771,14 @@ impl Pipeline {
                 None, // TODO: Wire DualProgressBar
             )?
         } else {
-            let (s, u, c) =
-                self.index_directory_with_progress(root, Arc::clone(&index), progress)?;
-            (s, u, c, None)
+            self.run_phase1(
+                FileSource::Walk(root.to_path_buf()),
+                Arc::clone(&index),
+                Phase1Options {
+                    progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
+                    embed: None,
+                },
+            )?
         };
 
         // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
