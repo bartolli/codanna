@@ -944,6 +944,112 @@ mod tests {
     }
 
     #[test]
+    fn resolution_pick_is_insertion_order_independent() {
+        // Candidate vectors fill in parse-completion order (thread
+        // interleaving); the pick among equal-tier candidates must not
+        // depend on it.
+        let rust = LanguageId::new("rust");
+        let build = |ids: &[u32]| {
+            let cache = Arc::new(SymbolLookupCache::new());
+            cache.insert(make_symbol(1, "caller", 1, rust));
+            for &id in ids {
+                // id N lives in file N (files 2 and 3, both cross-file)
+                cache.insert(make_symbol(id, "format", id, rust));
+            }
+            let stage = make_stage(cache);
+            let context = make_context(
+                1,
+                rust,
+                vec![SymbolId::new(1).unwrap()],
+                vec![make_unresolved(1, "format", 1, RelationKind::Calls)],
+            );
+            let (batch, _) = stage.resolve(&context);
+            batch.relationships.first().map(|r| r.to_id)
+        };
+
+        assert_eq!(
+            build(&[2, 3]),
+            build(&[3, 2]),
+            "pick must not depend on candidate insertion order"
+        );
+    }
+
+    #[test]
+    fn import_path_first_match_is_insertion_order_independent() {
+        // Tier 2 scans candidates for a bidirectional module-path match;
+        // two symbols can both match one import path. The winner must not
+        // depend on insertion order.
+        let rust = LanguageId::new("rust");
+        let build = |order: &[(u32, &str)]| {
+            let cache = Arc::new(SymbolLookupCache::new());
+            cache.insert(make_symbol(1, "caller", 1, rust));
+            for &(id, module_path) in order {
+                let mut sym = make_symbol(id, "helper", id, rust);
+                sym.module_path = Some(module_path.into());
+                sym.file_path = format!("src/f{id}.rs").into();
+                cache.insert(sym);
+            }
+            let stage = make_stage(cache);
+            let mut context = make_context(
+                1,
+                rust,
+                vec![SymbolId::new(1).unwrap()],
+                vec![make_unresolved(1, "helper", 1, RelationKind::Calls)],
+            );
+            context.imports = vec![Import {
+                path: "app::util::helper".to_string(),
+                alias: None,
+                file_id: FileId::new(1).unwrap(),
+                is_glob: false,
+                is_type_only: false,
+            }];
+            let (batch, _) = stage.resolve(&context);
+            batch.relationships.first().map(|r| r.to_id)
+        };
+
+        let a = build(&[(2, "app::util"), (3, "util")]);
+        let b = build(&[(3, "util"), (2, "app::util")]);
+        assert!(a.is_some(), "import-path match must resolve");
+        assert_eq!(
+            a, b,
+            "import-path winner must not depend on insertion order"
+        );
+    }
+
+    #[test]
+    fn resolution_pick_is_id_assignment_independent() {
+        // Ids are session-scoped, assigned in collect-arrival order — the
+        // same tree hands the same symbol different ids across runs. The
+        // pick must land on the same symbol IDENTITY either way.
+        let rust = LanguageId::new("rust");
+        let winner_path = |id_for_alpha: u32, id_for_beta: u32| {
+            let cache = Arc::new(SymbolLookupCache::new());
+            cache.insert(make_symbol(1, "caller", 1, rust));
+            for (id, path) in [(id_for_alpha, "src/alpha.rs"), (id_for_beta, "src/beta.rs")] {
+                let mut sym = make_symbol(id, "format", id, rust);
+                sym.file_path = path.into();
+                cache.insert(sym);
+            }
+            let stage = make_stage(Arc::clone(&cache));
+            let context = make_context(
+                1,
+                rust,
+                vec![SymbolId::new(1).unwrap()],
+                vec![make_unresolved(1, "format", 1, RelationKind::Calls)],
+            );
+            let (batch, _) = stage.resolve(&context);
+            let to_id = batch.relationships.first().map(|r| r.to_id)?;
+            cache.get(to_id).map(|s| s.file_path)
+        };
+
+        assert_eq!(
+            winner_path(2, 3),
+            winner_path(3, 2),
+            "pick must land on the same symbol identity regardless of id assignment"
+        );
+    }
+
+    #[test]
     fn python_self_aliases_pass_untyped_locals_fail_closed() {
         // cls.get() resolves through the python self vocabulary;
         // prefix_settings.get() (untyped local, the story-15 phantom class)

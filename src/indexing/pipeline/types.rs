@@ -373,11 +373,43 @@ pub use crate::parsing::CallerContext;
 /// - `by_name`: name → `Vec<SymbolId>` for candidate resolution
 /// - `by_file_id`: FileId → `Vec<SymbolId>` for local symbol lookup
 ///
+/// Identity-ordered entry in the `by_name` candidate lists. Derived
+/// `Ord` compares file_path, then start_line, then id — the id arm only
+/// breaks ties within one run; the identity prefix is what holds across
+/// runs (ids are session-scoped).
+#[derive(Debug, PartialEq, Eq)]
+struct NameCandidate {
+    file_path: Box<str>,
+    start_line: u32,
+    id: crate::types::SymbolId,
+}
+
+impl Ord for NameCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.file_path
+            .cmp(&other.file_path)
+            .then_with(|| self.start_line.cmp(&other.start_line))
+            .then_with(|| self.id.value().cmp(&other.id.value()))
+    }
+}
+
+impl PartialOrd for NameCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Memory: ~500 bytes/symbol, 600K symbols ≈ 300MB
+///
+/// `by_name` candidates stay sorted by symbol identity
+/// (file_path, start_line, id): insertion order is parse-completion
+/// order and ids are assigned in collect-arrival order — both vary run
+/// to run — so first-match consumers need a tree-stable order to pick
+/// deterministically.
 #[derive(Debug)]
 pub struct SymbolLookupCache {
     by_id: dashmap::DashMap<crate::types::SymbolId, crate::Symbol>,
-    by_name: dashmap::DashMap<Box<str>, Vec<crate::types::SymbolId>>,
+    by_name: dashmap::DashMap<Box<str>, Vec<NameCandidate>>,
     by_file_id: dashmap::DashMap<crate::types::FileId, Vec<crate::types::SymbolId>>,
     /// Re-exported paths: "pkg.helper" -> the symbol defined at "pkg.a.helper"
     /// when pkg's namespace imports it. Populated by the Phase 2 pre-pass.
@@ -416,12 +448,23 @@ impl SymbolLookupCache {
         let id = symbol.id;
         let file_id = symbol.file_id;
         let name: Box<str> = symbol.name.as_ref().into();
+        let candidate = NameCandidate {
+            file_path: symbol.file_path.clone(),
+            start_line: symbol.range.start_line,
+            id,
+        };
 
         // Insert into by_id
         self.by_id.insert(id, symbol);
 
-        // Insert into by_name (append to candidates)
-        self.by_name.entry(name).or_default().push(id);
+        // Insert into by_name at the identity-sorted position
+        {
+            let mut entry = self.by_name.entry(name).or_default();
+            let pos = entry
+                .binary_search(&candidate)
+                .unwrap_or_else(|insert_at| insert_at);
+            entry.insert(pos, candidate);
+        }
 
         // Insert into by_file_id (append to file's symbols)
         self.by_file_id.entry(file_id).or_default().push(id);
@@ -440,11 +483,11 @@ impl SymbolLookupCache {
         self.by_id.get(&id)
     }
 
-    /// Get candidate symbol IDs by name (O(1)).
+    /// Get candidate symbol IDs by name (O(1)), in identity order.
     pub fn lookup_candidates(&self, name: &str) -> Vec<crate::types::SymbolId> {
         self.by_name
             .get(name)
-            .map(|r| r.value().clone())
+            .map(|r| r.value().iter().map(|c| c.id).collect())
             .unwrap_or_default()
     }
 
@@ -772,10 +815,7 @@ impl PipelineSymbolCache for SymbolLookupCache {
     }
 
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId> {
-        self.by_name
-            .get(name)
-            .map(|r| r.value().clone())
-            .unwrap_or_default()
+        SymbolLookupCache::lookup_candidates(self, name)
     }
 }
 
