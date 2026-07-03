@@ -150,7 +150,6 @@ fn instance_call_skips_static_filter() {
 
     let cache = Arc::new(SymbolLookupCache::new());
     cache.insert(make_caller(1, caller_file));
-    let symbol_method_id = SymbolId::new(2).unwrap();
     cache.insert(make_method_on_class(2, "new", symbol_file, Some("Symbol")));
     cache.insert(make_method_on_class(
         3,
@@ -176,16 +175,16 @@ fn instance_call_skips_static_filter() {
         )],
     };
 
-    let (batch, _stats) = stage.resolve(&context);
+    let (batch, stats) = stage.resolve(&context);
 
-    let rel = batch
-        .relationships
-        .first()
-        .expect("one resolved relationship");
-    assert_eq!(
-        rel.to_id, symbol_method_id,
-        "instance call must bypass the static-call filter and fall through to priority logic (insertion-order pick)"
+    // The static-call filter is bypassed (no receiver-class pick), and the
+    // instance receiver's type is unknown, so resolution fails closed
+    // rather than falling through to an insertion-order guess.
+    assert!(
+        batch.is_empty(),
+        "instance call with unknown-type receiver must not resolve"
     );
+    assert_eq!(stats.resolved, 0);
 }
 
 #[test]

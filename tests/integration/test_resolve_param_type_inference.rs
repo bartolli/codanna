@@ -195,10 +195,11 @@ fn instance_call_filters_ambiguous_by_inferred_parameter_type() {
 }
 
 #[test]
-fn instance_call_falls_through_when_receiver_not_a_parameter() {
+fn instance_call_fails_closed_when_receiver_not_a_parameter() {
     // When `receiver` doesn't name a parameter on the caller's signature
-    // (e.g., a non-parameter local), the inference filter must skip and let
-    // the existing priority logic decide.
+    // (e.g., a non-parameter local), the receiver's type is unknown and
+    // resolution fails closed: any same-name pick would be a guess that
+    // attaches std/foreign-receiver calls to arbitrary user methods.
     let caller_file = FileId::new(1).unwrap();
     let other_store_file = FileId::new(2).unwrap();
     let document_store_file = FileId::new(3).unwrap();
@@ -210,7 +211,6 @@ fn instance_call_falls_through_when_receiver_not_a_parameter() {
         "fn caller(store: &DocumentStore)",
     ));
 
-    let other_store_method_id = SymbolId::new(2).unwrap();
     cache.insert(make_method_on_class(
         2,
         "process",
@@ -240,16 +240,13 @@ fn instance_call_falls_through_when_receiver_not_a_parameter() {
         )],
     };
 
-    let (batch, _stats) = stage.resolve(&context);
+    let (batch, stats) = stage.resolve(&context);
 
-    let rel = batch
-        .relationships
-        .first()
-        .expect("one resolved relationship");
-    assert_eq!(
-        rel.to_id, other_store_method_id,
-        "with no matching parameter, existing priority logic must pick the first-inserted same-name candidate"
+    assert!(
+        batch.is_empty(),
+        "unknown-type receiver must not resolve to any same-name candidate"
     );
+    assert_eq!(stats.resolved, 0);
 }
 
 #[test]

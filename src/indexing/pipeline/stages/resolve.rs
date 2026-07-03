@@ -299,10 +299,44 @@ impl ResolveStage {
         Some((type_name, caller))
     }
 
+    /// An instance call whose receiver is syntactically present but whose
+    /// type is neither inferred nor indexed. Bare-name fallback fails closed
+    /// here: with no type to check, any same-name candidate is a guess, and
+    /// first-pick guesses attach std/foreign-receiver calls to arbitrary
+    /// user methods. Self-form receivers stay resolvable: the enclosing
+    /// type is known even without signature inference.
+    fn has_uninferrable_instance_receiver(
+        &self,
+        unresolved: &UnresolvedRelationship,
+        language_id: &LanguageId,
+    ) -> bool {
+        if unresolved.kind != RelationKind::Calls {
+            return false;
+        }
+        let Some(metadata) = unresolved.metadata.as_ref() else {
+            return false;
+        };
+        if metadata.static_call {
+            return false;
+        }
+        let Some(receiver) = metadata.receiver.as_deref() else {
+            return false;
+        };
+        let self_aliases = self
+            .get_behavior(language_id)
+            .map(|b| b.self_receiver_aliases())
+            .unwrap_or(&["self"]);
+        if self_aliases.contains(&receiver) {
+            return false;
+        }
+        self.infer_receiver_type(unresolved, language_id).is_none()
+    }
+
     /// Single-candidate gate (Found arm of `resolve_one`): when the inferred
     /// receiver type is known, the candidate is compatible iff its containing
-    /// class matches via `is_receiver_compatible`. When no inference data is
-    /// available (filter doesn't apply), returns `true` (pass-through).
+    /// class matches via `is_receiver_compatible`. When inference misses,
+    /// three-state: no receiver in play (plain call, static call, self form)
+    /// passes through; a receiver whose type is unknown fails closed.
     fn is_instance_type_compatible(
         &self,
         unresolved: &UnresolvedRelationship,
@@ -310,7 +344,7 @@ impl ResolveStage {
         language_id: &LanguageId,
     ) -> bool {
         let Some((type_name, caller)) = self.infer_receiver_type(unresolved, language_id) else {
-            return true;
+            return !self.has_uninferrable_instance_receiver(unresolved, language_id);
         };
         let Some(behavior) = self.get_behavior(language_id) else {
             return true;
@@ -517,6 +551,10 @@ impl ResolveStage {
                     0 => return None,
                     _ => {}
                 }
+            } else if self.has_uninferrable_instance_receiver(unresolved, language_id) {
+                // Receiver present, type unknown: an unresolved edge beats
+                // a first-pick guess from the priority ladder below.
+                return None;
             }
         }
         let candidates = &filtered[..];
@@ -776,6 +814,167 @@ mod tests {
     /// Helper to create stage with empty behaviors (uses naive fallback matching)
     fn make_stage(cache: Arc<SymbolLookupCache>) -> ResolveStage {
         ResolveStage::new(cache, HashMap::new())
+    }
+
+    fn make_instance_call(
+        from_id: u32,
+        to_name: &str,
+        file_id: u32,
+        receiver: &str,
+    ) -> UnresolvedRelationship {
+        let mut unresolved = make_unresolved(from_id, to_name, file_id, RelationKind::Calls);
+        unresolved.metadata = Some(crate::relationship::RelationshipMetadata {
+            line: Some(5),
+            column: Some(4),
+            context: None,
+            receiver: Some(receiver.into()),
+            static_call: false,
+        });
+        unresolved
+    }
+
+    #[test]
+    fn unknown_receiver_instance_call_fails_closed_cross_file() {
+        // some_vec.len() where some_vec's type is neither inferred nor
+        // indexed must not attach to a same-name user method elsewhere.
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_symbol(1, "caller", 1, LanguageId::new("rust")));
+        let mut method = make_symbol(2, "len", 2, LanguageId::new("rust"));
+        method.kind = SymbolKind::Method;
+        cache.insert(method);
+
+        let stage = make_stage(cache);
+        let context = make_context(
+            1,
+            LanguageId::new("rust"),
+            vec![SymbolId::new(1).unwrap()],
+            vec![make_instance_call(1, "len", 1, "some_vec")],
+        );
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 0, "unknown receiver must fail closed");
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn unknown_receiver_instance_call_fails_closed_same_file() {
+        // The local-first ladder is the strongest absorber: a same-file
+        // same-name method must not win on file locality alone when the
+        // receiver's type is unknown.
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_symbol(1, "caller", 1, LanguageId::new("rust")));
+        let mut local = make_symbol(2, "get", 1, LanguageId::new("rust"));
+        local.kind = SymbolKind::Method;
+        cache.insert(local);
+        let mut remote = make_symbol(3, "get", 2, LanguageId::new("rust"));
+        remote.kind = SymbolKind::Method;
+        cache.insert(remote);
+
+        let stage = make_stage(cache);
+        let context = make_context(
+            1,
+            LanguageId::new("rust"),
+            vec![SymbolId::new(1).unwrap(), SymbolId::new(2).unwrap()],
+            vec![make_instance_call(1, "get", 1, "settings_map")],
+        );
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 0, "same-file candidate must not absorb");
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn self_receiver_instance_call_still_resolves() {
+        // self.helper(): the enclosing type is known without signature
+        // inference; the self form must keep resolving through locality.
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_symbol(1, "caller", 1, LanguageId::new("rust")));
+        let mut method = make_symbol(2, "helper", 1, LanguageId::new("rust"));
+        method.kind = SymbolKind::Method;
+        cache.insert(method);
+
+        let stage = make_stage(cache);
+        let context = make_context(
+            1,
+            LanguageId::new("rust"),
+            vec![SymbolId::new(1).unwrap(), SymbolId::new(2).unwrap()],
+            vec![make_instance_call(1, "helper", 1, "self")],
+        );
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "self receiver must keep resolving");
+        assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
+    }
+
+    #[test]
+    fn inferred_receiver_type_still_resolves_cross_file() {
+        // fn process(w: Wrapper) { w.len() }: signature inference names the
+        // receiver type, so the call resolves to Wrapper::len cross-file.
+        let rust = LanguageId::new("rust");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut caller = make_symbol(1, "process", 1, rust);
+        caller.signature = Some("fn process(w: Wrapper)".into());
+        cache.insert(caller);
+        let mut method = make_symbol(2, "len", 2, rust);
+        method.kind = SymbolKind::Method;
+        method.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("Wrapper".into()),
+        });
+        cache.insert(method);
+
+        let behaviors: HashMap<LanguageId, StdArc<dyn LanguageBehavior>> = HashMap::from([(
+            rust,
+            StdArc::new(crate::parsing::rust::RustBehavior::new()) as StdArc<dyn LanguageBehavior>,
+        )]);
+        let stage = ResolveStage::new(cache, behaviors);
+        let context = make_context(
+            1,
+            rust,
+            vec![SymbolId::new(1).unwrap()],
+            vec![make_instance_call(1, "len", 1, "w")],
+        );
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "inferred receiver type must resolve");
+        assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
+    }
+
+    #[test]
+    fn python_self_aliases_pass_untyped_locals_fail_closed() {
+        // cls.get() resolves through the python self vocabulary;
+        // prefix_settings.get() (untyped local, the story-15 phantom class)
+        // does not.
+        let python = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_symbol(1, "run_example", 1, python));
+        let mut method = make_symbol(2, "get", 1, python);
+        method.kind = SymbolKind::Method;
+        cache.insert(method);
+
+        let behaviors: HashMap<LanguageId, StdArc<dyn LanguageBehavior>> = HashMap::from([(
+            python,
+            StdArc::new(crate::parsing::python::PythonBehavior::new())
+                as StdArc<dyn LanguageBehavior>,
+        )]);
+        let stage = ResolveStage::new(cache, behaviors);
+        let context = make_context(
+            1,
+            python,
+            vec![SymbolId::new(1).unwrap(), SymbolId::new(2).unwrap()],
+            vec![
+                make_instance_call(1, "get", 1, "cls"),
+                make_instance_call(1, "get", 1, "prefix_settings"),
+            ],
+        );
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "cls resolves, untyped local does not");
+        assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
     }
 
     #[test]
