@@ -150,6 +150,15 @@ impl ResolveStage {
         let from_kind = caller_symbol.as_deref().map(|sym| sym.kind);
         drop(caller_symbol);
 
+        // `super()` receivers name a target the index already holds:
+        // enclosing class -> Extends -> parent member. Handled before the
+        // scope lookup, which would surface the same-name override (the
+        // self-edge class); misses fail closed instead of falling through
+        // to a bare-name guess.
+        if Self::is_super_instance_call(unresolved) {
+            return self.resolve_super_call(from_id, unresolved, context, &caller);
+        }
+
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
             if self.is_compatible(
                 from_kind,
@@ -401,6 +410,98 @@ impl ResolveStage {
     /// receivers (PHP `self`/`static`/`parent`) to concrete class names.
     /// Resolver is an empty `GenericInheritanceResolver`; arms that consult
     /// `parent_of` yield `None` until the resolver is populated.
+    /// An instance call whose receiver is the python `super()` form.
+    fn is_super_instance_call(unresolved: &UnresolvedRelationship) -> bool {
+        unresolved.kind == RelationKind::Calls
+            && unresolved
+                .metadata
+                .as_ref()
+                .is_some_and(|m| !m.static_call && m.receiver.as_deref() == Some("super()"))
+    }
+
+    /// Resolve `super().method()` through the parent chain: the caller's
+    /// enclosing class, its Extends targets in base-list order, and the
+    /// first parent declaring a same-name method. Single hop — a parent
+    /// that resolves but does not declare the member fails closed rather
+    /// than walking a cross-file chain.
+    fn resolve_super_call(
+        &self,
+        from_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+        context: &ResolutionContext,
+        caller: &CallerContext,
+    ) -> Option<ResolvedRelationship> {
+        let caller_sym = self.symbol_cache.get_ref(from_id)?;
+        let caller_range = caller_sym.range;
+        let file_id = caller_sym.file_id;
+        drop(caller_sym);
+
+        // Innermost class in the caller's file whose range encloses the
+        // calling method.
+        let class_id = self
+            .symbol_cache
+            .symbols_in_file(file_id)
+            .into_iter()
+            .filter(|&id| {
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    sym.kind == crate::SymbolKind::Class
+                        && sym.range.start_line <= caller_range.start_line
+                        && caller_range.end_line <= sym.range.end_line
+                })
+            })
+            .max_by_key(|&id| {
+                self.symbol_cache
+                    .get_ref(id)
+                    .map(|sym| sym.range.start_line)
+                    .unwrap_or(0)
+            })?;
+
+        for rel in &context.unresolved_rels {
+            if rel.kind != RelationKind::Extends || rel.from_id != Some(class_id) {
+                continue;
+            }
+            // Same lookup the Extends edge itself resolves through: the
+            // scope has the file's import bindings (e.g. `from .main
+            // import BaseModel`). A scope miss skips the base — parents
+            // reachable only via Tier 3 under-resolve, never mis-resolve.
+            let Some(parent_id) = context.resolve(&rel.to_name) else {
+                continue;
+            };
+            let Some(parent) = self.symbol_cache.get_ref(parent_id) else {
+                continue;
+            };
+            if parent.kind != crate::SymbolKind::Class
+                || parent.language_id.as_ref() != Some(&caller.language_id)
+            {
+                continue;
+            }
+            let (parent_file, parent_range) = (parent.file_id, parent.range);
+            drop(parent);
+
+            let member = self
+                .symbol_cache
+                .lookup_candidates(&unresolved.to_name)
+                .into_iter()
+                .find(|&id| {
+                    self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                        sym.file_id == parent_file
+                            && sym.kind == crate::SymbolKind::Method
+                            && parent_range.start_line <= sym.range.start_line
+                            && sym.range.end_line <= parent_range.end_line
+                    })
+                });
+            if let Some(to_id) = member {
+                return Some(ResolvedRelationship {
+                    from_id,
+                    to_id,
+                    kind: unresolved.kind,
+                    metadata: unresolved.metadata.clone(),
+                });
+            }
+        }
+        None
+    }
+
     fn resolve_static_call(
         &self,
         from_id: SymbolId,
@@ -831,6 +932,90 @@ mod tests {
             static_call: false,
         });
         unresolved
+    }
+
+    /// Scope resolving a fixed name map — stands in for import bindings.
+    struct MapScope(std::collections::HashMap<String, SymbolId>);
+
+    impl ResolutionScope for MapScope {
+        fn add_symbol(&mut self, _name: String, _symbol_id: SymbolId, _scope_level: ScopeLevel) {}
+        fn resolve(&self, name: &str) -> Option<SymbolId> {
+            self.0.get(name).copied()
+        }
+        fn clear_local_scope(&mut self) {}
+        fn enter_scope(&mut self, _scope_type: ScopeType) {}
+        fn exit_scope(&mut self) {}
+        fn symbols_in_scope(&self) -> Vec<(String, SymbolId, ScopeLevel)> {
+            vec![]
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// class A: def m (5..25, m at 10..20); class B(A): def m (35..55,
+    /// m at 40..50); B.m calls super().m().
+    fn super_call_fixture() -> (Arc<SymbolLookupCache>, Vec<UnresolvedRelationship>) {
+        let python = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mk = |id: u32, name: &str, kind: SymbolKind, start: u32, end: u32| {
+            let mut sym = make_symbol(id, name, 1, python);
+            sym.kind = kind;
+            sym.range = Range::new(start, 0, end, 1);
+            sym
+        };
+        cache.insert(mk(1, "A", SymbolKind::Class, 5, 25));
+        cache.insert(mk(2, "m", SymbolKind::Method, 10, 20));
+        cache.insert(mk(3, "B", SymbolKind::Class, 35, 55));
+        cache.insert(mk(4, "m", SymbolKind::Method, 40, 50));
+
+        let extends = make_unresolved(3, "A", 1, RelationKind::Extends);
+        let mut super_call = make_instance_call(4, "m", 1, "super()");
+        super_call.to_range = Some(Range::new(45, 8, 45, 20));
+        (cache, vec![extends, super_call])
+    }
+
+    #[test]
+    fn super_call_resolves_to_parent_method() {
+        let python = LanguageId::new("python");
+        let (cache, rels) = super_call_fixture();
+        let stage = make_stage(Arc::clone(&cache));
+        let mut context = make_context(1, python, vec![], rels);
+        context.scope = Box::new(MapScope(
+            [("A".to_string(), SymbolId::new(1).unwrap())]
+                .into_iter()
+                .collect(),
+        ));
+
+        let (batch, _) = stage.resolve(&context);
+        let call = batch
+            .relationships
+            .iter()
+            .find(|r| r.kind == RelationKind::Calls)
+            .expect("super() call must resolve when the parent chain is known");
+        assert_eq!(
+            call.to_id,
+            SymbolId::new(2).unwrap(),
+            "target is A.m, not the B.m self-edge"
+        );
+    }
+
+    #[test]
+    fn super_call_with_unresolvable_parent_fails_closed() {
+        let python = LanguageId::new("python");
+        let (cache, rels) = super_call_fixture();
+        let stage = make_stage(Arc::clone(&cache));
+        // NoOpScope: the parent name resolves to nothing.
+        let context = make_context(1, python, vec![], rels);
+
+        let (batch, _) = stage.resolve(&context);
+        assert!(
+            !batch
+                .relationships
+                .iter()
+                .any(|r| r.kind == RelationKind::Calls),
+            "unresolvable parent chain produces no edge, not a guess"
+        );
     }
 
     #[test]
