@@ -137,11 +137,14 @@ impl ResolveStage {
         let caller = caller_symbol
             .as_deref()
             .map(|sym| {
-                CallerContext::new(
-                    sym.file_id,
-                    sym.module_path.clone(),
-                    sym.language_id.unwrap_or(context.language_id),
-                )
+                let language_id = sym.language_id.unwrap_or(context.language_id);
+                // Missing behavior cannot happen for a parsed language; the
+                // "::" fallback fails closed (under-resolves, never leaks).
+                let separator = self
+                    .get_behavior(&language_id)
+                    .map(|b| b.module_separator())
+                    .unwrap_or("::");
+                CallerContext::new(sym.file_id, sym.module_path.clone(), language_id, separator)
             })
             .unwrap_or_else(|| CallerContext::from_file(context.file_id, context.language_id));
         let from_kind = caller_symbol.as_deref().map(|sym| sym.kind);

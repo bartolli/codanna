@@ -103,11 +103,6 @@ pub struct IndexingConfig {
     #[serde(default = "default_max_retry_attempts")]
     pub max_retry_attempts: u32,
 
-    /// Project root directory (defaults to workspace root)
-    /// Used for gitignore resolution and module path calculation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project_root: Option<PathBuf>,
-
     /// Patterns to ignore during indexing
     #[serde(default)]
     pub ignore_patterns: Vec<String>,
@@ -357,7 +352,6 @@ impl Default for IndexingConfig {
             parallelism: default_parallelism(),
             tantivy_heap_mb: default_tantivy_heap_mb(),
             max_retry_attempts: default_max_retry_attempts(),
-            project_root: None,
             ignore_patterns: vec![
                 "target/**".to_string(),
                 "node_modules/**".to_string(),

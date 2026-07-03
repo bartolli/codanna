@@ -440,7 +440,7 @@ fn test_caller_context_visibility_model() {
     cache.insert(private_format);
 
     // Test 1: Same file - Private helper visible
-    let caller_same_file = CallerContext::new(file1, Some("src.components".into()), lang);
+    let caller_same_file = CallerContext::new(file1, Some("src.components".into()), lang, ".");
     let result = cache.resolve("helper", &caller_same_file, None, &[]);
     assert_eq!(
         result,
@@ -453,6 +453,7 @@ fn test_caller_context_visibility_model() {
         file1,                         // calling from file1
         Some("src.components".into()), // same module as Icon
         lang,
+        ".",
     );
     let result = cache.resolve("Icon", &caller_same_module, None, &[]);
     assert_eq!(
@@ -466,6 +467,7 @@ fn test_caller_context_visibility_model() {
         file1,                         // calling from file1
         Some("src.components".into()), // different from src.utils
         lang,
+        ".",
     );
     let result = cache.resolve("format", &caller_diff_module, None, &[]);
     assert_eq!(
@@ -479,6 +481,7 @@ fn test_caller_context_visibility_model() {
         file3,                    // calling from utils
         Some("src.utils".into()), // different from src.components
         lang,
+        ".",
     );
     let result = cache.resolve("Button", &caller_from_utils, None, &[]);
     assert_eq!(

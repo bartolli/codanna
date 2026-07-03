@@ -128,7 +128,12 @@ fn test_private_ancestor_callee_resolution_requires_module_paths() {
     // private helper defined in ancestor module crate::widget.
     let cache = SymbolLookupCache::new();
     cache.insert(make_helper(Some("crate::widget")));
-    let caller = CallerContext::new(render_file, Some("crate::widget::render".into()), lang);
+    let caller = CallerContext::new(
+        render_file,
+        Some("crate::widget::render".into()),
+        lang,
+        "::",
+    );
     let result = cache.resolve("helper", &caller, Some(&Range::new(4, 0, 4, 30)), &[]);
     assert!(
         matches!(result, ResolveResult::Found(id) if id == SymbolId::new(1).unwrap()),
@@ -139,7 +144,7 @@ fn test_private_ancestor_callee_resolution_requires_module_paths() {
     // hides the private callee.
     let cache = SymbolLookupCache::new();
     cache.insert(make_helper(None));
-    let caller = CallerContext::new(render_file, None, lang);
+    let caller = CallerContext::new(render_file, None, lang, "::");
     let result = cache.resolve("helper", &caller, Some(&Range::new(4, 0, 4, 30)), &[]);
     assert!(
         matches!(result, ResolveResult::NotFound),

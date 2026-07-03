@@ -601,6 +601,7 @@ impl InheritanceResolver for GenericInheritanceResolver {
 ///     file_id: file_100,
 ///     module_path: Some("src.components".into()),
 ///     language_id: LanguageId::new("typescript"),
+///     separator: ".",
 /// };
 /// let result = cache.resolve("Button", &caller, None, &imports);
 /// ```
@@ -612,41 +613,74 @@ pub struct CallerContext {
     pub module_path: Option<Box<str>>,
     /// Language of the calling code (for cross-language filtering)
     pub language_id: LanguageId,
+    /// The caller language's `module_separator()`. Bounds the same-module
+    /// check: a foreign separator character inside a directory name
+    /// (`crate::widget.old`) must not read as a module boundary.
+    pub separator: &'static str,
 }
 
 impl CallerContext {
     /// Create caller context with explicit values.
-    pub fn new(file_id: FileId, module_path: Option<Box<str>>, language_id: LanguageId) -> Self {
+    ///
+    /// `separator` comes from the language behavior's `module_separator()`;
+    /// do not hardcode a per-language mapping at call sites.
+    pub fn new(
+        file_id: FileId,
+        module_path: Option<Box<str>>,
+        language_id: LanguageId,
+        separator: &'static str,
+    ) -> Self {
         Self {
             file_id,
             module_path,
             language_id,
+            separator,
         }
     }
 
     /// Create caller context from file and language (no module path).
+    ///
+    /// Without a module path `is_same_module` is always false, so the
+    /// separator is inert; it defaults to `::`.
     pub fn from_file(file_id: FileId, language_id: LanguageId) -> Self {
         Self {
             file_id,
             module_path: None,
             language_id,
+            separator: "::",
         }
     }
 
     /// Check if caller is in the same module as a target symbol.
     ///
-    /// Same module = module_path prefix match (e.g., "src.components" matches "src.components.Button").
+    /// Same module = equal module paths, or one nests under the other at a
+    /// module-separator boundary (e.g., "src.components" matches
+    /// "src.components.Button").
     /// Returns false if either lacks module_path (falls back to file check).
     pub fn is_same_module(&self, target_module_path: Option<&str>) -> bool {
         match (&self.module_path, target_module_path) {
             (Some(caller), Some(target)) => {
-                // Same module if one is prefix of the other
-                caller.starts_with(target) || target.starts_with(caller.as_ref())
+                is_module_prefix(target, caller, self.separator)
+                    || is_module_prefix(caller, target, self.separator)
             }
             // If either lacks module_path, fall back to file check (done by caller)
             _ => false,
         }
     }
+}
+
+/// True when `path` equals `prefix` or nests under it at a boundary of the
+/// caller language's module separator. Plain `starts_with` admits
+/// string-prefix siblings (`crate::widgets` vs `crate::widget`); a
+/// union-of-all-separators boundary admits foreign separator characters
+/// inside directory names (`crate::widget.old` vs `crate::widget`). Both
+/// leak private symbols across modules. Tier 3 compares same-language paths
+/// only, so one separator is always the right one. Residual limitation: the
+/// language's own separator inside a directory name (`pkg.v1` vs
+/// `pkg/v1.2/`) is indistinguishable in the joined-string encoding.
+fn is_module_prefix(prefix: &str, path: &str, separator: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(separator))
 }
 
 /// Trait for symbol cache used in pipeline resolution.
@@ -712,6 +746,53 @@ pub enum ResolveResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn caller_in(module_path: &str, separator: &'static str) -> CallerContext {
+        CallerContext::new(
+            FileId::new(1).unwrap(),
+            Some(module_path.into()),
+            crate::parsing::LanguageId::new("rust"),
+            separator,
+        )
+    }
+
+    #[test]
+    fn test_is_same_module_exact_and_nested() {
+        assert!(caller_in("crate::widget", "::").is_same_module(Some("crate::widget")));
+        assert!(caller_in("crate::widget::render", "::").is_same_module(Some("crate::widget")));
+        assert!(caller_in("crate::widget", "::").is_same_module(Some("crate::widget::render")));
+        assert!(caller_in("src.components.Button", ".").is_same_module(Some("src.components")));
+        assert!(caller_in("App\\Http\\Controllers", "\\").is_same_module(Some("App\\Http")));
+        assert!(caller_in("pkg/util/io", "/").is_same_module(Some("pkg/util")));
+    }
+
+    #[test]
+    fn test_is_same_module_rejects_string_prefix_siblings() {
+        assert!(!caller_in("crate::widgets", "::").is_same_module(Some("crate::widget")));
+        assert!(!caller_in("crate::widget", "::").is_same_module(Some("crate::widgets")));
+        assert!(!caller_in("src.components2", ".").is_same_module(Some("src.components")));
+        assert!(!caller_in("pkg/utils", "/").is_same_module(Some("pkg/util")));
+    }
+
+    #[test]
+    fn test_is_same_module_rejects_foreign_separator_in_component() {
+        // Directory named `widget.old` in a Rust tree: `.` is not a module
+        // boundary for a `::` language.
+        assert!(!caller_in("crate::widget.old", "::").is_same_module(Some("crate::widget")));
+        assert!(!caller_in("crate::widget", "::").is_same_module(Some("crate::widget.old")));
+        // Slash-named directory in a dot language.
+        assert!(!caller_in("pkg.v1/legacy", ".").is_same_module(Some("pkg.v1")));
+    }
+
+    #[test]
+    fn test_is_same_module_none_paths() {
+        assert!(!caller_in("crate::widget", "::").is_same_module(None));
+        let no_module = CallerContext::from_file(
+            FileId::new(1).unwrap(),
+            crate::parsing::LanguageId::new("rust"),
+        );
+        assert!(!no_module.is_same_module(Some("crate::widget")));
+    }
 
     #[test]
     fn test_default_compatibility_function_calls_function() {
