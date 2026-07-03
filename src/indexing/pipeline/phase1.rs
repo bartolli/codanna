@@ -111,6 +111,13 @@ impl Pipeline {
             None
         };
 
+        // Walk root doubles as the module-path base for files outside the
+        // workspace root; List sources fall back to registered indexed paths.
+        let module_root = match &source {
+            FileSource::Walk(root) => Some(root.clone()),
+            FileSource::List(_) => None,
+        };
+
         // Clone settings for threads
         let settings = Arc::clone(&self.settings);
         let parse_threads = self.config.parse_threads;
@@ -174,12 +181,13 @@ impl Pipeline {
                 let rx = content_rx.clone();
                 let tx = parsed_tx.clone();
                 let settings = Arc::clone(&settings);
+                let module_root = module_root.clone();
                 thread::spawn(move || {
                     let start = Instant::now();
                     // Initialize thread-local parser cache
                     init_parser_cache(settings.clone());
 
-                    let stage = ParseStage::new(settings);
+                    let stage = ParseStage::new(settings).with_module_root(module_root);
                     let mut parsed_count = 0;
                     let mut error_count = 0;
                     let mut symbol_count = 0;

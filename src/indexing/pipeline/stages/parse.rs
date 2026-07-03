@@ -11,7 +11,7 @@ use crate::parsing::{LanguageId, LanguageParser, get_registry, normalize_for_mod
 use crate::types::{FileId, SymbolCounter};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Thread-local parser cache.
@@ -95,11 +95,22 @@ fn detect_language(path: &Path) -> PipelineResult<LanguageId> {
 #[derive(Debug, Clone)]
 pub struct ParseStage {
     settings: Arc<Settings>,
+    /// Root of the tree being indexed, for module-path computation when the
+    /// file lies outside `settings.workspace_root` (out-of-tree indexing).
+    module_root: Option<PathBuf>,
 }
 
 impl ParseStage {
     pub fn new(settings: Arc<Settings>) -> Self {
-        Self { settings }
+        Self {
+            settings,
+            module_root: None,
+        }
+    }
+
+    pub fn with_module_root(mut self, root: Option<PathBuf>) -> Self {
+        self.module_root = root;
+        self
     }
 
     /// Get the settings.
@@ -109,7 +120,7 @@ impl ParseStage {
 
     /// Parse a file using this stage's settings.
     pub fn parse(&self, content: FileContent) -> PipelineResult<ParsedFile> {
-        parse_file(content, &self.settings)
+        parse_file_with_root(content, &self.settings, self.module_root.as_deref())
     }
 }
 
@@ -121,6 +132,15 @@ impl ParseStage {
 /// 3. Extracts symbols, imports, and relationships
 /// 4. Returns ParsedFile with RawSymbols (no IDs assigned)
 pub fn parse_file(content: FileContent, settings: &Settings) -> PipelineResult<ParsedFile> {
+    parse_file_with_root(content, settings, None)
+}
+
+/// Parse a single file, with a module root for out-of-tree files.
+pub fn parse_file_with_root(
+    content: FileContent,
+    settings: &Settings,
+    module_root: Option<&Path>,
+) -> PipelineResult<ParsedFile> {
     let language_id = detect_language(&content.path)?;
 
     PARSER_CACHE.with(|cache| {
@@ -131,7 +151,7 @@ pub fn parse_file(content: FileContent, settings: &Settings) -> PipelineResult<P
 
         let parser = parser_cache.get_or_create(language_id)?;
 
-        parse_with_parser(content, language_id, parser, settings)
+        parse_with_parser(content, language_id, parser, settings, module_root)
     })
 }
 
@@ -141,6 +161,7 @@ fn parse_with_parser(
     language_id: LanguageId,
     parser: &mut dyn LanguageParser,
     settings: &Settings,
+    module_root: Option<&Path>,
 ) -> PipelineResult<ParsedFile> {
     // Use a dummy file_id and counter - we just need to extract symbols
     // Real IDs are assigned in COLLECT stage
@@ -148,7 +169,7 @@ fn parse_with_parser(
     let mut counter = SymbolCounter::new();
 
     // Compute module_path using the language behavior
-    let module_path = compute_module_path(&content.path, language_id, settings);
+    let module_path = compute_module_path(&content.path, language_id, settings, module_root);
 
     // Parse symbols
     let symbols = parser.parse(&content.content, dummy_file_id, &mut counter);
@@ -216,6 +237,7 @@ fn compute_module_path(
     file_path: &Path,
     language_id: LanguageId,
     settings: &Settings,
+    module_root: Option<&Path>,
 ) -> Option<String> {
     let registry = get_registry();
     let registry_guard = registry.lock().ok()?;
@@ -238,7 +260,43 @@ fn compute_module_path(
     // Language behaviors expect absolute paths to strip_prefix(workspace_root)
     let normalized_path = normalize_for_module_path(file_path, workspace_root);
 
-    behavior.module_path_from_file(&normalized_path, workspace_root, &extensions)
+    let strip_base = select_strip_base(
+        &normalized_path,
+        workspace_root,
+        module_root,
+        &settings.indexed_paths_cache,
+    );
+
+    behavior.module_path_from_file(&normalized_path, strip_base, &extensions)
+}
+
+/// Pick the root that module paths are computed relative to.
+///
+/// The base must contain the file or every behavior's `strip_prefix` fails
+/// and the file gets no module path — which silently drops cross-file
+/// private-symbol resolution downstream. Priority: `workspace_root` (keeps
+/// in-tree runs unchanged), then the root being indexed, then the longest
+/// registered indexed path (incremental runs have no walk root).
+fn select_strip_base<'a>(
+    normalized_path: &Path,
+    workspace_root: &'a Path,
+    module_root: Option<&'a Path>,
+    indexed_paths: &'a [PathBuf],
+) -> &'a Path {
+    if normalized_path.starts_with(workspace_root) {
+        return workspace_root;
+    }
+    if let Some(root) = module_root.filter(|r| normalized_path.starts_with(r)) {
+        return root;
+    }
+    if let Some(root) = indexed_paths
+        .iter()
+        .filter(|r| normalized_path.starts_with(r))
+        .max_by_key(|r| r.as_os_str().len())
+    {
+        return root.as_path();
+    }
+    workspace_root
 }
 
 /// Extract relationships from parsed content.
@@ -359,6 +417,53 @@ pub fn compute_hash(content: &[u8]) -> u64 {
 mod tests {
     use super::*;
     use crate::types::Range;
+
+    #[test]
+    fn test_select_strip_base_workspace_wins_in_tree() {
+        let indexed = [PathBuf::from("/ws")];
+        let base = select_strip_base(
+            Path::new("/ws/src/lib.rs"),
+            Path::new("/ws"),
+            Some(Path::new("/ws/src")),
+            &indexed,
+        );
+        assert_eq!(base, Path::new("/ws"));
+    }
+
+    #[test]
+    fn test_select_strip_base_module_root_out_of_tree() {
+        let base = select_strip_base(
+            Path::new("/repo/src/widget/mod.rs"),
+            Path::new("/ws"),
+            Some(Path::new("/repo")),
+            &[],
+        );
+        assert_eq!(base, Path::new("/repo"));
+    }
+
+    #[test]
+    fn test_select_strip_base_indexed_path_longest_match() {
+        let indexed = [PathBuf::from("/repo"), PathBuf::from("/repo/vendor/lib")];
+        let base = select_strip_base(
+            Path::new("/repo/vendor/lib/src/a.rs"),
+            Path::new("/ws"),
+            None,
+            &indexed,
+        );
+        assert_eq!(base, Path::new("/repo/vendor/lib"));
+    }
+
+    #[test]
+    fn test_select_strip_base_unmatched_falls_back_to_workspace() {
+        let indexed = [PathBuf::from("/other")];
+        let base = select_strip_base(
+            Path::new("/elsewhere/a.rs"),
+            Path::new("/ws"),
+            Some(Path::new("/repo")),
+            &indexed,
+        );
+        assert_eq!(base, Path::new("/ws"));
+    }
 
     #[test]
     fn test_compute_hash() {

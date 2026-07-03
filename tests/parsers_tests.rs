@@ -187,6 +187,9 @@ mod test_cpp_self_receiver_aliases;
 #[path = "parsers/rust/test_extract_parameter_type.rs"]
 mod test_rust_extract_parameter_type;
 
+#[path = "parsers/rust/test_module_path_out_of_tree.rs"]
+mod test_rust_module_path_out_of_tree;
+
 #[path = "parsers/python/test_extract_parameter_type.rs"]
 mod test_python_extract_parameter_type;
 
