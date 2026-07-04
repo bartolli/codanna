@@ -57,16 +57,13 @@
 //! 3. Register both in `ParserFactory`
 //! 4. (Future) Register in the language registry for auto-discovery
 
-use crate::parsing::MethodCall;
 use crate::parsing::paths::{strip_extension, strip_source_root};
 use crate::parsing::resolution::{
     GenericInheritanceResolver, GenericResolutionContext, ImportBinding, ImportOrigin,
     InheritanceResolver, PipelineSymbolCache, ResolutionScope, ScopeLevel,
 };
 use crate::relationship::RelationKind;
-use crate::storage::DocumentIndex;
 use crate::{FileId, Symbol, SymbolId, SymbolKind, Visibility};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tree_sitter::Language;
 
@@ -330,8 +327,8 @@ pub trait LanguageBehavior: Send + Sync {
         None
     }
 
-    /// Receiver tokens that route an instance call to the Self-call arm of
-    /// `resolve_method_call`.
+    /// Receiver tokens the resolve stage treats as the calling instance
+    /// (self-form receivers pass the receiver gate without type inference).
     ///
     /// Default `&["self"]` matches Rust/Python/Swift. Per-language overrides:
     /// PHP `&["$this"]`, Python `&["self", "cls"]`, JS/TS/Java/Kotlin/C++ `&["this"]`.
@@ -352,164 +349,6 @@ pub trait LanguageBehavior: Send + Sync {
         _resolver: &dyn crate::parsing::InheritanceResolver,
     ) -> Option<String> {
         None
-    }
-
-    /// Resolve an instance method call to its symbol ID
-    ///
-    /// Given a type name and method name, find the symbol ID for the method.
-    /// Uses the resolution context for import-aware type lookup, then queries
-    /// the Defines relationship to find the method.
-    ///
-    /// # Arguments
-    /// * `type_name` - The resolved type name (e.g., "Calculator")
-    /// * `method_name` - The method being called (e.g., "add")
-    /// * `context` - Resolution context with import information
-    /// * `document_index` - For querying relationships
-    ///
-    /// # Returns
-    /// The SymbolId of the method if found, None otherwise
-    fn resolve_instance_method(
-        &self,
-        type_name: &str,
-        method_name: &str,
-        context: &dyn ResolutionScope,
-        document_index: &DocumentIndex,
-    ) -> Option<SymbolId> {
-        // Step 1: Resolve type using context (import-aware)
-        let type_id = match context.resolve(type_name) {
-            Some(id) => {
-                tracing::debug!("[resolve_instance_method] resolved type '{type_name}' to {id:?}");
-                id
-            }
-            None => {
-                tracing::debug!("[resolve_instance_method] failed to resolve type '{type_name}'");
-                return None;
-            }
-        };
-
-        // Step 2: Find method via Defines relationship from that specific type
-        let defined_symbols =
-            match document_index.get_relationships_from(type_id, RelationKind::Defines) {
-                Ok(rels) => {
-                    tracing::debug!(
-                        "[resolve_instance_method] found {} Defines relationships from {type_id:?}",
-                        rels.len()
-                    );
-                    rels
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        "[resolve_instance_method] error getting Defines from {type_id:?}: {e}"
-                    );
-                    return None;
-                }
-            };
-
-        // Step 3: Find the method with matching name
-        for (_, to_id, _) in defined_symbols {
-            if let Ok(Some(symbol)) = document_index.find_symbol_by_id(to_id) {
-                tracing::debug!(
-                    "[resolve_instance_method] checking defined symbol: '{}' vs '{method_name}'",
-                    symbol.name.as_ref()
-                );
-                if symbol.name.as_ref() == method_name {
-                    tracing::debug!(
-                        "[resolve_instance_method] found method '{method_name}' at {to_id:?}"
-                    );
-                    return Some(to_id);
-                }
-            }
-        }
-
-        tracing::debug!(
-            "[resolve_instance_method] method '{method_name}' not found in type '{type_name}'"
-        );
-        None
-    }
-
-    /// Resolve a method call to its symbol ID
-    ///
-    /// This is the unified API for resolving all types of method calls:
-    /// - Static calls: `Type::method()` - resolved via context with qualified name
-    /// - Instance calls: `receiver.method()` - type looked up, then Defines relationship queried
-    /// - Self calls: `self.method()` - resolved via current type context
-    ///
-    /// # Arguments
-    /// * `method_call` - The structured method call information
-    /// * `receiver_types` - Map of variable names to their types (e.g., "calc" -> "Calculator")
-    /// * `context` - Resolution context with import information
-    /// * `document_index` - For querying symbols and relationships
-    ///
-    /// # Returns
-    /// The SymbolId of the resolved method, or None if unresolved
-    fn resolve_method_call(
-        &self,
-        method_call: &MethodCall,
-        receiver_types: &HashMap<String, String>,
-        context: &dyn ResolutionScope,
-        document_index: &DocumentIndex,
-    ) -> Option<SymbolId> {
-        let method_name = &method_call.method_name;
-
-        match (&method_call.receiver, method_call.is_static) {
-            // Static call: Type::method()
-            // Use module_separator for resolution (:: for Rust, . for most others)
-            (Some(type_name), true) => {
-                let qualified = format!("{type_name}{}{method_name}", self.module_separator());
-                tracing::debug!("[resolve_method_call] static call: {qualified}");
-                context.resolve(&qualified)
-            }
-
-            // Instance call: receiver.method()
-            (Some(receiver), false)
-                if !self.self_receiver_aliases().contains(&receiver.as_str()) =>
-            {
-                // Look up the receiver's type
-                let type_name = match receiver_types.get(receiver) {
-                    Some(t) => t,
-                    None => {
-                        tracing::debug!(
-                            "[resolve_method_call] no type found for receiver '{receiver}'"
-                        );
-                        return None;
-                    }
-                };
-
-                tracing::debug!(
-                    "[resolve_method_call] instance call: {receiver}.{method_name} (type: {type_name})"
-                );
-
-                // Use resolve_instance_method to find via Defines relationship
-                self.resolve_instance_method(type_name, method_name, context, document_index)
-            }
-
-            // Self call: self.method() / $this->method() / this.method() / cls.method() per language.
-            (Some(receiver), false)
-                if self.self_receiver_aliases().contains(&receiver.as_str()) =>
-            {
-                // For self calls, try to resolve via context which should have current type info
-                let self_method = format!("self.{method_name}");
-                tracing::debug!(
-                    "[resolve_method_call] self call (receiver={receiver}): {self_method}"
-                );
-                context.resolve(&self_method).or_else(|| {
-                    // Fallback: just try the method name
-                    context.resolve(method_name)
-                })
-            }
-
-            // Plain function call (no receiver)
-            (None, _) => {
-                tracing::debug!("[resolve_method_call] plain function call: {method_name}");
-                context.resolve(method_name)
-            }
-
-            // Catch-all (shouldn't happen)
-            _ => {
-                tracing::debug!("[resolve_method_call] unhandled case: {:?}", method_call);
-                None
-            }
-        }
     }
 
     /// Get the inheritance relationship name for this language
