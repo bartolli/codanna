@@ -7,7 +7,7 @@ use codanna::mcp::{
     SemanticSearchWithContextRequest,
 };
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::RawContent;
+use rmcp::model::ContentBlock;
 use tempfile::TempDir;
 
 const REPOSITORY_FIXTURE: &str = r#"
@@ -175,8 +175,8 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     let semantic_text = semantic_result
         .content
         .iter()
-        .filter_map(|content| match &content.raw {
-            RawContent::Text(block) => Some(block.text.as_str()),
+        .filter_map(|content| match content {
+            ContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -201,8 +201,8 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     let context_text = context_result
         .content
         .iter()
-        .filter_map(|content| match &content.raw {
-            RawContent::Text(block) => Some(block.text.as_str()),
+        .filter_map(|content| match content {
+            ContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -225,8 +225,8 @@ async fn test_kotlin_semantic_search_and_dependency_injection() {
     let find_text = find_result
         .content
         .iter()
-        .filter_map(|content| match &content.raw {
-            RawContent::Text(block) => Some(block.text.as_str()),
+        .filter_map(|content| match content {
+            ContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -339,8 +339,8 @@ class UserService(
     let text = result
         .content
         .iter()
-        .filter_map(|content| match &content.raw {
-            RawContent::Text(block) => Some(block.text.as_str()),
+        .filter_map(|content| match content {
+            ContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()

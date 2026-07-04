@@ -32,7 +32,7 @@ impl CodeIntelligenceServer {
                     .map(|s| vec![s])
                     .unwrap_or_default()
             } else {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Invalid symbol_id format: {id_str}"
                 ))]));
             }
@@ -54,7 +54,7 @@ impl CodeIntelligenceServer {
                 output.push_str(&guidance);
                 output.push('\n');
             }
-            return Ok(CallToolResult::success(vec![Content::text(output)]));
+            return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
         }
 
         let mut result = format!("Found {} symbol(s) named '{}':\n\n", symbols.len(), name);
@@ -253,7 +253,7 @@ impl CodeIntelligenceServer {
             result.push('\n');
         }
 
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
     }
 
     #[tool(
@@ -274,22 +274,22 @@ impl CodeIntelligenceServer {
             match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
                 SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
                 SymbolResolution::NotFoundById(id) => {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Symbol not found: symbol_id:{id}"
                     ))]));
                 }
                 SymbolResolution::NotFoundByName(name) => {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Function not found: {name}"
                     ))]));
                 }
                 SymbolResolution::Ambiguous { name, candidates } => {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         render_ambiguity("get_calls", &name, &candidates),
                     )]));
                 }
                 SymbolResolution::MissingParam => {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Error: Either function_name or symbol_id must be provided".to_string(),
                     )]));
                 }
@@ -306,7 +306,7 @@ impl CodeIntelligenceServer {
                 output.push_str(&guidance);
                 output.push('\n');
             }
-            return Ok(CallToolResult::success(vec![Content::text(output)]));
+            return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
         }
 
         let result_count = all_called_with_metadata.len();
@@ -348,7 +348,7 @@ impl CodeIntelligenceServer {
             result.push('\n');
         }
 
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
     }
 
     #[tool(
@@ -368,22 +368,22 @@ impl CodeIntelligenceServer {
             match service::resolve_symbol_or_id(&indexer, symbol_id, function_name) {
                 SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
                 SymbolResolution::NotFoundById(id) => {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Symbol not found: symbol_id:{id}"
                     ))]));
                 }
                 SymbolResolution::NotFoundByName(name) => {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Function not found: {name}"
                     ))]));
                 }
                 SymbolResolution::Ambiguous { name, candidates } => {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         render_ambiguity("find_callers", &name, &candidates),
                     )]));
                 }
                 SymbolResolution::MissingParam => {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Error: Either function_name or symbol_id must be provided".to_string(),
                     )]));
                 }
@@ -400,7 +400,7 @@ impl CodeIntelligenceServer {
                 output.push_str(&guidance);
                 output.push('\n');
             }
-            return Ok(CallToolResult::success(vec![Content::text(output)]));
+            return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
         }
 
         // Build structured text response with rich metadata
@@ -451,7 +451,7 @@ impl CodeIntelligenceServer {
             result.push('\n');
         }
 
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
     }
 
     #[tool(
@@ -474,22 +474,22 @@ impl CodeIntelligenceServer {
             match service::resolve_symbol_or_id(&indexer, symbol_id, symbol_name) {
                 SymbolResolution::Resolved { symbol, identifier } => (symbol, identifier),
                 SymbolResolution::NotFoundById(id) => {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Symbol not found: symbol_id:{id}"
                     ))]));
                 }
                 SymbolResolution::NotFoundByName(name) => {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Symbol not found: {name}"
                     ))]));
                 }
                 SymbolResolution::Ambiguous { name, candidates } => {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         render_ambiguity("analyze_impact", &name, &candidates),
                     )]));
                 }
                 SymbolResolution::MissingParam => {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(
                         "Error: Either symbol_name or symbol_id must be provided".to_string(),
                     )]));
                 }
@@ -506,7 +506,7 @@ impl CodeIntelligenceServer {
                 output.push_str(&guidance);
                 output.push('\n');
             }
-            return Ok(CallToolResult::success(vec![Content::text(output)]));
+            return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
         }
 
         let mut result = format!("Analyzing impact of changing: {identifier}\n");
@@ -615,6 +615,6 @@ impl CodeIntelligenceServer {
             result.push('\n');
         }
 
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
     }
 }

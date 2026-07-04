@@ -136,9 +136,9 @@ impl CodeIntelligenceClient {
 
     fn print_tool_output(result: &rmcp::model::CallToolResult) {
         println!("Result:");
-        for annotated_content in &result.content {
-            match &**annotated_content {
-                rmcp::model::RawContent::Text(text) => println!("{}", text.text),
+        for content in &result.content {
+            match content {
+                rmcp::model::ContentBlock::Text(text) => println!("{}", text.text),
                 _ => println!("(Non-text content)"),
             }
         }

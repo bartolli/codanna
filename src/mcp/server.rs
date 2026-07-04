@@ -112,21 +112,25 @@ impl CodeIntelligenceServer {
         if let Some(peer) = peer_guard.as_ref() {
             // Send a resource updated notification
             let _ = peer
-                .notify_resource_updated(ResourceUpdatedNotificationParam {
-                    uri: format!("file://{file_path}"),
-                })
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(format!(
+                    "file://{file_path}"
+                )))
                 .await;
 
-            // Also send a logging message for visibility
+            // Also send a logging message for visibility. Logging is deprecated by
+            // SEP-2577; keep emitting it for client compatibility until rmcp removes it.
+            #[allow(deprecated)]
             let _ = peer
-                .notify_logging_message(LoggingMessageNotificationParam {
-                    level: LoggingLevel::Info,
-                    logger: Some("codanna".to_string()),
-                    data: serde_json::json!({
-                        "action": "re-indexed",
-                        "file": file_path
-                    }),
-                })
+                .notify_logging_message(
+                    LoggingMessageNotificationParam::new(
+                        LoggingLevel::Info,
+                        serde_json::json!({
+                            "action": "re-indexed",
+                            "file": file_path
+                        }),
+                    )
+                    .with_logger("codanna"),
+                )
                 .await;
         }
     }

@@ -61,7 +61,7 @@ impl CodeIntelligenceServer {
             "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}{semantic_info}"
         );
 
-        Ok(CallToolResult::success(vec![Content::text(result)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
     }
 
     #[tool(description = "Search documentation using natural language semantic search")]
@@ -95,7 +95,7 @@ impl CodeIntelligenceServer {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|_| "unknown".to_string());
 
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
                 indexer.settings().index_path.display(),
                 symbol_count,
@@ -130,7 +130,7 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![Content::text(output)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
                 }
 
                 let mut result = format!(
@@ -180,9 +180,9 @@ impl CodeIntelligenceServer {
                     result.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(result)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search failed: {e}"
             ))])),
         }
@@ -214,7 +214,7 @@ impl CodeIntelligenceServer {
             let metadata_exists = semantic_path.join("metadata.json").exists();
             let vectors_exist = semantic_path.join("segment_0.vec").exists();
 
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
                 indexer.settings().index_path.display(),
                 indexer.has_semantic_search(),
@@ -249,7 +249,7 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![Content::text(output)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
                 }
 
                 let mut output = String::new();
@@ -711,9 +711,9 @@ impl CodeIntelligenceServer {
                     output.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search failed: {e}"
             ))])),
         }
@@ -738,7 +738,7 @@ impl CodeIntelligenceServer {
             None => None,
             Some(Ok(k)) => Some(k),
             Some(Err(e)) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Error: {e}"
                 ))]));
             }
@@ -762,7 +762,7 @@ impl CodeIntelligenceServer {
                         output.push_str(&guidance);
                         output.push('\n');
                     }
-                    return Ok(CallToolResult::success(vec![Content::text(output)]));
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
                 }
 
                 let mut result = format!(
@@ -810,9 +810,9 @@ impl CodeIntelligenceServer {
                     result.push('\n');
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(result)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Search failed: {e}"
             ))])),
         }
@@ -832,7 +832,7 @@ impl CodeIntelligenceServer {
         let store = match &self.document_store {
             Some(s) => s,
             None => {
-                return Ok(CallToolResult::error(vec![Content::text(
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
                     "Document search not available. No document collections are indexed.\n\n\
                     To enable:\n\
                     1. Add a collection: codanna documents add-collection docs docs/\n\
@@ -864,7 +864,7 @@ impl CodeIntelligenceServer {
         match store.search(search_query) {
             Ok(results) => {
                 if results.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "No documents found for: {query}"
                     ))]));
                 }
@@ -894,9 +894,9 @@ impl CodeIntelligenceServer {
                     output.push_str(&format!("   Preview: {}\n\n", result.content_preview));
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Document search failed: {e}"
             ))])),
         }

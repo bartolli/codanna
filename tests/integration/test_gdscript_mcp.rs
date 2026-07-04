@@ -6,7 +6,7 @@ use codanna::mcp::{
     AnalyzeImpactRequest, CodeIntelligenceServer, SemanticSearchWithContextRequest,
 };
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::RawContent;
+use rmcp::model::ContentBlock;
 use tempfile::TempDir;
 
 const PLAYER_FIXTURE: &str = include_str!("../fixtures/gdscript/player.gd");
@@ -74,8 +74,8 @@ async fn test_gdscript_semantic_search_and_analyze_impact() {
     let semantic_text = semantic_result
         .content
         .iter()
-        .filter_map(|content| match &content.raw {
-            RawContent::Text(block) => Some(block.text.as_str()),
+        .filter_map(|content| match content {
+            ContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -105,8 +105,8 @@ async fn test_gdscript_semantic_search_and_analyze_impact() {
     let impact_text = impact_result
         .content
         .iter()
-        .filter_map(|content| match &content.raw {
-            RawContent::Text(block) => Some(block.text.as_str()),
+        .filter_map(|content| match content {
+            ContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()

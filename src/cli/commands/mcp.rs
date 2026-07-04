@@ -1676,8 +1676,8 @@ pub async fn run(
             } else {
                 // Default text output
                 for content in &call_result.content {
-                    match &**content {
-                        rmcp::model::RawContent::Text(text_content) => {
+                    match content {
+                        rmcp::model::ContentBlock::Text(text_content) => {
                             println!("{}", text_content.text);
                         }
                         _ => {

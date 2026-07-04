@@ -53,6 +53,9 @@ impl super::CodeIntelligenceServer {
         &self,
         mut receiver: broadcast::Receiver<FileChangeEvent>,
     ) {
+        // Logging types are deprecated by SEP-2577; keep emitting them for client
+        // compatibility until rmcp removes the API.
+        #[allow(deprecated)]
         use rmcp::model::{
             CustomNotification, LoggingLevel, LoggingMessageNotificationParam,
             ResourceUpdatedNotificationParam, ServerNotification,
@@ -73,21 +76,24 @@ impl super::CodeIntelligenceServer {
 
                                 // Send standard MCP resource updated notification (backwards compatible)
                                 let _ = peer
-                                    .notify_resource_updated(ResourceUpdatedNotificationParam {
-                                        uri: format!("file://{path_str}"),
-                                    })
+                                    .notify_resource_updated(ResourceUpdatedNotificationParam::new(
+                                        format!("file://{path_str}"),
+                                    ))
                                     .await;
 
                                 // Send logging message (backwards compatible)
+                                #[allow(deprecated)]
                                 let _ = peer
-                                    .notify_logging_message(LoggingMessageNotificationParam {
-                                        level: LoggingLevel::Info,
-                                        logger: Some("codanna".to_string()),
-                                        data: serde_json::json!({
-                                            "action": "re-indexed",
-                                            "file": path_str
-                                        }),
-                                    })
+                                    .notify_logging_message(
+                                        LoggingMessageNotificationParam::new(
+                                            LoggingLevel::Info,
+                                            serde_json::json!({
+                                                "action": "re-indexed",
+                                                "file": path_str
+                                            }),
+                                        )
+                                        .with_logger("codanna"),
+                                    )
                                     .await;
 
                                 // Send custom notification (new)
