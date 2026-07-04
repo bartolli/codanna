@@ -31,6 +31,10 @@ pub struct IncrementalStats {
     pub modified_files: usize,
     /// Number of deleted files cleaned up
     pub deleted_files: usize,
+    /// Symbols removed by deleted-file cleanup only. `cleanup_stats`
+    /// also counts modified-file cleanup, whose symbols re-add in the
+    /// same run — reporting that aggregate as "removed" over-claims.
+    pub deleted_symbols: usize,
     /// Phase 1 indexing stats
     pub index_stats: IndexStats,
     /// Cleanup stats

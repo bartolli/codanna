@@ -266,7 +266,14 @@ impl Pipeline {
             .with_width(28);
 
         // Run Phase 1 indexing with appropriate progress bar
-        let (index_stats, unresolved, symbol_cache, cleanup_stats, discover_counts) = if force {
+        let (
+            index_stats,
+            unresolved,
+            symbol_cache,
+            cleanup_stats,
+            deleted_symbols,
+            discover_counts,
+        ) = if force {
             // Force mode: use DualProgressBar for semantic+embedding, else single bar
             let has_embedding = semantic.is_some() && embedding_pool.is_some();
 
@@ -314,6 +321,7 @@ impl Pipeline {
                     unresolved,
                     cache,
                     CleanupStats::default(),
+                    0,
                     (files_indexed, 0, 0),
                 )
             } else {
@@ -352,6 +360,7 @@ impl Pipeline {
                     unresolved,
                     cache,
                     CleanupStats::default(),
+                    0,
                     (files_indexed, 0, 0),
                 )
             }
@@ -367,6 +376,7 @@ impl Pipeline {
                     new_files: 0,
                     modified_files: 0,
                     deleted_files: 0,
+                    deleted_symbols: 0,
                     index_stats: IndexStats::new(),
                     cleanup_stats: CleanupStats::default(),
                     phase2_stats: Phase2Stats::default(),
@@ -382,10 +392,12 @@ impl Pipeline {
             };
 
             let mut cleanup_stats = CleanupStats::default();
+            let mut deleted_symbols = 0;
             if !discover_result.deleted_files.is_empty() {
                 let stats = cleanup_stage.cleanup_files(&discover_result.deleted_files)?;
                 cleanup_stats.files_cleaned += stats.files_cleaned;
                 cleanup_stats.symbols_removed += stats.symbols_removed;
+                deleted_symbols = stats.symbols_removed;
             }
             if !discover_result.modified_files.is_empty() {
                 let stats = cleanup_stage.cleanup_files(&discover_result.modified_files)?;
@@ -445,7 +457,14 @@ impl Pipeline {
                 discover_result.modified_files.len(),
                 discover_result.deleted_files.len(),
             );
-            (stats, unresolved, cache, cleanup_stats, counts)
+            (
+                stats,
+                unresolved,
+                cache,
+                cleanup_stats,
+                deleted_symbols,
+                counts,
+            )
         };
 
         // Run Phase 2 with separate progress bar
@@ -460,6 +479,7 @@ impl Pipeline {
             new_files: discover_counts.0,
             modified_files: discover_counts.1,
             deleted_files: discover_counts.2,
+            deleted_symbols,
             index_stats,
             cleanup_stats,
             phase2_stats,
@@ -511,6 +531,7 @@ impl Pipeline {
                 new_files: 0,
                 modified_files: 0,
                 deleted_files: 0,
+                deleted_symbols: 0,
                 index_stats: IndexStats::new(),
                 cleanup_stats: CleanupStats::default(),
                 phase2_stats: Phase2Stats::default(),
@@ -527,11 +548,13 @@ impl Pipeline {
 
         // Cleanup deleted files
         let mut cleanup_stats = CleanupStats::default();
+        let mut deleted_symbols = 0;
         if !discover_result.deleted_files.is_empty() {
             let stats = cleanup_stage.cleanup_files(&discover_result.deleted_files)?;
             cleanup_stats.files_cleaned += stats.files_cleaned;
             cleanup_stats.symbols_removed += stats.symbols_removed;
             cleanup_stats.embeddings_removed += stats.embeddings_removed;
+            deleted_symbols = stats.symbols_removed;
         }
 
         // Cleanup modified files (old data must be removed before re-indexing)
@@ -588,6 +611,7 @@ impl Pipeline {
             new_files: discover_result.new_files.len(),
             modified_files: discover_result.modified_files.len(),
             deleted_files: discover_result.deleted_files.len(),
+            deleted_symbols,
             index_stats,
             cleanup_stats,
             phase2_stats,

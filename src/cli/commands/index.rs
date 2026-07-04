@@ -243,8 +243,16 @@ fn index_directory(
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
         Ok(stats) => {
-            // Print message only when no files need indexing (pipeline trace handles the rest)
-            if stats.files_indexed == 0 {
+            // Deletions leave the progress trace at zero width; report them
+            // explicitly so a cleanup-only run does not read as a no-op.
+            if stats.files_removed > 0 {
+                eprintln!(
+                    "Removed {} deleted file(s), {} symbol(s) from index",
+                    stats.files_removed, stats.symbols_removed
+                );
+            }
+            // Print message only when no work happened (pipeline trace handles the rest)
+            if stats.files_indexed == 0 && stats.files_removed == 0 {
                 eprintln!("Index up to date: {}", path.display());
             }
             stats.files_indexed

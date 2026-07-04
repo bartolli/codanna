@@ -45,6 +45,11 @@ pub struct IndexingStats {
     pub files_indexed: usize,
     pub symbols_found: usize,
     pub relationships_resolved: usize,
+    /// Files removed by deleted-file cleanup.
+    pub files_removed: usize,
+    /// Symbols removed by deleted-file cleanup (modified-file cleanup
+    /// excluded — those symbols re-add in the same run).
+    pub symbols_removed: usize,
 }
 
 /// Statistics for sync operations
@@ -1083,6 +1088,8 @@ impl IndexFacade {
             relationships_resolved: stats.phase2_stats.defines_resolved
                 + stats.phase2_stats.calls_resolved
                 + stats.phase2_stats.other_resolved,
+            files_removed: stats.deleted_files,
+            symbols_removed: stats.deleted_symbols,
         })
     }
 
@@ -1159,6 +1166,8 @@ impl IndexFacade {
         let mut stats = IndexStats::default();
         stats.files_indexed = pipeline_stats.new_files + pipeline_stats.modified_files;
         stats.symbols_found = pipeline_stats.index_stats.symbols_found;
+        stats.files_removed = pipeline_stats.deleted_files;
+        stats.symbols_removed = pipeline_stats.deleted_symbols;
         stats.elapsed = pipeline_stats.elapsed;
 
         Ok(stats)
@@ -1403,6 +1412,43 @@ mod tests {
         assert!(
             extended_by.iter().any(|s| s.name.as_ref() == "Derived"),
             "Base extended by Derived"
+        );
+    }
+
+    // Regression: a deletion-only incremental run must surface removal
+    // counts across the facade stats boundary instead of reading as a
+    // no-op ("Index up to date"). Modified-file cleanup must NOT count:
+    // its symbols re-add in the same run.
+    #[test]
+    fn deletion_only_run_reports_removal_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fixture");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("alpha.py"), "def alpha():\n    pass\n").unwrap();
+        std::fs::write(
+            root.join("beta.py"),
+            "def beta_one():\n    pass\n\n\ndef beta_two():\n    pass\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let seed = facade.index_directory(&root, false).unwrap();
+        assert_eq!(seed.files_indexed, 2);
+        assert_eq!(seed.files_removed, 0);
+
+        std::fs::remove_file(root.join("beta.py")).unwrap();
+        let stats = facade.index_directory(&root, false).unwrap();
+        assert_eq!(stats.files_indexed, 0, "no files re-indexed");
+        assert_eq!(stats.files_removed, 1, "deletion must surface");
+        assert_eq!(
+            stats.symbols_removed, 3,
+            "beta.py carried <module> + two functions"
         );
     }
 
