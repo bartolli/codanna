@@ -2,7 +2,7 @@
 //! as TSV with stable symbol identities (name@file:line/kind), for
 //! edge-set diffing between index runs. Not part of the product surface.
 //!
-//! Usage: dump_edges <path-to-.codanna/index/tantivy> [--symbols]
+//! Usage: dump_edges <path-to-.codanna/index/tantivy> [--symbols|--dups]
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,8 +25,10 @@ fn main() -> tantivy::Result<()> {
     let mut args = std::env::args().skip(1);
     let index_dir = args
         .next()
-        .expect("usage: dump_edges <tantivy-dir> [--symbols]");
-    let dump_symbols = args.next().as_deref() == Some("--symbols");
+        .expect("usage: dump_edges <tantivy-dir> [--symbols|--dups]");
+    let mode = args.next();
+    let dump_symbols = mode.as_deref() == Some("--symbols");
+    let dump_dups = mode.as_deref() == Some("--dups");
 
     let index = Index::open_in_dir(Path::new(&index_dir))?;
     let schema = index.schema();
@@ -57,8 +59,10 @@ fn main() -> tantivy::Result<()> {
         Term::from_field_text(doc_type, "symbol"),
         IndexRecordOption::Basic,
     );
+    type SymbolIdentity = (String, String, u64, String, String);
     let sym_docs = searcher.search(&sym_query, &DocSetCollector)?;
-    let mut symbols: HashMap<u64, (String, String, u64, String, String)> = HashMap::new();
+    let mut symbols: HashMap<u64, SymbolIdentity> = HashMap::new();
+    let mut all_rows: HashMap<u64, Vec<SymbolIdentity>> = HashMap::new();
     let mut dup_ids = 0usize;
     for addr in sym_docs {
         let doc: TantivyDocument = searcher.doc(addr)?;
@@ -72,11 +76,34 @@ fn main() -> tantivy::Result<()> {
             text_field(&doc, kind).unwrap_or_default(),
             text_field(&doc, module_path).unwrap_or_default(),
         );
+        if dump_dups {
+            all_rows.entry(id).or_default().push(ident.clone());
+        }
         if symbols.insert(id, ident).is_some() {
             dup_ids += 1;
         }
     }
     eprintln!("symbols: {} (duplicate ids: {dup_ids})", symbols.len());
+
+    if dump_dups {
+        let mut ids: Vec<u64> = all_rows
+            .iter()
+            .filter(|(_, rows)| rows.len() > 1)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        for id in ids {
+            let mut rows: Vec<String> = all_rows[&id]
+                .iter()
+                .map(|(n, fp, ln, k, mp)| format!("{id}\t{n}\t{fp}\t{ln}\t{k}\t{mp}"))
+                .collect();
+            rows.sort();
+            for r in &rows {
+                println!("{r}");
+            }
+        }
+        return Ok(());
+    }
 
     if dump_symbols {
         let mut rows: Vec<String> = symbols

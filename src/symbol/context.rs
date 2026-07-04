@@ -68,21 +68,27 @@ impl fmt::Display for SymbolContext {
 impl SymbolContext {
     /// Format just the location line
     pub fn format_location(&self) -> String {
-        format!(
-            "{} at {}",
-            self.symbol.name,
-            Self::symbol_location(&self.symbol)
-        )
+        Self::location(&self.symbol)
+    }
+
+    /// Location line for a symbol row.
+    pub fn location(symbol: &Symbol) -> String {
+        format!("{} at {}", symbol.name, Self::symbol_location(symbol))
     }
 
     /// Format location with type info
     pub fn format_location_with_type(&self) -> String {
+        Self::location_with_type(&self.symbol)
+    }
+
+    /// Location-with-type line for a symbol row.
+    pub fn location_with_type(symbol: &Symbol) -> String {
         format!(
             "{:?} {} at {} [symbol_id:{}]",
-            self.symbol.kind,
-            self.symbol.name,
-            Self::symbol_location(&self.symbol),
-            self.symbol.id.value()
+            symbol.kind,
+            symbol.name,
+            Self::symbol_location(symbol),
+            symbol.id.value()
         )
     }
 

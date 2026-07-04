@@ -73,8 +73,12 @@ impl CodeIntelligenceServer {
                     | ContextIncludes::EXTENDS
                     | ContextIncludes::USES,
             ) {
-                // Use formatted output from context
-                result.push_str(&ctx.format_location_with_type());
+                // Header from the name-matched doc, not the id-keyed context:
+                // on an index with duplicate symbol_ids the context lookup
+                // returns another generation's doc and the row reads crossed.
+                result.push_str(&crate::symbol::context::SymbolContext::location_with_type(
+                    symbol,
+                ));
                 result.push('\n');
 
                 // Add module path if available
@@ -519,7 +523,8 @@ impl CodeIntelligenceServer {
             symbol.id,
             ContextIncludes::CALLERS | ContextIncludes::EXTENDS | ContextIncludes::USES,
         ) {
-            let location = ctx.format_location();
+            // Name-matched doc, not the id-keyed context (see find_symbol).
+            let location = crate::symbol::context::SymbolContext::location(&symbol);
             let direct_callers = ctx
                 .relationships
                 .called_by
