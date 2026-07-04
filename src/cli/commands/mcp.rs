@@ -316,12 +316,8 @@ pub async fn run(
 
                 for symbol in symbols {
                     // Get full context with callers using the same approach as MCP
-                    let context = facade.get_symbol_context(
-                        symbol.id,
-                        ContextIncludes::CALLERS
-                            | ContextIncludes::IMPLEMENTATIONS
-                            | ContextIncludes::DEFINITIONS,
-                    );
+                    let context =
+                        facade.get_symbol_context(symbol.id, ContextIncludes::SYMBOL_CARD);
 
                     // Build result with context if available
                     if let Some(ctx) = context {
@@ -659,10 +655,7 @@ pub async fn run(
                                 // Get full context for each symbol
                                 let context = facade.get_symbol_context(
                                     symbol.id,
-                                    ContextIncludes::CALLERS
-                                        | ContextIncludes::CALLS
-                                        | ContextIncludes::IMPLEMENTATIONS
-                                        | ContextIncludes::DEFINITIONS,
+                                    ContextIncludes::SYMBOL_CARD | ContextIncludes::CALLS,
                                 );
 
                                 context.map(|ctx| SemanticSearchWithContextResult {

@@ -1348,6 +1348,64 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // Regression: every symbol-card surface requests
+    // ContextIncludes::SYMBOL_CARD. The CLI JSON paths used to request a
+    // subset, rendering extends/extended_by/uses null while the MCP text
+    // handler showed the same store's edges.
+    #[test]
+    fn symbol_card_context_carries_extends_both_directions() {
+        use crate::symbol::context::ContextIncludes;
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+
+        let source = dir.path().join("classes.py");
+        std::fs::write(
+            &source,
+            "class Base:\n    def m(self):\n        pass\n\n\nclass Derived(Base):\n    def m(self):\n        pass\n",
+        )
+        .unwrap();
+
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let derived = facade
+            .find_symbols_by_name("Derived", None)
+            .pop()
+            .expect("Derived indexed");
+        let ctx = facade
+            .get_symbol_context(derived.id, ContextIncludes::SYMBOL_CARD)
+            .expect("context for Derived");
+        let extends = ctx
+            .relationships
+            .extends
+            .expect("extends fetched under SYMBOL_CARD");
+        assert!(
+            extends.iter().any(|s| s.name.as_ref() == "Base"),
+            "Derived extends Base"
+        );
+
+        let base = facade
+            .find_symbols_by_name("Base", None)
+            .pop()
+            .expect("Base indexed");
+        let ctx = facade
+            .get_symbol_context(base.id, ContextIncludes::SYMBOL_CARD)
+            .expect("context for Base");
+        let extended_by = ctx
+            .relationships
+            .extended_by
+            .expect("extended_by fetched under SYMBOL_CARD");
+        assert!(
+            extended_by.iter().any(|s| s.name.as_ref() == "Derived"),
+            "Base extended by Derived"
+        );
+    }
+
     // Regression: force re-index of a not-yet-indexed file must still
     // succeed after remove_file errors stopped being swallowed.
     #[test]

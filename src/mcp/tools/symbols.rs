@@ -65,14 +65,7 @@ impl CodeIntelligenceServer {
             }
 
             // Try to get full context with all relationship types
-            if let Some(ctx) = indexer.get_symbol_context(
-                symbol.id,
-                ContextIncludes::IMPLEMENTATIONS
-                    | ContextIncludes::DEFINITIONS
-                    | ContextIncludes::CALLERS
-                    | ContextIncludes::EXTENDS
-                    | ContextIncludes::USES,
-            ) {
+            if let Some(ctx) = indexer.get_symbol_context(symbol.id, ContextIncludes::SYMBOL_CARD) {
                 // Header from the name-matched doc, not the id-keyed context:
                 // on an index with duplicate symbol_ids the context lookup
                 // returns another generation's doc and the row reads crossed.

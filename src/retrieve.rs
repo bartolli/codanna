@@ -325,14 +325,7 @@ pub fn retrieve_symbol(
     // Transform symbols to SymbolContext with file paths and relationships
     let symbols_with_context: Vec<SymbolContext> = symbols
         .into_iter()
-        .filter_map(|symbol| {
-            indexer.get_symbol_context(
-                symbol.id,
-                ContextIncludes::IMPLEMENTATIONS
-                    | ContextIncludes::DEFINITIONS
-                    | ContextIncludes::CALLERS,
-            )
-        })
+        .filter_map(|symbol| indexer.get_symbol_context(symbol.id, ContextIncludes::SYMBOL_CARD))
         .collect();
 
     let count = symbols_with_context.len();
@@ -634,12 +627,7 @@ pub fn retrieve_search(
     let results_with_context: Vec<SymbolContext> = search_results
         .into_iter()
         .filter_map(|result| {
-            indexer.get_symbol_context(
-                result.symbol_id,
-                ContextIncludes::IMPLEMENTATIONS
-                    | ContextIncludes::DEFINITIONS
-                    | ContextIncludes::CALLERS,
-            )
+            indexer.get_symbol_context(result.symbol_id, ContextIncludes::SYMBOL_CARD)
         })
         .collect();
 

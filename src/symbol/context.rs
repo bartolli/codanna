@@ -50,6 +50,15 @@ bitflags! {
         const EXTENDS       = 0b00010000;
         const USES          = 0b00100000;
         const ALL           = 0b00111111;
+        /// The symbol-card set: every kind the card surfaces render.
+        /// All surfaces presenting `SymbolRelationships` request this one
+        /// set — per-surface subsets leave fields null on one rendering
+        /// while another rendering of the same store shows the edges.
+        const SYMBOL_CARD = Self::IMPLEMENTATIONS.bits()
+            | Self::DEFINITIONS.bits()
+            | Self::CALLERS.bits()
+            | Self::EXTENDS.bits()
+            | Self::USES.bits();
     }
 }
 
