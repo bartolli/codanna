@@ -421,9 +421,10 @@ impl ResolveStage {
 
     /// Resolve `super().method()` through the parent chain: the caller's
     /// enclosing class, its Extends targets in base-list order, and the
-    /// first parent declaring a same-name method. Single hop — a parent
-    /// that resolves but does not declare the member fails closed rather
-    /// than walking a cross-file chain.
+    /// first parent declaring a same-name method as a DIRECT member
+    /// (`is_direct_member` — not mere containment in the parent's span).
+    /// Single hop — a parent that resolves but does not declare the
+    /// member fails closed rather than walking a cross-file chain.
     fn resolve_super_call(
         &self,
         from_id: SymbolId,
@@ -476,6 +477,7 @@ impl ResolveStage {
                 continue;
             }
             let (parent_file, parent_range) = (parent.file_id, parent.range);
+            let parent_name = parent.name.clone();
             drop(parent);
 
             let member = self
@@ -483,12 +485,24 @@ impl ResolveStage {
                 .lookup_candidates(&unresolved.to_name)
                 .into_iter()
                 .find(|&id| {
-                    self.symbol_cache.get_ref(id).is_some_and(|sym| {
-                        sym.file_id == parent_file
-                            && sym.kind == crate::SymbolKind::Method
-                            && parent_range.start_line <= sym.range.start_line
-                            && sym.range.end_line <= parent_range.end_line
-                    })
+                    let Some((member_range, member_scope)) =
+                        self.symbol_cache.get_ref(id).and_then(|sym| {
+                            (sym.file_id == parent_file
+                                && sym.kind == crate::SymbolKind::Method
+                                && parent_range.start_line <= sym.range.start_line
+                                && sym.range.end_line <= parent_range.end_line)
+                                .then(|| (sym.range, sym.scope_context.clone()))
+                        })
+                    else {
+                        return false;
+                    };
+                    self.is_direct_member(
+                        member_scope.as_ref(),
+                        member_range,
+                        parent_id,
+                        &parent_name,
+                        parent_file,
+                    )
                 });
             if let Some(to_id) = member {
                 return Some(ResolvedRelationship {
@@ -500,6 +514,49 @@ impl ResolveStage {
             }
         }
         None
+    }
+
+    /// Direct membership in the parent class, not mere line-range
+    /// containment: a Method inside the parent's span may belong to a
+    /// class nested in the parent's body. The parser's
+    /// `ClassMember.class_name` decides when present; parser-declared
+    /// non-member scopes reject; untracked scope falls back to the
+    /// innermost-enclosing-class walk (the candidate's innermost
+    /// enclosing Class must BE the parent, mirroring the caller side).
+    fn is_direct_member(
+        &self,
+        member_scope: Option<&crate::symbol::ScopeContext>,
+        member_range: crate::types::Range,
+        parent_id: SymbolId,
+        parent_name: &str,
+        parent_file: FileId,
+    ) -> bool {
+        use crate::symbol::ScopeContext;
+        match member_scope {
+            Some(ScopeContext::ClassMember {
+                class_name: Some(class_name),
+            }) => return class_name.as_ref() == parent_name,
+            Some(ScopeContext::ClassMember { class_name: None }) | None => {}
+            Some(_) => return false,
+        }
+        let innermost = self
+            .symbol_cache
+            .symbols_in_file(parent_file)
+            .into_iter()
+            .filter(|&id| {
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    sym.kind == crate::SymbolKind::Class
+                        && sym.range.start_line <= member_range.start_line
+                        && member_range.end_line <= sym.range.end_line
+                })
+            })
+            .max_by_key(|&id| {
+                self.symbol_cache
+                    .get_ref(id)
+                    .map(|sym| sym.range.start_line)
+                    .unwrap_or(0)
+            });
+        innermost == Some(parent_id)
     }
 
     fn resolve_static_call(
@@ -997,6 +1054,103 @@ mod tests {
             call.to_id,
             SymbolId::new(2).unwrap(),
             "target is A.m, not the B.m self-edge"
+        );
+    }
+
+    /// class A (5..25) contains class Inner (7..12) with its own m
+    /// (8..11) declared BEFORE A's m (15..22). Identity order puts
+    /// Inner.m first; the edge must target A.m regardless. Symbols
+    /// carry no scope_context, so this exercises the
+    /// innermost-enclosing-class fallback arm.
+    #[test]
+    fn super_call_skips_nested_class_member() {
+        let python = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mk = |id: u32, name: &str, kind: SymbolKind, start: u32, end: u32| {
+            let mut sym = make_symbol(id, name, 1, python);
+            sym.kind = kind;
+            sym.range = Range::new(start, 0, end, 1);
+            sym
+        };
+        cache.insert(mk(1, "A", SymbolKind::Class, 5, 25));
+        cache.insert(mk(2, "Inner", SymbolKind::Class, 7, 12));
+        cache.insert(mk(3, "m", SymbolKind::Method, 8, 11));
+        cache.insert(mk(4, "m", SymbolKind::Method, 15, 22));
+        cache.insert(mk(5, "B", SymbolKind::Class, 35, 55));
+        cache.insert(mk(6, "m", SymbolKind::Method, 40, 50));
+
+        let extends = make_unresolved(5, "A", 1, RelationKind::Extends);
+        let mut super_call = make_instance_call(6, "m", 1, "super()");
+        super_call.to_range = Some(Range::new(45, 8, 45, 20));
+
+        let stage = make_stage(Arc::clone(&cache));
+        let mut context = make_context(1, python, vec![], vec![extends, super_call]);
+        context.scope = Box::new(MapScope(
+            [("A".to_string(), SymbolId::new(1).unwrap())]
+                .into_iter()
+                .collect(),
+        ));
+
+        let (batch, _) = stage.resolve(&context);
+        let call = batch
+            .relationships
+            .iter()
+            .find(|r| r.kind == RelationKind::Calls)
+            .expect("super() call must resolve to the parent's direct member");
+        assert_eq!(
+            call.to_id,
+            SymbolId::new(4).unwrap(),
+            "target is A.m, not Inner.m (first in identity order)"
+        );
+    }
+
+    /// Same shape with parser-populated ClassMember scope: the
+    /// class_name arm decides without the geometric walk.
+    #[test]
+    fn super_call_member_check_uses_class_member_scope() {
+        let python = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mk =
+            |id: u32, name: &str, kind: SymbolKind, start: u32, end: u32, class: Option<&str>| {
+                let mut sym = make_symbol(id, name, 1, python);
+                sym.kind = kind;
+                sym.range = Range::new(start, 0, end, 1);
+                if let Some(class) = class {
+                    sym.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+                        class_name: Some(class.into()),
+                    });
+                }
+                sym
+            };
+        cache.insert(mk(1, "A", SymbolKind::Class, 5, 25, None));
+        cache.insert(mk(2, "Inner", SymbolKind::Class, 7, 12, None));
+        cache.insert(mk(3, "m", SymbolKind::Method, 8, 11, Some("Inner")));
+        cache.insert(mk(4, "m", SymbolKind::Method, 15, 22, Some("A")));
+        cache.insert(mk(5, "B", SymbolKind::Class, 35, 55, None));
+        cache.insert(mk(6, "m", SymbolKind::Method, 40, 50, Some("B")));
+
+        let extends = make_unresolved(5, "A", 1, RelationKind::Extends);
+        let mut super_call = make_instance_call(6, "m", 1, "super()");
+        super_call.to_range = Some(Range::new(45, 8, 45, 20));
+
+        let stage = make_stage(Arc::clone(&cache));
+        let mut context = make_context(1, python, vec![], vec![extends, super_call]);
+        context.scope = Box::new(MapScope(
+            [("A".to_string(), SymbolId::new(1).unwrap())]
+                .into_iter()
+                .collect(),
+        ));
+
+        let (batch, _) = stage.resolve(&context);
+        let call = batch
+            .relationships
+            .iter()
+            .find(|r| r.kind == RelationKind::Calls)
+            .expect("super() call must resolve via ClassMember.class_name");
+        assert_eq!(
+            call.to_id,
+            SymbolId::new(4).unwrap(),
+            "class_name == parent selects A.m; Inner.m rejected by name"
         );
     }
 
