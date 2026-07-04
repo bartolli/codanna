@@ -125,10 +125,31 @@ impl Pipeline {
             .first()
             .map(|r| r.file_id)
             .unwrap_or(FileId(0));
+        // Ids issued by process_single start above the committed counters,
+        // so the batch maxima are the new high-water marks.
+        let max_file_id = batch
+            .file_registrations
+            .iter()
+            .map(|r| r.file_id.value())
+            .max();
+        let max_symbol_id = batch.symbols.iter().map(|s| s.id.value()).max();
 
         // Start a batch before indexing
         index.start_batch()?;
         index_stage.index_batch(batch)?;
+
+        // Counters become durable in the same commit as the docs; without
+        // this, the next single-file run re-reads the stale counter and
+        // re-issues live ids (duplicate symbol_id across generations).
+        {
+            use crate::storage::MetadataKey;
+            if let Some(value) = max_file_id {
+                index.store_metadata(MetadataKey::FileCounter, u64::from(value))?;
+            }
+            if let Some(value) = max_symbol_id {
+                index.store_metadata(MetadataKey::SymbolCounter, u64::from(value))?;
+            }
+        }
 
         // Commit the batch
         index.commit_batch()?;
@@ -771,6 +792,56 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(_, to_id, _)| *to_id == callee.id)
+    }
+
+    // Regression: the watcher single-file path committed symbol docs
+    // without persisting the id counters, so the next single-file event
+    // re-read the stale counter and re-issued live ids — the duplicate
+    // symbol_id state observed on the live index. Consecutive runs on
+    // different files must consume disjoint id ranges.
+    #[test]
+    fn consecutive_single_file_runs_issue_disjoint_symbol_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("fixture");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("a.py"),
+            "def alpha_one():\n    pass\n\n\ndef alpha_two():\n    pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("b.py"),
+            "def beta_one():\n    pass\n\n\ndef beta_two():\n    pass\n",
+        )
+        .unwrap();
+
+        let settings = Arc::new(Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        });
+        let index =
+            Arc::new(DocumentIndex::new(settings.index_path.join("tantivy"), &settings).unwrap());
+        let pipeline = Pipeline::with_settings(Arc::clone(&settings));
+
+        pipeline
+            .index_file_single(&root.join("a.py"), Arc::clone(&index), None, None)
+            .unwrap();
+        pipeline
+            .index_file_single(&root.join("b.py"), Arc::clone(&index), None, None)
+            .unwrap();
+
+        let mut ids = std::collections::HashSet::new();
+        for name in ["alpha_one", "alpha_two", "beta_one", "beta_two"] {
+            let found = index.find_symbols_by_name(name, None).unwrap();
+            assert_eq!(found.len(), 1, "{name} must exist exactly once");
+            ids.insert(found[0].id);
+        }
+        assert_eq!(
+            ids.len(),
+            4,
+            "symbol ids must be disjoint across single-file generations"
+        );
     }
 
     // Regression: batch-incremental Phase 2 resolved against a cache scoped

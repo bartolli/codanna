@@ -41,6 +41,10 @@ pub struct IndexStage {
     progress: Option<Arc<ProgressBar>>,
     /// Optional progress callback (alternative to progress bar).
     progress_callback: Option<IndexProgressCallback>,
+    /// Starting (file, symbol) counters; seeds the durable high-water
+    /// mark so a partial run never persists counters below ids consumed
+    /// by earlier generations.
+    counter_floor: (u32, u32),
 }
 
 impl IndexStage {
@@ -54,7 +58,15 @@ impl IndexStage {
             batches_per_commit: batches_per_commit.max(1),
             progress: None,
             progress_callback: None,
+            counter_floor: (0, 0),
         }
+    }
+
+    /// Seed the durable-counter high-water mark with the run's starting
+    /// counters (from `get_start_counters`).
+    pub fn with_counter_floor(mut self, file: u32, symbol: u32) -> Self {
+        self.counter_floor = (file, symbol);
+        self
     }
 
     /// Add progress bar for live updates.
@@ -96,6 +108,8 @@ impl IndexStage {
         // Start initial batch - StorageError converts to PipelineError via #[from]
         self.index.start_batch()?;
 
+        let (mut file_high_water, mut symbol_high_water) = self.counter_floor;
+
         loop {
             // Track input wait (time blocked on recv)
             let recv_start = Instant::now();
@@ -108,17 +122,26 @@ impl IndexStage {
             // Accumulate relationships for Phase 2
             pending_relationships.extend(std::mem::take(&mut batch.unresolved_relationships));
 
+            for registration in &batch.file_registrations {
+                file_high_water = file_high_water.max(registration.file_id.value());
+            }
+            for symbol in &batch.symbols {
+                symbol_high_water = symbol_high_water.max(symbol.id.value());
+            }
+
             failed_files_total += self.process_batch(batch, &mut stats, &symbol_cache)?;
 
             batch_count += 1;
 
             // Commit every N batches
             if batch_count % self.batches_per_commit == 0 {
+                self.persist_counters(file_high_water, symbol_high_water)?;
                 self.commit_and_restart()?;
             }
         }
 
         // Final commit
+        self.persist_counters(file_high_water, symbol_high_water)?;
         self.index.commit_batch()?;
 
         // Clean work is committed and durable; failed files are unregistered
@@ -233,6 +256,23 @@ impl IndexStage {
     fn commit_and_restart(&self) -> PipelineResult<()> {
         self.index.commit_batch()?;
         self.index.start_batch()?;
+        Ok(())
+    }
+
+    /// Stage the id-counter high-water mark into the open batch so docs
+    /// and counters become durable in ONE commit. A run that dies after
+    /// any commit leaves the persisted counters at or above every
+    /// committed id; the next generation cannot re-issue a live id.
+    fn persist_counters(&self, file: u32, symbol: u32) -> PipelineResult<()> {
+        use crate::storage::MetadataKey;
+        if file > 0 {
+            self.index
+                .store_metadata(MetadataKey::FileCounter, u64::from(file))?;
+        }
+        if symbol > 0 {
+            self.index
+                .store_metadata(MetadataKey::SymbolCounter, u64::from(symbol))?;
+        }
         Ok(())
     }
 
@@ -364,6 +404,56 @@ mod tests {
         assert_eq!(stats.files_indexed, 5);
         assert_eq!(stats.symbols_found, 10);
         assert_eq!(symbol_cache.len(), 10);
+    }
+
+    /// Crash-window regression: docs must never be durable above the
+    /// persisted counters. Run the stage WITHOUT the pipeline's tail
+    /// save_final_counters; the stored counters must already cover
+    /// every committed id.
+    #[test]
+    fn counters_are_durable_at_every_commit_without_tail_save() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+
+        let (batch_tx, batch_rx) = bounded(10);
+        batch_tx.send(make_test_batch(1, 3)).unwrap(); // symbol ids 1..=3
+        batch_tx.send(make_test_batch(2, 3)).unwrap(); // symbol ids 4..=6
+        drop(batch_tx);
+
+        let stage = IndexStage::new(Arc::clone(&index), 1);
+        stage.run(batch_rx).unwrap();
+
+        assert_eq!(
+            index.get_next_symbol_id().unwrap(),
+            7,
+            "symbol counter must cover every committed id without a tail save"
+        );
+        assert_eq!(
+            index.get_next_file_id().unwrap(),
+            3,
+            "file counter must cover every committed registration"
+        );
+    }
+
+    /// A run whose batches carry ids below the starting counters (an
+    /// incremental run over an existing index) must not regress the
+    /// persisted counters below the floor.
+    #[test]
+    fn counter_floor_prevents_regression_below_prior_generations() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+
+        let (batch_tx, batch_rx) = bounded(10);
+        batch_tx.send(make_test_batch(1, 2)).unwrap(); // file id 1, symbol ids 1..=2
+        drop(batch_tx);
+
+        let stage = IndexStage::new(Arc::clone(&index), 1).with_counter_floor(10, 20);
+        stage.run(batch_rx).unwrap();
+
+        assert_eq!(index.get_next_file_id().unwrap(), 11);
+        assert_eq!(index.get_next_symbol_id().unwrap(), 21);
     }
 
     #[test]

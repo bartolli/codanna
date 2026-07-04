@@ -311,7 +311,8 @@ impl Pipeline {
             _ => None,
         };
         let index_handle = {
-            let mut index_stage = IndexStage::new(index, batches_per_commit);
+            let mut index_stage = IndexStage::new(index, batches_per_commit)
+                .with_counter_floor(start_file_counter, start_symbol_counter);
             match &progress {
                 ProgressSink::Silent => {}
                 ProgressSink::Bar(bar) => {
