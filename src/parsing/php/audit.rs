@@ -4,7 +4,6 @@
 //! This helps identify gaps in our symbol extraction.
 
 use super::PhpParser;
-use crate::io::format::format_utc_timestamp;
 use crate::parsing::NodeTracker;
 use crate::types::FileId;
 use std::collections::{HashMap, HashSet};
@@ -88,7 +87,6 @@ impl PhpParserAudit {
         let mut report = String::new();
 
         report.push_str("# PHP Parser Coverage Report\n\n");
-        report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
         // Key nodes we care about for symbol extraction
         let key_nodes = vec![

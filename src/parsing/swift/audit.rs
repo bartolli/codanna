@@ -4,7 +4,6 @@
 //! grammar exposed by tree-sitter-swift. Highlights extraction gaps.
 
 use super::SwiftParser;
-use crate::io::format::format_utc_timestamp;
 use crate::parsing::parser::{LanguageParser, NodeTracker};
 use crate::types::{FileId, SymbolCounter};
 use std::collections::{HashMap, HashSet};
@@ -85,7 +84,6 @@ impl SwiftParserAudit {
         let mut report = String::new();
 
         report.push_str("# Swift Parser Symbol Extraction Coverage Report\n\n");
-        report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
         // Key nodes for Swift - includes class_declaration which covers class/struct/enum/actor/extension
         let key_nodes = vec![

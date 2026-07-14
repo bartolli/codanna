@@ -1,7 +1,5 @@
 # Go Parser Symbol Extraction Coverage Report
 
-*Generated: 2026-07-14 21:19:18 UTC*
-
 ## Summary
 - Key nodes: 22/22 (100%)
 - Symbol kinds extracted: 9

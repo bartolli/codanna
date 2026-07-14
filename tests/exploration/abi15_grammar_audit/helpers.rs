@@ -1,7 +1,6 @@
 //! Shared helpers for grammar audit tests.
 
 use super::abi15_exploration_common::print_node_tree;
-use codanna::io::format::format_utc_timestamp as get_formatted_timestamp;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -222,10 +221,6 @@ fn generate_grammar_analysis(
         "# {name} Grammar Analysis\n\n",
         name = config.language_name
     ));
-    analysis.push_str(&format!(
-        "*Generated: {ts}*\n\n",
-        ts = get_formatted_timestamp()
-    ));
     analysis.push_str("## Statistics\n");
     analysis.push_str(&format!(
         "- Total nodes in grammar JSON: {count}\n",
@@ -325,10 +320,6 @@ pub fn format_node_discovery(
     output.push_str(&format!(
         "=== {name} Language NODE MAPPING ===\n",
         name = config.language_name
-    ));
-    output.push_str(&format!(
-        "  Generated: {ts}\n",
-        ts = get_formatted_timestamp()
     ));
     output.push_str(&format!("  ABI Version: {abi_version}\n"));
     output.push_str(&format!(

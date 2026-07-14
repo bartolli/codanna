@@ -3,7 +3,6 @@
 //! Tracks which AST nodes the parser handles vs what's available in the grammar.
 
 use super::LuaParser;
-use crate::io::format::format_utc_timestamp;
 use crate::parsing::NodeTracker;
 use crate::types::FileId;
 use std::collections::{HashMap, HashSet};
@@ -77,7 +76,6 @@ impl LuaParserAudit {
         let mut report = String::new();
 
         report.push_str("# Lua Parser Symbol Extraction Coverage Report\n\n");
-        report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
         let key_nodes = vec![
             "chunk",

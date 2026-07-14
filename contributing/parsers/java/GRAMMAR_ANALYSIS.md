@@ -1,7 +1,5 @@
 # Java Grammar Analysis
 
-*Generated: 2026-07-14 21:19:18 UTC*
-
 ## Statistics
 - Total nodes in grammar JSON: 151
 - Nodes found in comprehensive.java: 92

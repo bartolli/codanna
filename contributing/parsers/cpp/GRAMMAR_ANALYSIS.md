@@ -1,7 +1,5 @@
 # C++ Grammar Analysis
 
-*Generated: 2026-07-14 21:19:18 UTC*
-
 ## Statistics
 - Total nodes in grammar JSON: 223
 - Nodes found in comprehensive.cpp: 154

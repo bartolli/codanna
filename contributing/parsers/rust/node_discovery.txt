@@ -1,5 +1,4 @@
 === Rust Language NODE MAPPING ===
-  Generated: 2026-07-14 21:19:18 UTC
   ABI Version: 15
   Node kind count: 147
 

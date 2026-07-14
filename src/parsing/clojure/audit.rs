@@ -4,7 +4,6 @@
 //! This helps identify gaps in our symbol extraction.
 
 use super::ClojureParser;
-use crate::io::format::format_utc_timestamp;
 use crate::parsing::NodeTracker;
 use crate::parsing::parser::LanguageParser;
 use crate::types::FileId;
@@ -89,7 +88,6 @@ impl ClojureParserAudit {
         let mut report = String::new();
 
         report.push_str("# Clojure Parser Symbol Extraction Coverage Report\n\n");
-        report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
         // Key nodes we care about for symbol extraction in Clojure
         let key_nodes = vec![

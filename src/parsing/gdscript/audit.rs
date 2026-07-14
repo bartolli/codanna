@@ -4,7 +4,6 @@
 //! grammar exposed by tree-sitter-gdscript. This helps highlight extraction gaps.
 
 use super::GdscriptParser;
-use crate::io::format::format_utc_timestamp;
 use crate::parsing::parser::LanguageParser;
 use crate::types::{FileId, SymbolCounter};
 use std::collections::{HashMap, HashSet};
@@ -85,7 +84,6 @@ impl GdscriptParserAudit {
         let mut report = String::new();
 
         report.push_str("# GDScript Parser Symbol Extraction Coverage Report\n\n");
-        report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
         let key_nodes = vec![
             "class_definition",

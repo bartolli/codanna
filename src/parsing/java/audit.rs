@@ -3,7 +3,6 @@
 //! Provides ABI-15 coverage tracking for Java parser.
 
 use super::JavaParser;
-use crate::io::format::format_utc_timestamp;
 use crate::parsing::{LanguageParser, NodeTracker};
 use crate::types::FileId;
 use std::collections::{HashMap, HashSet};
@@ -79,7 +78,6 @@ impl JavaParserAudit {
         let mut report = String::new();
 
         report.push_str("# Java Parser Symbol Extraction Coverage Report\n\n");
-        report.push_str(&format!("*Generated: {}*\n\n", format_utc_timestamp()));
 
         let key_nodes = vec![
             "class_declaration",
