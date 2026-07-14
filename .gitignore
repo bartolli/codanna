@@ -83,3 +83,7 @@ vendors/fastembed-rs
 !/scripts/install.sh
 !/scripts/install.ps1
 docs/
+
+internal/
+conduct
+

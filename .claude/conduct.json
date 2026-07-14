@@ -1,0 +1,54 @@
+{
+  "version": 3,
+  "pluginVersion": "1.54.3",
+  "conductProjectPath": "${CONDUCT_PROJECT_ROOT}/rcrsr-codanna",
+  "updated": "2026-07-14T00:15:03.168Z",
+  "domains": {
+    "CDNA": {
+      "name": "Codanna",
+      "policy": "conduct/policies/policy-domain-cdna.md",
+      "artifacts": [
+        "RS"
+      ],
+      "keywords": [
+        "rust",
+        "mcp",
+        "tree-sitter",
+        "tantivy",
+        "code-intelligence"
+      ],
+      "agents": {
+        "engineer": "codanna-engineer",
+        "code-reviewer": "codanna-code-reviewer",
+        "architect": "codanna-architect",
+        "spec-reviewer": "codanna-spec-reviewer"
+      }
+    }
+  },
+  "artifacts": {
+    "RS": {
+      "type": "generic",
+      "name": "Rust",
+      "policy": "policy-artifact-rust.md"
+    }
+  },
+  "products": {},
+  "explorers": [
+    {
+      "name": "project-explorer",
+      "description": "Codebase exploration with domain knowledge from §CDNA"
+    }
+  ],
+  "resources": {
+    "installed": "2026-07-13T23:26:05.901Z"
+  },
+  "bashSafety": {
+    "enabled": true,
+    "disabledPatterns": [],
+    "additionalPatterns": [],
+    "additionalExceptions": {
+      "paths": [],
+      "commands": []
+    }
+  }
+}

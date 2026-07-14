@@ -1,0 +1,58 @@
+{
+  "environments": [
+    {
+      "name": "conduct",
+      "paths": [
+        "conduct"
+      ],
+      "checks": {
+        ".md": [
+          {
+            "name": "conduct",
+            "command": "node",
+            "args": [
+              "conduct/resources/scripts/validate-documents.mjs",
+              "--file",
+              "$FILE",
+              "--json"
+            ],
+            "parser": "jsonl",
+            "_conduct": true
+          }
+        ]
+      },
+      "_conduct": true
+    },
+    {
+      "name": "rust",
+      "paths": [
+        "."
+      ],
+      "checks": {
+        ".rs": [
+          {
+            "name": "rustfmt",
+            "command": "rustfmt",
+            "args": [
+              "--check",
+              "--edition",
+              "2024",
+              "$FILE"
+            ],
+            "parser": "prettier",
+            "_auto": true
+          }
+        ]
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "name": "policy-reviewer",
+      "match": "conduct:policy-engineer",
+      "action": "review",
+      "message": "Invoke conduct:policy-reviewer to validate the policy file.",
+      "_conduct": true
+    }
+  ]
+}
