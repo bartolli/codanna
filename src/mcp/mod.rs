@@ -21,10 +21,16 @@ pub mod client;
 pub mod http_server;
 pub mod https_server;
 pub mod notifications;
+pub mod proxy;
 pub mod requests;
 pub mod server;
 pub mod service;
 pub mod tools;
 
+pub use proxy::{ProxyError, ProxyResult, serve_proxy};
 pub use requests::*;
 pub use server::{CodeIntelligenceServer, format_relative_time};
+
+/// Bearer token accepted by the dev-mode auth middleware. Bare token — rmcp
+/// `auth_header` adds the "Bearer " prefix itself.
+pub(crate) const DUMMY_BEARER_TOKEN: &str = "mcp-access-token-dummy";

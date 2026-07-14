@@ -189,6 +189,32 @@ fn seed_indexer_with_config_paths(
     report
 }
 
+/// Resolve whether a `Commands::Serve` invocation selects proxy mode.
+///
+/// Proxy mode never loads an `IndexFacade` in-process (§4.5): it discovers or
+/// spawns a backing `codanna serve --http` and relays stdio traffic to it. This
+/// mirrors the CLI-flag-then-config precedence in
+/// `cli::commands::serve::run` so the pre-dispatch resource predicates
+/// (`needs_indexer`, `needs_trait_resolver`, `needs_semantic_search`) agree
+/// with the mode `serve::run` will actually select.
+fn is_proxy_serve(command: &Commands, config: &Settings) -> bool {
+    match command {
+        Commands::Serve {
+            proxy: true,
+            http: false,
+            https: false,
+            ..
+        } => true,
+        Commands::Serve {
+            proxy: false,
+            http: false,
+            https: false,
+            ..
+        } => config.server.mode == "proxy",
+        _ => false,
+    }
+}
+
 fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
     IndexFacade::new(settings).unwrap_or_else(|e| {
         eprintln!("Error: Failed to create index: {e}");
@@ -209,6 +235,19 @@ fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
 /// Auto-initializes config for index command. Persists index after modifications.
 #[tokio::main]
 async fn main() {
+    // reqwest's `rustls-no-provider` backend (enabled transitively by the
+    // `https-server` feature, see Cargo.toml) requires a default rustls
+    // crypto provider installed before the FIRST `reqwest::Client` is built
+    // anywhere in this process, or that build panics with "No rustls crypto
+    // provider is configured" -- including the plain `--http` proxy path's
+    // client (src/mcp/proxy.rs), which never touches `serve_tls` at all.
+    // Installing it once, here, before any command dispatch, covers every
+    // `reqwest::Client` construction site regardless of which one runs first.
+    #[cfg(feature = "https-server")]
+    {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
     let cli = Cli::parse();
 
     // For index command, auto-initialize if needed (but not when using --config)
@@ -278,7 +317,7 @@ async fn main() {
             | Commands::Plugin { .. }
             | Commands::Documents { .. }
             | Commands::Profile { .. }
-    );
+    ) && !is_proxy_serve(&cli.command, &config);
 
     // Initialize project resolution providers (only if needed)
     // This ensures caches are built before indexing starts
@@ -329,7 +368,7 @@ async fn main() {
             ..
         } | Commands::Index { .. }
             | Commands::Serve { .. }
-    );
+    ) && !is_proxy_serve(&cli.command, &config);
 
     // Determine if we need semantic search (ML model loading)
     // Retrieve commands use Tantivy text search only - no ML model needed
@@ -338,6 +377,7 @@ async fn main() {
             // Only these MCP tools need semantic search
             ["semantic_search_docs", "semantic_search_with_context"].contains(&tool.as_str())
         }
+        Commands::Serve { .. } if is_proxy_serve(&cli.command, &config) => false,
         Commands::Index { .. } | Commands::Serve { .. } => true,
         _ => false,
     };
@@ -623,6 +663,8 @@ async fn main() {
         }
     }
 
+    let serve_is_proxy = is_proxy_serve(&cli.command, &config);
+
     match cli.command {
         Commands::Init { force } => {
             codanna::cli::commands::init::run_init(force);
@@ -672,20 +714,31 @@ async fn main() {
             watch_interval,
             http,
             https,
+            proxy,
             bind,
         } => {
             use codanna::cli::commands::serve::{ServeArgs, run as run_serve};
+            // Proxy mode never loads an IndexFacade in-process (§4.5): the
+            // predicates above (needs_indexer/needs_trait_resolver/
+            // needs_semantic_search) already exclude it, so `indexer` is
+            // `None` here and must not be unwrapped.
+            let facade = if serve_is_proxy {
+                None
+            } else {
+                Some(indexer.expect("non-proxy serve requires indexer"))
+            };
             run_serve(
                 ServeArgs {
                     watch,
                     watch_interval,
                     http,
                     https,
+                    proxy,
                     bind,
                 },
                 config,
                 settings,
-                indexer.expect("serve requires indexer"),
+                facade,
                 index_path,
             )
             .await;
@@ -881,5 +934,52 @@ mod tests {
     fn verify_cli() {
         // This test ensures the CLI structure is valid
         Cli::command().debug_assert();
+    }
+}
+
+#[cfg(test)]
+mod is_proxy_serve_tests {
+    use super::*;
+
+    // `is_proxy_serve` is pure (Commands + Settings in, bool out) so precedence
+    // between the CLI `--proxy` flag and `config.server.mode` can be asserted
+    // hermetically here, mirroring `resolve_server_mode`'s precedence in
+    // `cli::commands::serve`.
+
+    fn serve_command(http: bool, https: bool, proxy: bool) -> Commands {
+        Commands::Serve {
+            watch: false,
+            watch_interval: 5,
+            http,
+            https,
+            proxy,
+            bind: "127.0.0.1:8080".to_string(),
+        }
+    }
+
+    #[test]
+    fn cli_proxy_flag_selects_proxy() {
+        let config = Settings::default();
+        assert!(is_proxy_serve(&serve_command(false, false, true), &config));
+    }
+
+    #[test]
+    fn config_server_mode_proxy_selects_proxy_for_bare_serve() {
+        let mut config = Settings::default();
+        config.server.mode = "proxy".to_string();
+        assert!(is_proxy_serve(&serve_command(false, false, false), &config));
+    }
+
+    #[test]
+    fn cli_http_flag_still_selects_http_over_config_proxy() {
+        let mut config = Settings::default();
+        config.server.mode = "proxy".to_string();
+        assert!(!is_proxy_serve(&serve_command(true, false, false), &config));
+    }
+
+    #[test]
+    fn non_serve_command_is_never_proxy() {
+        let config = Settings::default();
+        assert!(!is_proxy_serve(&Commands::Config, &config));
     }
 }

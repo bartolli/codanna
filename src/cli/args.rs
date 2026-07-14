@@ -195,7 +195,7 @@ pub enum Commands {
     #[command(
         about = "Start MCP server",
         long_about = "Start MCP server with optional HTTP/HTTPS modes.",
-        after_help = "Examples:\n  codanna serve\n  codanna serve --http --watch\n  codanna serve --https --watch\n  codanna serve --http --bind 0.0.0.0:3000\n\nModes:\n  Default: stdio\n  --http: HTTP with OAuth\n  --https: HTTPS with TLS"
+        after_help = "Examples:\n  codanna serve\n  codanna serve --http --watch\n  codanna serve --https --watch\n  codanna serve --http --bind 0.0.0.0:3000\n  codanna serve --proxy\n\nModes:\n  Default: stdio\n  --http: HTTP with OAuth\n  --https: HTTPS with TLS\n  --proxy: stdio-facing proxy that discovers/spawns a backing HTTP server"
     )]
     Serve {
         /// Watch index file for changes and auto-reload
@@ -221,6 +221,14 @@ pub enum Commands {
             help = "Run as HTTPS server with TLS support"
         )]
         https: bool,
+
+        /// Run as a stdio-facing proxy that delegates to a discovered/spawned HTTP server
+        #[arg(
+            long,
+            conflicts_with_all = ["http", "https"],
+            help = "Speak stdio to the client while delegating to a backing HTTP MCP server"
+        )]
+        proxy: bool,
 
         /// Bind address for HTTP/HTTPS server
         #[arg(

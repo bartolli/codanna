@@ -49,7 +49,10 @@ notify = "8.2.0"
 num_cpus = "1.17.0"
 parking_lot = "0.12.5"
 rayon = "1.12.0"
-rmcp = { version = "2.1.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
+# transport-streamable-http-client-reqwest gives the stdio<->HTTP proxy (src/mcp/proxy.rs) a
+# reqwest::Client that implements rmcp's StreamableHttpClient trait, so it can dial the loopback
+# backing "codanna serve --http" without a hand-rolled HTTP client (pulls in rmcp's own reqwest dep).
+rmcp = { version = "2.1.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "transport-worker"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
@@ -103,6 +106,10 @@ tree-sitter-clojure-orchard = "0.2.5"
 glob = "0.3.3"
 async-trait = "0.1.89"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# rmcp's `impl StreamableHttpClient for reqwest::Client` is against reqwest 0.13
+# (rmcp 2.1.0 -> reqwest 0.13.4). The 0.12 dep above is a DIFFERENT crate instance
+# and its Client does not implement that trait. Renamed so both can coexist.
+rmcp_reqwest = { package = "reqwest", version = "0.13", default-features = false }
 sysinfo = "0.39.5"
 indexmap = { version = "2.14.0", features = ["serde"] }
 
@@ -115,7 +122,28 @@ thread-id = "5.1.0"
 [features]
 default = ["http-server"]
 http-server = ["axum", "tower", "tower-http"]
-https-server = ["http-server", "axum-server", "rustls", "rcgen"]
+# reqwest 0.13's `rustls` feature selects aws-lc-rs as the crypto provider. codanna
+# pins `rustls` (above) to `ring` only. If rmcp_reqwest also enabled aws-lc-rs, two
+# competing default CryptoProviders would coexist in the same rustls instance, and
+# CryptoProvider::get_default_or_install_from_crate_features() would return None,
+# causing a runtime panic in `serve --https` and in semantic/remote.rs. Use
+# `rustls-no-provider` (no bundled crypto backend) so `ring` (pinned above) remains
+# the sole provider. Do NOT change this to `rustls`.
+#
+# `rmcp_reqwest/rustls-no-provider` is required by `serve_tls::pinned_client`
+# (the cert-pinned client used to dial a `--https` backing server), which calls
+# `ClientBuilder::tls_certs_only`, gated behind reqwest's `__tls` feature --
+# without a TLS backend enabled here that method does not exist at all. Wiring
+# this feature in requires the one-time
+# `rustls::crypto::ring::default_provider().install_default()` call described
+# above, or every `reqwest::Client` built through rmcp's streamable-HTTP
+# transport (including the plain `--http` proxy path, which never touches
+# `serve_tls`) panics with "No rustls crypto provider is configured" the first
+# time one is built in the process. `main.rs` makes that install call, once,
+# before any command dispatch, so every `reqwest::Client` construction site in
+# the process is covered by the same installed provider, whether it is built
+# via `serve --https`, the stdio<->HTTP proxy, or `serve_tls::pinned_client`.
+https-server = ["http-server", "axum-server", "rustls", "rcgen", "rmcp_reqwest/rustls-no-provider"]
 axum = ["dep:axum"]
 tower = ["dep:tower"]
 tower-http = ["dep:tower-http"]

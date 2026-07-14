@@ -258,6 +258,22 @@ pub struct ServerConfig {
     /// Watch interval for stdio mode (seconds)
     #[serde(default = "default_watch_interval")]
     pub watch_interval: u64,
+
+    /// Whether the proxy mode auto-spawns a backing server process
+    #[serde(default = "default_auto_spawn")]
+    pub auto_spawn: bool,
+
+    /// Idle timeout for the auto-spawned server, in seconds (0 = never)
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+
+    /// Timeout for spawning the backing server, in milliseconds
+    #[serde(default = "default_spawn_timeout_ms")]
+    pub spawn_timeout_ms: u64,
+
+    /// Poll interval while waiting for the backing server to become healthy, in milliseconds
+    #[serde(default = "default_health_poll_ms")]
+    pub health_poll_ms: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -406,6 +422,10 @@ impl Default for ServerConfig {
             mode: default_server_mode(),
             bind: default_bind_address(),
             watch_interval: default_watch_interval(),
+            auto_spawn: default_auto_spawn(),
+            idle_timeout_secs: default_idle_timeout_secs(),
+            spawn_timeout_ms: default_spawn_timeout_ms(),
+            health_poll_ms: default_health_poll_ms(),
         }
     }
 }
@@ -640,6 +660,38 @@ enabled = false
         assert_eq!(settings.indexing.ignore_patterns.len(), 1);
         assert_eq!(settings.mcp.max_context_size, 200000);
         assert!(!settings.languages["rust"].enabled);
+    }
+
+    #[test]
+    fn test_server_config_minimal_toml_uses_proxy_defaults() {
+        let toml_content = r#"
+mode = "stdio"
+"#;
+        let server: ServerConfig = toml::from_str(toml_content).unwrap();
+        assert_eq!(server.mode, "stdio");
+        assert_eq!(server.bind, default_bind_address());
+        assert_eq!(server.watch_interval, default_watch_interval());
+        assert!(server.auto_spawn);
+        assert_eq!(server.idle_timeout_secs, 0);
+        assert_eq!(server.spawn_timeout_ms, 8000);
+        assert_eq!(server.health_poll_ms, 100);
+    }
+
+    #[test]
+    fn test_server_config_proxy_mode_round_trips() {
+        let toml_content = r#"
+mode = "proxy"
+"#;
+        let server: ServerConfig = toml::from_str(toml_content).unwrap();
+        assert_eq!(server.mode, "proxy");
+
+        let serialized = toml::to_string(&server).unwrap();
+        let round_tripped: ServerConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(round_tripped.mode, "proxy");
+        assert_eq!(round_tripped.auto_spawn, server.auto_spawn);
+        assert_eq!(round_tripped.idle_timeout_secs, server.idle_timeout_secs);
+        assert_eq!(round_tripped.spawn_timeout_ms, server.spawn_timeout_ms);
+        assert_eq!(round_tripped.health_poll_ms, server.health_poll_ms);
     }
 
     #[test]

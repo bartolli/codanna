@@ -15,7 +15,6 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
-    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -293,8 +292,9 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
         .await
         .context("Failed to configure TLS")?;
 
-    // Parse bind address
-    let addr: SocketAddr = bind.parse().context("Failed to parse bind address")?;
+    // Bind and read back the actual assigned port
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let actual_port = listener.local_addr()?.port();
 
     eprintln!("HTTPS MCP server listening on https://{bind}");
     eprintln!("MCP endpoint: https://{bind}/mcp");
@@ -305,17 +305,63 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
     eprintln!();
     eprintln!("Press Ctrl+C to stop the server");
 
-    // Serve with TLS
-    let server = axum_server::bind_rustls(addr, tls_config).serve(router.into_make_service());
+    // Publish a discovery record under the tree's `.codanna/` so other tools
+    // (e.g. the CLI proxy) can find this server without guessing ports.
+    // `local_addr().port()` is read above rather than parsing `bind` so an
+    // ephemeral `:0` bind resolves to the actual assigned port.
+    //
+    // The directory is derived from the workspace root, not `index_path`:
+    // `index_path` may be absolute or resolved relative to a `--config`
+    // file's parent (`init::resolve_index_path`), so it can diverge from
+    // `.codanna` in exactly the cases `discover_or_spawn` relies on.
+    let codanna_dir = crate::serve_discovery::resolve_workspace_root(&config)
+        .map(|root| crate::serve_discovery::discovery_dir(&root));
+
+    match &codanna_dir {
+        Some(codanna_dir) => {
+            let serve_record = crate::serve_discovery::ServeRecord {
+                pid: std::process::id(),
+                port: actual_port,
+                scheme: crate::serve_discovery::ServeScheme::Https,
+            };
+            if let Err(e) = crate::serve_discovery::write_record(codanna_dir, &serve_record) {
+                tracing::warn!(target: "mcp", "failed to write serve discovery record: {e}");
+            }
+        }
+        None => {
+            tracing::warn!(
+                target: "mcp",
+                "no workspace root (.codanna) found; not publishing a discovery record -- \
+                 `codanna serve --proxy` cannot discover this server. Run `codanna init` in the project root."
+            );
+            eprintln!(
+                "Warning: no workspace root (.codanna) found; not publishing a discovery record -- \
+                 `codanna serve --proxy` cannot discover this server. Run `codanna init` in the project root."
+            );
+        }
+    }
+
+    // Convert to std listener for axum_server's Rustls acceptor. `into_std`
+    // preserves the non-blocking mode tokio's listener already has, which
+    // `from_tcp_rustls` requires.
+    let std_listener = listener.into_std()?;
+    let server =
+        axum_server::from_tcp_rustls(std_listener, tls_config)?.serve(router.into_make_service());
 
     // Handle graceful shutdown
     tokio::select! {
         result = server => {
+            if let Some(codanna_dir) = &codanna_dir {
+                crate::serve_discovery::remove_record(codanna_dir);
+            }
             result?;
         }
         _ = shutdown_signal() => {
             eprintln!("Shutting down HTTPS server...");
             ct.cancel();
+            if let Some(codanna_dir) = &codanna_dir {
+                crate::serve_discovery::remove_record(codanna_dir);
+            }
         }
     }
 
@@ -378,7 +424,7 @@ async fn oauth_token(body: String) -> axum::Json<serde_json::Value> {
     if grant_type == "authorization_code" && code == "dummy-auth-code" {
         // Return access token WITHOUT refresh token
         axum::Json(serde_json::json!({
-            "access_token": "mcp-access-token-dummy",
+            "access_token": crate::mcp::DUMMY_BEARER_TOKEN,
             "token_type": "Bearer",
             "expires_in": 3600,
             "scope": "mcp"
@@ -511,14 +557,16 @@ async fn get_or_create_certificate(bind: &str) -> anyhow::Result<(Vec<u8>, Vec<u
     use anyhow::Context;
     use rcgen::generate_simple_self_signed;
 
-    // Determine certificate storage directory
-    let cert_dir = dirs::config_dir()
-        .context("Failed to get config directory")?
-        .join("codanna")
-        .join("certs");
-
-    let cert_path = cert_dir.join("server.pem");
-    let key_path = cert_dir.join("server.key");
+    // Cert/key paths come from the single definition in `serve_tls::cert_paths`
+    // -- this is the same path `serve_tls::pinned_client` pins its trust to, so
+    // the writer here and that reader must never compute this join separately
+    // or they will silently drift onto different files.
+    let (cert_path, key_path) = crate::serve_tls::cert_paths()
+        .context("Failed to determine config directory for certificate storage")?;
+    let cert_dir = cert_path
+        .parent()
+        .context("Certificate path has no parent directory")?
+        .to_path_buf();
 
     // Create directory if it doesn't exist
     tokio::fs::create_dir_all(&cert_dir)

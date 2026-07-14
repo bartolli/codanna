@@ -3,6 +3,17 @@
 //! Provides a persistent HTTP server with streamable HTTP transport
 //! for multiple concurrent clients and real-time updates.
 
+/// Checks whether an `Authorization` header value carries the dev-mode
+/// Bearer token. Expects the standard "Bearer <token>" form; rmcp's
+/// `auth_header` adds the prefix, so the comparison strips it rather than
+/// composing a "Bearer <token>" literal.
+#[cfg(feature = "http-server")]
+fn is_authorized(auth_header: Option<&str>) -> bool {
+    auth_header
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| token == crate::mcp::DUMMY_BEARER_TOKEN)
+}
+
 #[cfg(feature = "http-server")]
 pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> anyhow::Result<()> {
     use crate::IndexPersistence;
@@ -303,7 +314,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         if grant_type == "authorization_code" && code == "dummy-auth-code" {
             // Return access token WITHOUT refresh token
             axum::Json(serde_json::json!({
-                "access_token": "mcp-access-token-dummy",
+                "access_token": crate::mcp::DUMMY_BEARER_TOKEN,
                 "token_type": "Bearer",
                 "expires_in": 3600,
                 "scope": "mcp"
@@ -414,14 +425,13 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
         next: axum::middleware::Next,
     ) -> Result<axum::response::Response, axum::http::StatusCode> {
         // Check for Bearer token in Authorization header
-        if let Some(auth_header) = req.headers().get("Authorization") {
-            if let Ok(auth_str) = auth_header.to_str() {
-                // Accept our dummy token
-                if auth_str == "Bearer mcp-access-token-dummy" {
-                    eprintln!("MCP request authorized with Bearer token");
-                    return Ok(next.run(req).await);
-                }
-            }
+        let auth_str = req
+            .headers()
+            .get("Authorization")
+            .and_then(|h| h.to_str().ok());
+        if is_authorized(auth_str) {
+            eprintln!("MCP request authorized with Bearer token");
+            return Ok(next.run(req).await);
         }
 
         // For OPTIONS requests (CORS preflight), allow without auth
@@ -455,10 +465,47 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
 
     // Bind and serve
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    let actual_port = listener.local_addr()?.port();
     eprintln!("HTTP MCP server listening on http://{bind}");
     eprintln!("MCP endpoint: http://{bind}/mcp");
     eprintln!("Health check: http://{bind}/health");
     eprintln!("Press Ctrl+C to stop the server");
+
+    // Publish a discovery record under the tree's `.codanna/` so other tools
+    // (e.g. the CLI proxy) can find this server without guessing ports.
+    // `local_addr().port()` is read above rather than parsing `bind` so an
+    // ephemeral `:0` bind resolves to the actual assigned port.
+    //
+    // The directory is derived from the workspace root, not `index_path`:
+    // `index_path` may be absolute or resolved relative to a `--config`
+    // file's parent (`init::resolve_index_path`), so it can diverge from
+    // `.codanna` in exactly the cases `discover_or_spawn` relies on.
+    let codanna_dir = crate::serve_discovery::resolve_workspace_root(&config)
+        .map(|root| crate::serve_discovery::discovery_dir(&root));
+
+    match &codanna_dir {
+        Some(codanna_dir) => {
+            let serve_record = crate::serve_discovery::ServeRecord {
+                pid: std::process::id(),
+                port: actual_port,
+                scheme: crate::serve_discovery::ServeScheme::Http,
+            };
+            if let Err(e) = crate::serve_discovery::write_record(codanna_dir, &serve_record) {
+                tracing::warn!(target: "mcp", "failed to write serve discovery record: {e}");
+            }
+        }
+        None => {
+            tracing::warn!(
+                target: "mcp",
+                "no workspace root (.codanna) found; not publishing a discovery record -- \
+                 `codanna serve --proxy` cannot discover this server. Run `codanna init` in the project root."
+            );
+            eprintln!(
+                "Warning: no workspace root (.codanna) found; not publishing a discovery record -- \
+                 `codanna serve --proxy` cannot discover this server. Run `codanna init` in the project root."
+            );
+        }
+    }
 
     // Create server future
     let server = axum::serve(listener, router);
@@ -466,11 +513,17 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
     // Handle graceful shutdown with tokio::select!
     tokio::select! {
         result = server => {
+            if let Some(codanna_dir) = &codanna_dir {
+                crate::serve_discovery::remove_record(codanna_dir);
+            }
             result?;
         }
         _ = shutdown_signal() => {
             eprintln!("Shutting down HTTP server...");
             ct.cancel();
+            if let Some(codanna_dir) = &codanna_dir {
+                crate::serve_discovery::remove_record(codanna_dir);
+            }
         }
     }
 
@@ -487,4 +540,29 @@ pub async fn serve_http(
     eprintln!("HTTP server support is not compiled in.");
     eprintln!("Please rebuild with: cargo build --features http-server");
     std::process::exit(1);
+}
+
+#[cfg(all(test, feature = "http-server"))]
+mod tests {
+    use super::is_authorized;
+
+    #[test]
+    fn accepts_bearer_prefixed_dummy_token() {
+        assert!(is_authorized(Some("Bearer mcp-access-token-dummy")));
+    }
+
+    #[test]
+    fn rejects_bare_token_without_bearer_prefix() {
+        assert!(!is_authorized(Some("mcp-access-token-dummy")));
+    }
+
+    #[test]
+    fn rejects_wrong_token() {
+        assert!(!is_authorized(Some("Bearer wrong")));
+    }
+
+    #[test]
+    fn rejects_missing_header() {
+        assert!(!is_authorized(None));
+    }
 }

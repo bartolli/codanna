@@ -71,6 +71,18 @@ pub(super) fn default_bind_address() -> String {
 pub(super) fn default_watch_interval() -> u64 {
     5
 }
+pub(super) fn default_auto_spawn() -> bool {
+    true
+}
+pub(super) fn default_idle_timeout_secs() -> u64 {
+    0
+}
+pub(super) fn default_spawn_timeout_ms() -> u64 {
+    8000
+}
+pub(super) fn default_health_poll_ms() -> u64 {
+    100
+}
 
 pub(super) fn default_guidance_templates() -> IndexMap<String, GuidanceTemplate> {
     let mut templates = IndexMap::new();

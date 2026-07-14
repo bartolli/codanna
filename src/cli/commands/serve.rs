@@ -1,111 +1,11 @@
 //! Serve command - MCP server modes (stdio, HTTP, HTTPS).
 
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
-
-/// PID lockfile guard for stdio MCP servers. Prevents two concurrent
-/// `codanna serve` (stdio) processes from racing the tantivy writer on the
-/// same `.codanna/index/`. Removed automatically on drop. HTTP/HTTPS modes
-/// get exclusion via port binding and do not use this lock.
-struct ServeLockGuard {
-    path: PathBuf,
-}
-
-#[derive(Debug)]
-enum ServeLockError {
-    AlreadyRunning { pid: u32, lock_path: PathBuf },
-    Io(std::io::Error),
-}
-
-impl ServeLockGuard {
-    /// `create_new`-first acquire: the lockfile is only ever removed after
-    /// `create_new` has failed with `AlreadyExists` AND the recorded PID is
-    /// verified dead. An unconditional pre-remove would delete a racing
-    /// process's live lock and let two servers share one tantivy index.
-    fn acquire(index_path: &Path) -> Result<Self, ServeLockError> {
-        let lock_path = index_path.join("serve.lock");
-
-        if let Some(parent) = lock_path.parent() {
-            std::fs::create_dir_all(parent).map_err(ServeLockError::Io)?;
-        }
-
-        for _ in 0..3 {
-            match OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-            {
-                Ok(mut f) => {
-                    f.write_all(std::process::id().to_string().as_bytes())
-                        .map_err(ServeLockError::Io)?;
-                    return Ok(Self { path: lock_path });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    match read_lock_pid(&lock_path) {
-                        Some(pid) if pid_is_alive(pid) => {
-                            return Err(ServeLockError::AlreadyRunning { pid, lock_path });
-                        }
-                        Some(_) => {
-                            // Recorded process is dead: reclaim and retry.
-                            let _ = std::fs::remove_file(&lock_path);
-                        }
-                        None => {
-                            // No parseable PID. A racing process may have
-                            // created the lock but not written its PID yet;
-                            // re-read after a grace window before treating
-                            // the file as a dead leftover (SIGKILL between
-                            // create and write leaves an empty lock that
-                            // must self-heal).
-                            std::thread::sleep(std::time::Duration::from_millis(50));
-                            match read_lock_pid(&lock_path) {
-                                Some(pid) if pid_is_alive(pid) => {
-                                    return Err(ServeLockError::AlreadyRunning { pid, lock_path });
-                                }
-                                _ => {
-                                    let _ = std::fs::remove_file(&lock_path);
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => return Err(ServeLockError::Io(e)),
-            }
-        }
-
-        // Retries exhausted: another process keeps winning the create race.
-        let pid = read_lock_pid(&lock_path).unwrap_or(0);
-        Err(ServeLockError::AlreadyRunning { pid, lock_path })
-    }
-}
-
-fn read_lock_pid(lock_path: &Path) -> Option<u32> {
-    std::fs::read_to_string(lock_path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-}
-
-impl Drop for ServeLockGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn pid_is_alive(pid: u32) -> bool {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    let pid = Pid::from_u32(pid);
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        true,
-        ProcessRefreshKind::nothing(),
-    );
-    sys.process(pid).is_some()
-}
+use crate::serve_discovery::{PidLockError, PidLockGuard};
 
 /// Arguments for the serve command.
 pub struct ServeArgs {
@@ -113,15 +13,47 @@ pub struct ServeArgs {
     pub watch_interval: u64,
     pub http: bool,
     pub https: bool,
+    pub proxy: bool,
     pub bind: String,
 }
 
+/// Resolve which server transport `codanna serve` should start.
+///
+/// Precedence mirrors `main.rs`'s `is_proxy_serve` so the pre-dispatch
+/// resource predicates and the actual server startup never disagree about
+/// which mode is in effect:
+/// 1. CLI `--https` (highest precedence)
+/// 2. CLI `--http`
+/// 3. CLI `--proxy`, OR `config.server.mode == "proxy"` when no CLI transport
+///    flag was given (bare `codanna serve` can default to proxy via
+///    `settings.toml`)
+/// 4. `config.server.mode == "http"`
+/// 5. stdio (default)
+fn resolve_server_mode(https: bool, http: bool, proxy: bool, config_mode: &str) -> &'static str {
+    if https {
+        "https"
+    } else if http {
+        "http"
+    } else if proxy || config_mode == "proxy" {
+        "proxy"
+    } else if config_mode == "http" {
+        "http"
+    } else {
+        "stdio"
+    }
+}
+
 /// Run the serve command.
+///
+/// `facade` is `None` exactly when proxy mode is selected: `main.rs` computes
+/// the effective mode ahead of index loading (§4.5) and skips constructing an
+/// `IndexFacade` entirely for proxy, since the proxy process holds no index
+/// state of its own -- it only relays to a backing HTTP server's facade.
 pub async fn run(
     args: ServeArgs,
     config: Settings,
     settings: Arc<Settings>,
-    facade: IndexFacade,
+    facade: Option<IndexFacade>,
     index_path: PathBuf,
 ) {
     let ServeArgs {
@@ -129,20 +61,11 @@ pub async fn run(
         watch_interval,
         http,
         https,
+        proxy,
         bind,
     } = args;
 
-    // Determine server mode:
-    // 1. CLI --https flag takes highest precedence
-    // 2. CLI --http flag takes second precedence
-    // 3. Otherwise, check config.server.mode
-    let server_mode = if https {
-        "https"
-    } else if http || config.server.mode == "http" {
-        "http"
-    } else {
-        "stdio"
-    };
+    let server_mode = resolve_server_mode(https, http, proxy, &config.server.mode);
 
     // Use bind address from CLI if provided, otherwise from config
     // For HTTPS, default to port 8443 if using default bind
@@ -172,11 +95,14 @@ pub async fn run(
         "http" => {
             run_http_server(config, watch, bind_address).await;
         }
+        "proxy" => {
+            run_proxy_server(config).await;
+        }
         _ => {
             run_stdio_server(
                 config,
                 settings,
-                facade,
+                facade.expect("stdio serve requires an already-loaded IndexFacade"),
                 index_path,
                 watch,
                 actual_watch_interval,
@@ -215,6 +141,18 @@ async fn run_https_server(config: &Settings, watch: bool, bind_address: String) 
     }
 }
 
+async fn run_proxy_server(config: Settings) {
+    // Proxy mode - stdio-facing delegate that discovers/spawns a backing
+    // `codanna serve --http` and relays MCP traffic to it. No IndexFacade is
+    // constructed in this process (§4.5).
+    eprintln!("Starting MCP server in proxy mode (stdio <-> HTTP delegate)");
+
+    if let Err(e) = crate::mcp::proxy::serve_proxy(config).await {
+        eprintln!("Proxy server error: {e}");
+        std::process::exit(1);
+    }
+}
+
 async fn run_http_server(config: Settings, watch: bool, bind_address: String) {
     // HTTP mode - persistent server with event-driven file watching
     eprintln!("Starting MCP server in HTTP mode");
@@ -246,9 +184,9 @@ async fn run_stdio_server(
     // function scope so the guard removes the lockfile on return / unwind.
     // The process::exit arms below must drop it explicitly: exit skips
     // destructors and would leave the lockfile behind.
-    let serve_lock = match ServeLockGuard::acquire(&index_path) {
+    let serve_lock = match PidLockGuard::acquire(&index_path.join("serve.lock")) {
         Ok(guard) => guard,
-        Err(ServeLockError::AlreadyRunning { pid, lock_path }) => {
+        Err(PidLockError::Held { pid, lock_path }) => {
             eprintln!(
                 "Another codanna serve is already running for this index (PID {pid}, lock at {}).",
                 lock_path.display()
@@ -265,7 +203,7 @@ async fn run_stdio_server(
             );
             std::process::exit(1);
         }
-        Err(ServeLockError::Io(e)) => {
+        Err(PidLockError::Io(e)) => {
             eprintln!(
                 "Failed to acquire serve lock under {}: {e}",
                 index_path.display()
@@ -442,71 +380,50 @@ pub async fn run_mcp_test(
 }
 
 #[cfg(test)]
-mod serve_lock_tests {
-    use super::*;
-    use tempfile::TempDir;
+mod server_mode_selection_tests {
+    use super::resolve_server_mode;
+
+    // These tests exercise `resolve_server_mode` in isolation: it is a pure
+    // function of (https, http, proxy, config_mode) -> &'static str with no
+    // I/O, so precedence can be asserted hermetically without spawning any
+    // process or binding any port.
+    //
+    // The stdio<->HTTP delegating pump in `mcp::proxy` is intentionally NOT
+    // unit tested here: exercising it for real requires a live backing HTTP
+    // MCP server (a spawned child process) and a connected stdio client on
+    // the other end, which is an integration/manual validation concern, not
+    // a hermetic unit test.
 
     #[test]
-    fn acquire_writes_pid_and_drop_removes_lock() {
-        let dir = TempDir::new().unwrap();
-        let lock_path = dir.path().join("serve.lock");
-
-        {
-            let _guard = ServeLockGuard::acquire(dir.path()).expect("first acquire");
-            let contents = std::fs::read_to_string(&lock_path).unwrap();
-            assert_eq!(contents.trim(), std::process::id().to_string());
-        }
-
-        assert!(
-            !lock_path.exists(),
-            "lockfile should be removed when guard drops"
-        );
+    fn cli_proxy_flag_selects_proxy() {
+        assert_eq!(resolve_server_mode(false, false, true, "stdio"), "proxy");
     }
 
     #[test]
-    fn second_acquire_blocks_when_first_is_alive() {
-        let dir = TempDir::new().unwrap();
-        let _first = ServeLockGuard::acquire(dir.path()).expect("first acquire");
-
-        match ServeLockGuard::acquire(dir.path()) {
-            Err(ServeLockError::AlreadyRunning { pid, .. }) => {
-                assert_eq!(pid, std::process::id());
-            }
-            Ok(_) => panic!("second acquire should have failed"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-        }
+    fn config_mode_proxy_selects_proxy_with_bare_serve() {
+        // Bare `codanna serve` (no CLI transport flags) must be able to
+        // default to proxy via settings.toml `server.mode = "proxy"`.
+        assert_eq!(resolve_server_mode(false, false, false, "proxy"), "proxy");
     }
 
     #[test]
-    fn unparseable_lock_is_reclaimed_after_grace_window() {
-        let dir = TempDir::new().unwrap();
-        let lock_path = dir.path().join("serve.lock");
-
-        // SIGKILL between create and PID write leaves an empty lock; it must
-        // self-heal instead of blocking serve forever.
-        std::fs::write(&lock_path, "").unwrap();
-
-        let guard = ServeLockGuard::acquire(dir.path()).expect("empty lock should be reclaimed");
-        let contents = std::fs::read_to_string(&lock_path).unwrap();
-        assert_eq!(contents.trim(), std::process::id().to_string());
-        drop(guard);
-        assert!(!lock_path.exists());
+    fn cli_http_flag_wins_over_config_mode_proxy() {
+        assert_eq!(resolve_server_mode(false, true, false, "proxy"), "http");
     }
 
     #[test]
-    fn stale_lock_with_dead_pid_is_overwritten() {
-        let dir = TempDir::new().unwrap();
-        let lock_path = dir.path().join("serve.lock");
+    fn cli_https_flag_wins_over_everything() {
+        assert_eq!(resolve_server_mode(true, false, false, "proxy"), "https");
+        assert_eq!(resolve_server_mode(true, false, true, "http"), "https");
+    }
 
-        // PID 0 never refers to a normal process on Unix; sysinfo also reports
-        // it as absent. Use it as a synthetic stale entry.
-        std::fs::write(&lock_path, "0").unwrap();
-        assert!(!pid_is_alive(0), "PID 0 must read as dead for this test");
+    #[test]
+    fn config_mode_http_selects_http_without_cli_flags() {
+        assert_eq!(resolve_server_mode(false, false, false, "http"), "http");
+    }
 
-        let guard = ServeLockGuard::acquire(dir.path()).expect("stale lock should be reclaimed");
-        let contents = std::fs::read_to_string(&lock_path).unwrap();
-        assert_eq!(contents.trim(), std::process::id().to_string());
-        drop(guard);
-        assert!(!lock_path.exists());
+    #[test]
+    fn default_is_stdio() {
+        assert_eq!(resolve_server_mode(false, false, false, "stdio"), "stdio");
     }
 }

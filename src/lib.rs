@@ -22,6 +22,8 @@ pub mod project_resolver;
 pub mod relationship;
 pub mod retrieve;
 pub mod semantic;
+pub mod serve_discovery;
+pub mod serve_tls;
 pub mod storage;
 pub mod symbol;
 pub mod types;
