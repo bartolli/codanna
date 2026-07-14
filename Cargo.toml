@@ -1,6 +1,22 @@
 [package]
 name = "codanna"
-version = "0.9.23+rcrsr"
+# Fork version: <upstream base>+rcrsr.<private addition counter>
+#
+#   0.9.23   -- the upstream release this fork is built from. Bump ONLY when
+#               rebasing/merging onto a new upstream release, and reset the
+#               counter to .1 when you do.
+#   +rcrsr.N -- N increments once per private addition landed on top of that
+#               base. Surfaces in `codanna --version` and, via
+#               CARGO_PKG_VERSION, in the MCP `initialize` handshake, so a
+#               connected client reports exactly which build it is talking to.
+#
+# `+` is BUILD METADATA, which semver ignores in precedence: every +rcrsr.N
+# compares EQUAL to a bare 0.9.23, and +rcrsr.7 does NOT sort above +rcrsr.1.
+# That is deliberate -- a `-rcrsr` pre-release would instead sort BELOW 0.9.23,
+# making a fork with strictly more code compare as older than the upstream it
+# was built from. The counter is informational, not orderable. Do not rely on
+# it for version-range gating.
+version = "0.9.23+rcrsr.1"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Code Intelligence for Large Language Models"
