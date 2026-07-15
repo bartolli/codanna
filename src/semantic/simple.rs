@@ -548,12 +548,10 @@ impl SimpleSemanticSearch {
 
         // Save all embeddings
         storage.save_batch(&embeddings)?;
-
-        // Release storage-owned handles or mappings before syncing and
-        // replacing the staged file. Important on Windows.
         drop(storage);
 
         let staged_vec = staging_dir.join("segment_0.vec");
+        // write(true): Windows FlushFileBuffers requires GENERIC_WRITE
         std::fs::OpenOptions::new()
             .write(true)
             .open(&staged_vec)

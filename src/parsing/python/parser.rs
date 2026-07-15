@@ -2866,7 +2866,7 @@ class Outer:
                     println!(
                         "{}    body: {}",
                         indent,
-                        &code[body.byte_range()].replace('\n', "\\n")
+                        code[body.byte_range()].replace('\n', "\\n")
                     );
                 }
             }
