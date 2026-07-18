@@ -169,12 +169,7 @@ impl ResolveStage {
             ) && self.is_receiver_compat(to_id, unresolved, &caller.language_id)
                 && self.is_instance_type_compatible(unresolved, to_id, &caller.language_id)
             {
-                return Some(ResolvedRelationship {
-                    from_id,
-                    to_id,
-                    kind: unresolved.kind,
-                    metadata: unresolved.metadata.clone(),
-                });
+                return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
             }
         }
 
@@ -207,21 +202,11 @@ impl ResolveStage {
                 if !self.is_instance_type_compatible(unresolved, to_id, &caller.language_id) {
                     return None;
                 }
-                Some(ResolvedRelationship {
-                    from_id,
-                    to_id,
-                    kind: unresolved.kind,
-                    metadata: unresolved.metadata.clone(),
-                })
+                self.accept_unwitnessed_pick(from_id, to_id, unresolved)
             }
             ResolveResult::Ambiguous(candidates) => {
                 let to_id = self.disambiguate(&candidates, unresolved, context, false)?;
-                Some(ResolvedRelationship {
-                    from_id,
-                    to_id,
-                    kind: unresolved.kind,
-                    metadata: unresolved.metadata.clone(),
-                })
+                self.accept_unwitnessed_pick(from_id, to_id, unresolved)
             }
             ResolveResult::NotFound => None,
         }
@@ -651,6 +636,122 @@ impl ResolveStage {
         behavior.is_receiver_compatible(&candidate, receiver, caller.as_deref())
     }
 
+    /// Final acceptance for a pick made without receiver evidence.
+    ///
+    /// Scope maps and the locality ladder pick last-declared/closest, not
+    /// the right container: when the winner is one of several same-file
+    /// member symbols with the same name, the pick is a guess. Calls fail
+    /// closed (under-report, not mis-report); Defines fall back to the
+    /// definer's own contained member before failing closed. Non-member
+    /// collisions (plain-function shadowing) pass through untouched —
+    /// closest-before-call IS the scope semantics there.
+    fn accept_unwitnessed_pick(
+        &self,
+        from_id: SymbolId,
+        to_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+    ) -> Option<ResolvedRelationship> {
+        let to_id = if self.is_unwitnessed_member_pick(to_id, unresolved) {
+            if unresolved.kind != RelationKind::Defines {
+                return None;
+            }
+            self.defines_member_by_containment(from_id, unresolved)?
+        } else {
+            to_id
+        };
+        Some(ResolvedRelationship {
+            from_id,
+            to_id,
+            kind: unresolved.kind,
+            metadata: unresolved.metadata.clone(),
+        })
+    }
+
+    fn is_unwitnessed_member_pick(
+        &self,
+        to_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+    ) -> bool {
+        if !matches!(unresolved.kind, RelationKind::Calls | RelationKind::Defines) {
+            return false;
+        }
+        if unresolved
+            .metadata
+            .as_ref()
+            .is_some_and(|m| m.receiver.is_some())
+        {
+            return false;
+        }
+        let Some(winner) = self.symbol_cache.get_ref(to_id) else {
+            return false;
+        };
+        if !Self::is_member_symbol(&winner) {
+            return false;
+        }
+        let (winner_file, winner_name) = (winner.file_id, winner.name.clone());
+        drop(winner);
+        self.symbol_cache
+            .lookup_candidates(&winner_name)
+            .into_iter()
+            .filter(|&id| id != to_id)
+            .any(|id| {
+                self.symbol_cache
+                    .get_ref(id)
+                    .is_some_and(|sym| sym.file_id == winner_file && Self::is_member_symbol(&sym))
+            })
+    }
+
+    fn is_member_symbol(sym: &Symbol) -> bool {
+        sym.kind == crate::SymbolKind::Method
+            || matches!(
+                sym.scope_context,
+                Some(crate::symbol::ScopeContext::ClassMember { .. })
+            )
+    }
+
+    /// Containment pick for gated Defines: the definer's span plus
+    /// `is_direct_member` name the definer's own member without guessing.
+    /// Exactly one survivor resolves; zero or several fail closed.
+    fn defines_member_by_containment(
+        &self,
+        from_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+    ) -> Option<SymbolId> {
+        let definer = self.symbol_cache.get_ref(from_id)?;
+        let (definer_file, definer_range) = (definer.file_id, definer.range);
+        let definer_name = definer.name.clone();
+        drop(definer);
+
+        let mut contained = self
+            .symbol_cache
+            .lookup_candidates(&unresolved.to_name)
+            .into_iter()
+            .filter(|&id| {
+                let Some((member_range, member_scope)) =
+                    self.symbol_cache.get_ref(id).and_then(|sym| {
+                        (sym.file_id == definer_file
+                            && definer_range.start_line <= sym.range.start_line
+                            && sym.range.end_line <= definer_range.end_line)
+                            .then(|| (sym.range, sym.scope_context.clone()))
+                    })
+                else {
+                    return false;
+                };
+                self.is_direct_member(
+                    member_scope.as_ref(),
+                    member_range,
+                    from_id,
+                    &definer_name,
+                    definer_file,
+                )
+            });
+        let survivor = contained.next();
+        match (survivor, contained.next()) {
+            (Some(id), None) => Some(id),
+            _ => None,
+        }
+    }
+
     /// Disambiguate among multiple candidates.
     ///
     /// Priority order:
@@ -1008,6 +1109,180 @@ mod tests {
         fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
             self
         }
+    }
+
+    fn make_member(
+        id: u32,
+        name: &str,
+        file_id: u32,
+        lang: LanguageId,
+        start: u32,
+        end: u32,
+    ) -> Symbol {
+        let mut sym = make_symbol(id, name, file_id, lang);
+        sym.kind = SymbolKind::Method;
+        sym.range = Range::new(start, 0, end, 1);
+        sym
+    }
+
+    /// Caller + three same-file same-name methods (the lua
+    /// `createObject` shape: Config:new / Container:new / Vector:new).
+    fn member_collision_cache() -> Arc<SymbolLookupCache> {
+        let lua = LanguageId::new("lua");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut caller = make_symbol(1, "createObject", 1, lua);
+        caller.range = Range::new(300, 0, 316, 1);
+        cache.insert(caller);
+        cache.insert(make_member(2, "new", 1, lua, 100, 110));
+        cache.insert(make_member(3, "new", 1, lua, 150, 160));
+        cache.insert(make_member(4, "new", 1, lua, 252, 260));
+        cache
+    }
+
+    #[test]
+    fn metadataless_call_frozen_scope_winner_fails_closed() {
+        // The scope map hands back the last-declared same-name member; with
+        // no receiver evidence and two rivals in the winner's file, the pick
+        // is a guess and must fail closed.
+        let lua = LanguageId::new("lua");
+        let cache = member_collision_cache();
+        let stage = make_stage(cache);
+
+        let mut rel = make_unresolved(1, "new", 1, RelationKind::Calls);
+        rel.to_range = Some(Range::new(308, 8, 308, 20));
+        let mut context = make_context(1, lua, vec![SymbolId::new(1).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("new".to_string(), SymbolId::new(4).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 0, "member collision must not resolve");
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn metadataless_call_member_collision_ladder_fails_closed() {
+        // Same collision through the cache tiers: Ambiguous -> disambiguate
+        // must not fall back to closest-by-range among member candidates.
+        let lua = LanguageId::new("lua");
+        let cache = member_collision_cache();
+        let stage = make_stage(cache);
+
+        let mut rel = make_unresolved(1, "new", 1, RelationKind::Calls);
+        rel.to_range = Some(Range::new(308, 8, 308, 20));
+        let context = make_context(1, lua, vec![SymbolId::new(1).unwrap()], vec![rel]);
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 0, "ladder must not re-guess a gated pick");
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn plain_function_shadowing_still_resolves() {
+        // Two same-file same-name FUNCTIONS are genuine shadowing;
+        // closest-before-call is the scope semantics, not a guess.
+        let lua = LanguageId::new("lua");
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_symbol(1, "caller", 1, lua));
+        let mut early = make_symbol(2, "helper", 1, lua);
+        early.range = Range::new(1, 0, 2, 1);
+        cache.insert(early);
+        let mut late = make_symbol(3, "helper", 1, lua);
+        late.range = Range::new(3, 0, 4, 1);
+        cache.insert(late);
+        let stage = make_stage(cache);
+
+        let rel = make_unresolved(1, "helper", 1, RelationKind::Calls);
+        let context = make_context(1, lua, vec![SymbolId::new(1).unwrap()], vec![rel]);
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "function shadowing must keep resolving");
+        assert_eq!(batch.relationships[0].to_id, SymbolId::new(3).unwrap());
+    }
+
+    #[test]
+    fn single_member_candidate_still_resolves() {
+        let lua = LanguageId::new("lua");
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_symbol(1, "caller", 1, lua));
+        cache.insert(make_member(2, "init", 1, lua, 100, 110));
+        let stage = make_stage(cache);
+
+        let rel = make_unresolved(1, "init", 1, RelationKind::Calls);
+        let mut context = make_context(1, lua, vec![SymbolId::new(1).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("init".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "unambiguous member must keep resolving");
+        assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
+    }
+
+    #[test]
+    fn defines_collision_resolves_to_definer_own_member() {
+        // Base(5..25) __init__@10..20; Derived(35..55) __init__@40..50.
+        // Defines from Derived through a scope map frozen on Base's member
+        // must land on Derived's own member (containment + direct
+        // membership), not the frozen winner.
+        let python = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut base = make_symbol(5, "Base", 1, python);
+        base.kind = SymbolKind::Class;
+        base.range = Range::new(5, 0, 25, 1);
+        cache.insert(base);
+        cache.insert(make_member(2, "__init__", 1, python, 10, 20));
+        let mut derived = make_symbol(3, "Derived", 1, python);
+        derived.kind = SymbolKind::Class;
+        derived.range = Range::new(35, 0, 55, 1);
+        cache.insert(derived);
+        cache.insert(make_member(4, "__init__", 1, python, 40, 50));
+        let stage = make_stage(cache);
+
+        let mut rel = make_unresolved(3, "__init__", 1, RelationKind::Defines);
+        rel.to_range = Some(Range::new(40, 0, 50, 1));
+        let mut context = make_context(1, python, vec![SymbolId::new(3).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("__init__".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "defines must resolve via containment");
+        assert_eq!(
+            batch.relationships[0].to_id,
+            SymbolId::new(4).unwrap(),
+            "must be the definer's own member, not the frozen winner"
+        );
+    }
+
+    #[test]
+    fn defines_collision_without_contained_member_fails_closed() {
+        let python = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        cache.insert(make_member(2, "__init__", 1, python, 10, 20));
+        cache.insert(make_member(4, "__init__", 1, python, 40, 50));
+        let mut definer = make_symbol(3, "Empty", 1, python);
+        definer.kind = SymbolKind::Class;
+        definer.range = Range::new(60, 0, 70, 1);
+        cache.insert(definer);
+        let stage = make_stage(cache);
+
+        let mut rel = make_unresolved(3, "__init__", 1, RelationKind::Defines);
+        rel.to_range = Some(Range::new(60, 0, 70, 1));
+        let mut context = make_context(1, python, vec![SymbolId::new(3).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("__init__".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 0, "no contained member: fail closed");
+        assert!(batch.is_empty());
     }
 
     /// class A: def m (5..25, m at 10..20); class B(A): def m (35..55,
