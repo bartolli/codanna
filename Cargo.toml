@@ -141,6 +141,10 @@ path = "examples/dump_edges.rs"
 name = "pipeline_metrics_demo"
 path = "examples/pipeline_metrics_demo.rs"
 
+[[example]]
+name = "parser_census"
+path = "examples/parser_census.rs"
+
 [[bench]]
 name = "unified_output_bench"
 harness = false
