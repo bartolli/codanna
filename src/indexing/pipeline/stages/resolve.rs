@@ -709,8 +709,20 @@ impl ResolveStage {
             )
     }
 
-    /// Containment pick for gated Defines: the definer's span plus
-    /// `is_direct_member` name the definer's own member without guessing.
+    /// Membership pick for gated Defines: parser evidence names the
+    /// definer's own member without guessing. Evidence order:
+    ///
+    /// 1. Site identity — the edge's `to_range` is the member's
+    ///    parse-recorded location; the same-file candidate starting
+    ///    there IS the member. Disambiguates same-name members of one
+    ///    definer (field + accessor) and same-name definers in one
+    ///    file, where name evidence alone sees rival claimants.
+    /// 2. `ClassMember { class_name: Some }` matching the definer —
+    ///    direct membership regardless of span containment (rust
+    ///    members live in impl blocks outside the struct's span).
+    /// 3. Span containment plus `is_direct_member` for unnamed or
+    ///    untracked scopes.
+    ///
     /// Exactly one survivor resolves; zero or several fail closed.
     fn defines_member_by_containment(
         &self,
@@ -722,6 +734,21 @@ impl ResolveStage {
         let definer_name = definer.name.clone();
         drop(definer);
 
+        if let Some(to_range) = unresolved.to_range {
+            let mut at_site = self
+                .symbol_cache
+                .lookup_candidates(&unresolved.to_name)
+                .into_iter()
+                .filter(|&id| {
+                    self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                        sym.file_id == definer_file && sym.range.start_line == to_range.start_line
+                    })
+                });
+            if let (Some(id), None) = (at_site.next(), at_site.next()) {
+                return Some(id);
+            }
+        }
+
         let mut contained = self
             .symbol_cache
             .lookup_candidates(&unresolved.to_name)
@@ -729,21 +756,27 @@ impl ResolveStage {
             .filter(|&id| {
                 let Some((member_range, member_scope)) =
                     self.symbol_cache.get_ref(id).and_then(|sym| {
-                        (sym.file_id == definer_file
-                            && definer_range.start_line <= sym.range.start_line
-                            && sym.range.end_line <= definer_range.end_line)
+                        (sym.file_id == definer_file)
                             .then(|| (sym.range, sym.scope_context.clone()))
                     })
                 else {
                     return false;
                 };
-                self.is_direct_member(
-                    member_scope.as_ref(),
-                    member_range,
-                    from_id,
-                    &definer_name,
-                    definer_file,
-                )
+                if let Some(crate::symbol::ScopeContext::ClassMember {
+                    class_name: Some(class_name),
+                }) = member_scope.as_ref()
+                {
+                    return class_name.as_ref() == &*definer_name;
+                }
+                definer_range.start_line <= member_range.start_line
+                    && member_range.end_line <= definer_range.end_line
+                    && self.is_direct_member(
+                        member_scope.as_ref(),
+                        member_range,
+                        from_id,
+                        &definer_name,
+                        definer_file,
+                    )
             });
         let survivor = contained.next();
         match (survivor, contained.next()) {
@@ -1283,6 +1316,155 @@ mod tests {
 
         assert_eq!(stats.resolved, 0, "no contained member: fail closed");
         assert!(batch.is_empty());
+    }
+
+    /// The rust witness shape: struct spans hold only the declaration;
+    /// members live in impl blocks OUTSIDE the span, carrying
+    /// `ClassMember { class_name: Some }` as the membership evidence.
+    fn rust_impl_member_cache() -> Arc<SymbolLookupCache> {
+        let rust = LanguageId::new("rust");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut method_call = make_symbol(1, "MethodCall", 1, rust);
+        method_call.kind = SymbolKind::Struct;
+        method_call.range = Range::new(62, 0, 70, 1);
+        cache.insert(method_call);
+        let mut resolver = make_symbol(3, "MethodCallResolver", 1, rust);
+        resolver.kind = SymbolKind::Struct;
+        resolver.range = Range::new(205, 0, 210, 1);
+        cache.insert(resolver);
+        let mut new_a = make_member(2, "new", 1, rust, 100, 110);
+        new_a.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("MethodCall".into()),
+        });
+        cache.insert(new_a);
+        let mut new_b = make_member(4, "new", 1, rust, 214, 220);
+        new_b.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("MethodCallResolver".into()),
+        });
+        cache.insert(new_b);
+        cache
+    }
+
+    #[test]
+    fn rust_defines_rescue_reaches_impl_member_outside_span() {
+        // Defines from MethodCallResolver, scope map frozen on the OTHER
+        // struct's `new`. The definer's own member sits outside its span
+        // but carries named ClassMember evidence — rescue must re-target
+        // onto it instead of dropping.
+        let rust = LanguageId::new("rust");
+        let cache = rust_impl_member_cache();
+        let stage = make_stage(cache);
+
+        let mut rel = make_unresolved(3, "new", 1, RelationKind::Defines);
+        rel.to_range = Some(Range::new(214, 0, 220, 1));
+        let mut context = make_context(1, rust, vec![SymbolId::new(3).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("new".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(
+            stats.resolved, 1,
+            "named ClassMember evidence must rescue the gated Defines"
+        );
+        assert_eq!(
+            batch.relationships[0].to_id,
+            SymbolId::new(4).unwrap(),
+            "must be the definer's own impl member"
+        );
+    }
+
+    #[test]
+    fn rust_defines_witness_pair_each_struct_names_own_member() {
+        // Both structs' Defines in one pass, both frozen on the same
+        // winner: each must land its OWN impl member, never a cross-pick.
+        let rust = LanguageId::new("rust");
+        let cache = rust_impl_member_cache();
+        let stage = make_stage(cache);
+
+        let mut rel_a = make_unresolved(1, "new", 1, RelationKind::Defines);
+        rel_a.to_range = Some(Range::new(100, 0, 110, 1));
+        let mut rel_b = make_unresolved(3, "new", 1, RelationKind::Defines);
+        rel_b.to_range = Some(Range::new(214, 0, 220, 1));
+        let mut context = make_context(
+            1,
+            rust,
+            vec![SymbolId::new(1).unwrap(), SymbolId::new(3).unwrap()],
+            vec![rel_a, rel_b],
+        );
+        let mut map = std::collections::HashMap::new();
+        map.insert("new".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 2, "both gated Defines must rescue");
+        let pairs: Vec<(u32, u32)> = batch
+            .relationships
+            .iter()
+            .map(|r| (r.from_id.value(), r.to_id.value()))
+            .collect();
+        assert!(pairs.contains(&(1, 2)), "MethodCall defines its own new");
+        assert!(
+            pairs.contains(&(3, 4)),
+            "MethodCallResolver defines its own new"
+        );
+    }
+
+    #[test]
+    fn rust_defines_field_and_accessor_both_resolve_by_site() {
+        // One struct owns BOTH a field `state` (inside its span) and an
+        // accessor method `state` (in the impl block, outside). Two true
+        // Defines edges; each carries the member's parse-recorded
+        // to_range. Both must resolve to their own site — name evidence
+        // alone sees two claimants and would fail closed.
+        let rust = LanguageId::new("rust");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut owner = make_symbol(1, "CBehavior", 1, rust);
+        owner.kind = SymbolKind::Struct;
+        owner.range = Range::new(12, 0, 20, 1);
+        cache.insert(owner);
+        let mut field = make_member(2, "state", 1, rust, 14, 14);
+        field.kind = SymbolKind::Field;
+        field.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("CBehavior".into()),
+        });
+        cache.insert(field);
+        let mut accessor = make_member(3, "state", 1, rust, 100, 105);
+        accessor.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("CBehavior".into()),
+        });
+        cache.insert(accessor);
+        let stage = make_stage(cache);
+
+        let mut field_rel = make_unresolved(1, "state", 1, RelationKind::Defines);
+        field_rel.to_range = Some(Range::new(14, 4, 14, 20));
+        let mut accessor_rel = make_unresolved(1, "state", 1, RelationKind::Defines);
+        accessor_rel.to_range = Some(Range::new(100, 4, 105, 5));
+        let mut context = make_context(
+            1,
+            rust,
+            vec![SymbolId::new(1).unwrap()],
+            vec![field_rel, accessor_rel],
+        );
+        let mut map = std::collections::HashMap::new();
+        map.insert("state".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 2, "both member edges must resolve by site");
+        let pairs: Vec<(u32, u32)> = batch
+            .relationships
+            .iter()
+            .map(|r| (r.from_id.value(), r.to_id.value()))
+            .collect();
+        assert!(pairs.contains(&(1, 2)), "field edge lands on the field");
+        assert!(
+            pairs.contains(&(1, 3)),
+            "accessor edge lands on the accessor"
+        );
     }
 
     /// class A: def m (5..25, m at 10..20); class B(A): def m (35..55,
