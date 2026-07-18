@@ -3,7 +3,7 @@ use crate::{FileId, RelationKind, Relationship, SymbolId, SymbolKind};
 use std::path::PathBuf;
 use tantivy::{
     TantivyDocument as Document, Term,
-    collector::TopDocs,
+    collector::{Count, TopDocs},
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery},
     schema::{IndexRecordOption, Value},
 };
@@ -11,6 +11,21 @@ use tantivy::{
 use super::{DocumentIndex, SearchResult};
 
 impl DocumentIndex {
+    /// Search returning every match: count-first, then an exact-limit drain.
+    ///
+    /// Replaces fixed `with_limit(N)` bounds that silently truncated dense
+    /// results (>1000 same-kind edges into one symbol).
+    fn search_all(
+        searcher: &tantivy::Searcher,
+        query: &dyn Query,
+    ) -> tantivy::Result<Vec<(f32, tantivy::DocAddress)>> {
+        let count = searcher.search(query, &Count)?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        searcher.search(query, &TopDocs::with_limit(count).order_by_score())
+    }
+
     /// Search for documents
     pub fn search(
         &self,
@@ -416,7 +431,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
+        let top_docs = Self::search_all(&searcher, &query)?;
         let mut symbols = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -451,7 +466,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
+        let top_docs = Self::search_all(&searcher, &query)?;
         let mut symbols = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -673,7 +688,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
+        let top_docs = Self::search_all(&searcher, &query)?;
         let mut relationships = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -730,7 +745,7 @@ impl DocumentIndex {
             ),
         ]);
 
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(1000).order_by_score())?;
+        let top_docs = Self::search_all(&searcher, &query)?;
         let mut relationships = Vec::new();
 
         for (_score, doc_address) in top_docs {
@@ -870,8 +885,7 @@ impl DocumentIndex {
         ]);
 
         let searcher = self.reader.searcher();
-        let top_docs = searcher
-            .search(&query, &TopDocs::with_limit(1000).order_by_score())
+        let top_docs = Self::search_all(&searcher, &query)
             .map_err(|e| StorageError::General(format!("Import search failed: {e}")))?;
 
         let mut imports = Vec::new();
@@ -2505,5 +2519,157 @@ mod tests {
         );
 
         println!("✅ SUCCESS: Owner extends Person relationship verified!");
+    }
+
+    #[test]
+    fn test_get_relationships_to_uncapped_beyond_1000() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        let hub = SymbolId::new(1).unwrap();
+        index.start_batch().unwrap();
+        for i in 2..=1102u32 {
+            let from = SymbolId::new(i).unwrap();
+            index
+                .store_relationship(from, hub, &Relationship::new(RelationKind::Extends))
+                .unwrap();
+        }
+        index.commit_batch().unwrap();
+
+        let edges = index
+            .get_relationships_to(hub, RelationKind::Extends)
+            .unwrap();
+        assert_eq!(edges.len(), 1101, "expected all edges, got a capped result");
+
+        let no_edges = index
+            .get_relationships_to(SymbolId::new(7777).unwrap(), RelationKind::Extends)
+            .unwrap();
+        assert!(no_edges.is_empty());
+    }
+
+    #[test]
+    fn test_get_relationships_from_uncapped_beyond_1000() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        let hub = SymbolId::new(1).unwrap();
+        index.start_batch().unwrap();
+        for i in 2..=1102u32 {
+            let to = SymbolId::new(i).unwrap();
+            index
+                .store_relationship(hub, to, &Relationship::new(RelationKind::Calls))
+                .unwrap();
+        }
+        index.commit_batch().unwrap();
+
+        let edges = index
+            .get_relationships_from(hub, RelationKind::Calls)
+            .unwrap();
+        assert_eq!(edges.len(), 1101, "expected all edges, got a capped result");
+
+        let no_edges = index
+            .get_relationships_from(SymbolId::new(7777).unwrap(), RelationKind::Calls)
+            .unwrap();
+        assert!(no_edges.is_empty());
+    }
+
+    #[test]
+    fn test_find_symbols_by_file_uncapped_beyond_1000() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        let file_id = FileId::new(1).unwrap();
+        index.start_batch().unwrap();
+        for i in 1..=1101u32 {
+            let sym = crate::Symbol::new(
+                SymbolId::new(i).unwrap(),
+                format!("sym_{i}").as_str(),
+                SymbolKind::Function,
+                file_id,
+                crate::Range::new(i, 0, i, 10),
+            );
+            index.add_document(&sym, "src/generated.rs").unwrap();
+        }
+        index.commit_batch().unwrap();
+
+        let symbols = index.find_symbols_by_file(file_id).unwrap();
+        assert_eq!(
+            symbols.len(),
+            1101,
+            "expected all symbols in file, got a capped result"
+        );
+
+        let none = index
+            .find_symbols_by_file(FileId::new(99).unwrap())
+            .unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_find_symbols_by_module_uncapped_beyond_1000() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        index.start_batch().unwrap();
+        for i in 1..=1101u32 {
+            let sym = crate::Symbol::new(
+                SymbolId::new(i).unwrap(),
+                format!("sym_{i}").as_str(),
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                crate::Range::new(i, 0, i, 10),
+            )
+            .with_module_path("crate::generated");
+            index.add_document(&sym, "src/generated.rs").unwrap();
+        }
+        index.commit_batch().unwrap();
+
+        let symbols = index.find_symbols_by_module("crate::generated").unwrap();
+        assert_eq!(
+            symbols.len(),
+            1101,
+            "expected all symbols in module, got a capped result"
+        );
+
+        let none = index.find_symbols_by_module("crate::absent").unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_get_imports_for_file_uncapped_beyond_1000() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        let file_id = FileId::new(1).unwrap();
+        index.start_batch().unwrap();
+        for i in 1..=1101u32 {
+            index
+                .store_import(&crate::parsing::Import {
+                    path: format!("dep::module_{i}"),
+                    alias: None,
+                    file_id,
+                    is_glob: false,
+                    is_type_only: false,
+                })
+                .unwrap();
+        }
+        index.commit_batch().unwrap();
+
+        let imports = index.get_imports_for_file(file_id).unwrap();
+        assert_eq!(
+            imports.len(),
+            1101,
+            "expected all imports for file, got a capped result"
+        );
+
+        let none = index
+            .get_imports_for_file(FileId::new(99).unwrap())
+            .unwrap();
+        assert!(none.is_empty());
     }
 }
