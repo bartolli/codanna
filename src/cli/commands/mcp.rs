@@ -47,7 +47,7 @@ struct IndexInfo {
     symbol_count: usize,
     file_count: usize,
     relationship_count: usize,
-    symbol_kinds: SymbolKindBreakdown,
+    symbol_kinds: std::collections::BTreeMap<String, usize>,
     semantic_search: SemanticSearchInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     documents: Option<DocumentsInfo>,
@@ -65,14 +65,6 @@ struct CollectionInfo {
     name: String,
     chunk_count: usize,
     file_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct SymbolKindBreakdown {
-    functions: usize,
-    methods: usize,
-    structs: usize,
-    traits: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -699,15 +691,12 @@ pub async fn run(
         let relationship_count = facade.relationship_count();
 
         // Count symbols by kind
-        let mut kind_counts = std::collections::HashMap::new();
+        let mut symbol_kinds = std::collections::BTreeMap::new();
         for symbol in facade.get_all_symbols() {
-            *kind_counts.entry(symbol.kind).or_insert(0) += 1;
+            *symbol_kinds
+                .entry(format!("{:?}", symbol.kind))
+                .or_insert(0usize) += 1;
         }
-
-        let functions = *kind_counts.get(&crate::SymbolKind::Function).unwrap_or(&0);
-        let methods = *kind_counts.get(&crate::SymbolKind::Method).unwrap_or(&0);
-        let structs = *kind_counts.get(&crate::SymbolKind::Struct).unwrap_or(&0);
-        let traits = *kind_counts.get(&crate::SymbolKind::Trait).unwrap_or(&0);
 
         // Get semantic search info
         let semantic_search = if let Some(metadata) = facade.get_semantic_metadata() {
@@ -739,12 +728,7 @@ pub async fn run(
             symbol_count,
             file_count: file_count as usize,
             relationship_count,
-            symbol_kinds: SymbolKindBreakdown {
-                functions,
-                methods,
-                structs,
-                traits,
-            },
+            symbol_kinds,
             semantic_search,
             documents,
         })

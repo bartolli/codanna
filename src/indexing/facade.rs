@@ -408,12 +408,20 @@ impl IndexFacade {
         self.document_index.find_symbol_by_id(id).ok().flatten()
     }
 
-    /// Get all symbols (with limit).
+    /// Get all symbols, sized by the exact symbol count.
     ///
     /// Returns empty vec on error for SimpleIndexer API compatibility.
     pub fn get_all_symbols(&self) -> Vec<Symbol> {
+        let total = match self.document_index.count_symbols() {
+            Ok(0) => return Vec::new(),
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(target: "facade", "get_all_symbols count error: {e}");
+                return Vec::new();
+            }
+        };
         self.document_index
-            .get_all_symbols(10000)
+            .get_all_symbols(total)
             .unwrap_or_else(|e| {
                 tracing::warn!(target: "facade", "get_all_symbols error: {e}");
                 Vec::new()
@@ -1413,6 +1421,53 @@ mod tests {
             extended_by.iter().any(|s| s.name.as_ref() == "Derived"),
             "Base extended by Derived"
         );
+    }
+
+    // Regression: get_all_symbols sampled the first 10k symbol docs and
+    // consumers (get_index_info kind counts) presented the sample as
+    // totals.
+    #[test]
+    fn get_all_symbols_uncapped_beyond_10k() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.document_index.start_batch().unwrap();
+        for i in 1..=10500u32 {
+            let kind = if i <= 100 {
+                crate::SymbolKind::Struct
+            } else {
+                crate::SymbolKind::Function
+            };
+            let sym = crate::Symbol::new(
+                crate::SymbolId::new(i).unwrap(),
+                format!("sym_{i}").as_str(),
+                kind,
+                crate::FileId::new(1).unwrap(),
+                crate::Range::new(i, 0, i, 10),
+            );
+            facade
+                .document_index
+                .add_document(&sym, "src/generated.rs")
+                .unwrap();
+        }
+        facade.document_index.commit_batch().unwrap();
+
+        let symbols = facade.get_all_symbols();
+        assert_eq!(
+            symbols.len(),
+            10500,
+            "expected all symbols, got a capped sample"
+        );
+        let structs = symbols
+            .iter()
+            .filter(|s| s.kind == crate::SymbolKind::Struct)
+            .count();
+        assert_eq!(structs, 100);
     }
 
     // Regression: a deletion-only incremental run must surface removal
