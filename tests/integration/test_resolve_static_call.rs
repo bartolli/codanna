@@ -122,6 +122,7 @@ fn static_call_filters_ambiguous_by_class_name() {
             "RawSymbol",
             true,
         )],
+        variable_bindings: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -173,6 +174,7 @@ fn instance_call_skips_static_filter() {
             "RawSymbol",
             false, // instance call -> static-call filter must be skipped
         )],
+        variable_bindings: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -222,6 +224,7 @@ fn static_call_no_match_returns_notfound() {
             "NoSuchType",
             true,
         )],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -268,6 +271,7 @@ fn static_call_matches_via_module_path_fallback() {
             "Target",
             true,
         )],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -325,6 +329,7 @@ fn static_call_multi_survivor_routes_through_disambiguate_priority() {
             "RawSymbol",
             true,
         )],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -382,6 +387,7 @@ fn static_call_overrides_found_in_file_scope() {
             "RawSymbol",
             true,
         )],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);

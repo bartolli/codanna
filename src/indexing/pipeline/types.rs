@@ -9,6 +9,7 @@ use crate::relationship::RelationshipMetadata;
 use crate::symbol::ScopeContext;
 use crate::types::{CompactString, FileId, Range, SymbolId};
 use crate::{RelationKind, Symbol, SymbolKind, Visibility};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -112,6 +113,25 @@ impl RawImport {
     }
 }
 
+/// A local variable binding with a statically-known type, captured at parse
+/// time by `LanguageParser::find_variable_types`.
+///
+/// In-memory only: rides `ParsedFile` -> `IndexBatch` -> `ResolutionContext`
+/// so receiver-type inference can consult constructor assignments and
+/// annotated locals. Never persisted; the stored edge metadata keeps the
+/// syntactic receiver.
+#[derive(Debug, Clone)]
+pub struct VariableBinding {
+    pub name: String,
+    pub type_name: String,
+    /// Range of the binding site (the assignment), for position-aware
+    /// last-binding-wins lookup within the caller's span.
+    pub range: Range,
+}
+
+/// Per-file typed-local bindings: the in-memory lane from Phase 1 to Phase 2.
+pub type FileBindings = HashMap<FileId, Vec<VariableBinding>>;
+
 /// Relationship extracted from parsing, before resolution.
 ///
 /// Contains ranges for disambiguation when multiple symbols share the same name:
@@ -165,6 +185,7 @@ pub struct ParsedFile {
     pub raw_symbols: Vec<RawSymbol>,
     pub raw_imports: Vec<RawImport>,
     pub raw_relationships: Vec<RawRelationship>,
+    pub variable_bindings: Vec<VariableBinding>,
 }
 
 impl ParsedFile {
@@ -177,6 +198,7 @@ impl ParsedFile {
             raw_symbols: Vec::new(),
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
+            variable_bindings: Vec::new(),
         }
     }
 
@@ -250,6 +272,9 @@ pub struct IndexBatch {
     pub unresolved_relationships: Vec<UnresolvedRelationship>,
     /// Files to register in the index
     pub file_registrations: Vec<FileRegistration>,
+    /// Per-file typed local bindings for receiver-type inference (in-memory
+    /// lane to Phase 2; never written to the index)
+    pub variable_bindings: FileBindings,
 }
 
 impl IndexBatch {
@@ -259,6 +284,7 @@ impl IndexBatch {
             imports: Vec::new(),
             unresolved_relationships: Vec::new(),
             file_registrations: Vec::new(),
+            variable_bindings: HashMap::new(),
         }
     }
 
@@ -268,6 +294,7 @@ impl IndexBatch {
             imports: Vec::with_capacity(imports),
             unresolved_relationships: Vec::with_capacity(rels),
             file_registrations: Vec::new(),
+            variable_bindings: HashMap::new(),
         }
     }
 
@@ -931,6 +958,9 @@ pub struct ResolutionContext {
     pub scope: Box<dyn crate::parsing::ResolutionScope>,
     /// Unresolved relationships originating from this file
     pub unresolved_rels: Vec<UnresolvedRelationship>,
+    /// Typed local bindings in this file (parse-time capture), for
+    /// receiver-type inference on instance calls
+    pub variable_bindings: Vec<VariableBinding>,
 }
 
 impl std::fmt::Debug for ResolutionContext {

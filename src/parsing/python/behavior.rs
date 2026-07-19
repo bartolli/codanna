@@ -78,6 +78,23 @@ fn reduce_type_to_name(node: Node, code: &str) -> Option<String> {
             let left = inner.child_by_field_name("left")?;
             reduce_type_to_name(left, code)
         }
+        "string" => {
+            // Forward-reference annotation: x: 'IntWrapper' / x: "pkg.Model".
+            // Reduced lexically to the bare or dotted-tail name; subscripted
+            // and union forms inside quotes stay unhandled (fail closed).
+            let content = inner
+                .children(&mut inner.walk())
+                .find(|c| c.kind() == "string_content")?;
+            let text = code[content.byte_range()].trim();
+            if text.is_empty()
+                || !text
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+            {
+                return None;
+            }
+            text.rsplit('.').next().map(|name| name.to_string())
+        }
         _ => None,
     }
 }
@@ -996,6 +1013,29 @@ mod tests {
         assert_eq!(
             behavior.module_path_from_file(stub_path, root, extensions),
             Some("typings.module".to_string())
+        );
+    }
+
+    #[test]
+    fn quoted_annotation_infers_like_bare() {
+        let behavior = PythonBehavior::new();
+        let extract = |sig: &str| behavior.extract_parameter_type(sig, "other");
+
+        assert_eq!(
+            extract("def __eq__(self, other: 'IntWrapper') -> bool"),
+            Some("IntWrapper".to_string())
+        );
+        assert_eq!(
+            extract("def check(self, other: \"pkg.Model\") -> bool"),
+            Some("Model".to_string())
+        );
+        // Subscripted and union forms inside quotes fail closed
+        assert_eq!(extract("def f(self, other: 'Optional[X]') -> bool"), None);
+        assert_eq!(extract("def f(self, other: 'A | None') -> bool"), None);
+        // Bare form still works
+        assert_eq!(
+            extract("def __eq__(self, other: IntWrapper) -> bool"),
+            Some("IntWrapper".to_string())
         );
     }
 }

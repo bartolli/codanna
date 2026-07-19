@@ -1229,14 +1229,14 @@ impl PythonParser {
         }
     }
 
-    /// Process assignment node with type annotation (x: int = 5 or x: int)
+    /// Process assignment node with a statically-known type: an annotation
+    /// (x: int = 5 or x: int) or a constructor call (x = ClassName(...)).
     fn process_assignment_with_type<'a>(
         &self,
         node: Node,
         code: &'a str,
         variable_types: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
-        // Only process assignments that have type annotations
         if let Some(type_node) = node.child_by_field_name("type") {
             // Extract variable name from the left side
             if let Some(target_node) = node.child_by_field_name("left") {
@@ -1246,7 +1246,50 @@ impl PythonParser {
                     variable_types.push((var_name, type_annotation, range));
                 }
             }
+            return;
         }
+
+        // Constructor form: plain-identifier target only — attribute targets
+        // (self.x = ...) are field-type territory, and their bare tail would
+        // collide with same-named locals.
+        let Some(target_node) = node.child_by_field_name("left") else {
+            return;
+        };
+        if target_node.kind() != "identifier" {
+            return;
+        }
+        let Some(callee) = node
+            .child_by_field_name("right")
+            .filter(|right| right.kind() == "call")
+            .and_then(|call| call.child_by_field_name("function"))
+        else {
+            return;
+        };
+        // Dotted constructors bind the bare class name (`pkg.Model()` -> Model),
+        // matching the ClassMember evidence the compat check consults. Only
+        // constructor-shaped callees qualify: an identifier or a dotted chain
+        // of identifiers. A call anywhere in the chain (`super().__new__`)
+        // yields a method result, not a constructed type.
+        let type_name = match callee.kind() {
+            "identifier" => &code[callee.byte_range()],
+            "attribute" => {
+                let mut object = callee.child_by_field_name("object");
+                while let Some(obj) = object {
+                    match obj.kind() {
+                        "identifier" => break,
+                        "attribute" => object = obj.child_by_field_name("object"),
+                        _ => return,
+                    }
+                }
+                match callee.child_by_field_name("attribute") {
+                    Some(tail) => &code[tail.byte_range()],
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        let var_name = &code[target_node.byte_range()];
+        variable_types.push((var_name, type_name, self.node_to_range(node)));
     }
 
     /// Extract variable name from assignment target
@@ -2331,6 +2374,41 @@ def setup():
             println!("  → Found annotated_assignment \"{name}: {typ} = ...\"");
             println!("    Variable: \"{name}\", Type: \"{typ}\"");
         }
+    }
+
+    #[test]
+    fn test_constructor_assignment_binding_capture() {
+        let mut parser = PythonParser::new().unwrap();
+        let code = r#"
+def build():
+    m = Model()
+    n = pkg.mod.Model(x, y=2)
+    p: Declared = factory()
+    q = factory()
+    self.attr = Model()
+    a, b = Model(), Other()
+    cls = super().__new__(mcs)
+    r = obj.chain().Model()
+"#;
+        let var_types = parser.find_variable_types(code);
+
+        let has = |name: &str, typ: &str| var_types.iter().any(|(n, t, _)| *n == name && *t == typ);
+        // Constructor call binds the callee name; dotted callees bind the tail
+        assert!(has("m", "Model"));
+        assert!(has("n", "Model"));
+        // Annotation outranks the callee when both are present
+        assert!(has("p", "Declared"));
+        assert!(!has("p", "factory"));
+        // Callee name is captured verbatim; resolution fails closed on
+        // non-class names via the ClassMember compat check
+        assert!(has("q", "factory"));
+        // Attribute targets and tuple targets are not captured
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "attr"));
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "a" || *n == "b"));
+        // A call anywhere in the callee chain is a method result, not a
+        // constructor: no binding
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "cls"));
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "r"));
     }
 
     // Test additional variable type annotation cases

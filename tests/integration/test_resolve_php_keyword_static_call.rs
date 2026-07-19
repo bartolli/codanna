@@ -111,6 +111,7 @@ fn self_keyword_resolves_to_caller_class() {
         local_symbols: vec![],
         scope: Box::new(GenericResolutionContext::new(file)),
         unresolved_rels: vec![static_call_unresolved(1, "reset", file, "self")],
+        variable_bindings: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -147,6 +148,7 @@ fn static_keyword_resolves_identically_to_self() {
         local_symbols: vec![],
         scope: Box::new(GenericResolutionContext::new(file)),
         unresolved_rels: vec![static_call_unresolved(1, "reset", file, "static")],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -187,6 +189,7 @@ fn parent_keyword_resolves_to_parent_class_method() {
         local_symbols: vec![],
         scope: Box::new(GenericResolutionContext::new(file)),
         unresolved_rels: vec![static_call_unresolved(1, "hello", file, "parent")],
+        variable_bindings: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -220,6 +223,7 @@ fn parent_keyword_with_empty_resolver_does_not_resolve() {
         local_symbols: vec![],
         scope: Box::new(GenericResolutionContext::new(file)),
         unresolved_rels: vec![static_call_unresolved(1, "hello", file, "parent")],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -257,6 +261,7 @@ fn non_keyword_receiver_passes_through_unchanged() {
         local_symbols: vec![],
         scope: Box::new(GenericResolutionContext::new(file)),
         unresolved_rels: vec![static_call_unresolved(1, "staticMethod", file, "MyClass")],
+        variable_bindings: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);

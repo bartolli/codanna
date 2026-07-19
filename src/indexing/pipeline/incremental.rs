@@ -112,8 +112,9 @@ impl Pipeline {
 
         // Collect into a batch (now includes embedding candidates)
         let collect_stage = CollectStage::new(self.config.batch_size);
-        let (batch, unresolved, embed_batch) =
+        let (mut batch, unresolved, embed_batch) =
             collect_stage.process_single(parsed, Arc::clone(&index))?;
+        let variable_bindings = std::mem::take(&mut batch.variable_bindings);
 
         // Index the batch
         let index_stage = IndexStage::new(Arc::clone(&index), self.config.batches_per_commit);
@@ -192,7 +193,7 @@ impl Pipeline {
         let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
 
         // Run Phase 2 resolution
-        let phase2_stats = self.run_phase2(unresolved, symbol_cache, index)?;
+        let phase2_stats = self.run_phase2(unresolved, variable_bindings, symbol_cache, index)?;
 
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
@@ -269,6 +270,7 @@ impl Pipeline {
         let (
             index_stats,
             unresolved,
+            variable_bindings,
             symbol_cache,
             cleanup_stats,
             deleted_symbols,
@@ -290,7 +292,7 @@ impl Pipeline {
                 ));
                 let dual_status = StatusLine::new(Arc::clone(&dual_bar));
 
-                let (stats, unresolved, cache, metrics) = self.run_phase1(
+                let (stats, unresolved, bindings, cache, metrics) = self.run_phase1(
                     FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
                     Phase1Options {
@@ -319,6 +321,7 @@ impl Pipeline {
                 (
                     stats,
                     unresolved,
+                    bindings,
                     cache,
                     CleanupStats::default(),
                     0,
@@ -338,7 +341,7 @@ impl Pipeline {
 
                 // has_embedding is false here, so semantic and pool are never
                 // both present: the embed stage cannot run in this arm.
-                let (stats, unresolved, cache, metrics) = self.run_phase1(
+                let (stats, unresolved, bindings, cache, metrics) = self.run_phase1(
                     FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
                     Phase1Options {
@@ -358,6 +361,7 @@ impl Pipeline {
                 (
                     stats,
                     unresolved,
+                    bindings,
                     cache,
                     CleanupStats::default(),
                     0,
@@ -431,7 +435,7 @@ impl Pipeline {
                 }),
                 _ => None,
             };
-            let (stats, unresolved, _run_cache, metrics) = self.run_phase1(
+            let (stats, unresolved, bindings, _run_cache, metrics) = self.run_phase1(
                 FileSource::List(files_to_index),
                 Arc::clone(&index),
                 Phase1Options {
@@ -460,6 +464,7 @@ impl Pipeline {
             (
                 stats,
                 unresolved,
+                bindings,
                 cache,
                 cleanup_stats,
                 deleted_symbols,
@@ -469,8 +474,13 @@ impl Pipeline {
 
         // Run Phase 2 with separate progress bar
         let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats =
-            self.run_phase2_maybe_bar(unresolved, symbol_cache, Arc::clone(&index), true)?;
+        let phase2_stats = self.run_phase2_maybe_bar(
+            unresolved,
+            variable_bindings,
+            symbol_cache,
+            Arc::clone(&index),
+            true,
+        )?;
 
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
@@ -582,7 +592,7 @@ impl Pipeline {
             }),
             _ => None,
         };
-        let (index_stats, unresolved, _run_cache, metrics) = self.run_phase1(
+        let (index_stats, unresolved, variable_bindings, _run_cache, metrics) = self.run_phase1(
             FileSource::List(files_to_index),
             Arc::clone(&index),
             Phase1Options {
@@ -601,8 +611,13 @@ impl Pipeline {
         // holds only this run's files, hiding unchanged files' symbols
         // and re-export aliases from resolution.
         let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
-        let phase2_stats =
-            self.run_phase2_maybe_bar(unresolved, symbol_cache, Arc::clone(&index), show_progress)?;
+        let phase2_stats = self.run_phase2_maybe_bar(
+            unresolved,
+            variable_bindings,
+            symbol_cache,
+            Arc::clone(&index),
+            show_progress,
+        )?;
 
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;

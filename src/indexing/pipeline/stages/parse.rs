@@ -230,6 +230,19 @@ fn parse_with_parser(
     // Extract relationships
     let raw_relationships = extract_relationships(parser, &content.content);
 
+    // Typed local bindings feed receiver-type inference in Phase 2
+    let variable_bindings = parser
+        .find_variable_types(&content.content)
+        .into_iter()
+        .map(
+            |(name, type_name, range)| crate::indexing::pipeline::VariableBinding {
+                name: name.to_string(),
+                type_name: type_name.to_string(),
+                range,
+            },
+        )
+        .collect();
+
     Ok(ParsedFile {
         path: content.path,
         content_hash: content.hash,
@@ -238,6 +251,7 @@ fn parse_with_parser(
         raw_symbols,
         raw_imports,
         raw_relationships,
+        variable_bindings,
     })
 }
 

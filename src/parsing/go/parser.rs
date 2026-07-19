@@ -2821,7 +2821,9 @@ type Closer interface {
         // base type, and the real interface name from the parent type_spec
         let defines = parser.find_defines(code);
         let has_pair = |definer: &str, method: &str| {
-            defines.iter().any(|(d, m, _)| *d == definer && *m == method)
+            defines
+                .iter()
+                .any(|(d, m, _)| *d == definer && *m == method)
         };
         assert!(has_pair("Reader", "Close"));
         assert!(has_pair("Writer", "Close"));
