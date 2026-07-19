@@ -45,3 +45,36 @@ function tbl:method() end
         ),
     }
 }
+
+#[test]
+fn test_lua_method_call_carries_enclosing_caller() {
+    let code = r#"
+local Vector = {}
+function Vector.new() end
+
+local function createObject()
+    local v = Vector:new()
+    return v
+end
+
+local top = Vector:new()
+"#;
+    let mut parser = LuaParser::new().unwrap();
+    let calls = parser.find_method_calls(code);
+    let inner = calls
+        .iter()
+        .find(|c| c.range.start_line == 5)
+        .expect("call inside createObject extracted");
+    assert_eq!(
+        inner.caller, "createObject",
+        "method call must carry the enclosing function name (plain-call walker identity)"
+    );
+    let module_level = calls
+        .iter()
+        .find(|c| c.range.start_line == 9)
+        .expect("module-level call extracted");
+    assert_eq!(
+        module_level.caller, "<module>",
+        "module-level method call matches the plain-call walker's <module> identity"
+    );
+}

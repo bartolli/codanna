@@ -1110,7 +1110,7 @@ impl PhpParser {
                     let method_name = code[name_node.byte_range()].trim();
                     let receiver = code[object_node.byte_range()].trim();
                     let range = self.node_to_range(node);
-                    let caller = current_function.unwrap_or("");
+                    let caller = current_function.unwrap_or("<module>");
                     let call = MethodCall::new(caller, method_name, range).with_receiver(receiver);
                     calls.push(call);
                 }
@@ -1129,7 +1129,7 @@ impl PhpParser {
                     let method_name = code[name_node.byte_range()].trim();
                     let receiver = code[scope_node.byte_range()].trim();
                     let range = self.node_to_range(node);
-                    let caller = current_function.unwrap_or("");
+                    let caller = current_function.unwrap_or("<module>");
                     let call = MethodCall::new(caller, method_name, range)
                         .with_receiver(receiver)
                         .static_method();
