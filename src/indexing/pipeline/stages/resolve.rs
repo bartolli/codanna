@@ -508,27 +508,20 @@ impl ResolveStage {
     /// (Extends evidence, MRO order for python), None = not on the chain.
     /// Inherited members resolve through the chain; the concrete type's own
     /// override always ranks closer.
-    fn receiver_chain_distance(
+    /// Identity anchor for an inferred receiver type: the specific Class
+    /// symbol the type name denotes in THIS file — file-scope resolution
+    /// (imports included) first, then the exactly-one function-local Class
+    /// inside the caller's span. None when the name does not resolve to a
+    /// Class here (unresolvable import specifier, non-Class kinds such as
+    /// rust Structs): copy selection is then impossible and distance 0
+    /// stays name-keyed.
+    fn receiver_type_anchor(
         &self,
-        candidate: &crate::Symbol,
         type_name: &str,
         caller: Option<&crate::Symbol>,
-        language_id: &LanguageId,
         context: &ResolutionContext,
-    ) -> Option<usize> {
-        let behavior = self.get_behavior(language_id)?;
-        if behavior.is_receiver_compatible(candidate, type_name, caller) {
-            return Some(0);
-        }
-        // Ancestor hops are identity-grade: the receiver type must resolve
-        // to a Class through THIS file's scope, and each hop follows that
-        // class's own Extends edges with scope-resolved parents. Bare-name
-        // chains merge every same-named class in the corpus (the pydantic
-        // test `Model` population) and mis-attribute inherited members.
-        // Chains dead-end after leaving the file (a parent's own Extends
-        // edges live in its file's context): deep cross-file chains
-        // under-report.
-        let start = context
+    ) -> Option<SymbolId> {
+        context
             .resolve(type_name)
             .filter(|&id| {
                 self.symbol_cache
@@ -555,7 +548,58 @@ impl ResolveStage {
                     }
                 }
                 only
-            })?;
+            })
+    }
+
+    fn receiver_chain_distance(
+        &self,
+        candidate: &crate::Symbol,
+        type_name: &str,
+        caller: Option<&crate::Symbol>,
+        language_id: &LanguageId,
+        context: &ResolutionContext,
+    ) -> Option<usize> {
+        let behavior = self.get_behavior(language_id)?;
+        // Distance 0: with an identity anchor, membership is in the ANCHORED
+        // class copy — same file, inside the anchor's span, direct member.
+        // Name-keyed compatibility alone cannot split duplicate class copies
+        // (vendored bundles, twin test files) or same-file same-name locals.
+        // Without an anchor, name-keyed is the only evidence there is.
+        let anchor = self.receiver_type_anchor(type_name, caller, context);
+        match anchor {
+            Some(anchor_id) => {
+                let (anchor_name, anchor_file, anchor_range) = {
+                    let sym = self.symbol_cache.get_ref(anchor_id)?;
+                    (sym.name.clone(), sym.file_id, sym.range)
+                };
+                if candidate.file_id == anchor_file
+                    && range_contains(&anchor_range, &candidate.range)
+                    && self.is_direct_member(
+                        candidate.scope_context.as_ref(),
+                        candidate.range,
+                        anchor_id,
+                        &anchor_name,
+                        anchor_file,
+                    )
+                {
+                    return Some(0);
+                }
+            }
+            None => {
+                if behavior.is_receiver_compatible(candidate, type_name, caller) {
+                    return Some(0);
+                }
+            }
+        }
+        // Ancestor hops are identity-grade: the receiver type must resolve
+        // to a Class through THIS file's scope, and each hop follows that
+        // class's own Extends edges with scope-resolved parents. Bare-name
+        // chains merge every same-named class in the corpus (the pydantic
+        // test `Model` population) and mis-attribute inherited members.
+        // Chains dead-end after leaving the file (a parent's own Extends
+        // edges live in its file's context): deep cross-file chains
+        // under-report.
+        let start = anchor?;
         let mut frontier = vec![start];
         for distance in 1..=8usize {
             let mut next = Vec::new();
