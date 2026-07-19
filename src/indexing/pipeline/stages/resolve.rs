@@ -159,6 +159,18 @@ impl ResolveStage {
             return self.resolve_super_call(from_id, unresolved, context, &caller);
         }
 
+        // Self-aliased receivers (self/this/cls) name their container: the
+        // caller's own enclosing type, evidenced by its ClassMember scope.
+        // Resolve within that type's direct members before the scope
+        // lookup, whose frozen winner may be a same-name member of a
+        // sibling type. A miss falls through — implicit-this languages
+        // emit the alias for free-function calls too.
+        if self.is_self_form_instance_call(unresolved, &caller.language_id) {
+            if let Some(resolved) = self.resolve_self_form_member(from_id, unresolved) {
+                return Some(resolved);
+            }
+        }
+
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
             if self.is_compatible(
                 from_kind,
@@ -542,6 +554,77 @@ impl ResolveStage {
                     .unwrap_or(0)
             });
         innermost == Some(parent_id)
+    }
+
+    /// An instance call whose receiver is a self alias for the caller's
+    /// language (`self`, `this`, `cls`, ...).
+    fn is_self_form_instance_call(
+        &self,
+        unresolved: &UnresolvedRelationship,
+        language_id: &LanguageId,
+    ) -> bool {
+        if unresolved.kind != RelationKind::Calls {
+            return false;
+        }
+        let Some(metadata) = unresolved.metadata.as_ref() else {
+            return false;
+        };
+        if metadata.static_call {
+            return false;
+        }
+        let Some(receiver) = metadata.receiver.as_deref() else {
+            return false;
+        };
+        self.get_behavior(language_id)
+            .map(|b| b.self_receiver_aliases())
+            .unwrap_or(&["self"])
+            .contains(&receiver)
+    }
+
+    /// Resolve a self-form call within the caller's own type: the caller's
+    /// `ClassMember { class_name: Some }` names the enclosing type, and a
+    /// same-file candidate carrying the same named evidence is its direct
+    /// member. Exactly one survivor resolves; zero or several return None
+    /// and the caller falls through to the ordinary path.
+    fn resolve_self_form_member(
+        &self,
+        from_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+    ) -> Option<ResolvedRelationship> {
+        let caller_sym = self.symbol_cache.get_ref(from_id)?;
+        let caller_file = caller_sym.file_id;
+        let enclosing = match caller_sym.scope_context.as_ref() {
+            Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(name),
+            }) => name.clone(),
+            _ => return None,
+        };
+        drop(caller_sym);
+
+        let mut members = self
+            .symbol_cache
+            .lookup_candidates(&unresolved.to_name)
+            .into_iter()
+            .filter(|&id| {
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    sym.file_id == caller_file
+                        && matches!(
+                            sym.scope_context.as_ref(),
+                            Some(crate::symbol::ScopeContext::ClassMember {
+                                class_name: Some(name),
+                            }) if *name == enclosing
+                        )
+                })
+            });
+        match (members.next(), members.next()) {
+            (Some(to_id), None) => Some(ResolvedRelationship {
+                from_id,
+                to_id,
+                kind: unresolved.kind,
+                metadata: unresolved.metadata.clone(),
+            }),
+            _ => None,
+        }
     }
 
     fn resolve_static_call(
@@ -1410,6 +1493,73 @@ mod tests {
             pairs.contains(&(3, 4)),
             "MethodCallResolver defines its own new"
         );
+    }
+
+    #[test]
+    fn self_form_call_resolves_within_enclosing_type() {
+        // Shape::display calls self-form `area()`; three same-file `area`
+        // members (Shape/Circle/Rectangle), scope frozen on Rectangle's.
+        // The caller's own ClassMember evidence names Shape — the call
+        // must land on Shape's member, not the frozen winner.
+        let lang = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut display = make_member(1, "display", 1, lang, 57, 60);
+        display.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("Shape".into()),
+        });
+        cache.insert(display);
+        for (id, class, line) in [(2, "Shape", 46), (3, "Circle", 83), (4, "Rectangle", 111)] {
+            let mut m = make_member(id, "area", 1, lang, line, line + 2);
+            m.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(class.into()),
+            });
+            cache.insert(m);
+        }
+        let stage = make_stage(cache);
+
+        let mut rel = make_instance_call(1, "area", 1, "self");
+        rel.to_range = Some(Range::new(58, 8, 58, 20));
+        let mut context = make_context(1, lang, vec![SymbolId::new(1).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("area".to_string(), SymbolId::new(4).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "self-form member call must resolve");
+        assert_eq!(
+            batch.relationships[0].to_id,
+            SymbolId::new(2).unwrap(),
+            "must be the enclosing type's own member, not the frozen winner"
+        );
+    }
+
+    #[test]
+    fn self_form_miss_falls_through_to_existing_path() {
+        // Enclosing type has no such member: the self-form arm must not
+        // fail the call closed — implicit-this languages emit the alias
+        // for free-function calls too, and the plain path still applies.
+        let lang = LanguageId::new("python");
+        let cache = Arc::new(SymbolLookupCache::new());
+        let mut caller = make_member(1, "display", 1, lang, 57, 60);
+        caller.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("Shape".into()),
+        });
+        cache.insert(caller);
+        cache.insert(make_symbol(2, "helper", 1, lang));
+        let stage = make_stage(cache);
+
+        let mut rel = make_instance_call(1, "helper", 1, "self");
+        rel.to_range = Some(Range::new(58, 8, 58, 20));
+        let mut context = make_context(1, lang, vec![SymbolId::new(1).unwrap()], vec![rel]);
+        let mut map = std::collections::HashMap::new();
+        map.insert("helper".to_string(), SymbolId::new(2).unwrap());
+        context.scope = Box::new(MapScope(map));
+
+        let (batch, stats) = stage.resolve(&context);
+
+        assert_eq!(stats.resolved, 1, "arm miss keeps the existing path");
+        assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
     }
 
     #[test]

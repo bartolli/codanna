@@ -123,3 +123,61 @@ void Service::run() {
         "method-impl caller should be the unqualified name (matches symbol-extraction)"
     );
 }
+
+#[test]
+fn test_cpp_implicit_this_call_carries_this_receiver() {
+    let code = r#"
+class Shape {
+public:
+    virtual double area() const = 0;
+    void display() const {
+        double a = area();
+    }
+};
+
+double Shape_helper() {
+    return free_compute();
+}
+
+class Grid {
+public:
+    void refresh();
+};
+
+void Grid::refresh() {
+    redraw();
+}
+"#;
+    let mut parser = CppParser::new().unwrap();
+    let calls = parser.find_method_calls(code);
+
+    let area = calls
+        .iter()
+        .find(|c| c.method_name == "area")
+        .expect("in-class implicit call extracted");
+    assert_eq!(
+        area.receiver.as_deref(),
+        Some("this"),
+        "unqualified call inside an in-class member definition is implicit-this"
+    );
+
+    let redraw = calls
+        .iter()
+        .find(|c| c.method_name == "redraw")
+        .expect("out-of-line member call extracted");
+    assert_eq!(
+        redraw.receiver.as_deref(),
+        Some("this"),
+        "unqualified call inside an out-of-line member definition is implicit-this"
+    );
+
+    let free = calls
+        .iter()
+        .find(|c| c.method_name == "free_compute")
+        .expect("free-function call extracted");
+    assert_eq!(
+        free.receiver.as_deref(),
+        None,
+        "unqualified call inside a free function stays receiver-less"
+    );
+}
