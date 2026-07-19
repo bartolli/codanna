@@ -797,7 +797,7 @@ impl GoParser {
         counter: &mut SymbolCounter,
         symbols: &mut Vec<Symbol>,
         module_path: &str,
-        interface_name: &str, // Used for generating qualified method names for interface methods
+        interface_name: &str, // Qualified method names and ClassMember scope
     ) {
         let method_name = method_node
             .children(&mut method_node.walk())
@@ -811,7 +811,7 @@ impl GoParser {
             // Generate qualified method name for better disambiguation
             let qualified_name = format!("{interface_name}.{name}");
 
-            let symbol = self.create_symbol(
+            let mut symbol = self.create_symbol(
                 counter.next_id(),
                 qualified_name,
                 SymbolKind::Method,
@@ -827,6 +827,9 @@ impl GoParser {
                 module_path,
                 visibility,
             );
+            symbol.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(interface_name.into()),
+            });
             symbols.push(symbol);
         }
     }
@@ -847,7 +850,7 @@ impl GoParser {
         let doc_comment = self.extract_doc_comment(&node, code);
         let visibility = self.determine_go_visibility(name);
 
-        Some(self.create_symbol(
+        let mut symbol = self.create_symbol(
             counter.next_id(),
             name.to_string(),
             SymbolKind::Method,
@@ -862,7 +865,38 @@ impl GoParser {
             doc_comment,
             module_path,
             visibility,
-        ))
+        );
+
+        // Methods are declared outside any type span, so the walk context
+        // never yields a class scope; the receiver names the container.
+        if let Some(class_name) = node
+            .child_by_field_name("receiver")
+            .and_then(|r| Self::receiver_base_type(r, code))
+        {
+            symbol.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+                class_name: Some(class_name.into()),
+            });
+        }
+
+        Some(symbol)
+    }
+
+    /// Base type name of a method receiver: unwraps pointer and generic
+    /// wrappers down to the bare type identifier.
+    fn receiver_base_type<'a>(receiver: Node, code: &'a str) -> Option<&'a str> {
+        let mut cursor = receiver.walk();
+        let param = receiver
+            .children(&mut cursor)
+            .find(|c| c.kind() == "parameter_declaration")?;
+        let mut ty = param.child_by_field_name("type")?;
+        loop {
+            match ty.kind() {
+                "type_identifier" => return Some(&code[ty.byte_range()]),
+                "generic_type" => ty = ty.child_by_field_name("type")?,
+                "pointer_type" => ty = ty.named_child(0)?,
+                _ => return None,
+            }
+        }
     }
 
     /// Process Go variable declarations
@@ -1766,8 +1800,12 @@ impl GoParser {
         match node.kind() {
             // Go interface types with method elements
             "interface_type" => {
-                // We need to get the interface name from the parent type_spec
-                let interface_name = "interface"; // Default name, could be improved
+                let interface_name = node
+                    .parent()
+                    .filter(|p| p.kind() == "type_spec")
+                    .and_then(|p| p.child_by_field_name("name"))
+                    .map(|n| &code[n.byte_range()])
+                    .unwrap_or("interface");
 
                 for child in node.children(&mut node.walk()) {
                     if child.kind() == "method_elem" {
@@ -1794,18 +1832,13 @@ impl GoParser {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let method_name = &code[name_node.byte_range()];
 
-                    // Extract receiver type for context
-                    let receiver_type = if let Some(receiver) = node.child_by_field_name("receiver")
-                    {
-                        // Get the receiver type from the parameter list
-                        receiver
-                            .children(&mut receiver.walk())
-                            .find(|n| matches!(n.kind(), "type_identifier" | "pointer_type"))
-                            .map(|n| &code[n.byte_range()])
-                            .unwrap_or("unknown")
-                    } else {
-                        "unknown"
-                    };
+                    // The receiver's bare base type is the definer identity;
+                    // pointer/generic wrappers or the raw parameter-list text
+                    // never resolve to a type symbol.
+                    let receiver_type = node
+                        .child_by_field_name("receiver")
+                        .and_then(|r| Self::receiver_base_type(r, code))
+                        .unwrap_or("unknown");
 
                     let range = Range::new(
                         node.start_position().row as u32,
@@ -2735,5 +2768,65 @@ func run(srv *Server) {
             .expect("srv.Start call should be extracted");
         assert_eq!(call.receiver.as_deref(), Some("srv"));
         assert!(!call.is_static);
+    }
+
+    #[test]
+    fn test_go_method_class_member_scope() {
+        let mut parser = GoParser::new().unwrap();
+        let file_id = FileId::new(1).unwrap();
+
+        let code = r#"
+package main
+
+type Reader struct{}
+type Writer struct{}
+type List[T any] struct{}
+
+func (r *Reader) Close() error { return nil }
+func (w Writer) Close() error { return nil }
+func (l *List[T]) Len() int { return 0 }
+func (List[T]) Cap() int { return 0 }
+
+type Closer interface {
+    Close() error
+}
+"#;
+
+        let symbols = parser.parse(code, file_id, &mut SymbolCounter::new());
+
+        let member_of = |name: &str, class: &str| {
+            symbols.iter().any(|s| {
+                s.name.as_ref() == name
+                    && s.kind == SymbolKind::Method
+                    && matches!(
+                        s.scope_context.as_ref(),
+                        Some(crate::symbol::ScopeContext::ClassMember {
+                            class_name: Some(c)
+                        }) if c.as_ref() == class
+                    )
+            })
+        };
+
+        // Same-name methods each name their own receiver type
+        assert!(member_of("Close", "Reader"));
+        assert!(member_of("Close", "Writer"));
+        // Pointer and generic wrappers unwrap to the bare type
+        assert!(member_of("Len", "List"));
+        // Anonymous receiver still names the type
+        assert!(member_of("Cap", "List"));
+        // Interface method specs are members of the interface
+        assert!(member_of("Closer.Close", "Closer"));
+
+        // Defines pairs carry resolvable definer names: the bare receiver
+        // base type, and the real interface name from the parent type_spec
+        let defines = parser.find_defines(code);
+        let has_pair = |definer: &str, method: &str| {
+            defines.iter().any(|(d, m, _)| *d == definer && *m == method)
+        };
+        assert!(has_pair("Reader", "Close"));
+        assert!(has_pair("Writer", "Close"));
+        assert!(has_pair("List", "Len"));
+        assert!(has_pair("List", "Cap"));
+        assert!(has_pair("Closer", "Close"));
     }
 }
