@@ -3,7 +3,8 @@
 //! Measures what each language parser emits against the evidence fields
 //! resolution depends on: caller identity, receiver (self-form vs named),
 //! static flag, caller_range, qualified plain-call targets, ClassMember
-//! scope on methods, Defines/Extends emission. Walks a fixture tree,
+//! scope on methods, Defines/Extends emission, variable-binding
+//! emission (find_variable_types). Walks a fixture tree,
 //! buckets files by registered extension, aggregates per language.
 //! Not part of the product surface.
 //!
@@ -38,6 +39,7 @@ struct LangStats {
     defines: usize,
     extends: usize,
     implements: usize,
+    vt_total: usize,
 }
 
 const SKIP_DIRS: &[&str] = &[
@@ -170,15 +172,18 @@ fn main() {
             s.defines += parser.find_defines(&code).len();
             s.extends += parser.find_extends(&code).len();
             s.implements += parser.find_implementations(&code).len();
+            // Shape split (ctor vs annotated) omitted: the hook returns
+            // (name, type, range) with no capture-arm provenance.
+            s.vt_total += parser.find_variable_types(&code).len();
         }
     }
 
     println!(
-        "lang\tfiles\tmc_total\tmc_caller_empty\tmc_recv_self\tmc_recv_named\tmc_recv_none\tmc_static\tmc_caller_range_none\tpc_total\tpc_qualified\tmethods\tm_classmember_named\tm_classmember_anon\tm_scope_other\tm_scope_none\tdefines\textends\timplements"
+        "lang\tfiles\tmc_total\tmc_caller_empty\tmc_recv_self\tmc_recv_named\tmc_recv_none\tmc_static\tmc_caller_range_none\tpc_total\tpc_qualified\tmethods\tm_classmember_named\tm_classmember_anon\tm_scope_other\tm_scope_none\tdefines\textends\timplements\tvt_total"
     );
     for (id, s) in &stats {
         println!(
-            "{id}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{id}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             s.files,
             s.mc_total,
             s.mc_caller_empty,
@@ -197,6 +202,7 @@ fn main() {
             s.defines,
             s.extends,
             s.implements,
+            s.vt_total,
         );
     }
 }

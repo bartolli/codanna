@@ -1163,20 +1163,21 @@ impl ResolveStage {
                 }
             }
         }
-        // Instance-call disambiguation via inferred parameter type: when the
-        // receiver names a parameter on the caller's signature, filter candidates
-        // to those whose containing type matches the inferred type. Zero
-        // survivors → NotFound (don't fall through to a wrong-class same-name
-        // pick); single survivor wins; multiple fall through.
+        // Instance-call disambiguation via inferred receiver type: filter
+        // candidates to those whose containing type matches. Single survivor
+        // wins; zero fail closed; multiple ALSO fail closed — the survivors
+        // are class-correct but copy-ambiguous (duplicate class copies in a
+        // corpus), and the ladder below is name-keyed first-pick, not
+        // identity evidence. An unresolved edge beats a wrong-copy or
+        // wrong-class guess.
         if unresolved.kind == RelationKind::Calls {
             if let Some(survivors) =
                 self.filter_by_instance_receiver_type(&filtered, unresolved, language_id, context)
             {
-                match survivors.len() {
-                    1 => return Some(survivors[0]),
-                    0 => return None,
-                    _ => {}
-                }
+                return match survivors.len() {
+                    1 => Some(survivors[0]),
+                    _ => None,
+                };
             } else if self.has_uninferrable_instance_receiver(unresolved, language_id, context) {
                 // Receiver present, type unknown: an unresolved edge beats
                 // a first-pick guess from the priority ladder below.

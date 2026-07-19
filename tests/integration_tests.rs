@@ -55,6 +55,9 @@ mod test_kotlin_semantic_search;
 #[path = "integration/test_pipeline_parse_stage.rs"]
 mod test_pipeline_parse_stage;
 
+#[path = "integration/test_resolve_instance_receiver_survivors.rs"]
+mod test_resolve_instance_receiver_survivors;
+
 #[path = "integration/test_resolve_kind_filter.rs"]
 mod test_resolve_kind_filter;
 
