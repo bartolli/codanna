@@ -222,7 +222,7 @@ impl ResolveStage {
                 self.accept_unwitnessed_pick(from_id, to_id, unresolved)
             }
             ResolveResult::Ambiguous(candidates) => {
-                let to_id = self.disambiguate(&candidates, unresolved, context, false)?;
+                let to_id = self.disambiguate(&candidates, unresolved, &caller, context, false)?;
                 self.accept_unwitnessed_pick(from_id, to_id, unresolved)
             }
             ResolveResult::NotFound => {
@@ -972,7 +972,7 @@ impl ResolveStage {
         let to_id = match filtered.len() {
             0 => return None,
             1 => filtered[0],
-            _ => self.disambiguate(&filtered, unresolved, context, true)?,
+            _ => self.disambiguate(&filtered, unresolved, caller, context, true)?,
         };
         Some(ResolvedRelationship {
             from_id,
@@ -1174,6 +1174,7 @@ impl ResolveStage {
         &self,
         candidates: &[SymbolId],
         unresolved: &UnresolvedRelationship,
+        caller: &CallerContext,
         context: &ResolutionContext,
         static_pre_filtered: bool,
     ) -> Option<SymbolId> {
@@ -1279,7 +1280,23 @@ impl ResolveStage {
             return Some(language_matches[0]);
         }
         if !language_matches.is_empty() {
-            return Some(language_matches[0]);
+            // Multiple same-language candidates with no local, import, or
+            // receiver evidence: module identity is the only evidence left.
+            // Exactly one same-module survivor wins; anything else is a
+            // first-pick over unimported cross-module copies — fail closed.
+            let same_module: Vec<SymbolId> = language_matches
+                .iter()
+                .copied()
+                .filter(|&id| {
+                    self.symbol_cache
+                        .get_ref(id)
+                        .is_some_and(|sym| caller.is_same_module(sym.module_path.as_deref()))
+                })
+                .collect();
+            if same_module.len() == 1 {
+                return Some(same_module[0]);
+            }
+            return None;
         }
 
         // No appropriate match found - don't resolve cross-language
