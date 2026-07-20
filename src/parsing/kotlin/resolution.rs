@@ -3,7 +3,9 @@
 //! Provides scoping and inheritance tracking tailored for Kotlin's language features,
 //! including package-based modules, nested classes, companion objects, and interfaces.
 
-use crate::parsing::resolution::{ImportBinding, InheritanceResolver, ResolutionScope};
+use crate::parsing::resolution::{
+    ImportBinding, ImportOrigin, InheritanceResolver, ResolutionScope,
+};
 use crate::parsing::{ScopeLevel, ScopeType};
 use crate::{FileId, SymbolId};
 use std::collections::{HashMap, HashSet};
@@ -267,9 +269,14 @@ impl ResolutionScope for KotlinResolutionContext {
     }
 
     fn register_import_binding(&mut self, binding: ImportBinding) {
-        if let Some(symbol_id) = binding.resolved_symbol {
-            self.import_scope
-                .insert(binding.exposed_name.clone(), symbol_id);
+        // import_scope feeds resolve(), whose hits are identity-grade for
+        // the receiver anchor and inheritance chain walk. External/Unknown
+        // bindings carry name-guessed ids (cache tier 3), not identity.
+        if binding.origin == ImportOrigin::Internal {
+            if let Some(symbol_id) = binding.resolved_symbol {
+                self.import_scope
+                    .insert(binding.exposed_name.clone(), symbol_id);
+            }
         }
         self.import_bindings
             .insert(binding.exposed_name.clone(), binding);
@@ -454,6 +461,45 @@ mod tests {
 
         // Top-level still visible, member not visible outside class
         assert_eq!(ctx.resolve("topLevel"), Some(SymbolId(1)));
+    }
+
+    #[test]
+    fn external_import_binding_never_feeds_resolve() {
+        let mut ctx = KotlinResolutionContext::new(FileId(1));
+        let import = crate::parsing::Import {
+            path: "external.thirdparty.Logger".to_string(),
+            file_id: FileId(1),
+            alias: None,
+            is_glob: false,
+            is_type_only: false,
+        };
+
+        ctx.register_import_binding(ImportBinding {
+            import: import.clone(),
+            exposed_name: "Logger".to_string(),
+            origin: ImportOrigin::External,
+            resolved_symbol: Some(SymbolId(7)),
+        });
+        ctx.register_import_binding(ImportBinding {
+            import: import.clone(),
+            exposed_name: "Guessed".to_string(),
+            origin: ImportOrigin::Unknown,
+            resolved_symbol: Some(SymbolId(9)),
+        });
+        // Name-guessed ids from unimported files must not resolve.
+        assert_eq!(ctx.resolve("Logger"), None);
+        assert_eq!(ctx.resolve("Guessed"), None);
+        // Binding records stay available for bookkeeping.
+        assert!(ctx.import_binding("Logger").is_some());
+        assert!(ctx.import_binding("Guessed").is_some());
+
+        ctx.register_import_binding(ImportBinding {
+            import,
+            exposed_name: "Real".to_string(),
+            origin: ImportOrigin::Internal,
+            resolved_symbol: Some(SymbolId(8)),
+        });
+        assert_eq!(ctx.resolve("Real"), Some(SymbolId(8)));
     }
 
     #[test]

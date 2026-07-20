@@ -145,6 +145,10 @@ path = "examples/pipeline_metrics_demo.rs"
 name = "parser_census"
 path = "examples/parser_census.rs"
 
+[[example]]
+name = "resolution_precision"
+path = "examples/resolution_precision.rs"
+
 [[bench]]
 name = "unified_output_bench"
 harness = false
