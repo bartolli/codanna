@@ -354,6 +354,17 @@ impl JavaScriptParser {
                                 tracing::debug!(
                                     "[javascript] found default export of '{symbol_name}'"
                                 );
+                            } else if let Some(name_node) = next.child_by_field_name("name") {
+                                // Inline declaration form (`export default function Foo`):
+                                // the declaration extracts via the recursion below; the
+                                // name still registers so the default-export visibility
+                                // pass covers the symbol.
+                                let symbol_name = &code[name_node.byte_range()];
+                                self.default_exported_symbols
+                                    .insert(symbol_name.to_string());
+                                tracing::debug!(
+                                    "[javascript] found inline default export declaration '{symbol_name}'"
+                                );
                             }
                         }
                     }
@@ -376,9 +387,19 @@ impl JavaScriptParser {
                     }
                 }
 
-                // Still process children for nested declarations (e.g., export function foo())
-                if !found_default {
-                    for child in children {
+                // Still process children for nested declarations (e.g., export function foo()).
+                // Under `export default`, only declaration children recurse: the inline
+                // `export default function Foo() {}` form must extract, while
+                // `export default <identifier>` re-exports carry no declaration to walk.
+                for child in children {
+                    if !found_default
+                        || matches!(
+                            child.kind(),
+                            "function_declaration"
+                                | "generator_function_declaration"
+                                | "class_declaration"
+                        )
+                    {
                         self.extract_symbols_from_node(
                             child,
                             code,
@@ -1393,6 +1414,17 @@ impl JavaScriptParser {
         // Recurse to children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
+            // Function children of an export_statement were already walked by
+            // the wrapper arm above with their own name as context; a second
+            // visit duplicates every call edge inside them.
+            if node.kind() == "export_statement"
+                && matches!(
+                    child.kind(),
+                    "function_declaration" | "generator_function_declaration"
+                )
+            {
+                continue;
+            }
             self.extract_calls_recursive(&child, code, function_context, calls);
         }
     }

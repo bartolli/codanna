@@ -22,6 +22,12 @@ mod test_typescript_jsx_uses;
 #[path = "parsers/javascript/test_nested_functions.rs"]
 mod test_javascript_nested_functions;
 
+#[path = "parsers/typescript/test_default_export.rs"]
+mod test_typescript_default_export;
+
+#[path = "parsers/javascript/test_default_export.rs"]
+mod test_javascript_default_export;
+
 #[path = "parsers/c/test_resolution.rs"]
 mod test_c_resolution;
 
