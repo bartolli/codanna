@@ -208,108 +208,117 @@ pub trait ResolutionScope: Send + Sync {
         to_kind: crate::SymbolKind,
         rel_kind: crate::RelationKind,
     ) -> bool {
-        use crate::RelationKind::*;
-        use crate::SymbolKind::*;
+        default_compatible_relationship(from_kind, to_kind, rel_kind)
+    }
+}
 
-        match rel_kind {
-            Calls => {
-                // Executable code can call other executable code
-                let caller_can_call = matches!(from_kind, Function | Method | Macro | Module);
-                let callee_can_be_called = matches!(to_kind, Function | Method | Macro | Class);
-                caller_can_call && callee_can_be_called
-            }
-            CalledBy => {
-                // Reverse of Calls
-                let caller_can_call = matches!(to_kind, Function | Method | Macro | Module);
-                let callee_can_be_called = matches!(from_kind, Function | Method | Macro | Class);
-                callee_can_be_called && caller_can_call
-            }
-            Implements => {
-                // Types can implement interfaces/traits
-                matches!(from_kind, Struct | Enum | Class) && matches!(to_kind, Trait | Interface)
-            }
-            ImplementedBy => {
-                // Reverse of Implements
-                matches!(from_kind, Trait | Interface) && matches!(to_kind, Struct | Enum | Class)
-            }
-            Uses => {
-                // Most symbols can use/reference types and values
-                let can_use = matches!(
-                    from_kind,
-                    Function | Method | Struct | Class | Trait | Interface | Module | Enum
-                );
-                let can_be_used = matches!(
-                    to_kind,
-                    Struct
-                        | Enum
-                        | Class
-                        | Trait
-                        | Interface
-                        | TypeAlias
-                        | Constant
-                        | Variable
-                        | Function
-                        | Method
-                );
+/// Default kind-compatibility rules. Shared so language overrides can
+/// tighten individual arms without replicating the whole table.
+pub(crate) fn default_compatible_relationship(
+    from_kind: crate::SymbolKind,
+    to_kind: crate::SymbolKind,
+    rel_kind: crate::RelationKind,
+) -> bool {
+    use crate::RelationKind::*;
+    use crate::SymbolKind::*;
 
-                can_use && can_be_used
-            }
-            UsedBy => {
-                // Reverse of Uses
-                let can_use = matches!(
-                    to_kind,
-                    Function | Method | Struct | Class | Trait | Interface | Module | Enum
-                );
-                let can_be_used = matches!(
-                    from_kind,
-                    Struct
-                        | Enum
-                        | Class
-                        | Trait
-                        | Interface
-                        | TypeAlias
-                        | Constant
-                        | Variable
-                        | Function
-                        | Method
-                );
-                can_be_used && can_use
-            }
-            Defines => {
-                // Containers can define members
-                let container = matches!(
-                    from_kind,
-                    Trait | Interface | Module | Struct | Enum | Class
-                );
-                let member = matches!(to_kind, Method | Function | Constant | Field | Variable);
-                container && member
-            }
-            DefinedIn => {
-                // Reverse of Defines
-                let member = matches!(from_kind, Method | Function | Constant | Field | Variable);
-                let container =
-                    matches!(to_kind, Trait | Interface | Module | Struct | Enum | Class);
-                member && container
-            }
-            Extends => {
-                // Types can extend other types (inheritance)
-                let extendable = matches!(from_kind, Class | Interface | Trait | Struct | Enum);
-                let can_be_extended = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
-                extendable && can_be_extended
-            }
-            ExtendedBy => {
-                // Reverse of Extends
-                matches!(from_kind, Class | Interface | Trait | Struct | Enum)
-                    && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
-            }
-            References => {
-                // Very permissive - almost anything can reference anything
-                true
-            }
-            ReferencedBy => {
-                // Reverse of References - also permissive
-                true
-            }
+    match rel_kind {
+        Calls => {
+            // Executable code can call other executable code
+            let caller_can_call = matches!(from_kind, Function | Method | Macro | Module);
+            let callee_can_be_called = matches!(to_kind, Function | Method | Macro | Class);
+            caller_can_call && callee_can_be_called
+        }
+        CalledBy => {
+            // Reverse of Calls
+            let caller_can_call = matches!(to_kind, Function | Method | Macro | Module);
+            let callee_can_be_called = matches!(from_kind, Function | Method | Macro | Class);
+            callee_can_be_called && caller_can_call
+        }
+        Implements => {
+            // Types can implement interfaces/traits
+            matches!(from_kind, Struct | Enum | Class) && matches!(to_kind, Trait | Interface)
+        }
+        ImplementedBy => {
+            // Reverse of Implements
+            matches!(from_kind, Trait | Interface) && matches!(to_kind, Struct | Enum | Class)
+        }
+        Uses => {
+            // Most symbols can use/reference types and values
+            let can_use = matches!(
+                from_kind,
+                Function | Method | Struct | Class | Trait | Interface | Module | Enum
+            );
+            let can_be_used = matches!(
+                to_kind,
+                Struct
+                    | Enum
+                    | Class
+                    | Trait
+                    | Interface
+                    | TypeAlias
+                    | Constant
+                    | Variable
+                    | Function
+                    | Method
+            );
+
+            can_use && can_be_used
+        }
+        UsedBy => {
+            // Reverse of Uses
+            let can_use = matches!(
+                to_kind,
+                Function | Method | Struct | Class | Trait | Interface | Module | Enum
+            );
+            let can_be_used = matches!(
+                from_kind,
+                Struct
+                    | Enum
+                    | Class
+                    | Trait
+                    | Interface
+                    | TypeAlias
+                    | Constant
+                    | Variable
+                    | Function
+                    | Method
+            );
+            can_be_used && can_use
+        }
+        Defines => {
+            // Containers can define members
+            let container = matches!(
+                from_kind,
+                Trait | Interface | Module | Struct | Enum | Class
+            );
+            let member = matches!(to_kind, Method | Function | Constant | Field | Variable);
+            container && member
+        }
+        DefinedIn => {
+            // Reverse of Defines
+            let member = matches!(from_kind, Method | Function | Constant | Field | Variable);
+            let container = matches!(to_kind, Trait | Interface | Module | Struct | Enum | Class);
+            member && container
+        }
+        Extends => {
+            // Types can extend other types (inheritance)
+            let extendable = matches!(from_kind, Class | Interface | Trait | Struct | Enum);
+            let can_be_extended = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
+            extendable && can_be_extended
+        }
+        ExtendedBy => {
+            // Reverse of Extends
+            matches!(from_kind, Class | Interface | Trait | Struct | Enum)
+                && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
+        }
+        References => {
+            // Very permissive - almost anything can reference anything
+            true
+        }
+        ReferencedBy => {
+            // Reverse of References - also permissive
+            true
         }
     }
 }

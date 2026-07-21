@@ -3,7 +3,9 @@
 //! Provides scoping and inheritance tracking tailored for Swift's language features,
 //! including protocols, extensions, and class inheritance.
 
-use crate::parsing::resolution::{ImportBinding, InheritanceResolver, ResolutionScope};
+use crate::parsing::resolution::{
+    ImportBinding, InheritanceResolver, ResolutionScope, default_compatible_relationship,
+};
 use crate::parsing::{ScopeLevel, ScopeType};
 use crate::{FileId, SymbolId};
 use std::collections::{HashMap, HashSet};
@@ -275,6 +277,40 @@ impl ResolutionScope for SwiftResolutionContext {
 
     fn import_binding(&self, name: &str) -> Option<ImportBinding> {
         self.import_bindings.get(name).cloned()
+    }
+
+    /// Swift's colon-merged heritage list emits every pair on both the
+    /// Extends and Implements channels; the kind gates sort them after
+    /// resolution. Conformance (type -> protocol) belongs to Implements,
+    /// so Extends rejects it. Protocol refinement (protocol -> protocol)
+    /// stays Extends, mirroring interface extension.
+    fn is_compatible_relationship(
+        &self,
+        from_kind: crate::SymbolKind,
+        to_kind: crate::SymbolKind,
+        rel_kind: crate::RelationKind,
+    ) -> bool {
+        use crate::RelationKind::*;
+        use crate::SymbolKind::*;
+
+        match rel_kind {
+            Extends => {
+                let extendable = matches!(from_kind, Class | Interface | Trait | Struct | Enum);
+                let can_be_extended = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
+                let conformance = matches!(from_kind, Class | Struct | Enum)
+                    && matches!(to_kind, Trait | Interface);
+                extendable && can_be_extended && !conformance
+            }
+            ExtendedBy => {
+                let extendable = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
+                let can_be_extended =
+                    matches!(from_kind, Class | Interface | Trait | Struct | Enum);
+                let conformance = matches!(to_kind, Class | Struct | Enum)
+                    && matches!(from_kind, Trait | Interface);
+                extendable && can_be_extended && !conformance
+            }
+            _ => default_compatible_relationship(from_kind, to_kind, rel_kind),
+        }
     }
 }
 
@@ -597,5 +633,89 @@ mod tests {
         let result = resolver.resolve_method("Rectangle", "draw");
         assert!(result.is_some());
         assert!(result.unwrap().contains("Drawable"));
+    }
+
+    #[test]
+    fn test_extends_gate_rejects_conformance_pairs() {
+        use crate::{RelationKind, SymbolKind};
+        let ctx = SwiftResolutionContext::new(FileId(1));
+
+        for from in [SymbolKind::Class, SymbolKind::Struct, SymbolKind::Enum] {
+            assert!(
+                !ctx.is_compatible_relationship(from, SymbolKind::Interface, RelationKind::Extends),
+                "{from:?} -> Interface is conformance; Extends must reject it"
+            );
+        }
+        assert!(
+            ctx.is_compatible_relationship(
+                SymbolKind::Class,
+                SymbolKind::Class,
+                RelationKind::Extends
+            ),
+            "superclass inheritance stays Extends"
+        );
+        assert!(
+            ctx.is_compatible_relationship(
+                SymbolKind::Interface,
+                SymbolKind::Interface,
+                RelationKind::Extends
+            ),
+            "protocol refinement stays Extends"
+        );
+    }
+
+    #[test]
+    fn test_implements_gate_accepts_exactly_the_rejected_conformance_pairs() {
+        use crate::{RelationKind, SymbolKind};
+        let ctx = SwiftResolutionContext::new(FileId(1));
+
+        for from in [SymbolKind::Class, SymbolKind::Struct, SymbolKind::Enum] {
+            assert!(
+                ctx.is_compatible_relationship(
+                    from,
+                    SymbolKind::Interface,
+                    RelationKind::Implements
+                ),
+                "{from:?} -> Interface conformance rides Implements"
+            );
+        }
+        assert!(
+            !ctx.is_compatible_relationship(
+                SymbolKind::Interface,
+                SymbolKind::Interface,
+                RelationKind::Implements
+            ),
+            "protocol refinement must not ride Implements"
+        );
+        assert!(
+            !ctx.is_compatible_relationship(
+                SymbolKind::Class,
+                SymbolKind::Class,
+                RelationKind::Implements
+            ),
+            "superclass inheritance must not ride Implements"
+        );
+    }
+
+    #[test]
+    fn test_extended_by_gate_mirrors_extends() {
+        use crate::{RelationKind, SymbolKind};
+        let ctx = SwiftResolutionContext::new(FileId(1));
+
+        assert!(!ctx.is_compatible_relationship(
+            SymbolKind::Interface,
+            SymbolKind::Class,
+            RelationKind::ExtendedBy
+        ));
+        assert!(ctx.is_compatible_relationship(
+            SymbolKind::Class,
+            SymbolKind::Class,
+            RelationKind::ExtendedBy
+        ));
+        assert!(ctx.is_compatible_relationship(
+            SymbolKind::Interface,
+            SymbolKind::Interface,
+            RelationKind::ExtendedBy
+        ));
     }
 }

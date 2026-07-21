@@ -306,3 +306,52 @@ protocol Resource {
         "Should have exactly one extends for ImageResource (struct only, not typealias), got: {image_resource_extends:?}"
     );
 }
+
+#[test]
+fn test_find_implementations_emits_heritage_pairs() {
+    // Dual-channel emission: swift cannot discriminate superclass from
+    // protocol at the colon, so every heritage pair rides both channels;
+    // the resolution kind gate sorts conformance to Implements.
+    let code = load_comprehensive_swift();
+    let mut parser = SwiftParser::new().expect("Failed to create Swift parser");
+
+    let implementations = parser.find_implementations(&code);
+    let extends = parser.find_extends(&code);
+
+    let animal_named = implementations
+        .iter()
+        .find(|(t, p, _)| *t == "Animal" && *p == "Named");
+    assert!(
+        animal_named.is_some(),
+        "Animal: Named must ride the Implements channel, got: {implementations:?}"
+    );
+    assert_eq!(
+        implementations.len(),
+        extends.len(),
+        "both channels carry the full heritage set"
+    );
+}
+
+#[test]
+fn test_find_implementations_minimized_conformance() {
+    let code = r#"
+protocol P {}
+class A {}
+class B: A, P {}
+"#;
+    let mut parser = SwiftParser::new().expect("Failed to create Swift parser");
+
+    let implementations = parser.find_implementations(code);
+    assert!(
+        implementations
+            .iter()
+            .any(|(t, p, _)| *t == "B" && *p == "P"),
+        "B: P must ride the Implements channel, got: {implementations:?}"
+    );
+    assert!(
+        implementations
+            .iter()
+            .any(|(t, p, _)| *t == "B" && *p == "A"),
+        "B: A rides both channels pre-resolution (kind unknown at parse), got: {implementations:?}"
+    );
+}
