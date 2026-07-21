@@ -1011,11 +1011,21 @@ impl IndexFacade {
     /// Index a single file using the parallel pipeline.
     ///
     /// Returns `IndexingResult::Indexed` with the file ID on success.
+    /// File records key off path text: an uncanonical root or file path
+    /// (`./src`, `x/../x`) addresses a key space disjoint from the
+    /// registered indexed_paths walks, re-indexing every file as new and
+    /// doubling the index. Normalize every externally-supplied path once,
+    /// here; nonexistent paths pass through raw so callers keep their
+    /// error reporting.
+    fn canonical_or_raw(path: &std::path::Path) -> std::path::PathBuf {
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+
     pub fn index_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
     ) -> crate::IndexResult<crate::IndexingResult> {
-        let path = path.as_ref();
+        let path = &Self::canonical_or_raw(path.as_ref());
         if self.has_semantic_search() {
             if let Err(e) = self.ensure_embedding_pool() {
                 tracing::warn!("Failed to initialize embedding pool: {e}");
@@ -1055,7 +1065,7 @@ impl IndexFacade {
     ///
     /// Uses the Pipeline's cleanup stage to remove symbols and embeddings.
     pub fn remove_file(&mut self, path: impl AsRef<std::path::Path>) -> crate::IndexResult<()> {
-        let path = path.as_ref();
+        let path = &Self::canonical_or_raw(path.as_ref());
         let semantic_path = self.settings.index_path.join("semantic");
 
         use crate::indexing::pipeline::stages::CleanupStage;
@@ -1066,7 +1076,7 @@ impl IndexFacade {
             CleanupStage::new(Arc::clone(&self.document_index), &semantic_path)
         };
 
-        cleanup_stage.cleanup_files(&[path.to_path_buf()])?;
+        cleanup_stage.cleanup_files(std::slice::from_ref(path))?;
         Ok(())
     }
 
@@ -1074,6 +1084,7 @@ impl IndexFacade {
     ///
     /// This is the primary indexing entry point using Pipeline.
     pub fn index_directory(&mut self, path: &Path, force: bool) -> FacadeResult<IndexingStats> {
+        let path = &Self::canonical_or_raw(path);
         if self.has_semantic_search() {
             if let Err(e) = self.ensure_embedding_pool() {
                 tracing::warn!("Failed to initialize embedding pool: {e}");
@@ -1116,7 +1127,7 @@ impl IndexFacade {
         use crate::indexing::FileWalker;
         use crate::indexing::progress::IndexStats;
 
-        let dir = dir.as_ref();
+        let dir = &Self::canonical_or_raw(dir.as_ref());
         let walker = FileWalker::new(Arc::clone(&self.settings));
         let files: Vec<_> = walker.walk(dir).collect();
 
@@ -1363,6 +1374,44 @@ mod tests {
 
         let result = IndexFacade::new(std::sync::Arc::new(settings));
         assert!(result.is_err());
+    }
+
+    // Regression: file records key off the walk root's textual form. An
+    // uncanonical root used to address a key space disjoint from the
+    // canonical indexed_paths walk, re-indexing every file as new and
+    // doubling the index (witnessed live: 2x13370 symbols after
+    // `rm -rf .codanna/index` + `codanna index .`).
+    #[test]
+    fn uncanonical_walk_root_does_not_double_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = dir.path().join("proj").join("src");
+        std::fs::create_dir_all(&corpus).unwrap();
+        std::fs::write(
+            corpus.join("a.rs"),
+            "pub fn alpha() { beta(); }\npub fn beta() {}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let root = dir.path().join("proj");
+        let canonical = root.canonicalize().unwrap();
+        facade.index_directory(&canonical, false).unwrap();
+        let count = facade.document_count().unwrap();
+        assert!(count > 0, "seed pass must index the corpus");
+
+        let alias = root.join("..").join("proj");
+        facade.index_directory(&alias, false).unwrap();
+        assert_eq!(
+            facade.document_count().unwrap(),
+            count,
+            "an uncanonical alias of an indexed root must not duplicate records"
+        );
     }
 
     // Regression: every symbol-card surface requests
