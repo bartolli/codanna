@@ -205,13 +205,72 @@ impl LanguageBehavior for KotlinBehavior {
         project_root: &Path,
         extensions: &[&str],
     ) -> Option<String> {
+        use crate::project_resolver::persist::ResolutionPersistence;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
+
+        // Thread-local cache with 1-second TTL (per Java/Swift pattern)
+        thread_local! {
+            static RULES_CACHE: RefCell<Option<(Instant, crate::project_resolver::persist::ResolutionIndex)>> = const { RefCell::new(None) };
+        }
+
+        // Provider rules first: gradle source root stripped, file stem
+        // dropped — the module path is the package directory chain.
+        let cached_result = RULES_CACHE.with(|cache| {
+            let mut cache_ref = cache.borrow_mut();
+
+            let needs_reload = cache_ref
+                .as_ref()
+                .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
+                .unwrap_or(true);
+
+            if needs_reload {
+                let persistence =
+                    ResolutionPersistence::new(std::path::Path::new(crate::init::local_dir_name()));
+                if let Ok(index) = persistence.load("kotlin") {
+                    *cache_ref = Some((Instant::now(), index));
+                } else {
+                    *cache_ref = None;
+                }
+            }
+
+            if let Some((_, ref index)) = *cache_ref {
+                if let Ok(canon_file) = file_path.canonicalize() {
+                    if let Some(config_path) = index.get_config_for_file(&canon_file) {
+                        if let Some(rules) = index.rules.get(config_path) {
+                            for root_path in rules.paths.keys() {
+                                let root = std::path::Path::new(root_path);
+                                let canon_root =
+                                    root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+
+                                if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
+                                    if let Some(parent) = relative.parent() {
+                                        let module_path =
+                                            parent.to_string_lossy().replace(['/', '\\'], ".");
+                                        return Some(module_path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            None
+        });
+
+        if cached_result.is_some() {
+            return cached_result;
+        }
+
+        // Fallback: convention-based prefix stripping, also package-grained
+        // (stem dropped) so the package matcher holds in both modes.
         let relative = file_path.strip_prefix(project_root).ok()?;
         let path = relative.to_string_lossy().replace('\\', "/");
 
         // Strip file extension using the provided extensions list
         let path_without_ext = strip_extension(&path, extensions);
 
-        // Convert path to package notation: src/main/kotlin/com/example/MyClass -> com.example.MyClass
         // Strip common Kotlin source directories
         let path_stripped = path_without_ext
             .trim_start_matches("src/main/kotlin/")
@@ -220,10 +279,14 @@ impl LanguageBehavior for KotlinBehavior {
             .trim_start_matches("src/test/java/")
             .trim_start_matches("src/");
 
-        // Convert path separators to dots
-        let module_path = path_stripped.replace('/', ".");
+        // Drop the file stem; files directly under the source root land
+        // in the default package (empty module path).
+        let package = match path_stripped.rsplit_once('/') {
+            Some((dirs, _stem)) => dirs.replace('/', "."),
+            None => String::new(),
+        };
 
-        Some(module_path)
+        Some(package)
     }
 
     fn get_language(&self) -> Language {
@@ -279,34 +342,29 @@ impl LanguageBehavior for KotlinBehavior {
         }
     }
 
+    /// Kotlin imports name a symbol: `import com.example.MyClass`.
+    /// Module paths are package-grained, so the package part of the
+    /// import must equal the symbol's module path. Wildcard imports
+    /// match symbols in that exact package, not nested packages.
     fn import_matches_symbol(
         &self,
         import_path: &str,
         symbol_module_path: &str,
         _importing_module: Option<&str>,
     ) -> bool {
-        // Exact match
-        if import_path == symbol_module_path {
-            return true;
-        }
-
-        // Handle wildcard imports (import com.example.*)
         if let Some(base) = import_path.strip_suffix(".*") {
-            if let Some(stripped) = symbol_module_path.strip_prefix(base) {
-                // Check that it's a direct child (not nested deeper)
-                if let Some(remainder) = stripped.strip_prefix('.') {
-                    // No more dots = direct child
-                    return !remainder.contains('.');
-                }
-            }
+            return symbol_module_path == base;
         }
 
-        // Handle partial matches (import com.example.MyClass matches symbol com.example.MyClass.InnerClass)
-        if let Some(remainder) = symbol_module_path.strip_prefix(import_path) {
-            return remainder.is_empty() || remainder.starts_with('.');
+        if let Some((import_package, _)) = import_path.rsplit_once('.') {
+            return import_package == symbol_module_path;
         }
 
         false
+    }
+
+    fn private_members_are_file_scoped(&self) -> bool {
+        true
     }
 
     fn is_resolvable_symbol(&self, symbol: &Symbol) -> bool {
@@ -386,21 +444,114 @@ mod tests {
     fn test_import_matches_symbol() {
         let behavior = KotlinBehavior::new();
 
-        // Exact match
-        assert!(behavior.import_matches_symbol("com.example.MyClass", "com.example.MyClass", None));
+        // Single-symbol import: package part equals the module path
+        assert!(behavior.import_matches_symbol("com.example.MyClass", "com.example", None));
 
-        // Wildcard match
-        assert!(behavior.import_matches_symbol("com.example.*", "com.example.MyClass", None));
+        // Wildcard import matches the exact package
+        assert!(behavior.import_matches_symbol("com.example.*", "com.example", None));
 
-        // Wildcard should not match nested
-        assert!(!behavior.import_matches_symbol("com.example.*", "com.example.sub.MyClass", None));
+        // Wildcard does not match nested packages
+        assert!(!behavior.import_matches_symbol("com.example.*", "com.example.sub", None));
 
-        // Partial match
-        assert!(behavior.import_matches_symbol(
+        // Different package refused
+        assert!(!behavior.import_matches_symbol("com.example.MyClass", "com.other", None));
+
+        // A module path shaped like a fully-qualified class is a
+        // different package, not this import's target
+        assert!(!behavior.import_matches_symbol(
             "com.example.MyClass",
-            "com.example.MyClass.InnerClass",
+            "com.example.MyClass",
             None
         ));
+
+        // Bare import has no package part
+        assert!(!behavior.import_matches_symbol("TopLevel", "com.example", None));
+    }
+
+    #[test]
+    fn test_module_path_from_file_fallback_package_grained() {
+        let behavior = KotlinBehavior::new();
+        let exts = ["kt", "kts"];
+
+        // Standard layout: source prefix stripped, file stem dropped
+        assert_eq!(
+            behavior.module_path_from_file(
+                Path::new("/proj/src/main/kotlin/com/example/MyClass.kt"),
+                Path::new("/proj"),
+                &exts,
+            ),
+            Some("com.example".to_string())
+        );
+
+        // Root-level file lands in the default package
+        assert_eq!(
+            behavior.module_path_from_file(
+                Path::new("/proj/src/main/kotlin/Main.kt"),
+                Path::new("/proj"),
+                &exts,
+            ),
+            Some(String::new())
+        );
+
+        // Package-mates share one module path
+        let a = behavior.module_path_from_file(
+            Path::new("/proj/src/main/kotlin/com/example/HttpClient.kt"),
+            Path::new("/proj"),
+            &exts,
+        );
+        let b = behavior.module_path_from_file(
+            Path::new("/proj/src/main/kotlin/com/example/HttpClientConfig.kt"),
+            Path::new("/proj"),
+            &exts,
+        );
+        assert_eq!(a, b);
+        assert_eq!(a, Some("com.example".to_string()));
+    }
+
+    #[test]
+    #[ignore = "mutates process CWD via set_current_dir; races with subprocess tests under parallel execution; run via cargo test -- --ignored --test-threads=1"]
+    fn test_module_path_from_file_uses_provider() {
+        use crate::project_resolver::provider::ProjectResolutionProvider;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let gradle_path = temp_dir.path().join("build.gradle.kts");
+        fs::write(&gradle_path, "plugins { kotlin(\"jvm\") }\n").unwrap();
+
+        let mut settings = crate::config::Settings::default();
+        let kotlin_settings = settings
+            .languages
+            .get_mut("kotlin")
+            .expect("kotlin language config should exist");
+        kotlin_settings.enabled = true;
+        kotlin_settings.config_files = vec![gradle_path.clone()];
+
+        let original_dir = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&temp_dir).unwrap();
+        fs::create_dir_all(temp_dir.path().join(crate::init::local_dir_name())).unwrap();
+
+        let provider = crate::project_resolver::providers::KotlinProvider::new();
+        provider.rebuild_cache(&settings).unwrap();
+
+        let kt_file = temp_dir
+            .path()
+            .join("src/main/kotlin/com/example/HttpClient.kt");
+        fs::create_dir_all(kt_file.parent().unwrap()).unwrap();
+        fs::write(&kt_file, "package com.example\nclass HttpClient\n").unwrap();
+
+        let behavior = KotlinBehavior::new();
+        let extensions = &["kt", "kts"];
+        let module_path = behavior.module_path_from_file(&kt_file, temp_dir.path(), extensions);
+
+        assert_eq!(
+            module_path,
+            Some("com.example".to_string()),
+            "Should use KotlinProvider source roots for package path"
+        );
+
+        std::env::set_current_dir(&original_dir).unwrap();
     }
 
     #[test]

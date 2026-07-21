@@ -219,6 +219,13 @@ impl ResolveStage {
                 ) {
                     return None;
                 }
+                if self.is_file_scoped_private_member_cross_file(
+                    to_id,
+                    caller.file_id,
+                    &caller.language_id,
+                ) {
+                    return None;
+                }
                 self.accept_unwitnessed_pick(from_id, to_id, unresolved)
             }
             ResolveResult::Ambiguous(candidates) => {
@@ -312,6 +319,32 @@ impl ResolveStage {
             return true;
         };
         behavior.is_compatible_relationship(from_kind, to_kind, rel_kind, file_id)
+    }
+
+    /// True when the pick is a Private Method/Field in another file and the
+    /// caller's language declares private members file-scoped (kotlin):
+    /// such symbols are unreferencable from the caller, so a name-keyed
+    /// pick of one is wrong by construction.
+    fn is_file_scoped_private_member_cross_file(
+        &self,
+        to_id: SymbolId,
+        caller_file: FileId,
+        language_id: &LanguageId,
+    ) -> bool {
+        let Some(sym) = self.symbol_cache.get_ref(to_id) else {
+            return false;
+        };
+        if sym.file_id == caller_file || sym.visibility != crate::Visibility::Private {
+            return false;
+        }
+        if !matches!(
+            sym.kind,
+            crate::SymbolKind::Method | crate::SymbolKind::Field
+        ) {
+            return false;
+        }
+        self.get_behavior(language_id)
+            .is_some_and(|b| b.private_members_are_file_scoped())
     }
 
     /// Filter candidates by static-call receiver type.
@@ -1294,7 +1327,38 @@ impl ResolveStage {
                 })
                 .collect();
             if same_module.len() == 1 {
-                return Some(same_module[0]);
+                // Module identity alone cannot pick a class member: a name
+                // reaching this arm receiver-less has no instance of the
+                // survivor's class, and a `this`/instance receiver reaching
+                // it never passed class matching (the self-form and instance
+                // filters missed). Members fail closed. Exception: the
+                // static fall-through — `Type::name` calls whose class-match
+                // filter left multiple class-correct copies — keeps the
+                // same-module tiebreak (receiver type IS class evidence).
+                use crate::symbol::ScopeContext;
+                // Kind check alongside scope: parsers leave scope_context
+                // None on some members (kotlin suspend members among the
+                // census's 120 scope_none rows), and those slipped a
+                // scope-only gate to wrong cross-file member picks.
+                let is_member = self
+                    .symbol_cache
+                    .get_ref(same_module[0])
+                    .is_some_and(|sym| {
+                        matches!(
+                            sym.kind,
+                            crate::SymbolKind::Method | crate::SymbolKind::Field
+                        ) || matches!(sym.scope_context, Some(ScopeContext::ClassMember { .. }))
+                    });
+                let class_evidenced_static = unresolved
+                    .metadata
+                    .as_ref()
+                    .is_some_and(|m| m.static_call && m.receiver.is_some())
+                    && self
+                        .filter_by_static_receiver(&same_module, unresolved, language_id)
+                        .is_some_and(|s| s.len() == 1);
+                if !is_member || class_evidenced_static {
+                    return Some(same_module[0]);
+                }
             }
             return None;
         }

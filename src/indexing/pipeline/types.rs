@@ -812,7 +812,12 @@ impl PipelineSymbolCache for SymbolLookupCache {
                 if sym.file_id == caller.file_id {
                     return Some(id);
                 }
-                // 2. Same module = always visible
+                // 2. Same module = always visible. Visibility semantics are
+                //    language-dependent (rust privates are module-visible;
+                //    kotlin privates are file-scoped) and Private is also
+                //    the unconfigured Symbol::new default, so this tier
+                //    stays visibility-blind — the resolve stage enforces
+                //    file-scoped-private via LanguageBehavior.
                 if caller.is_same_module(sym.module_path.as_deref()) {
                     return Some(id);
                 }

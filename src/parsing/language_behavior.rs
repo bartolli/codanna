@@ -336,6 +336,16 @@ pub trait LanguageBehavior: Send + Sync {
         &["self"]
     }
 
+    /// True when the language's `private` members are invisible outside
+    /// their declaring FILE (kotlin `private fun`). The resolve stage then
+    /// refuses cross-file picks of Private Method/Field symbols. Default
+    /// false: rust privates are module-visible (ancestor privates resolve
+    /// from child modules), and Private is also the unconfigured
+    /// `Symbol::new` default, so the gate must be opt-in per language.
+    fn private_members_are_file_scoped(&self) -> bool {
+        false
+    }
+
     /// Consumed by `ResolveStage::resolve_static_call` pre-gate.
     fn static_class_keywords(&self) -> &'static [&'static str] {
         &[]
