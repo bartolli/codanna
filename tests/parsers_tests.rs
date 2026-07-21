@@ -210,3 +210,6 @@ mod test_go_extract_parameter_type;
 
 #[path = "parsers/java/test_extract_parameter_type.rs"]
 mod test_java_extract_parameter_type;
+
+#[path = "parsers/java/test_method_kind.rs"]
+mod test_java_method_kind;

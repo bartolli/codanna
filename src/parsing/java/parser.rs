@@ -447,7 +447,7 @@ impl JavaParser {
         let mut symbol = Symbol::new(
             symbol_id,
             method_name.as_str(),
-            crate::SymbolKind::Function,
+            crate::SymbolKind::Method,
             file_id,
             range,
         );
@@ -499,7 +499,7 @@ impl JavaParser {
         let mut symbol = Symbol::new(
             symbol_id,
             constructor_name.as_str(),
-            crate::SymbolKind::Function,
+            crate::SymbolKind::Method,
             file_id,
             range,
         );
