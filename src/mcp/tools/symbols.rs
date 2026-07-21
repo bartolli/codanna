@@ -313,28 +313,32 @@ impl CodeIntelligenceServer {
         let mut result = format!("{identifier} calls {result_count} function(s):\n");
         for (callee, metadata) in all_called_with_metadata {
             // Parse metadata to extract receiver info and call site location
-            let (call_display, call_line) = if let Some(ref meta) = metadata {
-                let display = meta
-                    .context
-                    .as_deref()
-                    .and_then(parse_receiver_context)
-                    .map(|(receiver, is_static)| qualified_call(receiver, is_static, &callee.name))
-                    .unwrap_or_else(|| callee.name.to_string());
+            let call_display = metadata
+                .as_ref()
+                .and_then(|meta| meta.context.as_deref())
+                .and_then(parse_receiver_context)
+                .map(|(receiver, is_static)| qualified_call(receiver, is_static, &callee.name))
+                .unwrap_or_else(|| callee.name.to_string());
 
-                // Use call site line if available, otherwise definition line
-                let line = meta
-                    .line
-                    .map(|l| l + 1)
-                    .unwrap_or(callee.range.start_line + 1);
-                (display, line)
-            } else {
-                (callee.name.to_string(), callee.range.start_line + 1)
-            };
-
+            // A location string names one real place: the callee's own
+            // definition. The call site lives in the CALLER's file — naming
+            // it with the callee's path composed a nonexistent location on
+            // every cross-file edge.
             result.push_str(&format!(
-                "  -> {:?} {} at {}:{}\n",
-                callee.kind, call_display, callee.file_path, call_line
+                "  -> {:?} {} at {}:{}",
+                callee.kind,
+                call_display,
+                callee.file_path,
+                callee.range.start_line + 1
             ));
+            if let Some(call_line) = metadata.as_ref().and_then(|m| m.line) {
+                result.push_str(&format!(
+                    " (called at {}:{})",
+                    symbol.file_path,
+                    call_line + 1
+                ));
+            }
+            result.push('\n');
             if let Some(ref sig) = callee.signature {
                 result.push_str(&format!("     Signature: {sig}\n"));
             }

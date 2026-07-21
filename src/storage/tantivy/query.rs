@@ -200,22 +200,19 @@ impl DocumentIndex {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
-            // Extract kind from facet (stored as string representation)
+            // Extract kind from its stored Debug representation via the one
+            // kind vocabulary (SymbolKind::from_str); a partial hand-rolled
+            // map here misreported Class/Interface/Enum rows as Function.
             let kind_str = doc
                 .get_first(self.schema.kind)
                 .and_then(|v| v.as_str())
-                .unwrap_or("Unknown");
-
-            let kind = match kind_str {
-                "Function" => SymbolKind::Function,
-                "Struct" => SymbolKind::Struct,
-                "Trait" => SymbolKind::Trait,
-                "Method" => SymbolKind::Method,
-                "Field" => SymbolKind::Field,
-                "Module" => SymbolKind::Module,
-                "Constant" => SymbolKind::Constant,
-                _ => SymbolKind::Function, // Default fallback
-            };
+                .unwrap_or("");
+            let kind = kind_str.to_lowercase().parse::<SymbolKind>().map_err(|e| {
+                StorageError::InvalidFieldValue {
+                    field: "kind".to_string(),
+                    reason: e.to_string(),
+                }
+            })?;
 
             let module_path = doc
                 .get_first(self.schema.module_path)
@@ -223,13 +220,21 @@ impl DocumentIndex {
                 .unwrap_or("")
                 .to_string();
 
+            let language_id = doc
+                .get_first(self.schema.language)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             results.push(SearchResult {
                 symbol_id,
                 name,
                 kind,
                 file_path,
-                line,
+                // Stored line_number is the 0-indexed range start; scalar
+                // line fields are 1-indexed editor coordinates.
+                line: line + 1,
                 column,
+                language_id,
                 doc_comment,
                 signature,
                 module_path,
@@ -1135,7 +1140,9 @@ mod tests {
 
         let result = &results[0];
         assert_eq!(result.name, "parse_json");
-        assert_eq!(result.line, 42);
+        // Scalar line fields are 1-indexed editor coordinates: stored
+        // range.start_line 42 emits as 43.
+        assert_eq!(result.line, 43);
         assert_eq!(result.file_path, "src/parser.rs");
     }
 

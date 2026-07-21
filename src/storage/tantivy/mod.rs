@@ -30,11 +30,16 @@ pub struct SearchResult {
     pub name: String,
     pub kind: SymbolKind,
     pub file_path: String,
+    /// 1-indexed editor line of the symbol's definition start
     pub line: u32,
+    /// 0-indexed column (machine coordinate)
     pub column: u16,
     pub doc_comment: Option<String>,
     pub signature: Option<String>,
     pub module_path: String,
+    /// Stored language identifier (e.g. "rust", "java"); None on rows
+    /// persisted before the language field existed
+    pub language_id: Option<String>,
     pub score: f32,
     pub highlights: Vec<TextHighlight>,
     pub context: Option<String>,

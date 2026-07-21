@@ -408,6 +408,26 @@ impl IndexFacade {
         self.document_index.find_symbol_by_id(id).ok().flatten()
     }
 
+    /// Symbol counts by kind and by language in one pass. Both index-info
+    /// renderings consume this single assembly; the two maps partition the
+    /// same symbol set (languageless legacy rows appear only in kinds).
+    pub fn symbol_stats(
+        &self,
+    ) -> (
+        std::collections::BTreeMap<String, usize>,
+        std::collections::BTreeMap<String, usize>,
+    ) {
+        let mut kinds = std::collections::BTreeMap::new();
+        let mut languages = std::collections::BTreeMap::new();
+        for symbol in self.get_all_symbols() {
+            *kinds.entry(format!("{:?}", symbol.kind)).or_insert(0usize) += 1;
+            if let Some(lang) = symbol.language_id.as_ref() {
+                *languages.entry(lang.as_str().to_string()).or_insert(0usize) += 1;
+            }
+        }
+        (kinds, languages)
+    }
+
     /// Get all symbols, sized by the exact symbol count.
     ///
     /// Returns empty vec on error for SimpleIndexer API compatibility.

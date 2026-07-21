@@ -5,3 +5,9 @@ mod test_plugin_commands;
 
 #[path = "cli/test_mcp_index_info_remote_status.rs"]
 mod test_mcp_index_info_remote_status;
+
+#[path = "cli/test_mcp_exit_code_matrix.rs"]
+mod test_mcp_exit_code_matrix;
+
+#[path = "cli/test_mcp_line_convention.rs"]
+mod test_mcp_line_convention;

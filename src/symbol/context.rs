@@ -35,9 +35,36 @@ pub struct SymbolRelationships {
     /// What methods/fields this symbol defines
     pub defines: Option<Vec<Symbol>>,
     /// What this symbol calls (with relationship metadata including call site location)
+    #[serde(serialize_with = "serialize_call_edges")]
     pub calls: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
     /// What calls this symbol (with relationship metadata including call site location)
+    #[serde(serialize_with = "serialize_call_edges")]
     pub called_by: Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
+}
+
+/// `relationshipMetadata.line` is 1-indexed at the JSON boundary like every
+/// scalar line field; storage stays 0-indexed. Without the shift the tuple
+/// channel disagrees by one with the inline `call_line` on the same edge.
+fn serialize_call_edges<S>(
+    edges: &Option<Vec<(Symbol, Option<RelationshipMetadata>)>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let shifted = edges.as_ref().map(|edges| {
+        edges
+            .iter()
+            .map(|(symbol, metadata)| {
+                let metadata = metadata.clone().map(|mut m| {
+                    m.line = m.line.map(|l| l + 1);
+                    m
+                });
+                (symbol.clone(), metadata)
+            })
+            .collect::<Vec<_>>()
+    });
+    shifted.serialize(serializer)
 }
 
 bitflags! {
@@ -284,25 +311,25 @@ impl SymbolContext {
             if !calls.is_empty() {
                 output.push_str(&format!("{}Calls {} function(s):\n", indent, calls.len()));
                 for (called, metadata) in calls {
-                    // Use call site location from metadata if available, otherwise definition location
-                    let location = if let Some(meta) = metadata {
-                        if let Some(line) = meta.line {
-                            format!("{}:{}", called.file_path, line.saturating_add(1))
-                        } else {
-                            Self::symbol_location(called)
-                        }
-                    } else {
-                        Self::symbol_location(called)
-                    };
-
+                    // A location string names one real place: the callee's
+                    // definition. The call site lives in THIS symbol's file —
+                    // composing it with the callee's path named a nonexistent
+                    // location on every cross-file edge.
                     output.push_str(&format!(
                         "{}  - {} ({:?}) at {} [symbol_id:{}]",
                         indent,
                         called.name,
                         called.kind,
-                        location,
+                        Self::symbol_location(called),
                         called.id.value()
                     ));
+                    if let Some(line) = metadata.as_ref().and_then(|m| m.line) {
+                        output.push_str(&format!(
+                            " (called at {}:{})",
+                            self.file_path,
+                            line.saturating_add(1)
+                        ));
+                    }
 
                     // Show receiver info if available
                     if let Some(meta) = metadata {

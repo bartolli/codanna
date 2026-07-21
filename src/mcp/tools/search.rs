@@ -25,21 +25,18 @@ impl CodeIntelligenceServer {
         let file_count = indexer.file_count();
         let relationship_count = indexer.relationship_count();
 
-        // Efficiently count symbols by kind in one pass
-        let mut kind_counts = std::collections::HashMap::new();
-        for symbol in indexer.get_all_symbols() {
-            *kind_counts.entry(symbol.kind).or_insert(0) += 1;
+        // One shared assembly for kind and language counts (both renderings
+        // consume facade::symbol_stats)
+        let (kind_counts, language_counts) = indexer.symbol_stats();
+
+        let mut kinds_display = String::new();
+        for (kind, count) in &kind_counts {
+            kinds_display.push_str(&format!("\n  - {kind}s: {count}"));
         }
 
-        // Build symbol kinds display dynamically
-        let mut kinds_display = String::new();
-
-        // Sort by kind name for consistent output
-        let mut sorted_kinds: Vec<_> = kind_counts.iter().collect();
-        sorted_kinds.sort_by_key(|(kind, _)| format!("{kind:?}"));
-
-        for (kind, count) in sorted_kinds {
-            kinds_display.push_str(&format!("\n  - {kind:?}s: {count}"));
+        let mut languages_display = String::new();
+        for (lang, count) in &language_counts {
+            languages_display.push_str(&format!("\n  - {lang}: {count}"));
         }
 
         // Get semantic search info
@@ -58,7 +55,7 @@ impl CodeIntelligenceServer {
         };
 
         let result = format!(
-            "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}{semantic_info}"
+            "Index contains {symbol_count} symbols across {file_count} files.\n\nBreakdown:\n  - Symbols: {symbol_count}\n  - Relationships: {relationship_count}\n\nSymbol Kinds:{kinds_display}\n\nLanguages:{languages_display}{semantic_info}"
         );
 
         Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
@@ -344,23 +341,24 @@ impl CodeIntelligenceServer {
                                         called.name.to_string()
                                     };
 
-                                    // Use call site line if available
-                                    let line = meta
-                                        .line
-                                        .map(|l| l + 1)
-                                        .unwrap_or(called.range.start_line + 1);
-                                    (display, line)
+                                    (display, meta.line)
                                 } else {
-                                    (called.name.to_string(), called.range.start_line + 1)
+                                    (called.name.to_string(), None)
                                 };
 
+                                // Callee def location; the call site lives in
+                                // THIS symbol's file, named explicitly.
+                                let call_site = call_line
+                                    .map(|l| format!(" (called at {}:{})", symbol.file_path, l + 1))
+                                    .unwrap_or_default();
                                 output.push_str(&format!(
-                                    "     -> {:?} {} at {}:{} [symbol_id:{}]\n",
+                                    "     -> {:?} {} at {}:{} [symbol_id:{}]{}\n",
                                     called.kind,
                                     call_display,
                                     called.file_path,
-                                    call_line,
-                                    called.id.value()
+                                    called.range.start_line + 1,
+                                    called.id.value(),
+                                    call_site
                                 ));
                                 if i == 9 && called_with_metadata.len() > 10 {
                                     output.push_str(&format!(
