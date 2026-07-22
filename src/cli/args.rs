@@ -6,6 +6,7 @@ use clap::{
     Parser, Subcommand,
     builder::styling::{AnsiColor, Effects, Styles},
 };
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 fn clap_cargo_style() -> Styles {
@@ -69,6 +70,8 @@ fn create_custom_help() -> String {
     help.push_str("  parse         Output AST nodes in JSONL format\n");
     help.push_str("  plugin        Manage Claude Code plugins\n");
     help.push_str("  documents     Index and search document collections\n");
+    help.push_str("  profile       Initialize and manage project profiles\n");
+    help.push_str("  completions   Generate shell completion scripts\n");
     help.push_str("  help          Print this message or the help of the given subcommand(s)\n\n");
 
     help.push_str("See 'codanna help <command>' for more information on a specific command.\n\n");
@@ -348,6 +351,18 @@ pub enum Commands {
     Profile {
         #[command(subcommand)]
         action: crate::profiles::commands::ProfileAction,
+    },
+
+    /// Generate shell completion scripts
+    #[command(
+        about = "Generate shell completion scripts",
+        long_about = "Generate a shell completion script for the given shell and print it to stdout.\n\nRedirect the output to your shell's completion directory, or source it directly in the current session.",
+        after_help = "Examples:\n  codanna completions bash > ~/.local/share/bash-completion/completions/codanna\n  codanna completions zsh  > ~/.zsh/completions/_codanna\n  codanna completions fish > ~/.config/fish/completions/codanna.fish\n  source <(codanna completions bash)   # current session only"
+    )]
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
