@@ -29,6 +29,7 @@ mod java;
 mod javascript;
 mod kotlin;
 mod lua;
+mod nix;
 mod php;
 mod python;
 mod rust_lang;

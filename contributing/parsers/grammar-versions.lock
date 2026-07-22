@@ -74,6 +74,12 @@
       "updated": "2025-07-27T12:20:37-07:00",
       "abi_version": "15"
     },
+    "nix": {
+      "repo": "https://github.com/nix-community/tree-sitter-nix",
+      "version": "0.3.0",
+      "updated": "2026-05-21",
+      "abi_version": "15"
+    },
     "typescript": {
       "repo": "https://github.com/tree-sitter/tree-sitter-typescript",
       "commit": "75b3874edb2dc714fb1fd77a32013d0f8699989f",

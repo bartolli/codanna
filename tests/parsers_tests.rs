@@ -154,6 +154,12 @@ mod test_c_method_call_static;
 #[path = "parsers/lua/test_method_call_static.rs"]
 mod test_lua_method_call_static;
 
+#[path = "parsers/nix/test_symbol_extraction.rs"]
+mod test_nix_symbol_extraction;
+
+#[path = "parsers/nix/test_call_tracking.rs"]
+mod test_nix_call_tracking;
+
 #[path = "parsers/gdscript/test_method_call_static.rs"]
 mod test_gdscript_method_call_static;
 
