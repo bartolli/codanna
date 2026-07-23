@@ -678,6 +678,7 @@ impl IndexFacade {
             .get_file_path(symbol.file_id)
             .ok()
             .flatten()
+            .map(|p| self.document_index.to_portable_file_path(&p).unwrap_or(p))
             .unwrap_or_else(|| symbol.file_path.to_string());
 
         let mut relationships = SymbolRelationships::default();
@@ -951,11 +952,15 @@ impl IndexFacade {
             .map(|(id, _, _)| id)
     }
 
-    /// Get file path for a FileId.
+    /// Get file path for a FileId, in the emitted contract shape.
     ///
     /// Returns None on error for SimpleIndexer API compatibility.
     pub fn get_file_path(&self, file_id: FileId) -> Option<String> {
-        self.document_index.get_file_path(file_id).ok().flatten()
+        self.document_index
+            .get_file_path(file_id)
+            .ok()
+            .flatten()
+            .map(|p| self.document_index.to_portable_file_path(&p).unwrap_or(p))
     }
 
     /// Get all indexed file paths.

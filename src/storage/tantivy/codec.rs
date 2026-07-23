@@ -245,11 +245,16 @@ impl DocumentIndex {
                 end_line,
                 end_column: end_col,
             },
-            file_path: doc
-                .get_first(self.schema.file_path)
-                .and_then(|v| v.as_str())
-                .unwrap_or("<unknown>")
-                .into(),
+            file_path: {
+                let stored = doc
+                    .get_first(self.schema.file_path)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>");
+                match self.to_portable_file_path(stored) {
+                    Some(portable) => portable.into(),
+                    None => stored.into(),
+                }
+            },
             signature: signature.map(|s| s.into()),
             doc_comment: doc_comment.map(|s| s.into()),
             module_path: module_path.map(|s| s.into()),
@@ -594,5 +599,75 @@ mod tests {
             .unwrap()
             .expect("symbol stored by this test");
         assert_eq!(retrieved.scope_context, Some(scope));
+    }
+
+    fn portable_test_symbol(id: u32) -> crate::Symbol {
+        crate::Symbol::new(
+            SymbolId::new(id).unwrap(),
+            "portable_probe",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            crate::Range::new(0, 0, 2, 1),
+        )
+    }
+
+    fn roundtrip_file_path(settings: &crate::config::Settings, stored: &str) -> String {
+        let index_dir = TempDir::new().unwrap();
+        let index = DocumentIndex::new(index_dir.path(), settings).unwrap();
+        index.start_batch().unwrap();
+        index
+            .index_symbol(&portable_test_symbol(11), stored)
+            .unwrap();
+        index.commit_batch().unwrap();
+        index
+            .find_symbol_by_id(SymbolId::new(11).unwrap())
+            .unwrap()
+            .expect("symbol stored by this test")
+            .file_path
+            .to_string()
+    }
+
+    #[test]
+    fn absolute_stored_path_under_indexed_root_emits_relative() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().canonicalize().unwrap();
+        let mut settings = crate::config::Settings::default();
+        settings.indexing.indexed_paths = vec![base.clone()];
+        let stored = base.join("src/lib.rs");
+        assert_eq!(
+            roundtrip_file_path(&settings, &stored.to_string_lossy()),
+            "src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn absolute_stored_path_under_workspace_root_emits_relative() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().canonicalize().unwrap();
+        let settings = crate::config::Settings {
+            workspace_root: Some(base.clone()),
+            ..Default::default()
+        };
+        let stored = base.join("src/lib.rs");
+        assert_eq!(
+            roundtrip_file_path(&settings, &stored.to_string_lossy()),
+            "src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn relative_stored_path_passes_through() {
+        let settings = crate::config::Settings::default();
+        assert_eq!(roundtrip_file_path(&settings, "src/lib.rs"), "src/lib.rs");
+    }
+
+    #[test]
+    fn absolute_stored_path_outside_bases_passes_through() {
+        let root = TempDir::new().unwrap();
+        let base = root.path().canonicalize().unwrap();
+        let mut settings = crate::config::Settings::default();
+        settings.indexing.indexed_paths = vec![base];
+        let stored = "/nonexistent-root/other/src/lib.rs";
+        assert_eq!(roundtrip_file_path(&settings, stored), stored);
     }
 }

@@ -17,3 +17,6 @@ mod test_mcp_call_metadata_matrix;
 
 #[path = "cli/test_emission_version_gate.rs"]
 mod test_emission_version_gate;
+
+#[path = "cli/test_file_path_portable.rs"]
+mod test_file_path_portable;

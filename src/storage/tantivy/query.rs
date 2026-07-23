@@ -174,6 +174,7 @@ impl DocumentIndex {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            let file_path = self.to_portable_file_path(&file_path).unwrap_or(file_path);
 
             let line = doc
                 .get_first(self.schema.line_number)

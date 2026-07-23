@@ -68,6 +68,13 @@ pub struct DocumentIndex {
     pending_symbol_counter: Mutex<Option<u32>>,
     /// Pending file counter during batch operations
     pending_file_counter: Mutex<Option<u32>>,
+    /// Bases for decoding stored file paths into the emitted contract
+    /// shape (relative to the containing indexed root). Stored paths keep
+    /// full provenance (workspace-relative in-tree, absolute out-of-tree)
+    /// because incremental diffing and the watcher key on them; the
+    /// relativization applies at symbol materialization only. Ordered
+    /// workspace_root first, then registered roots longest-first.
+    strip_bases: Vec<PathBuf>,
 }
 
 impl std::fmt::Debug for DocumentIndex {
@@ -130,7 +137,49 @@ impl DocumentIndex {
             max_retry_attempts,
             pending_symbol_counter: Mutex::new(None),
             pending_file_counter: Mutex::new(None),
+            strip_bases: Self::collect_strip_bases(settings),
         })
+    }
+
+    fn collect_strip_bases(settings: &crate::config::Settings) -> Vec<PathBuf> {
+        let mut bases = Vec::new();
+        if let Some(root) = &settings.workspace_root {
+            bases.push(root.canonicalize().unwrap_or_else(|_| root.clone()));
+        }
+        let mut roots: Vec<PathBuf> = settings
+            .indexing
+            .indexed_paths
+            .iter()
+            .chain(settings.indexed_paths_cache.iter())
+            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+            .collect();
+        roots.sort_by_key(|p| std::cmp::Reverse(p.as_os_str().len()));
+        for root in roots {
+            if !bases.contains(&root) {
+                bases.push(root);
+            }
+        }
+        bases
+    }
+
+    /// Decode a stored file path into the emitted contract shape: an
+    /// absolute path under a registered base returns relative to it;
+    /// already-relative and unmatched absolute paths return None and the
+    /// caller keeps the stored form (fail-safe, never mangles).
+    pub fn to_portable_file_path(&self, stored: &str) -> Option<String> {
+        let path = Path::new(stored);
+        if path.is_relative() {
+            return None;
+        }
+        for base in &self.strip_bases {
+            if let Ok(rel) = path.strip_prefix(base) {
+                if rel.as_os_str().is_empty() {
+                    continue;
+                }
+                return Some(rel.to_string_lossy().into_owned());
+            }
+        }
+        None
     }
 
     /// Get the path where the index is stored
