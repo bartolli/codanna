@@ -61,6 +61,97 @@ pub fn resolve_symbol_or_id(
     }
 }
 
+/// Outcome of resolving a `find_symbol` query string: `symbol_id:<id>`
+/// resolves by direct id lookup, anything else by name with the
+/// dotted-member fallback.
+pub enum FindSymbolTarget {
+    /// Matches, possibly empty. `label` is the queried name, or the
+    /// resolved symbol's own name for the `symbol_id:` form.
+    Symbols { symbols: Vec<Symbol>, label: String },
+    /// `symbol_id:` prefix with a non-numeric id.
+    InvalidId(String),
+}
+
+/// Resolve a `find_symbol` target. One policy for the MCP handler, the
+/// CLI JSON collection, and the CLI text-mode exit plan — the id-lookup
+/// arm must not diverge between renderings.
+pub fn resolve_find_symbol_target(
+    facade: &IndexFacade,
+    name: &str,
+    lang: Option<&str>,
+) -> FindSymbolTarget {
+    if let Some(id_str) = name.strip_prefix("symbol_id:") {
+        let Ok(id) = id_str.parse::<u32>() else {
+            return FindSymbolTarget::InvalidId(id_str.to_string());
+        };
+        let symbols: Vec<Symbol> = facade.get_symbol(crate::SymbolId(id)).into_iter().collect();
+        let label = symbols
+            .first()
+            .map(|s| s.name.to_string())
+            .unwrap_or_else(|| name.to_string());
+        FindSymbolTarget::Symbols { symbols, label }
+    } else {
+        let mut symbols = facade.find_symbols_by_name(name, lang);
+        if symbols.is_empty() {
+            symbols = find_dotted_members(name, |n| facade.find_symbols_by_name(n, lang));
+        }
+        FindSymbolTarget::Symbols {
+            symbols,
+            label: name.to_string(),
+        }
+    }
+}
+
+/// Per-tool argument vocabulary: accepted keys plus the required subset
+/// (at least one must be present). One table for the CLI validation
+/// surface and the serve-side handler arms. `find_symbol`'s `symbol_id`
+/// and `analyze_impact`'s `depth` are CLI/alias sugar: the serve schema
+/// carries them as the `name` string form and a serde alias respectively.
+pub fn tool_param_spec(tool: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    match tool {
+        "find_symbol" => (&["name", "symbol_id", "lang"], &["name"]),
+        "get_calls" | "find_callers" => (
+            &["function_name", "symbol_id"],
+            &["function_name", "symbol_id"],
+        ),
+        "analyze_impact" => (
+            &["symbol_name", "symbol_id", "max_depth", "depth"],
+            &["symbol_name", "symbol_id"],
+        ),
+        "get_index_info" => (&[], &[]),
+        "search_symbols" => (&["query", "limit", "kind", "module", "lang"], &["query"]),
+        "semantic_search_docs" | "semantic_search_with_context" => {
+            (&["query", "limit", "threshold", "lang"], &["query"])
+        }
+        "search_documents" => (&["query", "collection", "limit"], &["query"]),
+        _ => (&[], &[]),
+    }
+}
+
+/// Message for a call missing its required parameter(s); one wording for
+/// both transports.
+pub fn missing_param_message(tool: &str) -> String {
+    let (_, requires_one_of) = tool_param_spec(tool);
+    if requires_one_of.len() == 1 {
+        format!("{tool} requires '{}' parameter", requires_one_of[0])
+    } else {
+        format!(
+            "{tool} requires either '{}' parameter",
+            requires_one_of.join("' or '")
+        )
+    }
+}
+
+/// Trailing "Accepted parameters" line on argument errors, both renderings.
+pub fn accepted_params_line(tool: &str) -> String {
+    let (accepted, _) = tool_param_spec(tool);
+    if accepted.is_empty() {
+        format!("{tool} accepts no key:value parameters")
+    } else {
+        format!("Accepted parameters for {tool}: {}", accepted.join(", "))
+    }
+}
+
 /// Class-scoped fallback for dotted queries: "Class.method" resolves the
 /// method within the named type when no symbol matches the literal name.
 /// Uniform across languages; `find` supplies name candidates (typically a
@@ -252,6 +343,26 @@ mod tests {
         assert!(find_dotted_members("plain", |_| unreachable!("no dot, no lookup")).is_empty());
         assert!(find_dotted_members(".x", |_| Vec::new()).is_empty());
         assert!(find_dotted_members("x.", |_| Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn param_vocabulary_messages_are_stable() {
+        assert_eq!(
+            missing_param_message("get_calls"),
+            "get_calls requires either 'function_name' or 'symbol_id' parameter"
+        );
+        assert_eq!(
+            missing_param_message("find_symbol"),
+            "find_symbol requires 'name' parameter"
+        );
+        assert_eq!(
+            accepted_params_line("get_calls"),
+            "Accepted parameters for get_calls: function_name, symbol_id"
+        );
+        assert_eq!(
+            accepted_params_line("get_index_info"),
+            "get_index_info accepts no key:value parameters"
+        );
     }
 
     #[test]

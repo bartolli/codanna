@@ -24,27 +24,17 @@ impl CodeIntelligenceServer {
 
         let indexer = self.facade.read().await;
 
-        // Support symbol_id:XXX format for direct lookup (from semantic search results)
-        let symbols = if let Some(id_str) = name.strip_prefix("symbol_id:") {
-            if let Ok(id) = id_str.parse::<u32>() {
-                indexer
-                    .get_symbol(crate::SymbolId(id))
-                    .map(|s| vec![s])
-                    .unwrap_or_default()
-            } else {
-                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                    "Invalid symbol_id format: {id_str}"
-                ))]));
-            }
-        } else {
-            let mut found = indexer.find_symbols_by_name(&name, lang.as_deref());
-            if found.is_empty() {
-                found = crate::mcp::service::find_dotted_members(&name, |n| {
-                    indexer.find_symbols_by_name(n, lang.as_deref())
-                });
-            }
-            found
-        };
+        // symbol_id:XXX (from semantic search results and ambiguity hints)
+        // resolves by direct id lookup; policy shared with the CLI JSON path.
+        let (symbols, label) =
+            match service::resolve_find_symbol_target(&indexer, &name, lang.as_deref()) {
+                service::FindSymbolTarget::Symbols { symbols, label } => (symbols, label),
+                service::FindSymbolTarget::InvalidId(id_str) => {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "Invalid symbol_id format: {id_str}"
+                    ))]));
+                }
+            };
 
         if symbols.is_empty() {
             let mut output = format!("No symbols found with name: {name}");
@@ -57,7 +47,7 @@ impl CodeIntelligenceServer {
             return Ok(CallToolResult::success(vec![ContentBlock::text(output)]));
         }
 
-        let mut result = format!("Found {} symbol(s) named '{}':\n\n", symbols.len(), name);
+        let mut result = format!("Found {} symbol(s) named '{label}':\n\n", symbols.len());
 
         for (idx, symbol) in symbols.iter().enumerate() {
             if idx > 0 {
@@ -289,9 +279,11 @@ impl CodeIntelligenceServer {
                     )]));
                 }
                 SymbolResolution::MissingParam => {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(
-                        "Error: Either function_name or symbol_id must be provided".to_string(),
-                    )]));
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "{}\n{}",
+                        service::missing_param_message("get_calls"),
+                        service::accepted_params_line("get_calls"),
+                    ))]));
                 }
             };
 
@@ -387,9 +379,11 @@ impl CodeIntelligenceServer {
                     )]));
                 }
                 SymbolResolution::MissingParam => {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(
-                        "Error: Either function_name or symbol_id must be provided".to_string(),
-                    )]));
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "{}\n{}",
+                        service::missing_param_message("find_callers"),
+                        service::accepted_params_line("find_callers"),
+                    ))]));
                 }
             };
 
@@ -493,9 +487,11 @@ impl CodeIntelligenceServer {
                     )]));
                 }
                 SymbolResolution::MissingParam => {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(
-                        "Error: Either symbol_name or symbol_id must be provided".to_string(),
-                    )]));
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "{}\n{}",
+                        service::missing_param_message("analyze_impact"),
+                        service::accepted_params_line("analyze_impact"),
+                    ))]));
                 }
             };
 

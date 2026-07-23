@@ -229,4 +229,53 @@ fn mcp_exit_codes_match_envelope_across_tools_outcomes_and_modes() {
             "text-mode process exit for {args:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
     }
+
+    // symbol_id: form — one resolution policy across renderings. The
+    // ambiguity hint directs consumers to this form; the JSON collection
+    // path must consume the handler's id-lookup arm.
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["mcp", "find_symbol", "name:unique_target", "--json"],
+    );
+    assert_eq!(code, 0, "id discovery should succeed\nstderr:\n{stderr}");
+    let payload: Value = serde_json::from_str(&stdout).expect("parse find_symbol envelope");
+    let id = payload["data"][0]["symbol"]["id"]
+        .as_u64()
+        .expect("symbol id in envelope data");
+    let id_arg = format!("symbol_id:{id}");
+
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["mcp", "find_symbol", id_arg.as_str(), "--json"],
+    );
+    assert_eq!(
+        code, 0,
+        "json id form must resolve like text mode\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_eq!(
+        envelope_exit_code(&stdout),
+        0,
+        "envelope exit_code for json id form\nstdout:\n{stdout}"
+    );
+
+    let (code, stdout, _) = run_cli(workspace.path(), &["mcp", "find_symbol", id_arg.as_str()]);
+    assert_eq!(code, 0, "text id form should resolve\nstdout:\n{stdout}");
+    assert!(
+        stdout.contains("named 'unique_target'"),
+        "id-form header names the resolved symbol, not the raw query\nstdout:\n{stdout}"
+    );
+
+    // Unreachable and non-numeric ids: not_found class in both modes.
+    for id_case in ["symbol_id:4294967295", "symbol_id:abc"] {
+        let (code, stdout, _) =
+            run_cli(workspace.path(), &["mcp", "find_symbol", id_case, "--json"]);
+        assert_eq!(code, 1, "json {id_case} exits not_found\nstdout:\n{stdout}");
+        assert_eq!(
+            envelope_exit_code(&stdout),
+            1,
+            "envelope exit_code for {id_case}\nstdout:\n{stdout}"
+        );
+        let (code, stdout, _) = run_cli(workspace.path(), &["mcp", "find_symbol", id_case]);
+        assert_eq!(code, 1, "text {id_case} exits not_found\nstdout:\n{stdout}");
+    }
 }

@@ -5,7 +5,10 @@ use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
 use crate::io::args::parse_positional_args;
 use crate::io::envelope::EntityType;
-use crate::mcp::service::{SymbolResolution, resolve_symbol_or_id};
+use crate::mcp::service::{
+    FindSymbolTarget, SymbolResolution, accepted_params_line, missing_param_message,
+    resolve_find_symbol_target, resolve_symbol_or_id, tool_param_spec,
+};
 use serde::Serialize;
 
 /// Print a terminal envelope and exit with the envelope's own exit_code.
@@ -55,7 +58,7 @@ fn exit_invalid_args(tool: &str, message: &str, accepted: &[&str], json: bool) -
     let accepted_list = if accepted.is_empty() {
         format!("{tool} accepts no key:value parameters")
     } else {
-        format!("Accepted parameters for {tool}: {}", accepted.join(", "))
+        accepted_params_line(tool)
     };
     if json {
         use crate::io::envelope::{Envelope, ResultCode};
@@ -66,29 +69,6 @@ fn exit_invalid_args(tool: &str, message: &str, accepted: &[&str], json: bool) -
         eprintln!("Error: {message}");
         eprintln!("{accepted_list}");
         std::process::exit(2);
-    }
-}
-
-/// Per-tool positional `key:value` vocabulary: accepted keys plus the
-/// required subset (`requires_one_of` = at least one must be present).
-fn tool_param_spec(tool: &str) -> (&'static [&'static str], &'static [&'static str]) {
-    match tool {
-        "find_symbol" => (&["name", "symbol_id", "lang"], &["name"]),
-        "get_calls" | "find_callers" => (
-            &["function_name", "symbol_id"],
-            &["function_name", "symbol_id"],
-        ),
-        "analyze_impact" => (
-            &["symbol_name", "symbol_id", "max_depth", "depth"],
-            &["symbol_name", "symbol_id"],
-        ),
-        "get_index_info" => (&[], &[]),
-        "search_symbols" => (&["query", "limit", "kind", "module", "lang"], &["query"]),
-        "semantic_search_docs" | "semantic_search_with_context" => {
-            (&["query", "limit", "threshold", "lang"], &["query"])
-        }
-        "search_documents" => (&["query", "collection", "limit"], &["query"]),
-        _ => (&[], &[]),
     }
 }
 
@@ -379,15 +359,7 @@ pub async fn run(
                 .as_ref()
                 .is_some_and(|map| requires_one_of.iter().any(|k| map.contains_key(*k)));
             if !satisfied {
-                let wording = if requires_one_of.len() == 1 {
-                    format!("{tool} requires '{}' parameter", requires_one_of[0])
-                } else {
-                    format!(
-                        "{tool} requires either '{}' parameter",
-                        requires_one_of.join("' or '")
-                    )
-                };
-                exit_invalid_args(&tool, &wording, accepted, json);
+                exit_invalid_args(&tool, &missing_param_message(&tool), accepted, json);
             }
         }
     }
@@ -405,12 +377,14 @@ pub async fn run(
             .and_then(|v| v.as_str());
 
         if let Some(symbol_name) = name {
-            let mut symbols = facade.find_symbols_by_name(symbol_name, language);
-            if symbols.is_empty() {
-                symbols = crate::mcp::service::find_dotted_members(symbol_name, |n| {
-                    facade.find_symbols_by_name(n, language)
-                });
-            }
+            // One resolution policy with the MCP handler: the symbol_id:
+            // form resolves by id here exactly as it does in text mode.
+            let symbols = match resolve_find_symbol_target(&facade, symbol_name, language) {
+                FindSymbolTarget::Symbols { symbols, .. } => symbols,
+                // Non-numeric id: nothing to look up; renders the
+                // not_found envelope exactly like an unmatched name.
+                FindSymbolTarget::InvalidId(_) => Vec::new(),
+            };
             if !symbols.is_empty() {
                 use crate::symbol::context::ContextIncludes;
                 let mut results = Vec::new();
@@ -485,7 +459,7 @@ pub async fn run(
             }
             SymbolResolution::MissingParam => exit_invalid_args(
                 &tool,
-                "get_calls requires either 'function_name' or 'symbol_id' parameter",
+                &missing_param_message(&tool),
                 tool_param_spec(&tool).0,
                 json,
             ),
@@ -528,7 +502,7 @@ pub async fn run(
             }
             SymbolResolution::MissingParam => exit_invalid_args(
                 &tool,
-                "find_callers requires either 'function_name' or 'symbol_id' parameter",
+                &missing_param_message(&tool),
                 tool_param_spec(&tool).0,
                 json,
             ),
@@ -575,7 +549,7 @@ pub async fn run(
             }
             SymbolResolution::MissingParam => exit_invalid_args(
                 &tool,
-                "analyze_impact requires either 'symbol_name' or 'symbol_id' parameter",
+                &missing_param_message(&tool),
                 tool_param_spec(&tool).0,
                 json,
             ),
@@ -908,20 +882,9 @@ pub async fn run(
                     .as_ref()
                     .and_then(|m| m.get("lang"))
                     .and_then(|v| v.as_str());
-                let found = if let Some(id_str) = name.strip_prefix("symbol_id:") {
-                    id_str
-                        .parse::<u32>()
-                        .ok()
-                        .and_then(|id| facade.get_symbol(crate::SymbolId(id)))
-                        .is_some()
-                } else {
-                    let mut symbols = facade.find_symbols_by_name(name, lang);
-                    if symbols.is_empty() {
-                        symbols = crate::mcp::service::find_dotted_members(name, |n| {
-                            facade.find_symbols_by_name(n, lang)
-                        });
-                    }
-                    !symbols.is_empty()
+                let found = match resolve_find_symbol_target(&facade, name, lang) {
+                    FindSymbolTarget::Symbols { symbols, .. } => !symbols.is_empty(),
+                    FindSymbolTarget::InvalidId(_) => false,
                 };
                 if found { 0 } else { 1 }
             }
@@ -947,7 +910,7 @@ pub async fn run(
                     SymbolResolution::Ambiguous { .. } => 2,
                     SymbolResolution::MissingParam => exit_invalid_args(
                         &tool,
-                        &format!("{tool} requires either '{name_key}' or 'symbol_id' parameter"),
+                        &missing_param_message(&tool),
                         tool_param_spec(&tool).0,
                         json,
                     ),
