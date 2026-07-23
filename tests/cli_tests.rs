@@ -11,3 +11,6 @@ mod test_mcp_exit_code_matrix;
 
 #[path = "cli/test_mcp_line_convention.rs"]
 mod test_mcp_line_convention;
+
+#[path = "cli/test_mcp_call_metadata_matrix.rs"]
+mod test_mcp_call_metadata_matrix;

@@ -1743,9 +1743,9 @@ impl TypeScriptParser {
 
                     if let Some(context) = function_context.or(inferred_context) {
                         let range = Range {
-                            start_line: (node.start_position().row + 1) as u32,
+                            start_line: node.start_position().row as u32,
                             start_column: node.start_position().column as u16,
-                            end_line: (node.end_position().row + 1) as u32,
+                            end_line: node.end_position().row as u32,
                             end_column: node.end_position().column as u16,
                         };
                         calls.push((context, fn_name, range));
@@ -2333,9 +2333,9 @@ impl TypeScriptParser {
                     {
                         if let Some(context) = function_context {
                             let range = Range {
-                                start_line: (node.start_position().row + 1) as u32,
+                                start_line: node.start_position().row as u32,
                                 start_column: node.start_position().column as u16,
-                                end_line: (node.end_position().row + 1) as u32,
+                                end_line: node.end_position().row as u32,
                                 end_column: node.end_position().column as u16,
                             };
 
