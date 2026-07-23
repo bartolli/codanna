@@ -5,6 +5,14 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Current emission-semantics version. Bump in the same commit as any
+/// parser or pipeline change that alters persisted row semantics (the
+/// commits that force a full-heal note in release notes). Compared
+/// against the stored stamp before an existing index is read or
+/// extended; a mismatch forces a full rebuild -- an incremental pass
+/// over rows from another version leaves a silent hybrid.
+pub const EMISSION_SEMANTICS_VERSION: u32 = 1;
+
 /// Metadata about the index state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexMetadata {
@@ -27,6 +35,12 @@ pub struct IndexMetadata {
     /// Used to detect config changes and auto-sync on load
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexed_paths: Option<Vec<PathBuf>>,
+
+    /// Emission-semantics version of the binary that built this index.
+    /// Stamped at save; absent on pre-gate indexes, and absence reads
+    /// as a mismatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission_version: Option<u32>,
 }
 
 /// Describes where the index data came from
@@ -52,6 +66,7 @@ impl Default for IndexMetadata {
             file_count: 0,
             last_modified: crate::indexing::get_utc_timestamp(),
             indexed_paths: None,
+            emission_version: None,
         }
     }
 }
@@ -127,5 +142,40 @@ impl IndexMetadata {
             "Index contains {} symbols from {} files",
             self.symbol_count, self.file_count
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emission_version_round_trips() {
+        let mut meta = IndexMetadata::new();
+        meta.emission_version = Some(EMISSION_SEMANTICS_VERSION);
+        let json = serde_json::to_string(&meta).expect("serialize");
+        let back: IndexMetadata = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.emission_version, Some(EMISSION_SEMANTICS_VERSION));
+    }
+
+    #[test]
+    fn pre_gate_metadata_reads_as_unstamped() {
+        // A 0.9.23-era index.meta: no emission_version field.
+        let legacy = r#"{
+            "version": 1,
+            "data_source": "Fresh",
+            "symbol_count": 42,
+            "file_count": 7,
+            "last_modified": 0
+        }"#;
+        let meta: IndexMetadata = serde_json::from_str(legacy).expect("legacy parse");
+        assert_eq!(meta.emission_version, None);
+    }
+
+    #[test]
+    fn unstamped_metadata_serializes_without_field() {
+        let meta = IndexMetadata::new();
+        let json = serde_json::to_string(&meta).expect("serialize");
+        assert!(!json.contains("emission_version"));
     }
 }

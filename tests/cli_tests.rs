@@ -14,3 +14,6 @@ mod test_mcp_line_convention;
 
 #[path = "cli/test_mcp_call_metadata_matrix.rs"]
 mod test_mcp_call_metadata_matrix;
+
+#[path = "cli/test_emission_version_gate.rs"]
+mod test_emission_version_gate;

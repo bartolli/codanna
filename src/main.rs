@@ -14,7 +14,7 @@ use codanna::project_resolver::{
     },
     registry::SimpleProviderRegistry,
 };
-use codanna::storage::IndexMetadata;
+use codanna::storage::{EMISSION_SEMANTICS_VERSION, IndexMetadata};
 use codanna::{IndexPersistence, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -342,6 +342,40 @@ async fn main() {
         _ => false,
     };
 
+    // Emission-semantics gate: an index stamped with a different (or no)
+    // emission version must not be read or incrementally extended -- a
+    // partial rewrite leaves a silent hybrid mixing row semantics.
+    // `codanna index` heals by full rebuild; everything else (including
+    // dry-run, whose pre-dispatch path sync can write) refuses with the
+    // heal command. `--force` clears unconditionally and needs no gate.
+    let mut emission_heal = false;
+    if needs_indexer
+        && persistence.exists()
+        && !matches!(cli.command, Commands::Index { force: true, .. })
+    {
+        let stored = IndexMetadata::load(&config.index_path)
+            .ok()
+            .and_then(|m| m.emission_version);
+        if stored != Some(EMISSION_SEMANTICS_VERSION) {
+            let stored_txt = stored.map_or_else(|| "none".to_string(), |v| format!("v{v}"));
+            let current = EMISSION_SEMANTICS_VERSION;
+            if matches!(cli.command, Commands::Index { dry_run: false, .. }) {
+                eprintln!(
+                    "Index emission semantics changed (index: {stored_txt}, binary: v{current}). Rebuilding from scratch."
+                );
+                emission_heal = true;
+            } else {
+                eprintln!(
+                    "Error: index emission semantics changed (index: {stored_txt}, binary: v{current})."
+                );
+                eprintln!(
+                    "Reading it would mix stale and current rows. Run 'codanna index' to rebuild."
+                );
+                std::process::exit(codanna::io::ExitCode::IndexCorrupted as i32);
+            }
+        }
+    }
+
     // Load existing index or create new one (only if command needs it)
     let settings = Arc::new(config.clone());
     let mut indexer: Option<IndexFacade> = if !needs_indexer {
@@ -349,7 +383,8 @@ async fn main() {
     } else {
         Some({
             // Force flag always means fresh index, regardless of path source (CLI or settings.toml)
-            let force_recreate_index = matches!(cli.command, Commands::Index { force: true, .. });
+            let force_recreate_index =
+                matches!(cli.command, Commands::Index { force: true, .. }) || emission_heal;
             if persistence.exists() && !force_recreate_index {
                 tracing::debug!(target: "cli", "found existing index at {}", config.index_path.display());
                 // Use lazy loading for simple commands to improve startup time
@@ -383,7 +418,7 @@ async fn main() {
                     }
                 }
             } else {
-                if force_recreate_index && persistence.exists() {
+                if force_recreate_index && persistence.exists() && !emission_heal {
                     eprintln!("Force re-indexing requested, creating new index");
                 } else if !persistence.exists() {
                     tracing::debug!(
@@ -436,7 +471,8 @@ async fn main() {
     // Sync indexed paths with config - auto-index new directories
     // This handles changes made while the index was not in use (e.g., add-dir command)
     // Skip sync if force flag is present (force means fresh start, not incremental)
-    let is_force_index = matches!(cli.command, Commands::Index { force: true, .. });
+    let is_force_index =
+        matches!(cli.command, Commands::Index { force: true, .. }) || emission_heal;
 
     // Progress is enabled by default from settings, can be disabled with --no-progress
     let no_progress_flag = matches!(
