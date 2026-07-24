@@ -2055,6 +2055,139 @@ mod tests {
         );
     }
 
+    // A php enum is a container like a class: its methods carry class
+    // evidence, so a `$this` call between them resolves. The class in the
+    // same fixture is the control — it already resolves today.
+    #[test]
+    fn php_enum_method_self_call_resolves_to_sibling_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("status.php");
+        std::fs::write(
+            &source,
+            "<?php\nenum Status: string {\n    case pending = 'pending';\n\n    public function description(): string { return 'd'; }\n\n    public function toArray() {\n        return ['description' => $this->description()];\n    }\n}\n\nclass C {\n    public function alpha() { return $this->beta(); }\n    public function beta() { return 1; }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        // Control: the class arm resolves today.
+        let alpha_id = facade
+            .find_symbols_by_name("alpha", None)
+            .first()
+            .expect("class method indexed")
+            .id;
+        let beta_id = facade
+            .find_symbols_by_name("beta", None)
+            .first()
+            .expect("class method indexed")
+            .id;
+        let control = facade.get_called_functions(alpha_id);
+        assert_eq!(
+            control.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![beta_id],
+            "control: class `$this` call must resolve"
+        );
+
+        let to_array_id = facade
+            .find_symbols_by_name("toArray", None)
+            .first()
+            .expect("enum method indexed")
+            .id;
+        let description_id = facade
+            .find_symbols_by_name("description", None)
+            .first()
+            .expect("enum method indexed")
+            .id;
+        let callees = facade.get_called_functions(to_array_id);
+        assert_eq!(
+            callees.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![description_id],
+            "enum `$this` call must resolve to the sibling member"
+        );
+    }
+
+    // The enum symbol itself must exist and carry the Enum kind, matching
+    // the vocabulary java/kotlin/swift/rust already emit. Before the
+    // container arm the symbol was absent entirely.
+    #[test]
+    fn php_enum_indexes_as_enum_kind_with_members_defined() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("status.php");
+        std::fs::write(
+            &source,
+            "<?php\nenum Status: string {\n    case pending = 'pending';\n\n    public function description(): string { return 'd'; }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let status = facade
+            .find_symbols_by_name("Status", None)
+            .into_iter()
+            .next()
+            .expect("enum symbol indexed");
+        assert_eq!(
+            status.kind,
+            SymbolKind::Enum,
+            "php enum takes the Enum kind"
+        );
+
+        let deps = facade.get_dependencies(status.id);
+        let defined = deps
+            .get(&RelationKind::Defines)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            defined.iter().any(|s| s.name.as_ref() == "description"),
+            "enum members are Defines targets: {defined:?}"
+        );
+    }
+
+    // php enums implement interfaces (the laravel witness is
+    // `enum ArrayableStatus: string implements Arrayable`), so the
+    // interface clause must be read on the enum arm too.
+    #[test]
+    fn php_enum_implements_clause_emits_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("status.php");
+        std::fs::write(
+            &source,
+            "<?php\ninterface Arrayable {\n    public function toArray();\n}\n\nenum Status: string implements Arrayable {\n    case pending = 'pending';\n\n    public function toArray() { return []; }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let status_id = facade
+            .find_symbols_by_name("Status", None)
+            .first()
+            .expect("enum symbol indexed")
+            .id;
+        let implemented = facade.get_implemented_traits(status_id);
+        assert!(
+            implemented.iter().any(|s| s.name.as_ref() == "Arrayable"),
+            "enum implements clause must emit an edge: {implemented:?}"
+        );
+    }
+
     // Single-file path (watcher reindex): the error names the language,
     // not an anonymous parse failure with an empty path.
     #[test]

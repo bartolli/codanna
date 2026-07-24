@@ -262,7 +262,7 @@ impl PhpParser {
                 self.context.set_current_function(saved_function);
                 self.context.set_current_class(saved_class);
             }
-            "class_declaration" => {
+            "class_declaration" | "enum_declaration" => {
                 self.register_handled_node(node.kind(), node.kind_id());
                 // Extract class name for parent tracking
                 let class_name = self.extract_class_name(node, code);
@@ -568,14 +568,13 @@ impl PhpParser {
 
         let id = counter.next_id();
 
-        // Using Class for PHP classes
-        let mut symbol = Symbol::new(
-            id,
-            name,
-            SymbolKind::Class,
-            file_id,
-            self.node_to_range(node),
-        );
+        // php enums are containers with methods; they travel this path so
+        // their members get the same class evidence a class's members do.
+        let kind = match node.kind() {
+            "enum_declaration" => SymbolKind::Enum,
+            _ => SymbolKind::Class,
+        };
+        let mut symbol = Symbol::new(id, name, kind, file_id, self.node_to_range(node));
         // Set scope context
         symbol.scope_context = Some(self.context.current_scope_context());
         symbol.doc_comment = self.extract_doc_comment(&node, code).map(Into::into);
@@ -1168,7 +1167,8 @@ impl PhpParser {
         // PHP grammar splits inheritance into two clauses:
         //   class C extends B          ⇒ `base_clause`            (extract_extends_from_node)
         //   class C implements I, J    ⇒ `class_interface_clause` (here)
-        if node.kind() == "class_declaration" {
+        // Enums implement interfaces through the same clause.
+        if matches!(node.kind(), "class_declaration" | "enum_declaration") {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let class_name = &code[name_node.byte_range()];
 
@@ -1281,14 +1281,18 @@ impl PhpParser {
         defines: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
         match node.kind() {
-            "class_declaration" | "interface_declaration" | "trait_declaration" => {
+            "class_declaration"
+            | "interface_declaration"
+            | "trait_declaration"
+            | "enum_declaration" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     let type_name = &code[name_node.byte_range()];
 
-                    // Find methods within the type - they're inside declaration_list
+                    // Find methods within the type - they're inside the body
+                    // list, which enums spell `enum_declaration_list`.
                     let mut cursor = node.walk();
                     for child in node.children(&mut cursor) {
-                        if child.kind() == "declaration_list" {
+                        if matches!(child.kind(), "declaration_list" | "enum_declaration_list") {
                             // Methods are inside declaration_list, not direct children
                             let mut decl_cursor = child.walk();
                             for decl_child in child.children(&mut decl_cursor) {
