@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-07-23
+
+### Fixed
+
+- `codanna serve` (stdio) on a gate-refused index completes the MCP handshake instead of exiting before it: the `instructions` field carries the heal command and the semantic re-embed cost note, `tools/list` is empty, and the process exits `7` when the session ends. MCP clients that spawn the server and discard stderr previously showed only a generic connection failure with no heal instruction. HTTP/HTTPS serve and all read commands keep the immediate exit-`7` refusal.
+
 ## [0.10.0] - 2026-07-23
 
 Evidence-gated resolution release. Resolved-relationship counts move in both directions and both movements are fixes: recall rises where new evidence channels resolve calls that previously returned nothing (pydantic +3904, codanna self-index +937, gin +616), and counts drop where the resolver now refuses picks it cannot prove (ktor -46%, nlohmann -12%), with witnessed pick-corrections as the precision counterpart. Every call edge now carries its exact call site. An emission-semantics gate makes binary upgrades safe: an index built by a different-semantics binary can no longer be silently mixed with new rows.
@@ -1438,6 +1444,8 @@ _Note: v0.5.0 was an internal milestone, not a public release. Changes were incl
 ### Performance
 - Significant CI pipeline optimization
 
+[0.10.1]: https://github.com/bartolli/codanna/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/bartolli/codanna/compare/v0.9.23...v0.10.0
 [0.9.23]: https://github.com/bartolli/codanna/compare/v0.9.22...v0.9.23
 [0.9.22]: https://github.com/bartolli/codanna/compare/v0.9.21...v0.9.22
 [0.9.21]: https://github.com/bartolli/codanna/compare/v0.9.20...v0.9.21
