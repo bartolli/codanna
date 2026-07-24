@@ -3,10 +3,13 @@
 //! `codanna index` heals by full rebuild; read paths and dry-run refuse
 //! with the heal command; `--force` clears unconditionally.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::env;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -230,6 +233,146 @@ fn dry_run_refuses_stale_index() {
     assert_eq!(
         code, REFUSAL_EXIT,
         "dry-run over a stale index must refuse\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+fn recv_json(rx: &Receiver<String>) -> Value {
+    let line = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("server response before timeout");
+    serde_json::from_str(&line).expect("valid JSON-RPC line")
+}
+
+fn wait_with_timeout(child: &mut Child, deadline: Duration) -> std::process::ExitStatus {
+    let start = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().expect("poll child") {
+            return status;
+        }
+        if start.elapsed() > deadline {
+            let _ = child.kill();
+            panic!("serve did not exit within {deadline:?} after stdin EOF");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Stale index + stdio serve: the refusal is protocol-level, not a
+/// pre-handshake exit. Client-spawned servers lose stderr, so the heal
+/// command rides the `instructions` field; zero tools keeps the refusal
+/// fail-closed. The process still exits with the gate code at session end.
+#[test]
+fn serve_stale_stdio_completes_degraded_handshake() {
+    let workspace = seed_workspace();
+    tamper_emission_version(workspace.path(), None);
+
+    let bin = codanna_binary();
+    let test_home = workspace.path().join(".home");
+    let mut child = Command::new(&bin)
+        .args(["serve"])
+        .current_dir(workspace.path())
+        .env("HOME", &test_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn serve");
+
+    let mut stdin = child.stdin.take().expect("child stdin");
+    let stdout = child.stdout.take().expect("child stdout");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(l) => {
+                    if tx.send(l).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    writeln!(
+        stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "gate-test", "version": "0"}
+            }
+        })
+    )
+    .expect("write initialize");
+    stdin.flush().expect("flush initialize");
+
+    let init = recv_json(&rx);
+    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+    let instructions = init["result"]["instructions"]
+        .as_str()
+        .unwrap_or_else(|| panic!("initialize result carries instructions\n{init}"));
+    assert!(
+        instructions.contains("INDEX STALE"),
+        "instructions must name the stale state\n{instructions}"
+    );
+    assert!(
+        instructions.contains("codanna index"),
+        "instructions must carry the heal command\n{instructions}"
+    );
+    assert!(
+        instructions.contains("restart this MCP server"),
+        "instructions must name the restart duty\n{instructions}"
+    );
+
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    )
+    .expect("write initialized");
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    )
+    .expect("write tools/list");
+    stdin.flush().expect("flush tools/list");
+
+    let tools = recv_json(&rx);
+    assert_eq!(tools["id"], 2, "tools/list response id\n{tools}");
+    let list = tools["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list result carries a tools array\n{tools}"));
+    assert!(
+        list.is_empty(),
+        "degraded serve must advertise zero tools\n{tools}"
+    );
+
+    drop(stdin);
+    let status = wait_with_timeout(&mut child, Duration::from_secs(10));
+    assert_eq!(
+        status.code(),
+        Some(REFUSAL_EXIT),
+        "degraded serve exits with the gate code after session end"
+    );
+
+    let mut stderr_text = String::new();
+    use std::io::Read;
+    child
+        .stderr
+        .take()
+        .expect("child stderr")
+        .read_to_string(&mut stderr_text)
+        .expect("read stderr");
+    assert!(
+        stderr_text.contains("emission semantics changed"),
+        "stderr keeps the heal text for terminal users\n{stderr_text}"
     );
 }
 

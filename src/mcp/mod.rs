@@ -24,7 +24,9 @@ pub mod notifications;
 pub mod requests;
 pub mod server;
 pub mod service;
+pub mod stale_server;
 pub mod tools;
 
 pub use requests::*;
 pub use server::{CodeIntelligenceServer, format_relative_time};
+pub use stale_server::StaleIndexServer;

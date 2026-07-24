@@ -371,6 +371,23 @@ async fn main() {
                 eprintln!(
                     "Reading it would mix stale and current rows. Run 'codanna index' to rebuild."
                 );
+                // Client-spawned stdio servers lose stderr: a pre-handshake
+                // exit surfaces as an opaque connection failure. Serve a
+                // degraded handshake (zero tools, heal command in the
+                // instructions field), then exit with the gate code when the
+                // session ends. HTTP/HTTPS serve is terminal-launched, where
+                // stderr is already visible.
+                if matches!(
+                    cli.command,
+                    Commands::Serve {
+                        http: false,
+                        https: false,
+                        ..
+                    }
+                ) && config.server.mode != "http"
+                {
+                    codanna::cli::commands::serve::run_stale_stdio(stored, current).await;
+                }
                 std::process::exit(codanna::io::ExitCode::IndexCorrupted as i32);
             }
         }

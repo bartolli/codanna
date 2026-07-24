@@ -418,6 +418,26 @@ async fn run_stdio_server(
     }
 }
 
+/// Serve a degraded stdio MCP session for a gate-refused index.
+/// Completes the handshake with zero tools and heal instructions;
+/// never touches the index, so no serve lock is taken and no watcher
+/// starts. The caller exits with the gate code when this returns.
+pub async fn run_stale_stdio(stored: Option<u32>, current: u32) {
+    use rmcp::{ServiceExt, transport::stdio};
+
+    let server = crate::mcp::StaleIndexServer::new(stored, current);
+    match server.serve(stdio()).await {
+        Ok(service) => {
+            if let Err(e) = service.waiting().await {
+                eprintln!("Degraded MCP server error: {e}");
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to start degraded MCP server: {e}");
+        }
+    }
+}
+
 /// Run the MCP test command.
 pub async fn run_mcp_test(
     server_binary: Option<PathBuf>,
