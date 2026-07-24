@@ -134,6 +134,64 @@ const store = create((set) => set({}));
     }
 
     #[test]
+    fn dotted_wrapper_names_match_full_member_text() {
+        let code = r#"
+function helper(x: number): number { return x; }
+const program = Effect.gen(function* () {
+  yield helper(1);
+});
+const strict = Effect.fn("strict")(function* () {
+  yield helper(2);
+});
+"#;
+        let mut parser = TypeScriptParser::new()
+            .expect("parser")
+            .with_function_wrappers(vec!["Effect.gen".to_string(), "Effect.fn".to_string()]);
+        let mut counter = SymbolCounter::new();
+        let kinds: Vec<(String, SymbolKind)> = parser
+            .parse(code, FileId::new(1).unwrap(), &mut counter)
+            .into_iter()
+            .map(|s| (s.name.to_string(), s.kind))
+            .collect();
+
+        assert_eq!(kind_of(&kinds, "program"), SymbolKind::Function);
+        assert_eq!(kind_of(&kinds, "strict"), SymbolKind::Function);
+
+        let calls = parser.find_calls(code);
+        let callers: Vec<&str> = calls
+            .iter()
+            .filter(|(_, callee, _)| *callee == "helper")
+            .map(|(caller, _, _)| *caller)
+            .collect();
+        assert!(
+            callers.contains(&"program") && callers.contains(&"strict"),
+            "dotted-wrapper bodies attribute to their bindings; got {callers:?}"
+        );
+    }
+
+    #[test]
+    fn dotted_wrapper_does_not_match_bare_property_calls() {
+        let code = r#"
+const loose = gen(function* () { return 1; });
+"#;
+        let mut parser = TypeScriptParser::new()
+            .expect("parser")
+            .with_function_wrappers(vec!["Effect.gen".to_string()]);
+        let mut counter = SymbolCounter::new();
+        let kinds: Vec<(String, SymbolKind)> = parser
+            .parse(code, FileId::new(1).unwrap(), &mut counter)
+            .into_iter()
+            .map(|s| (s.name.to_string(), s.kind))
+            .collect();
+
+        assert_eq!(
+            kind_of(&kinds, "loose"),
+            SymbolKind::Constant,
+            "declared Effect.gen must not match a bare gen(...) call"
+        );
+    }
+
+    #[test]
     fn unconfigured_parser_leaves_wrapped_calls_unattributed() {
         let mut parser = TypeScriptParser::new().expect("parser");
         let calls = parser.find_calls(CODE);

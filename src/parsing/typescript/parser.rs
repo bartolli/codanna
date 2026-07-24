@@ -145,21 +145,34 @@ impl TypeScriptParser {
         self
     }
 
-    /// Base callee name of a possibly-curried call chain: walks the
-    /// `function` field through nested call_expressions. For member
-    /// expressions the property name is the match target, so a declared
-    /// `memo` also matches `React.memo`.
-    fn call_chain_base_callee<'c>(call: Node, code: &'c str) -> Option<&'c str> {
-        let mut f = call.child_by_field_name("function")?;
+    /// Whether a possibly-curried call chain's base callee matches a
+    /// declared wrapper. Walks the `function` field through nested
+    /// call_expressions. A declared name matches a member expression's
+    /// full dotted text (`Effect.gen`, `React.memo`) or its final
+    /// property name (`memo` also matches `React.memo`); bare
+    /// identifiers match exactly.
+    fn call_matches_wrapper(&self, call: Node, code: &str) -> bool {
+        let Some(mut f) = call.child_by_field_name("function") else {
+            return false;
+        };
         loop {
             match f.kind() {
-                "call_expression" => f = f.child_by_field_name("function")?,
-                "identifier" => return Some(&code[f.byte_range()]),
-                "member_expression" => {
-                    let prop = f.child_by_field_name("property")?;
-                    return Some(&code[prop.byte_range()]);
+                "call_expression" => {
+                    let Some(inner) = f.child_by_field_name("function") else {
+                        return false;
+                    };
+                    f = inner;
                 }
-                _ => return None,
+                "identifier" => return self.is_function_wrapper(&code[f.byte_range()]),
+                "member_expression" => {
+                    if self.is_function_wrapper(&code[f.byte_range()]) {
+                        return true;
+                    }
+                    return f
+                        .child_by_field_name("property")
+                        .is_some_and(|p| self.is_function_wrapper(&code[p.byte_range()]));
+                }
+                _ => return false,
             }
         }
     }
@@ -179,8 +192,7 @@ impl TypeScriptParser {
         if self.function_wrappers.is_empty() || value_node.kind() != "call_expression" {
             return None;
         }
-        let callee = Self::call_chain_base_callee(value_node, code)?;
-        if !self.is_function_wrapper(callee) {
+        if !self.call_matches_wrapper(value_node, code) {
             return None;
         }
         let mut level = Some(value_node);
@@ -222,8 +234,7 @@ impl TypeScriptParser {
             match parent.kind() {
                 "call_expression" => call = parent,
                 "variable_declarator" => {
-                    let callee = Self::call_chain_base_callee(call, code)?;
-                    if !self.is_function_wrapper(callee) {
+                    if !self.call_matches_wrapper(call, code) {
                         return None;
                     }
                     let name_node = parent.child_by_field_name("name")?;
