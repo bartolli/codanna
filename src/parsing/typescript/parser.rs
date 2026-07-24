@@ -26,6 +26,11 @@ pub struct TypeScriptParser {
     named_exported_symbols: std::collections::HashSet<String>,
     /// Track JSX component usages (caller -> component name)
     component_usages: Vec<(String, String)>,
+    /// User-declared higher-order function wrappers to treat as function
+    /// definitions, from `[languages.typescript].parser_options.function_wrappers`
+    /// (e.g. `Effect.fn`, `Effect.gen`, `Effect.sync`, `memo`, `forwardRef`).
+    /// Empty by default: the feature ships knowing zero frameworks.
+    function_wrappers: Vec<String>,
 }
 
 impl TypeScriptParser {
@@ -131,7 +136,14 @@ impl TypeScriptParser {
             default_exported_symbols: std::collections::HashSet::new(),
             named_exported_symbols: std::collections::HashSet::new(),
             component_usages: Vec::new(),
+            function_wrappers: Vec::new(),
         })
+    }
+
+    /// Set the configurable higher-order function-wrapper names, from
+    /// `[languages.typescript].parser_options.function_wrappers`.
+    pub fn set_function_wrappers(&mut self, wrappers: Vec<String>) {
+        self.function_wrappers = wrappers;
     }
 
     /// Extract symbols from a TypeScript node
@@ -828,8 +840,28 @@ impl TypeScriptParser {
                                 false
                             };
 
+                        // Detect higher-order-wrapped function definitions such as
+                        // `const x = Effect.fn("name")(function* () {})`,
+                        // `const x = Effect.gen(function* () {})`, or a service wrapper
+                        // `const make = Effect.sync(() => { ... })`. The binding names a
+                        // function/scope even though its value is a call expression.
+                        let wrapped_function = if is_arrow_function {
+                            None
+                        } else {
+                            child.child_by_field_name("value").and_then(|value_node| {
+                                Self::find_wrapped_function(
+                                    value_node,
+                                    code,
+                                    &self.function_wrappers,
+                                    0,
+                                )
+                            })
+                        };
+
+                        let is_function = is_arrow_function || wrapped_function.is_some();
+
                         // Determine the kind based on whether it's a function or regular variable
-                        let kind = if is_arrow_function {
+                        let kind = if is_function {
                             SymbolKind::Function
                         } else if code[node.byte_range()].starts_with("const") {
                             SymbolKind::Constant
@@ -859,8 +891,9 @@ impl TypeScriptParser {
                             visibility,
                         );
 
-                        // Override scope context for arrow functions - they are never hoisted
-                        if is_arrow_function {
+                        // Override scope context for arrow functions and wrapped
+                        // functions - neither is hoisted
+                        if is_function {
                             // Arrow functions are not hoisted, but keep the parent context that was already set
                             match symbol.scope_context {
                                 Some(crate::symbol::ScopeContext::Local {
@@ -935,10 +968,101 @@ impl TypeScriptParser {
                                 }
                             }
                         }
+
+                        // Process the wrapped function's body (Effect.fn/gen generator, or
+                        // an Effect.sync/suspend arrow service wrapper) so nested symbols and
+                        // calls inside it are indexed, mirroring the arrow-function path.
+                        if let Some(inner) = wrapped_function {
+                            if let Some(body) = inner.child_by_field_name("body") {
+                                let saved_function =
+                                    self.context.current_function().map(|s| s.to_string());
+                                let saved_class =
+                                    self.context.current_class().map(|s| s.to_string());
+
+                                self.context.enter_scope(ScopeType::function());
+                                self.context.set_current_function(Some(name.to_string()));
+
+                                self.register_handled_node(body.kind(), body.kind_id());
+                                self.extract_symbols_from_node(
+                                    body,
+                                    code,
+                                    file_id,
+                                    counter,
+                                    symbols,
+                                    module_path,
+                                    depth + 1,
+                                );
+
+                                self.context.exit_scope();
+                                self.context.set_current_function(saved_function);
+                                self.context.set_current_class(saved_class);
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    /// Extract the dotted callee name of a wrapping call: `memo`, `Effect.sync`,
+    /// or (curried) the inner callee of `Effect.fn("x")(...)` -> `Effect.fn`.
+    fn wrapper_name<'a>(callee: Node, code: &'a str) -> Option<&'a str> {
+        match callee.kind() {
+            "identifier" | "member_expression" => Some(&code[callee.byte_range()]),
+            "call_expression" => callee
+                .child_by_field_name("function")
+                .and_then(|f| Self::wrapper_name(f, code)),
+            _ => None,
+        }
+    }
+
+    /// Detect a user-declared higher-order-wrapped function definition. `wrappers`
+    /// is the configurable `[languages.typescript].parser_options.function_wrappers`
+    /// list (e.g. `Effect.fn`, `Effect.gen`, `Effect.sync`, `memo`, `forwardRef`).
+    /// Returns the inner function/arrow/generator node when the value is a call
+    /// (or a curried chain of calls) whose callee name is in that list. An empty
+    /// list disables detection entirely, so the feature is fully opt-in and ships
+    /// knowing zero frameworks - ordinary calls like `arr.map(x => ...)` are only
+    /// ever matched if the user explicitly lists `arr.map`, which they would not.
+    fn find_wrapped_function<'tree>(
+        node: Node<'tree>,
+        code: &str,
+        wrappers: &[String],
+        depth: usize,
+    ) -> Option<Node<'tree>> {
+        if depth > 3 || wrappers.is_empty() || node.kind() != "call_expression" {
+            return None;
+        }
+
+        let is_configured = node
+            .child_by_field_name("function")
+            .and_then(|c| Self::wrapper_name(c, code))
+            .map(|name| wrappers.iter().any(|w| w == name))
+            .unwrap_or(false);
+
+        if is_configured {
+            if let Some(args) = node.child_by_field_name("arguments") {
+                let mut cursor = args.walk();
+                for arg in args.named_children(&mut cursor) {
+                    if matches!(
+                        arg.kind(),
+                        "generator_function" | "arrow_function" | "function_expression"
+                    ) {
+                        return Some(arg);
+                    }
+                }
+            }
+        }
+
+        // Curried wrappers like `Effect.fn("name")(gen)` where the callee is
+        // itself a call expression.
+        if let Some(callee) = node.child_by_field_name("function") {
+            if callee.kind() == "call_expression" {
+                return Self::find_wrapped_function(callee, code, wrappers, depth + 1);
+            }
+        }
+
+        None
     }
 
     /// Process arrow functions
@@ -1635,6 +1759,23 @@ impl TypeScriptParser {
                 } else {
                     current_function
                 }
+            } else {
+                current_function
+            }
+        } else if node.kind() == "variable_declarator"
+            && node
+                .child_by_field_name("value")
+                .and_then(|v| Self::find_wrapped_function(v, code, &self.function_wrappers, 0))
+                .is_some()
+        {
+            // Higher-order-wrapped functions (`const x = Effect.fn(...)(function* () {})`,
+            // `const make = Effect.sync(() => {...})`) name a function scope at ANY
+            // nesting level. The real service pattern nests domain functions inside an
+            // outer `Effect.sync` wrapper, so a call made in a sibling wrapped function
+            // must attribute to that sibling, not the outer wrapper. Unlike plain arrow
+            // consts below, this is NOT gated on top level.
+            if let Some(name_node) = node.child_by_field_name("name") {
+                Some(&code[name_node.byte_range()])
             } else {
                 current_function
             }

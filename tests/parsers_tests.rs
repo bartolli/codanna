@@ -10,6 +10,9 @@ mod test_typescript_resolution_pipeline;
 #[path = "parsers/typescript/test_call_tracking.rs"]
 mod test_typescript_call_tracking;
 
+#[path = "parsers/typescript/test_function_wrappers.rs"]
+mod test_typescript_function_wrappers;
+
 #[path = "parsers/typescript/test_nested_functions.rs"]
 mod test_typescript_nested_functions;
 

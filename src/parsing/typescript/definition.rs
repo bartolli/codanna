@@ -24,8 +24,25 @@ impl LanguageDefinition for TypeScriptLanguage {
         &["ts", "tsx", "mts", "cts"]
     }
 
-    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
-        let parser = TypeScriptParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+    fn create_parser(&self, settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
+        let mut parser = TypeScriptParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+        // Wire the configurable function-wrapper list
+        // ([languages.typescript].parser_options.function_wrappers) so
+        // higher-order-wrapped functions (Effect.fn/gen/sync, React memo, etc.)
+        // are indexed as callable functions. Empty by default.
+        if let Some(wrappers) = settings
+            .languages
+            .get("typescript")
+            .and_then(|c| c.parser_options.get("function_wrappers"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+        {
+            parser.set_function_wrappers(wrappers);
+        }
         Ok(Box::new(parser))
     }
 
