@@ -404,6 +404,14 @@ impl Settings {
                     result.push_str("#     \"/path/to/project/tsconfig.json\",\n");
                     result.push_str("#     \"/path/to/project/packages/web/tsconfig.json\",\n");
                     result.push_str("# ]\n");
+                    result
+                        .push_str("# Register const bindings wrapped by higher-order functions\n");
+                    result.push_str(
+                        "# (const View = memo(() => {})) as functions and index their bodies.\n",
+                    );
+                    result.push_str("# Changing this list requires: codanna index --force\n");
+                    result.push_str("# [languages.typescript.parser_options]\n");
+                    result.push_str("# function_wrappers = [\"memo\", \"forwardRef\"]\n");
                     continue;
                 }
             }

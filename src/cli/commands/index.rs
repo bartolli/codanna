@@ -38,6 +38,24 @@ pub fn run(
         cli_config,
     } = args;
 
+    // Preflight: construct one parser per enabled language so configuration
+    // errors (e.g. malformed parser_options) fail the command here. The
+    // pipeline constructs parsers per worker thread and surfaces failures
+    // as per-file parse errors, which silently skips the language.
+    {
+        let registry = crate::parsing::registry::get_registry();
+        let registry = registry.lock().unwrap_or_else(|e| {
+            eprintln!("Error: language registry lock poisoned: {e}");
+            std::process::exit(1);
+        });
+        for definition in registry.iter_enabled(config) {
+            if let Err(e) = definition.create_parser(config) {
+                eprintln!("Error: cannot initialize {} parser: {e}", definition.name());
+                std::process::exit(2);
+            }
+        }
+    }
+
     // Determine paths to index
     let paths_to_index = if !paths.is_empty() {
         // CLI paths provided - add them to settings.toml first

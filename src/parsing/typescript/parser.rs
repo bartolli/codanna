@@ -26,6 +26,10 @@ pub struct TypeScriptParser {
     named_exported_symbols: std::collections::HashSet<String>,
     /// Track JSX component usages (caller -> component name)
     component_usages: Vec<(String, String)>,
+    /// Callee names that wrap a function value in `const X = wrapper(fn)`
+    /// forms, declared via `[languages.typescript.parser_options]`
+    /// `function_wrappers`. Empty list = detection off.
+    function_wrappers: Vec<String>,
 }
 
 impl TypeScriptParser {
@@ -131,7 +135,103 @@ impl TypeScriptParser {
             default_exported_symbols: std::collections::HashSet::new(),
             named_exported_symbols: std::collections::HashSet::new(),
             component_usages: Vec::new(),
+            function_wrappers: Vec::new(),
         })
+    }
+
+    /// Set the wrapper callee names for `const X = wrapper(fn)` detection.
+    pub fn with_function_wrappers(mut self, wrappers: Vec<String>) -> Self {
+        self.function_wrappers = wrappers;
+        self
+    }
+
+    /// Base callee name of a possibly-curried call chain: walks the
+    /// `function` field through nested call_expressions. For member
+    /// expressions the property name is the match target, so a declared
+    /// `memo` also matches `React.memo`.
+    fn call_chain_base_callee<'c>(call: Node, code: &'c str) -> Option<&'c str> {
+        let mut f = call.child_by_field_name("function")?;
+        loop {
+            match f.kind() {
+                "call_expression" => f = f.child_by_field_name("function")?,
+                "identifier" => return Some(&code[f.byte_range()]),
+                "member_expression" => {
+                    let prop = f.child_by_field_name("property")?;
+                    return Some(&code[prop.byte_range()]);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn is_function_wrapper(&self, callee: &str) -> bool {
+        self.function_wrappers.iter().any(|w| w == callee)
+    }
+
+    /// For a declarator value `wrapper(...)`: the wrapped function-valued
+    /// argument, scanning outer-to-inner call levels. None unless the
+    /// chain's base callee is a declared wrapper.
+    fn wrapped_function_value<'tree>(
+        &self,
+        value_node: Node<'tree>,
+        code: &str,
+    ) -> Option<Node<'tree>> {
+        if self.function_wrappers.is_empty() || value_node.kind() != "call_expression" {
+            return None;
+        }
+        let callee = Self::call_chain_base_callee(value_node, code)?;
+        if !self.is_function_wrapper(callee) {
+            return None;
+        }
+        let mut level = Some(value_node);
+        while let Some(call) = level {
+            if let Some(args) = call.child_by_field_name("arguments") {
+                let mut w = args.walk();
+                for arg in args.children(&mut w) {
+                    if matches!(
+                        arg.kind(),
+                        "arrow_function" | "function_expression" | "generator_function"
+                    ) {
+                        return Some(arg);
+                    }
+                }
+            }
+            level = call
+                .child_by_field_name("function")
+                .filter(|f| f.kind() == "call_expression");
+        }
+        None
+    }
+
+    /// Calls-pass counterpart: for a function node that is an argument of
+    /// a wrapper call chain assigned to a declarator, the declarator name.
+    fn wrapper_declarator_name<'c>(&self, func_node: &Node, code: &'c str) -> Option<&'c str> {
+        if self.function_wrappers.is_empty() {
+            return None;
+        }
+        let args = func_node.parent()?;
+        if args.kind() != "arguments" {
+            return None;
+        }
+        let mut call = args.parent()?;
+        if call.kind() != "call_expression" {
+            return None;
+        }
+        loop {
+            let parent = call.parent()?;
+            match parent.kind() {
+                "call_expression" => call = parent,
+                "variable_declarator" => {
+                    let callee = Self::call_chain_base_callee(call, code)?;
+                    if !self.is_function_wrapper(callee) {
+                        return None;
+                    }
+                    let name_node = parent.child_by_field_name("name")?;
+                    return Some(&code[name_node.byte_range()]);
+                }
+                _ => return None,
+            }
+        }
     }
 
     /// Extract symbols from a TypeScript node
@@ -820,16 +920,21 @@ impl TypeScriptParser {
                     if name_node.kind() == "identifier" {
                         let name = &code[name_node.byte_range()];
 
-                        // Check if this is an arrow function assignment
+                        // Check if this is an arrow function assignment, or a
+                        // declared function-wrapper call carrying the function
+                        // as an argument (const View = memo(() => {}))
+                        let value_node = child.child_by_field_name("value");
                         let is_arrow_function =
-                            if let Some(value_node) = child.child_by_field_name("value") {
-                                value_node.kind() == "arrow_function"
-                            } else {
-                                false
-                            };
+                            value_node.is_some_and(|v| v.kind() == "arrow_function");
+                        let wrapped_function = if is_arrow_function {
+                            None
+                        } else {
+                            value_node.and_then(|v| self.wrapped_function_value(v, code))
+                        };
+                        let is_function_binding = is_arrow_function || wrapped_function.is_some();
 
                         // Determine the kind based on whether it's a function or regular variable
-                        let kind = if is_arrow_function {
+                        let kind = if is_function_binding {
                             SymbolKind::Function
                         } else if code[node.byte_range()].starts_with("const") {
                             SymbolKind::Constant
@@ -860,7 +965,7 @@ impl TypeScriptParser {
                         );
 
                         // Override scope context for arrow functions - they are never hoisted
-                        if is_arrow_function {
+                        if is_function_binding {
                             // Arrow functions are not hoisted, but keep the parent context that was already set
                             match symbol.scope_context {
                                 Some(crate::symbol::ScopeContext::Local {
@@ -899,11 +1004,17 @@ impl TypeScriptParser {
 
                         symbols.push(symbol);
 
-                        // CRITICAL FIX: Process arrow function body for nested symbols
-                        if is_arrow_function {
-                            if let Some(value_node) = child.child_by_field_name("value") {
-                                if value_node.kind() == "arrow_function" {
-                                    if let Some(body) = value_node.child_by_field_name("body") {
+                        // CRITICAL FIX: Process the function body for nested symbols
+                        // (direct arrow, or the wrapped function argument)
+                        if is_function_binding {
+                            let function_node = if is_arrow_function {
+                                value_node
+                            } else {
+                                wrapped_function
+                            };
+                            if let Some(function_node) = function_node {
+                                {
+                                    if let Some(body) = function_node.child_by_field_name("body") {
                                         // Save current context
                                         let saved_function =
                                             self.context.current_function().map(|s| s.to_string());
@@ -1580,6 +1691,9 @@ impl TypeScriptParser {
             || node.kind() == "method_definition"
             || node.kind() == "arrow_function"
             || node.kind() == "function_expression"
+            // generator expressions join the context walk only under
+            // wrapper detection; default emission stays unchanged
+            || (node.kind() == "generator_function" && !self.function_wrappers.is_empty())
         {
             // We're entering a NEW function scope - extract its name
             if let Some(name_node) = node.child_by_field_name("name").or_else(|| {
@@ -1598,7 +1712,10 @@ impl TypeScriptParser {
             } else {
                 // Arrow functions might not have a name, check parent for variable declaration
                 // Handle case: const ComponentName = () => { ... }
-                if node.kind() == "arrow_function" {
+                if node.kind() == "arrow_function"
+                    || (!self.function_wrappers.is_empty()
+                        && matches!(node.kind(), "function_expression" | "generator_function"))
+                {
                     if let Some(parent) = node.parent() {
                         if parent.kind() == "variable_declarator" {
                             // Get the name from the variable declarator
@@ -1607,6 +1724,11 @@ impl TypeScriptParser {
                             } else {
                                 current_function
                             }
+                        } else if let Some(wrapper_target) =
+                            self.wrapper_declarator_name(node, code)
+                        {
+                            // const X = wrapper(fn): calls inside fn attribute to X
+                            Some(wrapper_target)
                         } else {
                             current_function
                         }
@@ -2277,11 +2399,17 @@ impl TypeScriptParser {
             || node.kind() == "method_definition"
             || node.kind() == "arrow_function"
             || node.kind() == "function_expression"
+            // generator expressions join the context walk only under
+            // wrapper detection; default emission stays unchanged
+            || (node.kind() == "generator_function" && !self.function_wrappers.is_empty())
         {
             // We're entering a NEW function - extract its name
             if let Some(name_node) = node.child_by_field_name("name") {
                 Some(&code[name_node.byte_range()])
-            } else if node.kind() == "arrow_function" {
+            } else if node.kind() == "arrow_function"
+                || (!self.function_wrappers.is_empty()
+                    && matches!(node.kind(), "function_expression" | "generator_function"))
+            {
                 // Check parent for variable declarator name
                 if let Some(parent) = node.parent() {
                     if parent.kind() == "variable_declarator" {
@@ -2290,6 +2418,9 @@ impl TypeScriptParser {
                         } else {
                             current_function // Anonymous, inherit context
                         }
+                    } else if let Some(wrapper_target) = self.wrapper_declarator_name(node, code) {
+                        // const X = wrapper(fn): calls inside fn attribute to X
+                        Some(wrapper_target)
                     } else {
                         current_function // Anonymous, inherit context
                     }

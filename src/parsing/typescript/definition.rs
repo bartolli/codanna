@@ -24,8 +24,31 @@ impl LanguageDefinition for TypeScriptLanguage {
         &["ts", "tsx", "mts", "cts"]
     }
 
-    fn create_parser(&self, _settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
+    fn create_parser(&self, settings: &Settings) -> IndexResult<Box<dyn LanguageParser>> {
         let parser = TypeScriptParser::new().map_err(|e| IndexError::General(e.to_string()))?;
+        let parser = match settings
+            .languages
+            .get("typescript")
+            .and_then(|c| c.parser_options.get("function_wrappers"))
+        {
+            None => parser,
+            Some(value) => {
+                let wrappers = value
+                    .as_array()
+                    .and_then(|items| {
+                        items
+                            .iter()
+                            .map(|i| i.as_str().map(String::from))
+                            .collect::<Option<Vec<String>>>()
+                    })
+                    .ok_or_else(|| {
+                        IndexError::General(
+                            "languages.typescript.parser_options.function_wrappers must be an array of strings".to_string(),
+                        )
+                    })?;
+                parser.with_function_wrappers(wrappers)
+            }
+        };
         Ok(Box::new(parser))
     }
 
