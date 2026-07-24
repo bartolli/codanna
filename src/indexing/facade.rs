@@ -2188,6 +2188,88 @@ mod tests {
         );
     }
 
+    // Enum cases are members: Constant kind, scoped to the enum, reachable
+    // as Defines targets. Matches rust enum_variant / kotlin and swift
+    // enum_entry.
+    #[test]
+    fn php_enum_case_indexes_as_constant_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("status.php");
+        std::fs::write(
+            &source,
+            "<?php\nenum Status: string {\n    case pending = 'pending';\n\n    public function d(): string { return 'd'; }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let pending = facade
+            .find_symbols_by_name("pending", None)
+            .into_iter()
+            .next()
+            .expect("enum case indexed");
+        assert_eq!(
+            pending.kind,
+            SymbolKind::Constant,
+            "enum case takes the Constant kind"
+        );
+
+        let status_id = facade
+            .find_symbols_by_name("Status", None)
+            .first()
+            .expect("enum symbol indexed")
+            .id;
+        let deps = facade.get_dependencies(status_id);
+        let defined = deps
+            .get(&RelationKind::Defines)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            defined.iter().any(|s| s.name.as_ref() == "pending"),
+            "enum case is a Defines target of its enum: {defined:?}"
+        );
+    }
+
+    // `case` is ambiguous in php: an enum case is a member, a switch case
+    // is control flow. Only the former is a symbol. A pure (unbacked) case
+    // is a member too.
+    #[test]
+    fn php_pure_enum_case_is_a_symbol_and_switch_case_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("mixed.php");
+        std::fs::write(
+            &source,
+            "<?php\nenum Flag {\n    case bare;\n}\n\nfunction pick($x) {\n    switch ($x) {\n        case NOTASYMBOL:\n            return 1;\n    }\n    return 0;\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let bare = facade
+            .find_symbols_by_name("bare", None)
+            .into_iter()
+            .next()
+            .expect("unbacked enum case indexed");
+        assert_eq!(bare.kind, SymbolKind::Constant, "pure case is a Constant");
+
+        assert!(
+            facade.find_symbols_by_name("NOTASYMBOL", None).is_empty(),
+            "a switch case is control flow, not a member"
+        );
+    }
+
     // Single-file path (watcher reindex): the error names the language,
     // not an anonymous parse failure with an empty path.
     #[test]

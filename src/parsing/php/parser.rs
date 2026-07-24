@@ -347,6 +347,23 @@ impl PhpParser {
                 // Process children to extract the const_elements
                 self.process_children(node, code, file_id, symbols, counter, depth);
             }
+            "enum_case" => {
+                self.register_handled_node(node.kind(), node.kind_id());
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = &code[name_node.byte_range()];
+                    let mut symbol = Symbol::new(
+                        counter.next_id(),
+                        name,
+                        SymbolKind::Constant,
+                        file_id,
+                        self.node_to_range(node),
+                    );
+                    symbol.scope_context = Some(self.context.current_scope_context());
+                    symbol.doc_comment = self.extract_doc_comment(&node, code).map(Into::into);
+                    symbols.push(symbol);
+                }
+                self.process_children(node, code, file_id, symbols, counter, depth);
+            }
             "const_element" => {
                 self.register_handled_node(node.kind(), node.kind_id());
                 // Process individual const elements
@@ -1296,13 +1313,14 @@ impl PhpParser {
                             // Methods are inside declaration_list, not direct children
                             let mut decl_cursor = child.walk();
                             for decl_child in child.children(&mut decl_cursor) {
-                                if decl_child.kind() == "method_declaration" {
-                                    if let Some(method_name_node) =
+                                // Cases are members of their enum alongside methods.
+                                if matches!(decl_child.kind(), "method_declaration" | "enum_case") {
+                                    if let Some(member_name_node) =
                                         decl_child.child_by_field_name("name")
                                     {
-                                        let method_name = &code[method_name_node.byte_range()];
-                                        let range = self.node_to_range(method_name_node);
-                                        defines.push((type_name, method_name, range));
+                                        let member_name = &code[member_name_node.byte_range()];
+                                        let range = self.node_to_range(member_name_node);
+                                        defines.push((type_name, member_name, range));
                                     }
                                 }
                             }
