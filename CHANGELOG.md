@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-07-23
+
+Evidence-gated resolution release. Resolved-relationship counts move in both directions and both movements are fixes: recall rises where new evidence channels resolve calls that previously returned nothing (pydantic +3904, codanna self-index +937, gin +616), and counts drop where the resolver now refuses picks it cannot prove (ktor -46%, nlohmann -12%), with witnessed pick-corrections as the precision counterpart. Every call edge now carries its exact call site. An emission-semantics gate makes binary upgrades safe: an index built by a different-semantics binary can no longer be silently mixed with new rows.
+
+### Breaking Changes
+
+- `codanna mcp` process exit codes use the envelope vocabulary: not-found exits `1` (was `3`), blocking errors exit `2`. Automation keying on exit `3` must update.
+- Unknown `key:value` arguments reject on every surface — positional, `--args`, and serve-mode `tools/call` (serve rejects via `isError: true`; tool schemas advertise `additionalProperties: false`). Misspelled argument keys previously ignored now fail the call.
+- JS/TS/Go `call_line` values shift -1 to true 1-indexed source lines (a stored-range pre-increment double-counted with the JSON boundary's own shift), and every plain-call edge gains `call_line`/`call_column`. Consumers caching old call-site values must re-read.
+- Out-of-tree indexes emit `file_path` relative to the file's indexed root, matching in-tree shape and the schema's documented contract. Consumers of absolute out-of-tree paths must resolve against their indexed root. Existing indexes serve the corrected shape without a rebuild.
+- Emission-semantics gate: an index built by a binary with different output semantics is refused before any tool runs — read commands exit `7` with the heal command; `codanna index` rebuilds from scratch automatically with a message. Existing indexes heal on first `codanna index` after upgrade; no manual `rm -rf` required.
+- Resolved-relationship counts change across the board (see lead paragraph); cached counts will not match.
+
+### Added
+
+- Call-site metadata on every `Calls` edge: `call_line` (1-indexed editor coordinate) and `call_column` (0-indexed machine coordinate) on `get_calls`/`find_callers` JSON rows; text output names the callee definition and the call site separately. Exactness is fixture-locked for Rust, Python, JS, TS, and Go across call forms.
+- Emission-semantics version stamp in `index.meta` with a load-time gate (see Breaking Changes). The stamp is ignored by older binaries; downgrades parse cleanly.
+- Variable-binding receiver inference: constructor-shaped assignments feed an in-memory binding channel, resolving typed-receiver method calls (largest single recall source; bindings are never persisted).
+- Self-form member resolution through the caller's own class-membership evidence, with `super()` parent-chain resolution and identity-anchored inheritance walks; instance calls with multiple surviving candidates fail closed instead of guessing.
+- Kotlin module paths are package-true and package-grained in both provider and fallback modes; the import matcher compares packages.
+- Go methods carry class-membership scope from their receiver, feeding self-form and receiver resolution (previously Go methods were scope-blind).
+- Rust `Defines` edges rescue out-of-line impl members by site identity: a same-file candidate at the edge's exact definition line resolves outright, disambiguating same-name members that share one definer (a field and its accessor).
+- Receiver-type identity anchoring: when a receiver's type name denotes a specific class in the caller's file, copy selection uses that identity instead of failing closed on name ties in multi-copy corpora.
+- `parser_census` example binary: per-language audit of parser evidence emission (caller identity, receivers, static flags, scope, Defines/Extends, binding emission) — companion to `dump_edges`.
+- `search_symbols` rows carry 1-indexed `line` and `language_id`.
+- `find_symbol symbol_id:<id>` resolves identically on CLI JSON, one-shot MCP, and serve.
+- `get_index_info` reports the full `symbol_kinds` map (unsampled; values partition `symbol_count`) and a `semantic_search` status object; relationship queries return complete edge sets (hub answers are no longer capped).
+- Java methods and constructors emit `Method` kind (was `Function`); Swift protocol conformance emits `Implements` (was `Extends`).
+
+### Changed
+
+- Resolution is evidence-gated at three layers: per-language scope serves only file-local and internal-import identities; the post-scope ladder resolves only an exactly-one same-module survivor that is not a class member; a file-scoped-private veto applies where the language vouches for it. Fallback guessing paths are removed.
+- `rmcp` 2.1 -> 2.2; `tree-sitter` 0.26.11; `tree-sitter-clojure-orchard` 0.2.8 (parser emission verified unchanged across all 15 languages); `tokio` 1.53; patch bumps across `serde`, `serde_json`, `clap`, `regex`, `thiserror`, `toml`, `rustls`, `tokio-util`, `async-trait`, `glob`, `sysinfo`, `bitflags`, `anyhow`, `crossbeam-channel`, `ignore`. `fastembed` stays pinned at 5.6.0 (ONNX Runtime glibc floor) and `reqwest` at 0.12.
+
+### Fixed
+
+- Windows: forced re-indexing of a large repository no longer fails to save semantic vectors. Contributed by Fan Chen (#112).
+- Path-form variants (`codanna index src`, `./src`, absolute) canonicalize to one identity before indexing — the same directory indexed under two spellings no longer double-indexes.
+- JS/TS: inline default-export declarations (`export default function Foo() {}`, `export default class Foo {}`) extract as Public symbols; previously only the split `function Foo(){}; export default Foo;` form indexed. Anonymous default exports still produce no symbol.
+- C, Lua, and PHP method calls attribute to their real enclosing caller instead of an empty caller identity.
+- Qualified static calls (`Type::method`) no longer emit a duplicate bare-name edge — the twin absorbs into one metadata-carrying edge per call site.
+- GDScript/Kotlin import scope serves only internal identities; external-import names no longer leak into resolution.
+- Call edges in minified or vendored single-line files attribute to the true enclosing caller.
+- `codanna mcp` coordinates are self-consistent across text and JSON: range objects 0-indexed, scalar line fields 1-indexed, one convention on every surface.
+- Serve-mode and CLI text output are byte-identical for the non-semantic tool set on both stdio and HTTP transports.
+
 ## [0.9.23] - 2026-07-03
 
 Resolver precision release. Resolved-relationship counts drop across the board, and the drop is the fix: method-call edges that resolve now target the call site's actual receiver, method calls whose receiver type cannot be named return nothing instead of a guess, and resolution output is deterministic run to run. On the recall side, Python imports resolve across package boundaries and re-exports, and `super()` calls resolve to the parent's method instead of the caller's own override.

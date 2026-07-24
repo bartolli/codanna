@@ -1,15 +1,15 @@
 [package]
 name = "codanna"
-version = "0.9.23"
+version = "0.10.0"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
-description = "Code Intelligence for Large Language Models"
-documentation = "https://docs.rs/codanna"
-homepage = "https://github.com/bartolli/codanna"
+description = "Local code intelligence MCP server and CLI for AI coding agents"
+documentation = "https://docs.codanna.sh"
+homepage = "https://docs.codanna.sh"
 repository = "https://github.com/bartolli/codanna"
 license = "Apache-2.0"
 readme = "README.md"
-keywords = ["mcp-server", "code-intelligence", "semantic-search", "llm", "rag"]
+keywords = ["code-indexing", "code-intelligence", "mcp-server", "semantic-search", "ai-agents"]
 categories = ["development-tools", "command-line-utilities", "parsing", "text-processing", "compilers"]
 autoexamples = false
 exclude = [".github/", "contributing/", "tests/", "docs/"]
