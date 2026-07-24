@@ -1404,6 +1404,66 @@ impl LanguageParser for PythonParser {
         Language::Python
     }
 
+    fn find_this_barrier_spans(&mut self, code: &str) -> Vec<Range> {
+        // A callable binding its own `self`/`cls` owns that name; a nested
+        // def or lambda without one captures the enclosing method's, so it
+        // stays transparent to the walk.
+        let mut spans = Vec::new();
+        let Some(tree) = self.parser.parse(code, None) else {
+            return spans;
+        };
+
+        fn binds_own_self(node: &Node, code: &str) -> bool {
+            let Some(params) = node.child_by_field_name("parameters") else {
+                return false;
+            };
+            let mut cursor = params.walk();
+            // A comment sits in the parameter list as a named child and can
+            // precede the first real parameter (`def f(  # noqa`).
+            let Some(first) = params
+                .named_children(&mut cursor)
+                .find(|n| n.kind() != "comment")
+            else {
+                return false;
+            };
+            // `self`, `self: Foo` and `self=None` nest the identifier one
+            // level down; a bare parameter is the identifier itself.
+            let ident = if first.kind() == "identifier" {
+                Some(first)
+            } else {
+                let mut inner = first.walk();
+                first
+                    .named_children(&mut inner)
+                    .find(|n| n.kind() == "identifier")
+            };
+            ident.is_some_and(|n| {
+                crate::parsing::python::SELF_ALIASES.contains(&&code[n.byte_range()])
+            })
+        }
+
+        fn walk(node: &Node, code: &str, spans: &mut Vec<Range>) {
+            // A lambda is transparent unless it rebinds the name itself
+            // (`lambda self: ...`), which makes it own its `self` the same
+            // way a def does.
+            if matches!(node.kind(), "function_definition" | "lambda") && binds_own_self(node, code)
+            {
+                spans.push(Range::new(
+                    node.start_position().row as u32,
+                    node.start_position().column as u16,
+                    node.end_position().row as u32,
+                    node.end_position().column as u16,
+                ));
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk(&child, code, spans);
+            }
+        }
+
+        walk(&tree.root_node(), code, &mut spans);
+        spans
+    }
+
     fn extract_doc_comment(&self, node: &Node, code: &str) -> Option<String> {
         match node.kind() {
             "function_definition" => self.extract_function_docstring(*node, code),

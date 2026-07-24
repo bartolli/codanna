@@ -211,7 +211,7 @@ impl LanguageBehavior for PythonBehavior {
     }
 
     fn self_receiver_aliases(&self) -> &'static [&'static str] {
-        &["self", "cls"]
+        crate::parsing::python::SELF_ALIASES
     }
 
     fn self_alias_receiver_is_explicit(&self) -> bool {

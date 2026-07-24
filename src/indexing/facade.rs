@@ -1817,6 +1817,244 @@ mod tests {
         assert_ne!(callees[0].id, arrow.id, "never a self-loop");
     }
 
+    // Python twin: a nested def without its own `self` parameter
+    // captures the enclosing method's `self` lexically, so the innermost
+    // this-barrier is the method. The nested def shadows the method's
+    // name, so a scope-lookup resolution would self-loop.
+    #[test]
+    fn py_nested_def_self_call_resolves_to_method_not_self_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.py");
+        std::fs::write(
+            &source,
+            "class Widget:\n    def render(self):\n        def render():\n            return self.render()\n        return render\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let mut renders = facade.find_symbols_by_name("render", None);
+        renders.sort_by_key(|s| s.range.start_line);
+        assert_eq!(
+            renders.len(),
+            2,
+            "method and nested def both indexed: {renders:?}"
+        );
+        let method_id = renders[0].id;
+        let nested_id = renders[1].id;
+
+        let callees = facade.get_called_functions(nested_id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "nested def must call exactly the lexical method: {callees:?}"
+        );
+        assert_eq!(callees[0].id, method_id, "callee is the enclosing method");
+        assert_ne!(callees[0].id, nested_id, "never a self-loop");
+    }
+
+    // A nested def binding its own `self` is its own barrier: the name is
+    // rebound, the enclosing method does not own that `self`, and the call
+    // fails closed rather than resolving to the shadowed member.
+    #[test]
+    fn py_nested_def_rebinding_self_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.py");
+        std::fs::write(
+            &source,
+            "class Widget:\n    def keep(self, x):\n        def keep(self):\n            return self.keep(x)\n        return keep\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let mut keeps = facade.find_symbols_by_name("keep", None);
+        keeps.sort_by_key(|s| s.range.start_line);
+        assert_eq!(
+            keeps.len(),
+            2,
+            "method and nested def both indexed: {keeps:?}"
+        );
+
+        let callees = facade.get_called_functions(keeps[1].id);
+        assert!(
+            callees.is_empty(),
+            "a rebound `self` must fail closed: {callees:?}"
+        );
+    }
+
+    // A decorated method nests its `function_definition` inside a
+    // `decorated_definition`, so the barrier span and the member symbol's
+    // own range must still agree for the walk to land.
+    #[test]
+    fn py_decorated_method_barrier_matches_member_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.py");
+        std::fs::write(
+            &source,
+            "class Widget:\n    @property\n    def value(self):\n        def value():\n            return self.compute()\n        return value\n\n    def compute(self):\n        return 1\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let compute_id = facade
+            .find_symbols_by_name("compute", None)
+            .first()
+            .expect("compute indexed")
+            .id;
+        let mut values = facade.find_symbols_by_name("value", None);
+        values.sort_by_key(|s| s.range.start_line);
+        assert_eq!(values.len(), 2, "method and nested def indexed: {values:?}");
+
+        let callees = facade.get_called_functions(values[1].id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "decorated method must still own the nested def's `self`: {callees:?}"
+        );
+        assert_eq!(callees[0].id, compute_id, "callee is the sibling member");
+    }
+
+    // A comment inside the parameter list is its first named child, ahead
+    // of `self`. The method must still register as a barrier, or every
+    // nested def under a lint-suppressed signature fails closed.
+    #[test]
+    fn py_comment_before_self_parameter_still_barriers() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.py");
+        std::fs::write(
+            &source,
+            "class Widget:\n    def build(  # noqa\n        self, x\n    ):\n        def inner(schema):\n            return self.other(schema)\n        return inner\n\n    def other(self, s):\n        return 1\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let inner_id = facade
+            .find_symbols_by_name("inner", None)
+            .first()
+            .expect("nested def indexed")
+            .id;
+        let other_id = facade
+            .find_symbols_by_name("other", None)
+            .first()
+            .expect("sibling member indexed")
+            .id;
+
+        let callees = facade.get_called_functions(inner_id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "comment-led parameter list must not break the barrier: {callees:?}"
+        );
+        assert_eq!(callees[0].id, other_id, "callee is the sibling member");
+    }
+
+    // A lambda whose own parameter is named `self` rebinds the name, so it
+    // owns its `self` exactly as a def would. Without a barrier of its own
+    // the walk would run past it to the enclosing method and resolve a name
+    // that never referred to the instance.
+    #[test]
+    fn py_lambda_rebinding_self_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.py");
+        std::fs::write(
+            &source,
+            "class Widget:\n    def m(self):\n        def outer(x):\n            f = lambda self: self.other()\n            return f\n        return outer\n\n    def other(self):\n        return 1\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let other_id = facade
+            .find_symbols_by_name("other", None)
+            .first()
+            .expect("sibling member indexed")
+            .id;
+        for sym in facade.find_symbols_by_name("outer", None) {
+            let callees = facade.get_called_functions(sym.id);
+            assert!(
+                !callees.iter().any(|c| c.id == other_id),
+                "a lambda-rebound `self` must not reach the enclosing method: {callees:?}"
+            );
+        }
+    }
+
+    // `cls` is the second alias in the vocabulary: a classmethod owns its
+    // `cls` and is a barrier, so a nested def capturing it reaches the
+    // classmethod's class member.
+    #[test]
+    fn py_classmethod_cls_capture_resolves_to_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.py");
+        std::fs::write(
+            &source,
+            "class Widget:\n    @classmethod\n    def make(cls):\n        def build():\n            return cls.helper()\n        return build\n\n    @classmethod\n    def helper(cls):\n        return 1\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let helper_id = facade
+            .find_symbols_by_name("helper", None)
+            .first()
+            .expect("classmethod member indexed")
+            .id;
+        let build_id = facade
+            .find_symbols_by_name("build", None)
+            .first()
+            .expect("nested def indexed")
+            .id;
+
+        let callees = facade.get_called_functions(build_id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "nested def must reach the classmethod's member via `cls`: {callees:?}"
+        );
+        assert_eq!(
+            callees[0].id, helper_id,
+            "callee is the sibling classmethod"
+        );
+    }
+
     // Single-file path (watcher reindex): the error names the language,
     // not an anonymous parse failure with an empty path.
     #[test]
