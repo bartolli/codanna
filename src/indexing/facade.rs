@@ -1781,6 +1781,42 @@ mod tests {
         assert_ne!(callees[0].id, arrow.id, "never a self-loop");
     }
 
+    // TypeScript twin of the lexical-this lock: modifiers and a return
+    // type must not break the barrier-to-member range equality the walk
+    // depends on.
+    #[test]
+    fn ts_arrow_this_shadow_resolves_to_method_not_self_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.ts");
+        std::fs::write(
+            &source,
+            "class Widget {\n  private render(): number {\n    const render = () => this.render();\n    return render();\n  }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let arrow = facade
+            .find_symbols_by_name("render", None)
+            .into_iter()
+            .find(|s| s.kind == SymbolKind::Function)
+            .expect("arrow symbol indexed");
+        let callees = facade.get_called_functions(arrow.id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "arrow must call exactly the lexical method: {callees:?}"
+        );
+        assert_eq!(callees[0].kind, SymbolKind::Method, "callee is the method");
+        assert_ne!(callees[0].id, arrow.id, "never a self-loop");
+    }
+
     // Single-file path (watcher reindex): the error names the language,
     // not an anonymous parse failure with an empty path.
     #[test]
