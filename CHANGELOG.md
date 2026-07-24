@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-07-24
+
+### Added
+
+- `function_wrappers` parser option for TypeScript (`[languages.typescript.parser_options]`): functions declared through named wrapper calls are extracted with their inner call edges. A declared name matches the call's full dotted text (`Effect.gen` matches `Effect.gen(...)` only) or its final property name (`memo` matches both `memo(...)` and `React.memo(...)`); curried forms (`wrap("name")(fn)`) descend. Emission is unchanged when the option is absent. Closes #115; dotted-text matching adopted from PR #116. The generated `codanna init` settings carry a commented example.
+
+### Changed
+
+- `--fields` projects dotted paths (`symbols.name,symbols.range.start_line`) with output nesting preserved. An unknown first segment rejects with an `INVALID_QUERY` envelope listing the available fields (exit `2`); unknown names previously dropped silently, returning output that looked complete. Scripts passing misspelled field names now fail the call.
+
+### Fixed
+
+- A language whose parser cannot construct (for example a malformed `parser_options` value) fails the indexing run with an error naming the language and cause, on every entry path: `codanna index` exits `2` before touching the index, watch-triggered re-index and MCP force-reindex surface the error on stderr. Previously the run reported success while every file of the language was silently skipped.
+- A failed re-index leaves the file's existing rows in place. Single-file re-index parses the new content before removing old rows; directory re-index validates parser construction for the change-set's languages before cleanup. Previously a parser-construction failure durably removed the changed files' rows until the next successful index run.
+- `codanna index` after deleting `.codanna/index` runs a single indexing pass in the command phase. Previously the pre-command config sync re-indexed every configured root against the freshly created empty index and the command phase then reported "Index up to date".
+
 ## [0.10.1] - 2026-07-23
 
 ### Fixed
