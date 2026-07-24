@@ -132,6 +132,10 @@ pub struct VariableBinding {
 /// Per-file typed-local bindings: the in-memory lane from Phase 1 to Phase 2.
 pub type FileBindings = HashMap<FileId, Vec<VariableBinding>>;
 
+/// Per-file this-barrier spans (non-arrow callables), in-memory lane to
+/// Phase 2 alongside [`FileBindings`]; never written to the index.
+pub type FileBarriers = HashMap<FileId, Vec<Range>>;
+
 /// Relationship extracted from parsing, before resolution.
 ///
 /// Contains ranges for disambiguation when multiple symbols share the same name:
@@ -186,6 +190,7 @@ pub struct ParsedFile {
     pub raw_imports: Vec<RawImport>,
     pub raw_relationships: Vec<RawRelationship>,
     pub variable_bindings: Vec<VariableBinding>,
+    pub this_barrier_spans: Vec<Range>,
 }
 
 impl ParsedFile {
@@ -199,6 +204,7 @@ impl ParsedFile {
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
             variable_bindings: Vec::new(),
+            this_barrier_spans: Vec::new(),
         }
     }
 
@@ -275,6 +281,9 @@ pub struct IndexBatch {
     /// Per-file typed local bindings for receiver-type inference (in-memory
     /// lane to Phase 2; never written to the index)
     pub variable_bindings: FileBindings,
+    /// Per-file this-barrier spans (in-memory lane to Phase 2; never
+    /// written to the index)
+    pub this_barrier_spans: FileBarriers,
 }
 
 impl IndexBatch {
@@ -285,6 +294,7 @@ impl IndexBatch {
             unresolved_relationships: Vec::new(),
             file_registrations: Vec::new(),
             variable_bindings: HashMap::new(),
+            this_barrier_spans: HashMap::new(),
         }
     }
 
@@ -295,6 +305,7 @@ impl IndexBatch {
             unresolved_relationships: Vec::with_capacity(rels),
             file_registrations: Vec::new(),
             variable_bindings: HashMap::new(),
+            this_barrier_spans: HashMap::new(),
         }
     }
 
@@ -966,6 +977,11 @@ pub struct ResolutionContext {
     /// Typed local bindings in this file (parse-time capture), for
     /// receiver-type inference on instance calls
     pub variable_bindings: Vec<VariableBinding>,
+    /// Spans of non-arrow callables in this file (parse-time capture,
+    /// never persisted). `this` binds to the innermost enclosing
+    /// barrier; arrows contribute none, so the lexical-this walk
+    /// resolves a call site's owner by innermost containing span.
+    pub this_barrier_spans: Vec<Range>,
 }
 
 impl std::fmt::Debug for ResolutionContext {

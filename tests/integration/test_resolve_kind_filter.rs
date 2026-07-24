@@ -105,6 +105,7 @@ fn calls_to_field_rejected_via_cache_resolve_path() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -141,6 +142,7 @@ fn calls_to_field_rejected_via_context_resolve_path() {
         scope: Box::new(scope),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -186,6 +188,7 @@ fn python_calls_to_field_rejected() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -230,6 +233,7 @@ fn typescript_calls_to_field_rejected() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -267,6 +271,7 @@ fn uses_to_field_rejected_unconditional_filter() {
             RelationKind::Uses,
         )],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -303,6 +308,7 @@ fn function_to_function_calls_passthrough_preserved() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "main", "helper", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -341,6 +347,7 @@ fn ambiguous_all_fields_filtered_to_empty_returns_none() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -377,6 +384,7 @@ fn ambiguous_mixed_kind_candidates_filter_to_method_survivor() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -416,6 +424,7 @@ fn calls_to_method_passthrough_preserved_via_cache_resolve_path() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![make_unresolved(1, "caller", "kind", caller_file)],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);

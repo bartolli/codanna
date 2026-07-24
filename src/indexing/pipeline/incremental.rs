@@ -121,6 +121,7 @@ impl Pipeline {
         let (mut batch, unresolved, embed_batch) =
             collect_stage.process_single(parsed, Arc::clone(&index))?;
         let variable_bindings = std::mem::take(&mut batch.variable_bindings);
+        let this_barrier_spans = std::mem::take(&mut batch.this_barrier_spans);
 
         // Index the batch
         let index_stage = IndexStage::new(Arc::clone(&index), self.config.batches_per_commit);
@@ -199,7 +200,13 @@ impl Pipeline {
         let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
 
         // Run Phase 2 resolution
-        let phase2_stats = self.run_phase2(unresolved, variable_bindings, symbol_cache, index)?;
+        let phase2_stats = self.run_phase2(
+            unresolved,
+            variable_bindings,
+            this_barrier_spans,
+            symbol_cache,
+            index,
+        )?;
 
         // Save embeddings
         self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
@@ -277,6 +284,7 @@ impl Pipeline {
             index_stats,
             unresolved,
             variable_bindings,
+            this_barriers,
             symbol_cache,
             cleanup_stats,
             deleted_symbols,
@@ -298,7 +306,7 @@ impl Pipeline {
                 ));
                 let dual_status = StatusLine::new(Arc::clone(&dual_bar));
 
-                let (stats, unresolved, bindings, cache, metrics) = self.run_phase1(
+                let (stats, unresolved, bindings, barriers, cache, metrics) = self.run_phase1(
                     FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
                     Phase1Options {
@@ -328,6 +336,7 @@ impl Pipeline {
                     stats,
                     unresolved,
                     bindings,
+                    barriers,
                     cache,
                     CleanupStats::default(),
                     0,
@@ -347,7 +356,7 @@ impl Pipeline {
 
                 // has_embedding is false here, so semantic and pool are never
                 // both present: the embed stage cannot run in this arm.
-                let (stats, unresolved, bindings, cache, metrics) = self.run_phase1(
+                let (stats, unresolved, bindings, barriers, cache, metrics) = self.run_phase1(
                     FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
                     Phase1Options {
@@ -368,6 +377,7 @@ impl Pipeline {
                     stats,
                     unresolved,
                     bindings,
+                    barriers,
                     cache,
                     CleanupStats::default(),
                     0,
@@ -446,7 +456,7 @@ impl Pipeline {
                 }),
                 _ => None,
             };
-            let (stats, unresolved, bindings, _run_cache, metrics) = self.run_phase1(
+            let (stats, unresolved, bindings, barriers, _run_cache, metrics) = self.run_phase1(
                 FileSource::List(files_to_index),
                 Arc::clone(&index),
                 Phase1Options {
@@ -476,6 +486,7 @@ impl Pipeline {
                 stats,
                 unresolved,
                 bindings,
+                barriers,
                 cache,
                 cleanup_stats,
                 deleted_symbols,
@@ -488,6 +499,7 @@ impl Pipeline {
         let phase2_stats = self.run_phase2_maybe_bar(
             unresolved,
             variable_bindings,
+            this_barriers,
             symbol_cache,
             Arc::clone(&index),
             true,
@@ -608,14 +620,15 @@ impl Pipeline {
             }),
             _ => None,
         };
-        let (index_stats, unresolved, variable_bindings, _run_cache, metrics) = self.run_phase1(
-            FileSource::List(files_to_index),
-            Arc::clone(&index),
-            Phase1Options {
-                progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
-                embed,
-            },
-        )?;
+        let (index_stats, unresolved, variable_bindings, this_barriers, _run_cache, metrics) = self
+            .run_phase1(
+                FileSource::List(files_to_index),
+                Arc::clone(&index),
+                Phase1Options {
+                    progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
+                    embed,
+                },
+            )?;
 
         // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
         if let Some(m) = metrics {
@@ -630,6 +643,7 @@ impl Pipeline {
         let phase2_stats = self.run_phase2_maybe_bar(
             unresolved,
             variable_bindings,
+            this_barriers,
             symbol_cache,
             Arc::clone(&index),
             show_progress,

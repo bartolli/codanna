@@ -50,10 +50,11 @@ pub use stages::semantic_embed::{SemanticEmbedStage, SemanticEmbedStats};
 pub use stages::write::{WriteStage, WriteStats};
 pub use stats::{IncrementalStats, Phase2Stats, PipelineStats, StageTimings, SyncStats};
 pub use types::{
-    DiscoverResult, EmbedOptions, EmbeddingBatch, FileBindings, FileContent, FileRegistration,
-    FileSource, IndexBatch, ParsedFile, Phase1Options, PipelineError, PipelineResult, ProgressSink,
-    RawImport, RawRelationship, RawSymbol, ResolutionContext, ResolvedBatch, ResolvedRelationship,
-    SingleFileStats, SymbolLookupCache, UnresolvedRelationship, VariableBinding,
+    DiscoverResult, EmbedOptions, EmbeddingBatch, FileBarriers, FileBindings, FileContent,
+    FileRegistration, FileSource, IndexBatch, ParsedFile, Phase1Options, PipelineError,
+    PipelineResult, ProgressSink, RawImport, RawRelationship, RawSymbol, ResolutionContext,
+    ResolvedBatch, ResolvedRelationship, SingleFileStats, SymbolLookupCache,
+    UnresolvedRelationship, VariableBinding,
 };
 
 use crate::Settings;

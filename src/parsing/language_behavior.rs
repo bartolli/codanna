@@ -336,6 +336,18 @@ pub trait LanguageBehavior: Send + Sync {
         &["self"]
     }
 
+    /// True when the parser emits a self-alias receiver ONLY for an
+    /// explicit source alias (a literal `this.x()` / `self.x()`). The
+    /// resolve stage then refuses to fall through to scope lookup for a
+    /// self-alias call whose caller has no ClassMember evidence — the
+    /// lexical-this walk recovers it or the row fails closed. Default
+    /// false: csharp emits `this` on every bare call and cpp on bare
+    /// calls inside member functions; their fall-through is the
+    /// legitimate free-function path.
+    fn self_alias_receiver_is_explicit(&self) -> bool {
+        false
+    }
+
     /// True when the language's `private` members are invisible outside
     /// their declaring FILE (kotlin `private fun`). The resolve stage then
     /// refuses cross-file picks of Private Method/Field symbols. Default

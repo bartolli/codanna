@@ -169,6 +169,19 @@ impl ResolveStage {
             if let Some(resolved) = self.resolve_self_form_member(from_id, unresolved) {
                 return Some(resolved);
             }
+            // Lexical-this boundary: where the behavior vouches the alias
+            // is an explicit source token, a caller without ClassMember
+            // evidence must not reach scope lookup — the caller's locals
+            // can shadow the member (the arrow self-loop class). The
+            // innermost this-barrier owning the call site resolves it, or
+            // the row fails closed.
+            if self
+                .get_behavior(&caller.language_id)
+                .is_some_and(|b| b.self_alias_receiver_is_explicit())
+                && !self.caller_has_member_scope(from_id)
+            {
+                return self.resolve_lexical_this_member(from_id, unresolved, context);
+            }
         }
 
         if let Some(to_id) = context.resolve(&unresolved.to_name) {
@@ -929,30 +942,106 @@ impl ResolveStage {
         };
         drop(caller_sym);
 
-        let mut members = self
-            .symbol_cache
-            .lookup_candidates(&unresolved.to_name)
-            .into_iter()
-            .filter(|&id| {
-                self.symbol_cache.get_ref(id).is_some_and(|sym| {
-                    sym.file_id == caller_file
-                        && matches!(
-                            sym.scope_context.as_ref(),
-                            Some(crate::symbol::ScopeContext::ClassMember {
-                                class_name: Some(name),
-                            }) if *name == enclosing
-                        )
-                })
-            });
-        match (members.next(), members.next()) {
-            (Some(to_id), None) => Some(ResolvedRelationship {
+        self.sole_member_of_class(caller_file, &enclosing, &unresolved.to_name)
+            .map(|to_id| ResolvedRelationship {
                 from_id,
                 to_id,
                 kind: unresolved.kind,
                 metadata: unresolved.metadata.clone(),
-            }),
+            })
+    }
+
+    /// True when the caller's own scope names its enclosing type.
+    fn caller_has_member_scope(&self, from_id: SymbolId) -> bool {
+        self.symbol_cache.get_ref(from_id).is_some_and(|sym| {
+            matches!(
+                sym.scope_context.as_ref(),
+                Some(crate::symbol::ScopeContext::ClassMember {
+                    class_name: Some(_)
+                })
+            )
+        })
+    }
+
+    /// The exactly-one same-file candidate carrying the named
+    /// `ClassMember` evidence; zero or several return None.
+    fn sole_member_of_class(
+        &self,
+        file: FileId,
+        class_name: &str,
+        member_name: &str,
+    ) -> Option<SymbolId> {
+        let mut members = self
+            .symbol_cache
+            .lookup_candidates(member_name)
+            .into_iter()
+            .filter(|&id| {
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    sym.file_id == file
+                        && matches!(
+                            sym.scope_context.as_ref(),
+                            Some(crate::symbol::ScopeContext::ClassMember {
+                                class_name: Some(name),
+                            }) if name.as_ref() == class_name
+                        )
+                })
+            });
+        match (members.next(), members.next()) {
+            (Some(id), None) => Some(id),
             _ => None,
         }
+    }
+
+    /// Lexical-this walk: `this` binds to the innermost enclosing
+    /// non-arrow callable. The call site's owner is the innermost
+    /// this-barrier span containing it; the call resolves iff that
+    /// barrier IS a named class member's own span (symbol range
+    /// equality) and the member's class has exactly one candidate for
+    /// the name. A nested `function` is its own barrier and carries no
+    /// ClassMember evidence, so it rejects; a module-level arrow has no
+    /// barrier at all. Every miss fails closed.
+    fn resolve_lexical_this_member(
+        &self,
+        from_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+        context: &ResolutionContext,
+    ) -> Option<ResolvedRelationship> {
+        let call_site = unresolved.to_range.as_ref()?;
+        let barrier = context
+            .this_barrier_spans
+            .iter()
+            .filter(|b| {
+                b.contains(call_site.start_line, call_site.start_column)
+                    && b.contains(call_site.end_line, call_site.end_column)
+            })
+            // Barriers containing one point nest; the innermost starts last.
+            .max_by_key(|b| (b.start_line, b.start_column))?;
+
+        let caller_file = self.symbol_cache.get_ref(from_id)?.file_id;
+        let owner_class = self
+            .symbol_cache
+            .symbols_in_file(caller_file)
+            .into_iter()
+            .find_map(|id| {
+                let sym = self.symbol_cache.get_ref(id)?;
+                if sym.range != *barrier {
+                    return None;
+                }
+                match sym.scope_context.as_ref() {
+                    Some(crate::symbol::ScopeContext::ClassMember {
+                        class_name: Some(name),
+                    }) => Some(name.clone()),
+                    _ => None,
+                }
+            })?;
+
+        self.sole_member_of_class(caller_file, &owner_class, &unresolved.to_name)
+            .map(|to_id| ResolvedRelationship {
+                from_id,
+                to_id,
+                kind: unresolved.kind,
+                metadata: unresolved.metadata.clone(),
+            })
     }
 
     fn resolve_static_call(
@@ -1539,6 +1628,7 @@ mod tests {
             scope: Box::new(NoOpScope),
             unresolved_rels,
             variable_bindings: vec![],
+            this_barrier_spans: vec![],
         }
     }
 
@@ -2386,10 +2476,16 @@ mod tests {
     fn python_self_aliases_pass_untyped_locals_fail_closed() {
         // cls.get() resolves through the python self vocabulary;
         // prefix_settings.get() (untyped local, the story-15 phantom class)
-        // does not.
+        // does not. The caller carries ClassMember scope: python vouches
+        // alias-implies-explicit, so an evidence-less caller would fail
+        // closed at the lexical-this boundary instead of falling through.
         let python = LanguageId::new("python");
         let cache = Arc::new(SymbolLookupCache::new());
-        cache.insert(make_symbol(1, "run_example", 1, python));
+        let mut caller = make_symbol(1, "run_example", 1, python);
+        caller.scope_context = Some(crate::symbol::ScopeContext::ClassMember {
+            class_name: Some("Example".into()),
+        });
+        cache.insert(caller);
         let mut method = make_symbol(2, "get", 1, python);
         method.kind = SymbolKind::Method;
         cache.insert(method);
@@ -2554,6 +2650,7 @@ mod tests {
                 make_extends(10, "Model", "Base", 1),
             ],
             variable_bindings: vec![model_binding()],
+            this_barrier_spans: vec![],
         };
 
         let (batch, stats) = stage.resolve(&context);
@@ -2610,6 +2707,7 @@ mod tests {
                 make_extends(10, "Model", "Base", 1),
             ],
             variable_bindings: vec![model_binding()],
+            this_barrier_spans: vec![],
         };
 
         let (batch, stats) = stage.resolve(&context);
@@ -2660,6 +2758,7 @@ mod tests {
                 make_extends(10, "Model", "Base", 1),
             ],
             variable_bindings: vec![model_binding()],
+            this_barrier_spans: vec![],
         };
 
         let (batch, stats) = stage.resolve(&context);

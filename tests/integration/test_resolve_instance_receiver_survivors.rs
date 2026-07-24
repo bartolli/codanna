@@ -119,6 +119,7 @@ fn resolve_with_candidates(duplicate_copy: bool) -> (ResolvedBatch, ResolveStats
         )),
         unresolved_rels: vec![call],
         variable_bindings: bindings,
+        this_barrier_spans: vec![],
     };
     stage.resolve(&context)
 }
@@ -212,6 +213,7 @@ fn import_anchored_duplicate_copies_recover() {
         scope: Box::new(scope),
         unresolved_rels: vec![call],
         variable_bindings: bindings,
+        this_barrier_spans: vec![],
     };
     let (batch, stats) = stage.resolve(&context);
 
@@ -299,6 +301,7 @@ fn span_local_class_anchors_same_file_duplicates() {
         )),
         unresolved_rels: vec![call],
         variable_bindings: bindings,
+        this_barrier_spans: vec![],
     };
     let (batch, stats) = stage.resolve(&context);
 

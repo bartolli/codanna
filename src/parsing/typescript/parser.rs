@@ -2829,6 +2829,37 @@ impl LanguageParser for TypeScriptParser {
         crate::parsing::Language::TypeScript
     }
 
+    fn find_this_barrier_spans(&mut self, code: &str) -> Vec<Range> {
+        // Non-arrow callables own their `this`; arrows bind lexically and
+        // contribute no barrier.
+        let mut spans = Vec::new();
+        if let Some(tree) = self.parser.parse(code, None) {
+            fn walk(node: &tree_sitter::Node, spans: &mut Vec<Range>) {
+                if BARRIERS.contains(&node.kind()) {
+                    spans.push(Range::new(
+                        node.start_position().row as u32,
+                        node.start_position().column as u16,
+                        node.end_position().row as u32,
+                        node.end_position().column as u16,
+                    ));
+                }
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    walk(&child, spans);
+                }
+            }
+            const BARRIERS: &[&str] = &[
+                "method_definition",
+                "function_declaration",
+                "function_expression",
+                "generator_function",
+                "generator_function_declaration",
+            ];
+            walk(&tree.root_node(), &mut spans);
+        }
+        spans
+    }
+
     fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         // Basic TS variable type inference for `const/let/var x = new Type()` patterns
         let mut bindings = Vec::new();

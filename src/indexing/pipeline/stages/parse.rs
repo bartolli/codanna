@@ -263,6 +263,9 @@ fn parse_with_parser(
         )
         .collect();
 
+    // This-barrier spans feed the lexical-this walk in Phase 2
+    let this_barrier_spans = parser.find_this_barrier_spans(&content.content);
+
     Ok(ParsedFile {
         path: content.path,
         content_hash: content.hash,
@@ -272,6 +275,7 @@ fn parse_with_parser(
         raw_imports,
         raw_relationships,
         variable_bindings,
+        this_barrier_spans,
     })
 }
 

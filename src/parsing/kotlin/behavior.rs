@@ -131,6 +131,10 @@ impl LanguageBehavior for KotlinBehavior {
         &["this"]
     }
 
+    fn self_alias_receiver_is_explicit(&self) -> bool {
+        true
+    }
+
     fn configure_symbol(&self, symbol: &mut Symbol, module_path: Option<&str>) {
         if let Some(path) = module_path {
             let full_path = self.format_module_path(path, &symbol.name);

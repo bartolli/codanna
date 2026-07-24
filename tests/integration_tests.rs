@@ -61,6 +61,9 @@ mod test_resolve_instance_receiver_survivors;
 #[path = "integration/test_resolve_ladder_language_arm.rs"]
 mod test_resolve_ladder_language_arm;
 
+#[path = "integration/test_resolve_lexical_this_walk.rs"]
+mod test_resolve_lexical_this_walk;
+
 #[path = "integration/test_resolve_kind_filter.rs"]
 mod test_resolve_kind_filter;
 

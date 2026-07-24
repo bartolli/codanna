@@ -175,6 +175,10 @@ impl LanguageBehavior for TypeScriptBehavior {
         &["this"]
     }
 
+    fn self_alias_receiver_is_explicit(&self) -> bool {
+        true
+    }
+
     fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
         let wrapped = format!("class __W__ {{ {signature} {{}} }}");
         let mut parser = tree_sitter::Parser::new();

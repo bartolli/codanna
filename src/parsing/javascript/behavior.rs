@@ -116,6 +116,10 @@ impl LanguageBehavior for JavaScriptBehavior {
         &["this"]
     }
 
+    fn self_alias_receiver_is_explicit(&self) -> bool {
+        true
+    }
+
     fn get_language(&self) -> Language {
         tree_sitter_javascript::LANGUAGE.into()
     }

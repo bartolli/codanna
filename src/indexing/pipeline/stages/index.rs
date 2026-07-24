@@ -92,6 +92,7 @@ impl IndexStage {
         IndexStats,
         Vec<UnresolvedRelationship>,
         super::super::FileBindings,
+        super::super::FileBarriers,
         SymbolLookupCache,
         std::time::Duration,
     )> {
@@ -100,6 +101,7 @@ impl IndexStage {
         let mut stats = IndexStats::new();
         let mut pending_relationships: Vec<UnresolvedRelationship> = Vec::new();
         let mut pending_bindings = super::super::FileBindings::new();
+        let mut pending_barriers = super::super::FileBarriers::new();
         let mut batch_count = 0;
         let mut failed_files_total = 0usize;
         let mut input_wait = Duration::ZERO;
@@ -124,6 +126,7 @@ impl IndexStage {
             // Accumulate relationships for Phase 2
             pending_relationships.extend(std::mem::take(&mut batch.unresolved_relationships));
             pending_bindings.extend(std::mem::take(&mut batch.variable_bindings));
+            pending_barriers.extend(std::mem::take(&mut batch.this_barrier_spans));
 
             for registration in &batch.file_registrations {
                 file_high_water = file_high_water.max(registration.file_id.value());
@@ -164,6 +167,7 @@ impl IndexStage {
             stats,
             pending_relationships,
             pending_bindings,
+            pending_barriers,
             symbol_cache,
             input_wait,
         ))
@@ -367,7 +371,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, rels, _, symbol_cache, _) = result.unwrap();
+        let (stats, rels, _, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Indexed {} files, {} symbols, cache has {} entries",
@@ -401,7 +405,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, _, _, symbol_cache, _) = result.unwrap();
+        let (stats, _, _, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Indexed {} files, {} symbols with batches_per_commit=2, cache has {} entries",
@@ -495,7 +499,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, rels, _, symbol_cache, _) = result.unwrap();
+        let (stats, rels, _, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Accumulated {} relationships for Phase 2, cache has {} symbols",
@@ -542,7 +546,7 @@ mod tests {
         drop(batch_tx);
 
         let stage = IndexStage::new(Arc::clone(&index), 10);
-        let (_, _, _, symbol_cache, _) = stage.run(batch_rx).unwrap();
+        let (_, _, _, _, symbol_cache, _) = stage.run(batch_rx).unwrap();
 
         // Verify lookup by name returns correct candidates
         let candidates = symbol_cache.lookup_candidates("process_data");

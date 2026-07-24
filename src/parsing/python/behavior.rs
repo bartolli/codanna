@@ -214,6 +214,10 @@ impl LanguageBehavior for PythonBehavior {
         &["self", "cls"]
     }
 
+    fn self_alias_receiver_is_explicit(&self) -> bool {
+        true
+    }
+
     fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
         let trimmed = signature.strip_prefix("async ").unwrap_or(signature);
         let wrapped = format!("def __sig__{trimmed}: pass");

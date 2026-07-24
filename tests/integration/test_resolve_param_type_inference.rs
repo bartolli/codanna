@@ -175,6 +175,7 @@ fn instance_call_filters_ambiguous_by_inferred_parameter_type() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -240,6 +241,7 @@ fn instance_call_fails_closed_when_receiver_not_a_parameter() {
             "unknown_var",
         )],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -283,6 +285,7 @@ fn instance_call_single_candidate_type_match_resolves() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -327,6 +330,7 @@ fn instance_call_real_world_signature_with_attrs_pub_async_lifetimes() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -375,6 +379,7 @@ fn instance_call_single_candidate_type_mismatch_resolves_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "walk", caller_file, "node")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -420,6 +425,7 @@ fn slice_4_6_regression_walk_on_external_node_resolves_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "walk", caller_file, "node")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -463,6 +469,7 @@ fn slice_4_6_regression_push_on_external_vec_resolves_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "push", caller_file, "calls")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -517,6 +524,7 @@ fn instance_call_external_type_resolves_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "kind", caller_file, "node")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -568,6 +576,7 @@ fn python_instance_call_ambiguous_filters_to_inferred_type_class() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -609,6 +618,7 @@ fn python_instance_call_wrong_class_single_candidate_collapses_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -659,6 +669,7 @@ fn typescript_instance_call_ambiguous_filters_to_inferred_type_class() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -697,6 +708,7 @@ fn typescript_instance_call_wrong_class_single_candidate_collapses_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "encode", caller_file, "url")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -743,6 +755,7 @@ fn go_instance_call_ambiguous_filters_to_inferred_type_class() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "Process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -781,6 +794,7 @@ fn go_instance_call_wrong_class_single_candidate_collapses_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "Walk", caller_file, "node")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -827,6 +841,7 @@ fn java_instance_call_ambiguous_filters_to_inferred_type_class() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "process", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -865,6 +880,7 @@ fn java_instance_call_wrong_class_single_candidate_collapses_notfound() {
         scope: Box::new(GenericResolutionContext::new(caller_file)),
         unresolved_rels: vec![instance_call_unresolved(1, "save", caller_file, "store")],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);

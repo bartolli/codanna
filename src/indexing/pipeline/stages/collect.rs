@@ -323,6 +323,13 @@ impl CollectStage {
                 .insert(file_id, std::mem::take(&mut parsed.variable_bindings));
         }
 
+        if !parsed.this_barrier_spans.is_empty() {
+            state
+                .current_batch
+                .this_barrier_spans
+                .insert(file_id, std::mem::take(&mut parsed.this_barrier_spans));
+        }
+
         // Set current language for embedding metadata
         state.current_language = parsed.language_id.as_str().into();
 
@@ -467,6 +474,7 @@ mod tests {
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
             variable_bindings: Vec::new(),
+            this_barrier_spans: Vec::new(),
         }
     }
 
@@ -862,6 +870,7 @@ mod tests {
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
             variable_bindings: Vec::new(),
+            this_barrier_spans: Vec::new(),
         };
 
         parsed_tx.send(parsed).unwrap();

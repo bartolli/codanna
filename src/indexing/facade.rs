@@ -1744,6 +1744,43 @@ mod tests {
         );
     }
 
+    // Lexical-this walk, end to end through the real js parser: the
+    // story's minimized reproducer. The arrow shadows the method's name;
+    // the persisted edge must target the ClassMember method, never the
+    // arrow itself.
+    #[test]
+    fn js_arrow_this_shadow_resolves_to_method_not_self_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("widget.js");
+        std::fs::write(
+            &source,
+            "class Widget {\n  render() {\n    const render = () => this.render();\n    return render;\n  }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_file(&source).unwrap();
+
+        let arrow = facade
+            .find_symbols_by_name("render", None)
+            .into_iter()
+            .find(|s| s.kind == SymbolKind::Function)
+            .expect("arrow symbol indexed");
+        let callees = facade.get_called_functions(arrow.id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "arrow must call exactly the lexical method: {callees:?}"
+        );
+        assert_eq!(callees[0].kind, SymbolKind::Method, "callee is the method");
+        assert_ne!(callees[0].id, arrow.id, "never a self-loop");
+    }
+
     // Single-file path (watcher reindex): the error names the language,
     // not an anonymous parse failure with an empty path.
     #[test]

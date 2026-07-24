@@ -93,6 +93,7 @@ impl ContextStage {
         &self,
         unresolved: Vec<UnresolvedRelationship>,
         variable_bindings: &HashMap<FileId, Vec<VariableBinding>>,
+        this_barrier_spans: &HashMap<FileId, Vec<crate::types::Range>>,
     ) -> Vec<ResolutionContext> {
         // Group relationships by file_id
         let mut by_file: HashMap<FileId, Vec<UnresolvedRelationship>> = HashMap::new();
@@ -106,7 +107,11 @@ impl ContextStage {
 
         for (file_id, rels) in by_file {
             let bindings = variable_bindings.get(&file_id).cloned().unwrap_or_default();
-            let context = self.build_context_for_file(file_id, rels, bindings);
+            let barriers = this_barrier_spans
+                .get(&file_id)
+                .cloned()
+                .unwrap_or_default();
+            let context = self.build_context_for_file(file_id, rels, bindings, barriers);
             contexts.push(context);
         }
 
@@ -123,6 +128,7 @@ impl ContextStage {
         file_id: FileId,
         unresolved_rels: Vec<UnresolvedRelationship>,
         variable_bindings: Vec<VariableBinding>,
+        this_barrier_spans: Vec<crate::types::Range>,
     ) -> ResolutionContext {
         // Get local symbols from cache (O(1))
         let local_symbols = self.symbol_cache.symbols_in_file(file_id);
@@ -165,6 +171,7 @@ impl ContextStage {
             scope,
             unresolved_rels,
             variable_bindings,
+            this_barrier_spans,
         }
     }
 
@@ -324,7 +331,11 @@ mod tests {
         ];
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(unresolved, &std::collections::HashMap::new());
+        let contexts = stage.build_contexts(
+            unresolved,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
 
         assert_eq!(contexts.len(), 2, "Expected 2 file contexts");
 
@@ -360,7 +371,11 @@ mod tests {
         let factory = make_factory();
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(vec![], &std::collections::HashMap::new());
+        let contexts = stage.build_contexts(
+            vec![],
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
 
         assert!(contexts.is_empty());
     }
@@ -384,7 +399,11 @@ mod tests {
         ];
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(unresolved, &std::collections::HashMap::new());
+        let contexts = stage.build_contexts(
+            unresolved,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
         let stats = stage.stats(&contexts);
 
         assert_eq!(stats.total_files, 2);
@@ -415,7 +434,11 @@ mod tests {
         };
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let contexts = stage.build_contexts(vec![rel], &std::collections::HashMap::new());
+        let contexts = stage.build_contexts(
+            vec![rel],
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
 
         assert_eq!(contexts.len(), 1);
         let ctx = &contexts[0];
@@ -488,7 +511,11 @@ mod tests {
         ];
 
         let stage = ContextStage::new(cache, index, factory, settings);
-        let _contexts = stage.build_contexts(unresolved, &std::collections::HashMap::new());
+        let _contexts = stage.build_contexts(
+            unresolved,
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
 
         // Check behaviors are cached
         let behaviors = stage.behaviors();

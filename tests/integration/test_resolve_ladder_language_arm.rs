@@ -128,6 +128,7 @@ fn resolve_in(
         scope: Box::new(GenericResolutionContext::new(rel.file_id)),
         unresolved_rels: vec![rel],
         variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
     stage.resolve(&context)
 }

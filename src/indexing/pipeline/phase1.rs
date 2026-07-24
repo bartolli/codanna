@@ -2,9 +2,9 @@
 
 use super::stages::{CollectStage, DiscoverStage, IndexStage, ReadStage};
 use super::{
-    EmbedOptions, FileBindings, FileSource, ParseStage, Phase1Options, Pipeline, PipelineError,
-    PipelineMetrics, PipelineResult, ProgressSink, SemanticEmbedStage, StageMetrics, StageTracker,
-    SymbolLookupCache, UnresolvedRelationship, init_parser_cache,
+    EmbedOptions, FileBarriers, FileBindings, FileSource, ParseStage, Phase1Options, Pipeline,
+    PipelineError, PipelineMetrics, PipelineResult, ProgressSink, SemanticEmbedStage, StageMetrics,
+    StageTracker, SymbolLookupCache, UnresolvedRelationship, init_parser_cache,
 };
 use crate::indexing::IndexStats;
 use crate::storage::DocumentIndex;
@@ -20,6 +20,7 @@ type Phase1Result = (
     IndexStats,
     Vec<UnresolvedRelationship>,
     FileBindings,
+    FileBarriers,
     SymbolLookupCache,
     Option<Arc<PipelineMetrics>>,
 );
@@ -46,21 +47,34 @@ impl Pipeline {
         IndexStats,
         Vec<UnresolvedRelationship>,
         FileBindings,
+        FileBarriers,
         SymbolLookupCache,
     )> {
-        let (stats, pending_relationships, pending_bindings, symbol_cache, metrics) = self
-            .run_phase1(
-                FileSource::Walk(root.to_path_buf()),
-                index,
-                Phase1Options::default(),
-            )?;
+        let (
+            stats,
+            pending_relationships,
+            pending_bindings,
+            pending_barriers,
+            symbol_cache,
+            metrics,
+        ) = self.run_phase1(
+            FileSource::Walk(root.to_path_buf()),
+            index,
+            Phase1Options::default(),
+        )?;
 
         // Log pipeline metrics report (no StatusLine in this path)
         if let Some(m) = metrics {
             m.log();
         }
 
-        Ok((stats, pending_relationships, pending_bindings, symbol_cache))
+        Ok((
+            stats,
+            pending_relationships,
+            pending_bindings,
+            pending_barriers,
+            symbol_cache,
+        ))
     }
 
     /// Run the Phase 1 skeleton: source -> READ -> PARSE -> COLLECT -> INDEX (+ EMBED).
@@ -83,6 +97,7 @@ impl Pipeline {
                 return Ok((
                     IndexStats::new(),
                     Vec::new(),
+                    HashMap::new(),
                     HashMap::new(),
                     SymbolLookupCache::with_capacity(0),
                     None,
@@ -363,7 +378,7 @@ impl Pipeline {
                 }
 
                 // Record items and wait times before finalizing
-                if let (Some(t), Ok((stats, _, _, _, input_wait))) = (&tracker, &result) {
+                if let (Some(t), Ok((stats, _, _, _, _, input_wait))) = (&tracker, &result) {
                     t.record_items(stats.symbols_found);
                     t.record_input_wait(*input_wait);
                 }
@@ -439,7 +454,8 @@ impl Pipeline {
         // If INDEX succeeded, we MUST save counters regardless of EMBED status.
         let (index_result, index_metrics) = index_join
             .map_err(|_| PipelineError::ChannelRecv("INDEX thread panicked".to_string()))?;
-        let (mut stats, pending_relationships, pending_bindings, symbol_cache, _) = index_result?;
+        let (mut stats, pending_relationships, pending_bindings, pending_barriers, symbol_cache, _) =
+            index_result?;
 
         // Add INDEX metrics
         if let (Some(m), Some(im)) = (&metrics, index_metrics) {
@@ -558,6 +574,7 @@ impl Pipeline {
             stats,
             pending_relationships,
             pending_bindings,
+            pending_barriers,
             symbol_cache,
             metrics,
         ))
@@ -681,7 +698,7 @@ export { processUser, main };
         let result = pipeline.index_directory(&src_dir, index);
 
         match result {
-            Ok((stats, pending_relationships, _bindings, symbol_cache)) => {
+            Ok((stats, pending_relationships, _bindings, _barriers, symbol_cache)) => {
                 // Categorize relationships by kind
                 let calls: Vec<_> = pending_relationships
                     .iter()

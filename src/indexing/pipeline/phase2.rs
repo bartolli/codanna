@@ -1,8 +1,8 @@
 //! Phase 2 orchestration: two-pass relationship resolution.
 
 use super::{
-    ContextStage, FileBindings, Phase2Stats, Pipeline, PipelineError, PipelineResult, ResolveStage,
-    SymbolLookupCache, UnresolvedRelationship, WriteStage,
+    ContextStage, FileBarriers, FileBindings, Phase2Stats, Pipeline, PipelineError, PipelineResult,
+    ResolveStage, SymbolLookupCache, UnresolvedRelationship, WriteStage,
 };
 use crate::RelationKind;
 use crate::parsing::ParserFactory;
@@ -30,10 +30,18 @@ impl Pipeline {
         &self,
         unresolved: Vec<UnresolvedRelationship>,
         variable_bindings: FileBindings,
+        this_barrier_spans: FileBarriers,
         symbol_cache: Arc<SymbolLookupCache>,
         index: Arc<DocumentIndex>,
     ) -> PipelineResult<Phase2Stats> {
-        self.run_phase2_with_progress(unresolved, variable_bindings, symbol_cache, index, None)
+        self.run_phase2_with_progress(
+            unresolved,
+            variable_bindings,
+            this_barrier_spans,
+            symbol_cache,
+            index,
+            None,
+        )
     }
 
     /// Run Phase 2 with optional progress bar.
@@ -41,6 +49,7 @@ impl Pipeline {
         &self,
         unresolved: Vec<UnresolvedRelationship>,
         variable_bindings: FileBindings,
+        this_barrier_spans: FileBarriers,
         symbol_cache: Arc<SymbolLookupCache>,
         index: Arc<DocumentIndex>,
         progress: Option<Arc<crate::io::status_line::ProgressBar>>,
@@ -90,7 +99,7 @@ impl Pipeline {
             defines.len()
         );
         if !defines.is_empty() {
-            let contexts = context_stage.build_contexts(defines, &HashMap::new());
+            let contexts = context_stage.build_contexts(defines, &HashMap::new(), &HashMap::new());
             let behaviors = context_stage.behaviors();
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors);
 
@@ -126,7 +135,8 @@ impl Pipeline {
             // Extends relationships BEFORE build_contexts(others) consumes the vec
             // and BEFORE any Calls resolution in this pass fires resolve_static_call.
             let inheritance_resolvers = context_stage.build_inheritance_resolvers(&others);
-            let contexts = context_stage.build_contexts(others, &variable_bindings);
+            let contexts =
+                context_stage.build_contexts(others, &variable_bindings, &this_barrier_spans);
             let behaviors = context_stage.behaviors();
             let resolve_stage = ResolveStage::new(Arc::clone(&symbol_cache), behaviors)
                 .with_inheritance_resolvers(inheritance_resolvers);
@@ -182,6 +192,7 @@ impl Pipeline {
         &self,
         unresolved: Vec<UnresolvedRelationship>,
         variable_bindings: FileBindings,
+        this_barrier_spans: FileBarriers,
         symbol_cache: Arc<SymbolLookupCache>,
         index: Arc<DocumentIndex>,
         show_progress: bool,
@@ -191,7 +202,13 @@ impl Pipeline {
         };
 
         if !show_progress || unresolved.is_empty() {
-            return self.run_phase2(unresolved, variable_bindings, symbol_cache, index);
+            return self.run_phase2(
+                unresolved,
+                variable_bindings,
+                this_barrier_spans,
+                symbol_cache,
+                index,
+            );
         }
 
         let options = ProgressBarOptions::default()
@@ -211,6 +228,7 @@ impl Pipeline {
         let stats = self.run_phase2_with_progress(
             unresolved,
             variable_bindings,
+            this_barrier_spans,
             symbol_cache,
             index,
             Some(phase2_bar.clone()),

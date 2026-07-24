@@ -96,6 +96,15 @@ pub trait LanguageParser: Send + Sync {
         Vec::new()
     }
 
+    /// Spans of non-arrow callables (this-barriers): the regions whose
+    /// `this`/self binding is their own, not the lexical enclosure's.
+    /// The resolve stage uses them to bind `this.X` inside arrows to the
+    /// innermost enclosing barrier. In-memory lane only, never persisted.
+    /// Default empty: only lexical-this languages (js/ts) emit.
+    fn find_this_barrier_spans(&mut self, _code: &str) -> Vec<Range> {
+        Vec::new()
+    }
+
     /// Optional: Extract variable types with complex generic substitution
     ///
     /// Returns owned strings to support type substitution like `List<T>` → `List<Int>`.
