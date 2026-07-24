@@ -143,18 +143,8 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
                                     "Use the file paths and byte ranges to read specific sections",
                                 )
                         };
-                        let output = if let Some(ref field_list) = fields {
-                            envelope.to_json_with_fields(field_list)
-                        } else {
-                            envelope.to_json()
-                        };
-                        match output {
-                            Ok(json) => println!("{json}"),
-                            Err(e) => {
-                                eprintln!("JSON serialization error: {e}");
-                                std::process::exit(2);
-                            }
-                        }
+                        let output = super::mcp::render_envelope_json(&envelope, fields.as_ref());
+                        println!("{output}");
                     } else if results.is_empty() {
                         eprintln!("No results found.");
                     } else {

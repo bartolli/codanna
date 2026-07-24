@@ -6,7 +6,7 @@ use crate::Symbol;
 use crate::indexing::facade::IndexFacade;
 use crate::io::{
     ExitCode, OutputFormat,
-    envelope::{EntityType as EnvelopeEntityType, Envelope, ResultCode},
+    envelope::{EntityType as EnvelopeEntityType, Envelope, FieldProjectionError, ResultCode},
 };
 use crate::symbol::context::SymbolContext;
 use serde::Serialize;
@@ -228,14 +228,7 @@ impl<'a> QueryContext<'a> {
                 envelope = envelope.with_hint(h);
             }
 
-            let json = if let Some(ref fields) = self.fields {
-                envelope.to_json_with_fields(fields)
-            } else {
-                envelope.to_json()
-            };
-
-            println!("{}", json.expect("envelope serialization"));
-            ExitCode::Success
+            emit_envelope_json(&envelope, self.fields.as_ref())
         } else {
             // Text mode - use Display trait
             for item in &data {
@@ -265,6 +258,40 @@ impl<'a> QueryContext<'a> {
 /// Execute retrieve symbol command
 ///
 /// Unlike callers/calls, this returns ALL matching symbols (not ambiguous error).
+/// Print an envelope as JSON, applying --fields projection when requested.
+/// An unknown projection field emits an InvalidQuery error envelope and
+/// exits 2, mirroring the unknown-argument rejection register.
+fn emit_envelope_json<T: Serialize>(
+    envelope: &Envelope<T>,
+    fields: Option<&Vec<String>>,
+) -> ExitCode {
+    let Some(f) = fields else {
+        println!("{}", envelope.to_json().expect("envelope serialization"));
+        return ExitCode::Success;
+    };
+    match envelope.to_json_with_fields(f) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::Success
+        }
+        Err(FieldProjectionError::UnknownField { field, available }) => {
+            let err: Envelope<()> = Envelope::error(
+                ResultCode::InvalidQuery,
+                format!("Unknown field '{field}' in --fields"),
+            )
+            .with_hint(format!(
+                "Available top-level fields: {}",
+                available.join(", ")
+            ));
+            println!("{}", err.to_json().expect("envelope serialization"));
+            ExitCode::BlockingError
+        }
+        Err(FieldProjectionError::Serde(e)) => {
+            panic!("envelope serialization: {e}")
+        }
+    }
+}
+
 pub fn retrieve_symbol(
     indexer: &IndexFacade,
     name: &str,
@@ -343,14 +370,7 @@ pub fn retrieve_symbol(
             envelope = envelope.with_lang(lang);
         }
 
-        let json = if let Some(ref f) = fields {
-            envelope.to_json_with_fields(f)
-        } else {
-            envelope.to_json()
-        };
-
-        println!("{}", json.expect("envelope serialization"));
-        ExitCode::Success
+        emit_envelope_json(&envelope, fields.as_ref())
     } else {
         // Text output
         for ctx in &symbols_with_context {
@@ -420,14 +440,7 @@ pub fn retrieve_callers(
             envelope = envelope.with_lang(lang);
         }
 
-        let json = if let Some(ref f) = fields {
-            envelope.to_json_with_fields(f)
-        } else {
-            envelope.to_json()
-        };
-
-        println!("{}", json.expect("envelope serialization"));
-        ExitCode::Success
+        emit_envelope_json(&envelope, fields.as_ref())
     } else {
         // Text output
         for ctx in &callers_with_context {
@@ -497,14 +510,7 @@ pub fn retrieve_calls(
             envelope = envelope.with_lang(lang);
         }
 
-        let json = if let Some(ref f) = fields {
-            envelope.to_json_with_fields(f)
-        } else {
-            envelope.to_json()
-        };
-
-        println!("{}", json.expect("envelope serialization"));
-        ExitCode::Success
+        emit_envelope_json(&envelope, fields.as_ref())
     } else {
         // Text output
         for ctx in &calls_with_context {
@@ -577,14 +583,7 @@ pub fn retrieve_implementations(
             envelope = envelope.with_lang(lang);
         }
 
-        let json = if let Some(ref f) = fields {
-            envelope.to_json_with_fields(f)
-        } else {
-            envelope.to_json()
-        };
-
-        println!("{}", json.expect("envelope serialization"));
-        ExitCode::Success
+        emit_envelope_json(&envelope, fields.as_ref())
     } else {
         // Text output
         for ctx in &impls_with_context {
@@ -654,15 +653,10 @@ pub fn retrieve_search(
             env
         };
 
-        let json = if let Some(ref f) = fields {
-            envelope.to_json_with_fields(f)
-        } else {
-            envelope.to_json()
-        };
-
-        println!("{}", json.expect("envelope serialization"));
-
-        if count == 0 {
+        let emitted = emit_envelope_json(&envelope, fields.as_ref());
+        if emitted != ExitCode::Success {
+            emitted
+        } else if count == 0 {
             ExitCode::NotFound
         } else {
             ExitCode::Success
@@ -795,14 +789,7 @@ pub fn retrieve_describe(
             envelope = envelope.with_lang(lang);
         }
 
-        let json = if let Some(ref f) = fields {
-            envelope.to_json_with_fields(f)
-        } else {
-            envelope.to_json()
-        };
-
-        println!("{}", json.expect("envelope serialization"));
-        ExitCode::Success
+        emit_envelope_json(&envelope, fields.as_ref())
     } else {
         // Text output
         println!("{context}");

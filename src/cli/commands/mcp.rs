@@ -19,6 +19,34 @@ fn emit_envelope_and_exit<T: Serialize>(envelope: crate::io::envelope::Envelope<
     std::process::exit(envelope.exit_code.into());
 }
 
+/// Render an envelope as JSON, applying --fields projection when requested.
+/// An unknown projection field emits an InvalidQuery error envelope and
+/// exits 2, mirroring the unknown-argument rejection register.
+pub(crate) fn render_envelope_json<T: Serialize>(
+    envelope: &crate::io::envelope::Envelope<T>,
+    fields: Option<&Vec<String>>,
+) -> String {
+    use crate::io::envelope::{Envelope, FieldProjectionError, ResultCode};
+    match fields {
+        None => envelope.to_json().expect("envelope serialization"),
+        Some(f) => match envelope.to_json_with_fields(f) {
+            Ok(json) => json,
+            Err(FieldProjectionError::UnknownField { field, available }) => {
+                let err: Envelope<()> = Envelope::error(
+                    ResultCode::InvalidQuery,
+                    format!("Unknown field '{field}' in --fields"),
+                )
+                .with_hint(format!(
+                    "Available top-level fields: {}",
+                    available.join(", ")
+                ));
+                emit_envelope_and_exit(err);
+            }
+            Err(FieldProjectionError::Serde(e)) => panic!("envelope serialization: {e}"),
+        },
+    }
+}
+
 /// Print an INVALID_QUERY envelope for an ambiguous symbol name and exit 2.
 /// Mirrors the MCP handlers' refuse-and-list policy: JSON mode must never
 /// merge relationships across same-named symbols.
@@ -1196,11 +1224,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1263,11 +1288,8 @@ pub async fn run(
                             envelope = envelope.with_hint(hint);
                         }
 
-                        let output = match &fields {
-                            Some(f) => envelope.to_json_with_fields(f),
-                            None => envelope.to_json(),
-                        };
-                        println!("{}", output.expect("envelope serialization"));
+                        let output = render_envelope_json(&envelope, fields.as_ref());
+                        println!("{output}");
                     }
                 }
             } else if json && tool == "get_calls" {
@@ -1314,11 +1336,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1387,11 +1406,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1460,11 +1476,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1533,11 +1546,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1596,11 +1606,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1669,11 +1676,8 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
@@ -1743,11 +1747,8 @@ pub async fn run(
                             )
                     };
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
                     if envelope.exit_code != 0 {
                         std::process::exit(envelope.exit_code.into());
                     }
