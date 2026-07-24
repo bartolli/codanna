@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-07-24
+
+### Fixed
+
+- `this.name()` inside an arrow function resolves to the enclosing method's class member instead of a same-named local or the arrow's own symbol. A self-alias receiver (`this`, `self`, `$this`) on a caller carrying no class-member evidence no longer falls through to scope lookup in JavaScript, TypeScript, Python, PHP, Kotlin, and Java; JavaScript and TypeScript recover the call site through its innermost non-arrow enclosing callable, and a site with no such evidence produces no edge. Resolved-relationship counts move down where the resolver refuses picks it cannot prove: three.js 33695 -> 33491, laravel -6, ktor -2, pydantic -9. Python nested functions and PHP closures capturing `self`/`$this` fall into the refused class — their calls are dropped rather than resolved by scope proximity. Existing indexes converge through incremental re-index; `codanna index --force` adopts the change across every file at once.
+
 ## [0.11.0] - 2026-07-24
 
 ### Added
@@ -1460,6 +1466,8 @@ _Note: v0.5.0 was an internal milestone, not a public release. Changes were incl
 ### Performance
 - Significant CI pipeline optimization
 
+[0.11.1]: https://github.com/bartolli/codanna/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/bartolli/codanna/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/bartolli/codanna/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/bartolli/codanna/compare/v0.9.23...v0.10.0
 [0.9.23]: https://github.com/bartolli/codanna/compare/v0.9.22...v0.9.23
