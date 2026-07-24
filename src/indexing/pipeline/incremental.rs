@@ -76,6 +76,7 @@ impl Pipeline {
         let content_hash = file_content.hash.clone();
 
         // Check if file already exists by querying Tantivy
+        let mut existing_changed = false;
         if let Ok(Some((existing_file_id, existing_hash, _mtime))) = index.get_file_info(path_str) {
             if existing_hash == content_hash {
                 // File hasn't changed, skip re-indexing
@@ -88,7 +89,17 @@ impl Pipeline {
                     elapsed: start.elapsed(),
                 });
             }
+            existing_changed = true;
+        }
 
+        // Parse BEFORE cleanup: parse is pure (settings-only), so a parse
+        // failure here leaves the file's old rows untouched. Cleanup-first
+        // turned a construction failure into durable row loss.
+        init_parser_cache(Arc::clone(&self.settings));
+        let parse_stage = ParseStage::new(Arc::clone(&self.settings));
+        let parsed = parse_stage.parse(file_content)?;
+
+        if existing_changed {
             // File has changed - cleanup old data within a batch
             // Start batch for cleanup to avoid creating temporary writers
             index.start_batch()?;
@@ -104,11 +115,6 @@ impl Pipeline {
             // Commit cleanup changes before re-indexing
             index.commit_batch()?;
         }
-
-        // Parse file
-        init_parser_cache(Arc::clone(&self.settings));
-        let parse_stage = ParseStage::new(Arc::clone(&self.settings));
-        let parsed = parse_stage.parse(file_content)?;
 
         // Collect into a batch (now includes embedding candidates)
         let collect_stage = CollectStage::new(self.config.batch_size);
@@ -388,6 +394,18 @@ impl Pipeline {
                 });
             }
 
+            let files_to_index: Vec<PathBuf> = discover_result
+                .new_files
+                .iter()
+                .chain(discover_result.modified_files.iter())
+                .cloned()
+                .collect();
+
+            // Validate parser construction for every language in the
+            // change set BEFORE removing the modified files' old rows: a
+            // config error must fail the run with the rows still in place.
+            super::stages::preflight_file_parsers(&files_to_index, &self.settings)?;
+
             // Cleanup
             let cleanup_stage = if let Some(ref sem) = semantic {
                 CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
@@ -408,13 +426,6 @@ impl Pipeline {
                 cleanup_stats.files_cleaned += stats.files_cleaned;
                 cleanup_stats.symbols_removed += stats.symbols_removed;
             }
-
-            let files_to_index: Vec<PathBuf> = discover_result
-                .new_files
-                .iter()
-                .chain(discover_result.modified_files.iter())
-                .cloned()
-                .collect();
 
             // Create Phase 1 bar with actual files to index count
             // Labels: files, indexed, failed, embedded (for embedding visibility)
@@ -549,6 +560,19 @@ impl Pipeline {
             });
         }
 
+        // Combine new + modified for indexing
+        let files_to_index: Vec<PathBuf> = discover_result
+            .new_files
+            .iter()
+            .chain(discover_result.modified_files.iter())
+            .cloned()
+            .collect();
+
+        // Validate parser construction for every language in the change
+        // set BEFORE removing the modified files' old rows: a config
+        // error must fail the run with the rows still in place.
+        super::stages::preflight_file_parsers(&files_to_index, &self.settings)?;
+
         // Create cleanup stage
         let cleanup_stage = if let Some(ref sem) = semantic {
             CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
@@ -574,14 +598,6 @@ impl Pipeline {
             cleanup_stats.symbols_removed += stats.symbols_removed;
             cleanup_stats.embeddings_removed += stats.embeddings_removed;
         }
-
-        // Combine new + modified for indexing
-        let files_to_index: Vec<PathBuf> = discover_result
-            .new_files
-            .iter()
-            .chain(discover_result.modified_files.iter())
-            .cloned()
-            .collect();
 
         // Run Phase 1 on the files to index
         let show_progress = progress.is_some();

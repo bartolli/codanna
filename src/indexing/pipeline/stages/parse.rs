@@ -69,8 +69,8 @@ fn create_parser(
 
     registry
         .create_parser(language_id, settings)
-        .map_err(|e| PipelineError::Parse {
-            path: Default::default(),
+        .map_err(|e| PipelineError::ParserConstruction {
+            language: language_id,
             reason: e.to_string(),
         })
 }
@@ -91,6 +91,26 @@ fn detect_language(path: &Path) -> PipelineResult<LanguageId> {
         .ok_or_else(|| PipelineError::UnsupportedFileType {
             path: path.to_path_buf(),
         })
+}
+
+/// Construct one parser per language present in `files`.
+///
+/// Change-driven paths call this before their destructive cleanup: a
+/// parser that cannot construct (config error) would otherwise fail
+/// AFTER the modified files' old rows were removed, turning a config
+/// mistake into durable row loss. Only languages in the change set are
+/// constructed; unknown extensions pass (discover already filtered).
+pub fn preflight_file_parsers(files: &[PathBuf], settings: &Settings) -> PipelineResult<()> {
+    let mut seen = std::collections::HashSet::new();
+    for path in files {
+        let Ok(language_id) = detect_language(path) else {
+            continue;
+        };
+        if seen.insert(language_id) {
+            create_parser(language_id, settings)?;
+        }
+    }
+    Ok(())
 }
 
 /// Parse stage configuration.

@@ -1141,6 +1141,15 @@ pub enum PipelineError {
     #[error("Failed to parse file {path}: {reason}")]
     Parse { path: PathBuf, reason: String },
 
+    /// Parser could not be constructed for a language (configuration
+    /// error, not a file error). Fatal to the run: every file of the
+    /// language would silently drop out of the index otherwise.
+    #[error("cannot initialize {language} parser: {reason}")]
+    ParserConstruction {
+        language: crate::parsing::LanguageId,
+        reason: String,
+    },
+
     #[error("Unsupported file type: {path}")]
     UnsupportedFileType { path: PathBuf },
 

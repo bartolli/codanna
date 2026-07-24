@@ -68,8 +68,9 @@ impl Pipeline {
     /// Sequencing contract lives in the architecture spec (Phase 1 orchestration):
     /// counters bracket the run, every stage handle joins before result
     /// inspection, results inspect source -> INDEX -> COLLECT -> counter save ->
-    /// EMBED (soft-fail), metrics return for deferred logging, and the
-    /// orchestrator ends at Phase 1 (no resolution, no embeddings save).
+    /// parser-construction check (fatal) -> EMBED (soft-fail), metrics return
+    /// for deferred logging, and the orchestrator ends at Phase 1 (no
+    /// resolution, no embeddings save).
     pub(super) fn run_phase1(
         &self,
         source: FileSource,
@@ -202,6 +203,12 @@ impl Pipeline {
                     let mut symbol_count = 0;
                     let mut input_wait = std::time::Duration::ZERO;
                     let mut output_wait = std::time::Duration::ZERO;
+                    // Construction failures are config errors, not file
+                    // errors: recorded here and failed after join so the
+                    // run cannot report success while a whole language
+                    // silently drops out. Draining continues so shutdown
+                    // and counter-save semantics stay unchanged.
+                    let mut construction_error: Option<PipelineError> = None;
 
                     loop {
                         // Track input wait (time blocked on recv)
@@ -224,9 +231,14 @@ impl Pipeline {
                                 }
                                 output_wait += send_start.elapsed();
                             }
-                            Err(_e) => {
+                            Err(e) => {
                                 error_count += 1;
-                                // Continue on parse errors - don't fail the whole batch
+                                // Continue on per-file parse errors - don't fail the whole batch
+                                if construction_error.is_none()
+                                    && matches!(e, PipelineError::ParserConstruction { .. })
+                                {
+                                    construction_error = Some(e);
+                                }
                             }
                         }
                     }
@@ -238,6 +250,7 @@ impl Pipeline {
                         input_wait,
                         output_wait,
                         start.elapsed(),
+                        construction_error,
                     )
                 })
             })
@@ -372,6 +385,7 @@ impl Pipeline {
             parse_input_wait,
             parse_output_wait,
             parse_wall_time,
+            parse_construction_error,
         ) = self.join_parse_workers(parse_handles);
         let collect_join = collect_handle.join();
         let embed_join = embed_handle.map(|h| h.join());
@@ -446,6 +460,15 @@ impl Pipeline {
         // INDEX succeeded, so we MUST persist the new ID pointers to prevent
         // duplicate IDs on the next run.
         self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
+
+        // Parser-construction failure is a config error: every file of the
+        // language was skipped, so reporting success would present a
+        // truncated index as complete. Counters are saved above (INDEX
+        // committed the other languages' rows); failing here keeps the
+        // partial index consistent and re-indexable after the config fix.
+        if let Some(e) = parse_construction_error {
+            return Err(e);
+        }
 
         // Handle EMBED results (Soft Failure - log but don't fail pipeline)
         // The index is valid even if embeddings failed; semantic search will be incomplete.

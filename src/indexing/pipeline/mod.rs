@@ -44,7 +44,7 @@ pub use metrics::{PipelineMetrics, StageMetrics, StageTracker};
 pub use stages::cleanup::{CleanupStage, CleanupStats};
 pub use stages::context::{ContextStage, ContextStats};
 pub use stages::embed::{EmbedStage, EmbedStats};
-pub use stages::parse::{ParseStage, init_parser_cache, parse_file};
+pub use stages::parse::{ParseStage, init_parser_cache, parse_file, preflight_file_parsers};
 pub use stages::resolve::{ResolveStage, ResolveStats};
 pub use stages::semantic_embed::{SemanticEmbedStage, SemanticEmbedStats};
 pub use stages::write::{WriteStage, WriteStats};
