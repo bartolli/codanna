@@ -20,3 +20,6 @@ mod test_emission_version_gate;
 
 #[path = "cli/test_file_path_portable.rs"]
 mod test_file_path_portable;
+
+#[path = "cli/test_index_seed_ownership.rs"]
+mod test_index_seed_ownership;

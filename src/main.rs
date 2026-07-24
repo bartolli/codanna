@@ -395,6 +395,10 @@ async fn main() {
 
     // Load existing index or create new one (only if command needs it)
     let settings = Arc::new(config.clone());
+    // Captured before facade creation: creating a facade manufactures the
+    // index directory, so persistence.exists() afterwards cannot tell a
+    // real index from one this process just created.
+    let index_preexisted = persistence.exists();
     let mut indexer: Option<IndexFacade> = if !needs_indexer {
         None
     } else {
@@ -590,8 +594,18 @@ async fn main() {
     // Track whether sync made changes (for later check); None means sync did not run
     let mut sync_made_changes: Option<bool> = None;
 
+    // The index command owns indexing work. On a freshly created index
+    // (e.g. after `rm -rf .codanna/index`), stored_paths defaults empty
+    // and sync would read every configured root as a config change,
+    // running the full pass pre-dispatch and leaving the command phase
+    // to no-op ("Index up to date"). Removal sync after `remove-dir`
+    // needs a pre-existing index by definition, so this gate never
+    // skips it.
+    let index_command_fresh_index =
+        matches!(cli.command, Commands::Index { .. }) && !index_preexisted;
+
     if let Some(ref mut idx) = indexer {
-        if persistence.exists() && !is_force_index {
+        if persistence.exists() && !is_force_index && !index_command_fresh_index {
             // Load stored indexed_paths from metadata
             match IndexMetadata::load(&config.index_path) {
                 Ok(metadata) => {
