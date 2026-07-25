@@ -116,11 +116,14 @@ impl DocumentIndex {
             doc.add_text(self.schema.signature, sig);
         }
 
-        // Add string fields for filtering
-        doc.add_text(
-            self.schema.module_path,
-            symbol.module_path.as_deref().unwrap_or(""),
-        );
+        // Add string fields for filtering. module_path None persists as
+        // field-absent, never as "": None means "no module evidence" and
+        // Some("") is a real module (kotlin default package); collapsing
+        // them made rehydrated caches disagree with run caches on tier-3
+        // same-module verdicts.
+        if let Some(module_path) = symbol.module_path.as_deref() {
+            doc.add_text(self.schema.module_path, module_path);
+        }
         doc.add_text(self.schema.kind, format!("{:?}", symbol.kind));
         doc.add_u64(self.schema.visibility, symbol.visibility as u64);
 
@@ -331,6 +334,53 @@ mod tests {
     use crate::SymbolKind;
 
     use tempfile::TempDir;
+
+    #[test]
+    fn module_path_round_trips_none_empty_and_real() {
+        use crate::{FileId, Range, Symbol, SymbolId};
+
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        let sym = |id: u32, name: &str, module: Option<&str>| {
+            let mut s = Symbol::new(
+                SymbolId::new(id).unwrap(),
+                name,
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                Range::new(1, 0, 1, 10),
+            );
+            s.module_path = module.map(Into::into);
+            s
+        };
+
+        index.start_batch().unwrap();
+        index
+            .index_symbol(&sym(1, "no_module", None), "a.rs")
+            .unwrap();
+        index
+            .index_symbol(&sym(2, "empty_module", Some("")), "a.rs")
+            .unwrap();
+        index
+            .index_symbol(&sym(3, "real_module", Some("pkg.a")), "a.rs")
+            .unwrap();
+        index.commit_batch().unwrap();
+
+        let read = |name: &str| {
+            let found = index.find_symbols_by_name(name, None).unwrap();
+            assert_eq!(found.len(), 1, "{name} must round-trip");
+            found[0].module_path.clone()
+        };
+
+        assert_eq!(
+            read("no_module"),
+            None,
+            "None must not decode as Some(\"\")"
+        );
+        assert_eq!(read("empty_module").as_deref(), Some(""));
+        assert_eq!(read("real_module").as_deref(), Some("pkg.a"));
+    }
 
     #[test]
     fn test_three_reconstruction_paths_agree_on_context_only_metadata() {

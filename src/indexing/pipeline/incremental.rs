@@ -929,6 +929,9 @@ mod tests {
             "from pkg import helper\n\n\ndef reexport_caller(x):\n    return helper(x)\n";
         std::fs::write(pkg.join("c.py"), consumer).unwrap();
 
+        // Canonical root, as the facade guarantees before the pipeline
+        // sees it: the Walk-lane module-path strip needs it.
+        let root = root.canonicalize().unwrap();
         let settings = Arc::new(Settings {
             index_path: dir.path().join("index"),
             workspace_root: None,
@@ -938,8 +941,13 @@ mod tests {
             Arc::new(DocumentIndex::new(settings.index_path.join("tantivy"), &settings).unwrap());
         let pipeline = Pipeline::with_settings(Arc::clone(&settings));
 
+        // First pass force=true: production never runs incremental on an
+        // empty index (the facade auto-forces at document_count == 0),
+        // and only the force lane's Walk source computes module paths
+        // here. The re-export arc must form on module identity, not on
+        // the None/"" storage collapse this lock predated.
         pipeline
-            .index_incremental(&root, Arc::clone(&index), None, None, false)
+            .index_incremental(&root, Arc::clone(&index), None, None, true)
             .unwrap();
         assert!(
             calls_edge_exists(&index, "reexport_caller", "helper"),

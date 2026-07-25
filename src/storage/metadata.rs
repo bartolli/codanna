@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 /// against the stored stamp before an existing index is read or
 /// extended; a mismatch forces a full rebuild -- an incremental pass
 /// over rows from another version leaves a silent hybrid.
-pub const EMISSION_SEMANTICS_VERSION: u32 = 2;
+pub const EMISSION_SEMANTICS_VERSION: u32 = 3;
 
 /// Metadata about the index state
 #[derive(Debug, Clone, Serialize, Deserialize)]

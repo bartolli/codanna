@@ -2290,4 +2290,56 @@ mod tests {
             "error must carry the typed construction message: {msg}"
         );
     }
+
+    // Lane-parity lock: a receiver-less call to a member two classes
+    // share resolves identically through the force lane (fresh CLI
+    // index) and the non-force incremental lane. The lanes used to
+    // disagree — persisted rows rehydrate module_path None as Some(""),
+    // which flipped tier-3 same-module verdicts and let disambiguate's
+    // imported arm first-pick an unrelated class's member. The decoy
+    // package sorts before the real base so an order-luck pick cannot
+    // read as inherited-member resolution.
+    #[test]
+    fn incremental_lane_matches_fresh_verdict_on_receiverless_member_call() {
+        for force in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            for pkg in ["z", "b", "c"] {
+                std::fs::create_dir_all(src.join(pkg)).unwrap();
+            }
+            std::fs::write(
+                src.join("z/Base.java"),
+                "package z;\npublic class Base { protected void helper() { } }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("b/Child.java"),
+                "package b;\nimport z.Base;\npublic class Child extends Base { public void run() { helper(); } }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("c/Other.java"),
+                "package c;\npublic class Other { protected void helper() { } }\n",
+            )
+            .unwrap();
+
+            let settings = Settings {
+                index_path: dir.path().join("index"),
+                workspace_root: None,
+                ..Default::default()
+            };
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&src, force).unwrap();
+
+            let runs = facade.find_symbols_by_name("run", None);
+            assert_eq!(runs.len(), 1, "one run symbol expected (force={force})");
+            let callees = facade.get_called_functions(runs[0].id);
+            assert!(
+                callees.is_empty(),
+                "receiver-less two-candidate member call must fail closed \
+                 in both lanes (force={force}), got: {:?}",
+                callees.iter().map(|s| s.name.as_ref()).collect::<Vec<_>>()
+            );
+        }
+    }
 }
