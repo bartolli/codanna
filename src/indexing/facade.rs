@@ -2672,6 +2672,288 @@ mod tests {
         }
     }
 
+    // Cross-file same-type member: a self-form call whose member is
+    // defined in another file of the SAME type (rust split impl
+    // blocks) resolves on the named-ClassMember match — caller and
+    // member both declare membership in Widget — behind exactly-one
+    // same-language discipline and the same-tree constraint. The
+    // Other.setup decoy is filtered by the named match. Production
+    // lanes only, and the indexed path is PRE-REGISTERED in settings:
+    // rust module identity is path-derived and the List lane has no
+    // walk root, so its strip base comes from the registered indexed
+    // paths — exactly the shape production incremental runs have
+    // (invariant: bare test contexts without registered paths
+    // degenerate to module None and the arm correctly fails closed).
+    #[test]
+    fn rust_split_impl_self_call_resolves_on_named_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("widget.rs"),
+            "pub struct Widget {}\n\nimpl Widget {\n    pub fn setup(&self) {\n    }\n}\n",
+        )
+        .unwrap();
+        let consumer = "use crate::widget::Widget;\n\nimpl Widget {\n    pub fn make(&self) {\n        self.setup();\n    }\n}\n";
+        std::fs::write(src.join("consumer.rs"), consumer).unwrap();
+        std::fs::write(
+            src.join("other.rs"),
+            "pub struct Other {}\n\nimpl Other {\n    pub fn setup(&self) {\n    }\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(src.clone())
+            .expect("register indexed path");
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let assert_resolves = |facade: &IndexFacade, leg: &str| {
+            let makes = facade.find_symbols_by_name("make", None);
+            assert_eq!(makes.len(), 1, "one make symbol expected ({leg})");
+            let callees = facade.get_called_functions(makes[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert!(
+                callees.iter().any(|s| s.name.as_ref() == "setup"
+                    && facade
+                        .get_file_path(s.file_id)
+                        .unwrap_or_default()
+                        .ends_with("widget.rs")),
+                "split-impl self call must resolve to the same type's \
+                 member on the named-ClassMember witness ({leg}), \
+                 got: {picked:?}"
+            );
+        };
+
+        facade.index_directory(&src, true).unwrap();
+        assert_resolves(&facade, "fresh");
+
+        std::fs::write(src.join("consumer.rs"), format!("{consumer}\n// touched\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(src.join("consumer.rs"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        facade.index_directory(&src, false).unwrap();
+        assert_resolves(&facade, "seeded incremental");
+    }
+
+    // Same-file name claimant vetoes the cross-file borrow: when the
+    // caller's own file holds ANY member named like the call (under
+    // whatever class), the tree-wide named match must not borrow a
+    // same-named-class copy from another file. Witnessed leak:
+    // three.js minified twin bundles — independent minification
+    // scrambles class names, so the caller's class name matches the
+    // TWIN bundle's copy while its own bundle's copy sits same-file
+    // under a different name. The row still resolves through the
+    // local tier to the same-file claimant.
+    #[test]
+    fn same_file_claimant_vetoes_cross_file_named_borrow() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        // Shared parent dir: both modules root at `lib`, so the (b)
+        // same-tree constraint admits the twin — the veto is the only
+        // discipline left between the caller and the wrong copy.
+        let lib = src.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(
+            lib.join("appA.js"),
+            "class Painter {\n    parse() {\n        this.createNodeFromType();\n    }\n}\n\nclass Registry {\n    createNodeFromType() {\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            lib.join("appB.js"),
+            "class Painter {\n    createNodeFromType() {\n    }\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(src.clone())
+            .expect("register indexed path");
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_directory(&src, true).unwrap();
+
+        let parses = facade.find_symbols_by_name("parse", None);
+        assert_eq!(parses.len(), 1, "one parse symbol expected");
+        let callees = facade.get_called_functions(parses[0].id);
+        let picked: Vec<String> = callees
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}@{}",
+                    s.name,
+                    facade.get_file_path(s.file_id).unwrap_or_default()
+                )
+            })
+            .collect();
+        assert!(
+            !callees
+                .iter()
+                .any(|s| s.name.as_ref() == "createNodeFromType"
+                    && facade
+                        .get_file_path(s.file_id)
+                        .unwrap_or_default()
+                        .ends_with("appB.js")),
+            "cross-file borrow past a same-file claimant is a wrong-copy \
+             pick, got: {picked:?}"
+        );
+    }
+
+    // Language gate on the split-type premise: php declares one class
+    // per file, so a same-named class in another file is a DIFFERENT
+    // class — the named match must not borrow its member (witnessed:
+    // laravel Schema\Grammars\SqlServerGrammar callers borrowing
+    // Query\Grammars\SqlServerGrammar's wrapTable — namespace twins,
+    // no inheritance relation). The arm runs only where the language
+    // has split-type syntax (rust impl blocks, cpp out-of-line,
+    // csharp partial).
+    #[test]
+    fn php_namespace_twin_class_member_stays_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let a = src.join("schema");
+        let b = src.join("query");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(
+            a.join("Widget.php"),
+            "<?php\nnamespace App\\Schema;\n\nclass Widget {\n    public function make() {\n        $this->setup(1);\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            b.join("Widget.php"),
+            "<?php\nnamespace App\\Query;\n\nclass Widget {\n    public function setup($x) {\n    }\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(src.clone())
+            .expect("register indexed path");
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_directory(&src, true).unwrap();
+
+        let makes = facade.find_symbols_by_name("make", None);
+        assert_eq!(makes.len(), 1, "one make symbol expected");
+        let callees = facade.get_called_functions(makes[0].id);
+        assert!(
+            !callees.iter().any(|s| s.name.as_ref() == "setup"),
+            "a namespace twin's member is another class's member, got: {callees:?}"
+        );
+    }
+
+    // Duplicate type copies: two same-named types in one tree, both
+    // declaring the member — the named match cannot pick a copy, so
+    // exactly-one discipline fails closed.
+    #[test]
+    fn rust_split_impl_duplicate_type_copies_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("widget.rs"),
+            "pub struct Widget {}\n\nimpl Widget {\n    pub fn setup(&self) {\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("twin.rs"),
+            "pub struct Widget {}\n\nimpl Widget {\n    pub fn setup(&self) {\n    }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("consumer.rs"),
+            "use crate::widget::Widget;\n\nimpl Widget {\n    pub fn make(&self) {\n        self.setup();\n    }\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(src.clone())
+            .expect("register indexed path");
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_directory(&src, true).unwrap();
+
+        let makes = facade.find_symbols_by_name("make", None);
+        assert_eq!(makes.len(), 1, "one make symbol expected");
+        let callees = facade.get_called_functions(makes[0].id);
+        assert!(
+            !callees.iter().any(|s| s.name.as_ref() == "setup"),
+            "two named claimants cannot license a copy pick, got: {callees:?}"
+        );
+    }
+
+    // Cross-tree block, the (b) discipline: a single global claimant
+    // in ANOTHER tree (different module root) is not a candidate — the
+    // caller's own same-named class lacking the member must not borrow
+    // it across trees.
+    #[test]
+    fn python_cross_tree_single_claimant_stays_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let pkg_a = src.join("pkg_a");
+        let pkg_b = src.join("pkg_b");
+        std::fs::create_dir_all(&pkg_a).unwrap();
+        std::fs::create_dir_all(&pkg_b).unwrap();
+        std::fs::write(pkg_a.join("__init__.py"), "").unwrap();
+        std::fs::write(pkg_b.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            pkg_a.join("widget.py"),
+            "class Widget:\n    def setup(self):\n        pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg_b.join("consumer.py"),
+            "class Widget:\n    def make(self):\n        self.setup()\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(src.clone())
+            .expect("register indexed path");
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_directory(&src, true).unwrap();
+
+        let makes = facade.find_symbols_by_name("make", None);
+        assert_eq!(makes.len(), 1, "one make symbol expected");
+        let callees = facade.get_called_functions(makes[0].id);
+        assert!(
+            !callees.iter().any(|s| s.name.as_ref() == "setup"),
+            "a cross-tree claimant must not be borrowed, got: {callees:?}"
+        );
+    }
+
     // Own-scope exemption: a bare call to the caller's own non-public
     // member keeps its same-file evidence — the gate fires only on
     // cross-file picks. The cross-file public decoy guards that the

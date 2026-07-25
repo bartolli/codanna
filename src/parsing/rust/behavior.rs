@@ -74,6 +74,11 @@ impl Default for RustBehavior {
 }
 
 impl LanguageBehavior for RustBehavior {
+    /// impl blocks define members away from the type declaration.
+    fn type_members_span_files(&self) -> bool {
+        true
+    }
+
     fn language_id(&self) -> crate::parsing::registry::LanguageId {
         crate::parsing::registry::LanguageId::new("rust")
     }

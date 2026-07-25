@@ -1095,6 +1095,8 @@ impl ResolveStage {
     ) -> Option<ResolvedRelationship> {
         let caller_sym = self.symbol_cache.get_ref(from_id)?;
         let caller_file = caller_sym.file_id;
+        let caller_language = caller_sym.language_id;
+        let caller_module = caller_sym.module_path.clone();
         let enclosing = match caller_sym.scope_context.as_ref() {
             Some(crate::symbol::ScopeContext::ClassMember {
                 class_name: Some(name),
@@ -1104,12 +1106,95 @@ impl ResolveStage {
         drop(caller_sym);
 
         self.sole_member_of_class(caller_file, &enclosing, &unresolved.to_name)
+            .or_else(|| {
+                let language_id = caller_language.as_ref()?;
+                if !self
+                    .get_behavior(language_id)
+                    .is_some_and(|b| b.type_members_span_files())
+                {
+                    return None;
+                }
+                self.sole_same_tree_member_of_class(
+                    caller_file,
+                    &enclosing,
+                    &unresolved.to_name,
+                    language_id,
+                    caller_module.as_deref()?,
+                )
+            })
             .map(|to_id| ResolvedRelationship {
                 from_id,
                 to_id,
                 kind: unresolved.kind,
                 metadata: unresolved.metadata.clone(),
             })
+    }
+
+    /// Cross-file variant of `sole_member_of_class` for split member
+    /// definitions (rust impl blocks across files, cpp out-of-line
+    /// members): the caller and the member both declare membership in
+    /// the same-named type. The named match is weaker than the file
+    /// identity it relaxes, so three disciplines bound it: any
+    /// same-file member claimant for the name vetoes the borrow (the
+    /// caller's own file already claims the name under another class;
+    /// witnessed leak: minified twin bundles, where scrambled class
+    /// names make the caller's class match the TWIN bundle's copy
+    /// while its own copy sits same-file under a different name);
+    /// exactly one candidate over the whole tree (duplicate type
+    /// copies fail closed); and a shared module-tree root (cross-tree
+    /// twins are not candidates). Module None on either side fails
+    /// closed: loose files carry no tree identity.
+    fn sole_same_tree_member_of_class(
+        &self,
+        caller_file: FileId,
+        class_name: &str,
+        member_name: &str,
+        language_id: &LanguageId,
+        caller_module: &str,
+    ) -> Option<SymbolId> {
+        let separator = self
+            .get_behavior(language_id)
+            .map(|b| b.module_separator())
+            .unwrap_or("::");
+        let caller_root = caller_module.split(separator).next()?;
+
+        let same_file_claimant = self
+            .symbol_cache
+            .lookup_candidates(member_name)
+            .into_iter()
+            .any(|id| {
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    sym.file_id == caller_file && Self::is_member_kind_or_scope(&sym)
+                })
+            });
+        if same_file_claimant {
+            return None;
+        }
+
+        let mut members = self
+            .symbol_cache
+            .lookup_candidates(member_name)
+            .into_iter()
+            .filter(|&id| {
+                self.symbol_cache.get_ref(id).is_some_and(|sym| {
+                    sym.language_id.as_ref() == Some(language_id)
+                        && matches!(
+                            sym.scope_context.as_ref(),
+                            Some(crate::symbol::ScopeContext::ClassMember {
+                                class_name: Some(name),
+                            }) if name.as_ref() == class_name
+                        )
+                        && sym
+                            .module_path
+                            .as_deref()
+                            .and_then(|m| m.split(separator).next())
+                            == Some(caller_root)
+                })
+            });
+        match (members.next(), members.next()) {
+            (Some(id), None) => Some(id),
+            _ => None,
+        }
     }
 
     /// True when the caller's own scope names its enclosing type.

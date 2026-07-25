@@ -369,6 +369,17 @@ pub trait LanguageBehavior: Send + Sync {
         false
     }
 
+    /// True when one type's members may be DEFINED across multiple
+    /// files (rust impl blocks, cpp out-of-line member definitions,
+    /// csharp partial classes). Gates the cross-file named-ClassMember
+    /// self-form arm. Default false: in one-declaration-per-file
+    /// languages a same-named class in another file is a DIFFERENT
+    /// class, never a continuation — borrowing its member is a
+    /// wrong-class pick (witnessed: laravel namespace twins).
+    fn type_members_span_files(&self) -> bool {
+        false
+    }
+
     /// Consumed by `ResolveStage::resolve_static_call` pre-gate.
     fn static_class_keywords(&self) -> &'static [&'static str] {
         &[]

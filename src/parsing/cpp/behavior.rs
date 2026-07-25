@@ -38,6 +38,11 @@ impl Default for CppBehavior {
 }
 
 impl LanguageBehavior for CppBehavior {
+    /// out-of-line member definitions live in other translation units.
+    fn type_members_span_files(&self) -> bool {
+        true
+    }
+
     fn language_id(&self) -> crate::parsing::registry::LanguageId {
         crate::parsing::registry::LanguageId::new("cpp")
     }
