@@ -362,6 +362,9 @@ fn ambiguous_all_fields_filtered_to_empty_returns_none() {
 
 #[test]
 fn ambiguous_mixed_kind_candidates_filter_to_method_survivor() {
+    // Function survivor: the vehicle stays on the kind-filter duty. A
+    // member survivor pruned to one now dies at the len==1 member gate
+    // before kind selection is observable (ladder-arm tests own that).
     let caller_file = FileId::new(1).unwrap();
     let field1_file = FileId::new(2).unwrap();
     let field2_file = FileId::new(3).unwrap();
@@ -372,7 +375,7 @@ fn ambiguous_mixed_kind_candidates_filter_to_method_survivor() {
     cache.insert(make_symbol(2, "kind", SymbolKind::Field, field1_file));
     cache.insert(make_symbol(3, "kind", SymbolKind::Field, field2_file));
     let method_id = SymbolId::new(4).unwrap();
-    cache.insert(make_symbol(4, "kind", SymbolKind::Method, method_file));
+    cache.insert(make_symbol(4, "kind", SymbolKind::Function, method_file));
 
     let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors());
 
@@ -400,7 +403,7 @@ fn ambiguous_mixed_kind_candidates_filter_to_method_survivor() {
         .expect("one resolved relationship");
     assert_eq!(
         rel.to_id, method_id,
-        "kind-filter must select the Method, rejecting both Fields"
+        "kind-filter must select the callable, rejecting both Fields"
     );
     assert_eq!(stats.calls_resolved, 1);
 }

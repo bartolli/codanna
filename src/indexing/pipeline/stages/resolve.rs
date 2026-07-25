@@ -1637,15 +1637,31 @@ impl ResolveStage {
             return Some(local_matches[0]);
         }
 
+        // Exactly one import-witnessed candidate is identity; two or more
+        // import-matched copies leave first-pick as the only tiebreak,
+        // which is candidate order, not evidence - fail closed (D3).
         if imported_matches.len() == 1 {
             return Some(imported_matches[0]);
         }
-        if !imported_matches.is_empty() {
-            return Some(imported_matches[0]);
+        if imported_matches.len() > 1 {
+            return None;
         }
 
         if language_matches.len() == 1 {
-            return Some(language_matches[0]);
+            // A survivor pruned to one by the kind-compat filter carries
+            // the same evidence class the member gates reject: language
+            // identity plus candidate count. Receiver-typed rows exited at
+            // the instance filter and imported rows fill the bucket above,
+            // so the shared Found-arm predicate decides. No static
+            // exemption here: a class-evidenced static exits at the
+            // pre-bucket receiver filter (exactly-one) or arrives with
+            // multiple class-matched copies for the same-module arm below;
+            // a static reaching this arm alone is class-mismatched.
+            let survivor = language_matches[0];
+            if self.is_unevidenced_cross_file_member_pick(survivor, unresolved, caller, context) {
+                return None;
+            }
+            return Some(survivor);
         }
         if !language_matches.is_empty() {
             // Multiple same-language candidates with no local, import, or

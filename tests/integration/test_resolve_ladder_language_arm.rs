@@ -114,16 +114,17 @@ fn relation(kind: RelationKind, to_name: &str, caller_file: u32) -> UnresolvedRe
     }
 }
 
-fn resolve_in(
+fn resolve_with_imports(
     cache: Arc<SymbolLookupCache>,
     rel: UnresolvedRelationship,
     lang: LanguageId,
+    imports: Vec<codanna::parsing::Import>,
 ) -> (ResolvedBatch, ResolveStats) {
     let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors());
     let context = ResolutionContext {
         file_id: rel.file_id,
         language_id: lang,
-        imports: vec![],
+        imports,
         local_symbols: vec![],
         scope: Box::new(GenericResolutionContext::new(rel.file_id)),
         unresolved_rels: vec![rel],
@@ -131,6 +132,24 @@ fn resolve_in(
         this_barrier_spans: vec![],
     };
     stage.resolve(&context)
+}
+
+fn resolve_in(
+    cache: Arc<SymbolLookupCache>,
+    rel: UnresolvedRelationship,
+    lang: LanguageId,
+) -> (ResolvedBatch, ResolveStats) {
+    resolve_with_imports(cache, rel, lang, vec![])
+}
+
+fn wildcard_import(path: &str, file: u32) -> codanna::parsing::Import {
+    codanna::parsing::Import {
+        path: path.into(),
+        file_id: FileId::new(file).unwrap(),
+        alias: None,
+        is_glob: true,
+        is_type_only: false,
+    }
 }
 
 fn resolve(
@@ -375,6 +394,152 @@ fn same_module_module_scoped_survivor_still_resolves() {
         "the member gate must not touch module-scoped same-module survivors"
     );
     assert_eq!(batch.relationships[0].to_id, SymbolId::new(3).unwrap());
+}
+
+#[test]
+fn kind_pruned_single_member_survivor_fails_closed() {
+    // An Ambiguous set whose kind-compat filter prunes to exactly one
+    // member survivor reached the language_matches.len() == 1 early
+    // return with no member gate: same-language identity plus candidate
+    // count picked a cross-file member (ktor: bare `delay`/`post` calls
+    // attached to config members whose runtime referent is external).
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(caller(1, SymbolKind::Method, 1, "app.main"));
+    let mut field_a = method_sym(2, "delay", 2, "vendor.a", "RetryConfig");
+    field_a.kind = SymbolKind::Field;
+    let mut field_b = method_sym(3, "delay", 3, "vendor.b", "OtherConfig");
+    field_b.kind = SymbolKind::Field;
+    cache.insert(field_a);
+    cache.insert(field_b);
+    cache.insert(method_sym(4, "delay", 4, "vendor.c", "HttpRetry"));
+
+    let (batch, _stats) = resolve(cache, relation(RelationKind::Calls, "delay", 1));
+    assert_eq!(
+        batch.len(),
+        0,
+        "a member survivor left alone by kind pruning carries no receiver, \
+         import, or inheritance witness - the len==1 language arm must \
+         apply the member gate, not resolve on candidate count"
+    );
+}
+
+#[test]
+fn kind_pruned_static_class_matched_member_still_resolves() {
+    use codanna::relationship::RelationshipMetadata;
+
+    // Kind pruning leaves one survivor whose class matches the static
+    // receiver: class evidence licenses the member pick (served by the
+    // pre-bucket receiver filter; the len==1 member gate must not be
+    // reachable ahead of it).
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(caller(1, SymbolKind::Function, 1, "app.main"));
+    let mut decoy = method_sym(2, "make", 2, "vendor.a", "Config");
+    decoy.kind = SymbolKind::Field;
+    cache.insert(decoy);
+    cache.insert(method_sym(3, "make", 3, "vendor.b", "Config"));
+
+    let mut rel = relation(RelationKind::Calls, "make", 1);
+    rel.metadata = Some(RelationshipMetadata {
+        receiver: Some("Config".into()),
+        static_call: true,
+        ..Default::default()
+    });
+
+    let (batch, _stats) = resolve(cache, rel);
+    assert_eq!(
+        batch.len(),
+        1,
+        "a class-matched static member pruned to one survivor keeps the \
+         static exemption (receiver type is class evidence)"
+    );
+    assert_eq!(batch.relationships[0].to_id, SymbolId::new(3).unwrap());
+}
+
+#[test]
+fn kind_pruned_static_class_mismatched_member_fails_closed() {
+    use codanna::relationship::RelationshipMetadata;
+
+    // The exemption is class-matched-only: a lone survivor whose class
+    // does not match the static receiver dies at the gate.
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(caller(1, SymbolKind::Function, 1, "app.main"));
+    let mut decoy = method_sym(2, "make", 2, "vendor.a", "Config");
+    decoy.kind = SymbolKind::Field;
+    cache.insert(decoy);
+    cache.insert(method_sym(3, "make", 3, "vendor.b", "Unrelated"));
+
+    let mut rel = relation(RelationKind::Calls, "make", 1);
+    rel.metadata = Some(RelationshipMetadata {
+        receiver: Some("Config".into()),
+        static_call: true,
+        ..Default::default()
+    });
+
+    let (batch, _stats) = resolve(cache, rel);
+    assert_eq!(batch.len(), 0);
+}
+
+#[test]
+fn multi_imported_candidates_fail_closed() {
+    // Two wildcard imports admit both same-name candidates into the
+    // imported bucket. Tier 2 never fires for wildcards (the `*` segment
+    // matches no call name), so the pair arrives Ambiguous, and the
+    // imported arm returned imported_matches[0] on multi-match: a
+    // first-pick over two import-witnessed copies is not identity.
+    let mut c = caller(1, SymbolKind::Function, 1, "app.main");
+    c.language_id = Some(kotlin());
+    let mut f1 = free_fn(2, "helper", 2, "liba");
+    f1.language_id = Some(kotlin());
+    let mut f2 = free_fn(3, "helper", 3, "libb");
+    f2.language_id = Some(kotlin());
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(c);
+    cache.insert(f1);
+    cache.insert(f2);
+
+    let imports = vec![wildcard_import("liba.*", 1), wildcard_import("libb.*", 1)];
+    let (batch, _stats) = resolve_with_imports(
+        cache,
+        relation(RelationKind::Calls, "helper", 1),
+        kotlin(),
+        imports,
+    );
+    assert_eq!(
+        batch.len(),
+        0,
+        "two import-matched candidates must fail closed, not first-pick \
+         imported_matches[0]"
+    );
+}
+
+#[test]
+fn single_imported_candidate_resolves_over_unimported_twin() {
+    let mut c = caller(1, SymbolKind::Function, 1, "app.main");
+    c.language_id = Some(kotlin());
+    let mut f1 = free_fn(2, "helper", 2, "liba");
+    f1.language_id = Some(kotlin());
+    let mut f2 = free_fn(3, "helper", 3, "libb");
+    f2.language_id = Some(kotlin());
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(c);
+    cache.insert(f1);
+    cache.insert(f2);
+
+    let imports = vec![wildcard_import("liba.*", 1)];
+    let (batch, _stats) = resolve_with_imports(
+        cache,
+        relation(RelationKind::Calls, "helper", 1),
+        kotlin(),
+        imports,
+    );
+    assert_eq!(
+        batch.len(),
+        1,
+        "exactly one import-witnessed candidate is identity"
+    );
+    assert_eq!(batch.relationships[0].to_id, SymbolId::new(2).unwrap());
 }
 
 #[test]
