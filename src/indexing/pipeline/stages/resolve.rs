@@ -182,6 +182,16 @@ impl ResolveStage {
             {
                 return self.resolve_lexical_this_member(from_id, unresolved, context);
             }
+            // A self-alias receiver names the caller's own instance, so an
+            // inherited member is in reach: walk the enclosing class's
+            // Extends rows before the ladder, whose single-survivor pick
+            // carries no class evidence. Applies to every language — the
+            // receiver is explicit here, unlike the bare-call arm below.
+            if let Some(resolved) =
+                self.resolve_inherited_member(from_id, unresolved, context, &caller)
+            {
+                return Some(resolved);
+            }
         }
 
         if let Some(to_id) = context.resolve(&unresolved.to_name) {

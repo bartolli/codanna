@@ -2411,4 +2411,146 @@ mod tests {
             );
         }
     }
+
+    // Slice 1b tracer bullet: an inherited `self.helper()` whose member
+    // lives in the parent's file resolves on the inheritance walk from
+    // the self-form miss path — to the parent's member, never the
+    // same-name decoy. Production lanes only: fresh (auto-force shape),
+    // then a seeded incremental re-index of the consumer. Python module
+    // identity is path-derived, so incremental-on-empty (a lane the
+    // facade's auto-force forbids anyway) degenerates and locks nothing.
+    #[test]
+    fn python_inherited_self_call_resolves_on_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let pkg = src.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            pkg.join("base.py"),
+            "class Base:\n    def helper(self):\n        pass\n",
+        )
+        .unwrap();
+        let consumer = "from pkg.base import Base\n\n\nclass Child(Base):\n    def run(self):\n        self.helper()\n";
+        std::fs::write(pkg.join("child.py"), consumer).unwrap();
+        std::fs::write(
+            pkg.join("other.py"),
+            "class Other:\n    def helper(self):\n        pass\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let assert_resolves = |facade: &IndexFacade, leg: &str| {
+            let runs = facade.find_symbols_by_name("run", None);
+            assert_eq!(runs.len(), 1, "one run symbol expected ({leg})");
+            let callees = facade.get_called_functions(runs[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert!(
+                callees.iter().any(|s| s.name.as_ref() == "helper"
+                    && facade
+                        .get_file_path(s.file_id)
+                        .unwrap_or_default()
+                        .ends_with("base.py")),
+                "inherited self-form call must resolve to the parent's member \
+                 ({leg}), got: {picked:?}"
+            );
+        };
+
+        facade.index_directory(&src, true).unwrap();
+        assert_resolves(&facade, "fresh");
+
+        // Touch only the consumer; the parent and decoy stay unchanged.
+        std::fs::write(pkg.join("child.py"), format!("{consumer}\n# touched\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(pkg.join("child.py"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        facade.index_directory(&src, false).unwrap();
+        assert_resolves(&facade, "seeded incremental");
+    }
+
+    // Slice 1b, kotlin twin: an explicit `this.helper()` whose member is
+    // inherited resolves on the walk — to the superclass member, never
+    // the same-name decoy in an unrelated class. Production lanes:
+    // fresh, then seeded incremental re-index of the consumer.
+    #[test]
+    fn kotlin_inherited_this_call_resolves_on_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("Base.kt"),
+            "package p\n\nopen class Base {\n    protected fun helper() {\n    }\n}\n",
+        )
+        .unwrap();
+        let consumer = "package p\n\nclass Child : Base() {\n    fun run() {\n        this.helper()\n    }\n}\n";
+        std::fs::write(src.join("Child.kt"), consumer).unwrap();
+        std::fs::write(
+            src.join("Other.kt"),
+            "package p\n\nclass Other {\n    internal fun helper() {\n    }\n}\n",
+        )
+        .unwrap();
+
+        let settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let assert_resolves = |facade: &IndexFacade, leg: &str| {
+            let runs = facade.find_symbols_by_name("run", None);
+            assert_eq!(runs.len(), 1, "one run symbol expected ({leg})");
+            let callees = facade.get_called_functions(runs[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert!(
+                callees.iter().any(|s| s.name.as_ref() == "helper"
+                    && facade
+                        .get_file_path(s.file_id)
+                        .unwrap_or_default()
+                        .ends_with("Base.kt")),
+                "inherited this-call must resolve to the superclass member \
+                 ({leg}), got: {picked:?}"
+            );
+        };
+
+        facade.index_directory(&src, true).unwrap();
+        assert_resolves(&facade, "fresh");
+
+        std::fs::write(src.join("Child.kt"), format!("{consumer}\n// touched\n")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(src.join("Child.kt"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+            .unwrap();
+        facade.index_directory(&src, false).unwrap();
+        assert_resolves(&facade, "seeded incremental");
+    }
 }
