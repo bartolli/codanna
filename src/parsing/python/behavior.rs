@@ -553,52 +553,38 @@ impl LanguageBehavior for PythonBehavior {
                 is_type_only: import.is_type_only,
             });
 
-            // 5. Lookup candidates by symbol name and match by module_path
+            // 5. Lookup candidates by symbol name and match by module_path.
+            // Exact module match wins outright ("from pydantic.v1.error_wrappers
+            // import ValidationError": sym_module equals the target; the full
+            // path equals a module's own path when the imported name is a
+            // module, "from pkg import a"). Suffix matches (relative/short
+            // imports) only bind an exactly-one survivor: candidate order is
+            // file-processing order, not identity evidence, and a vendored
+            // twin that processes first must not capture the binding.
             let mut resolved_symbol: Option<SymbolId> = None;
-            let candidates = cache.lookup_candidates(&symbol_name);
-
-            for id in candidates {
+            let mut suffix_matches: Vec<SymbolId> = Vec::new();
+            for id in cache.lookup_candidates(&symbol_name) {
                 if let Some(symbol) = cache.get(id) {
                     if let Some(ref sym_module) = symbol.module_path {
                         let sym_mod = sym_module.as_ref();
-
-                        // Python match: exact module match preferred
-                        // For "from pydantic.v1.error_wrappers import ValidationError":
-                        //   target_module = "pydantic.v1.error_wrappers"
-                        //   sym_module should equal "pydantic.v1.error_wrappers"
-                        // The full path equals a module's own path when the
-                        // imported name is a module ("from pkg import a").
                         if sym_mod == target_module || sym_mod == effective_path {
-                            // Exact match - best
                             resolved_symbol = Some(id);
                             break;
                         }
-
-                        // Handle suffix matches for relative/short imports
-                        if !target_module.is_empty() {
-                            // target_module ends with sym_module (relative import resolved)
-                            if target_module.ends_with(sym_mod)
-                                && (target_module.len() == sym_mod.len()
-                                    || target_module
-                                        .chars()
-                                        .nth(target_module.len() - sym_mod.len() - 1)
-                                        == Some('.'))
-                            {
-                                resolved_symbol = Some(id);
-                                break;
-                            }
-
-                            // sym_module ends with target_module (short import)
-                            if sym_mod.ends_with(&target_module)
-                                && (sym_mod.len() == target_module.len()
-                                    || sym_mod.chars().nth(sym_mod.len() - target_module.len() - 1)
-                                        == Some('.'))
-                            {
-                                resolved_symbol = Some(id);
-                                break;
-                            }
+                        if !target_module.is_empty()
+                            && crate::indexing::pipeline::types::segment_suffix_match(
+                                sym_mod,
+                                &target_module,
+                            )
+                        {
+                            suffix_matches.push(id);
                         }
                     }
+                }
+            }
+            if resolved_symbol.is_none() {
+                if let [id] = suffix_matches.as_slice() {
+                    resolved_symbol = Some(*id);
                 }
             }
 
@@ -702,15 +688,11 @@ impl LanguageBehavior for PythonBehavior {
                 }
             }
 
-            // Handle short imports (just symbol name)
-            if !import_path.contains('.') {
-                // Simple name, might match if it's the last segment of symbol path
-                if symbol_module_path.ends_with(&format!(".{import_path}"))
-                    || symbol_module_path == import_path
-                {
-                    return true;
-                }
-            }
+            // Bare imports (`import x`) name a top-level module; the exact
+            // arm above already matched it. A final-segment ends_with here
+            // let deeper modules capture stdlib names (pydantic.v1.typing
+            // captured `import typing`), minting import identity the
+            // member gates trust - removed.
         }
 
         false
@@ -842,6 +824,24 @@ mod tests {
             behavior.parse_visibility("def __str__(self):"),
             Visibility::Public
         );
+    }
+
+    #[test]
+    fn bare_import_matches_exact_module_only() {
+        let behavior = PythonBehavior::new();
+
+        // Top-level exact module.
+        assert!(behavior.import_matches_symbol("typing", "typing", Some("tests.bench")));
+
+        // A bare import names a top-level module; a deeper module whose
+        // final segment collides must not capture it (pydantic witness:
+        // stdlib `import typing` classified pydantic.v1.typing as
+        // imported, exempting a wrong-copy pick from the member gates).
+        assert!(!behavior.import_matches_symbol(
+            "typing",
+            "pydantic.v1.typing",
+            Some("tests.bench")
+        ));
     }
 
     #[test]

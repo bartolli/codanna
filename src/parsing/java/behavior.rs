@@ -233,17 +233,19 @@ impl LanguageBehavior for JavaBehavior {
         }
 
         // For single-type imports: import com.example.Person
-        // Split into package and class name
+        // Split into package and class name. Empty packages carry no
+        // identity: plain-mode symbols degenerate to "" and "" == ""
+        // classified every candidate as imported (D2).
         if let Some((import_package, _import_class)) = import_path.rsplit_once('.') {
             // Match if packages are the same
-            if import_package == symbol_module_path {
+            if !import_package.is_empty() && import_package == symbol_module_path {
                 return true;
             }
         }
 
         // Same package: symbols in same package don't need imports
         if let Some(current_pkg) = importing_module {
-            if current_pkg == symbol_module_path {
+            if !current_pkg.is_empty() && current_pkg == symbol_module_path {
                 return true;
             }
         }
@@ -1204,6 +1206,27 @@ mod tests {
             !behavior.import_matches_symbol("com.example.Foo", "com.other.Bar", None),
             "Different packages should not match"
         );
+    }
+
+    #[test]
+    fn import_matches_symbol_refuses_empty_packages() {
+        let behavior = JavaBehavior::new();
+
+        // Plain-mode degeneracy (D2): empty package strings compare equal
+        // and classify every candidate as imported, filling the imported
+        // bucket with cross-class decoys. Empty is absence of package
+        // identity, not a package.
+        assert!(
+            !behavior.import_matches_symbol("z.Base", "", Some("")),
+            "empty symbol package must not match via the same-package arm"
+        );
+        assert!(
+            !behavior.import_matches_symbol("Base", "", Some("")),
+            "packageless import against empty packages must not match"
+        );
+
+        // Real same-package comparison still matches.
+        assert!(behavior.import_matches_symbol("z.Other", "z", Some("z")));
     }
 
     #[test]

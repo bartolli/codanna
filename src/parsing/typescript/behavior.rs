@@ -416,20 +416,32 @@ impl LanguageBehavior for TypeScriptBehavior {
                 is_type_only: import.is_type_only,
             });
 
-            // Look up candidates by local_name and match module_path
+            // Look up candidates by local_name and match module_path. Exact
+            // match wins outright; segment-boundary suffix matches bind only
+            // an exactly-one survivor (candidate order is file-processing
+            // order, not identity; raw ends_with also admitted mid-segment
+            // captures).
             let mut resolved_symbol: Option<SymbolId> = None;
-            let candidates = cache.lookup_candidates(&local_name);
-            for id in candidates {
+            let mut suffix_matches: Vec<SymbolId> = Vec::new();
+            for id in cache.lookup_candidates(&local_name) {
                 if let Some(symbol) = cache.get(id) {
                     if let Some(ref module_path) = symbol.module_path {
-                        if module_path.as_ref() == target_module
-                            || target_module.ends_with(module_path.as_ref())
-                            || module_path.ends_with(&target_module)
-                        {
+                        if module_path.as_ref() == target_module {
                             resolved_symbol = Some(id);
                             break;
                         }
+                        if crate::indexing::pipeline::types::segment_suffix_match(
+                            module_path,
+                            &target_module,
+                        ) {
+                            suffix_matches.push(id);
+                        }
                     }
+                }
+            }
+            if resolved_symbol.is_none() {
+                if let [id] = suffix_matches.as_slice() {
+                    resolved_symbol = Some(*id);
                 }
             }
 

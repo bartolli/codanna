@@ -497,10 +497,13 @@ pub trait LanguageBehavior: Send + Sync {
                 imports,
             );
 
+            // Ambiguous stays unresolved: a bound import is identity-grade
+            // (receiver anchor, chain walk), and ids.first() is candidate
+            // order, not evidence.
             let resolved_symbol = match result {
                 crate::parsing::ResolveResult::Found(id) => Some(id),
-                crate::parsing::ResolveResult::Ambiguous(ids) => ids.first().copied(),
-                crate::parsing::ResolveResult::NotFound => None,
+                crate::parsing::ResolveResult::Ambiguous(_)
+                | crate::parsing::ResolveResult::NotFound => None,
             };
 
             // Determine origin (simplified without Tantivy access)

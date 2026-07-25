@@ -917,33 +917,44 @@ impl SymbolLookupCache {
             .or_else(|| path.rsplit_once('/'))
             .map(|(q, _)| q);
 
-        // Look up candidates and filter by module path + language
-        let candidates = self.lookup_candidates(name);
-        for id in candidates {
+        // Collect matches in two tiers: structural-exact (module path equals
+        // the qualifier, or the full path for module symbols imported by
+        // name) outranks segment-suffix. Within a tier, exactly one survivor
+        // is identity; more than one is candidate order, which follows file
+        // processing, not evidence - fail closed.
+        let mut exact: Vec<SymbolId> = Vec::new();
+        let mut suffix: Vec<SymbolId> = Vec::new();
+        for id in self.lookup_candidates(name) {
             if let Some(sym) = self.by_id.get(&id) {
                 if sym.language_id.as_ref() == Some(&language_id) {
-                    // Module path matches at segment boundaries: against the
-                    // qualifier for symbols inside a module, against the full
-                    // path for module symbols imported by name.
                     if let Some(ref module_path) = sym.module_path {
-                        if segment_suffix_match(module_path, path)
+                        let module_path: &str = module_path;
+                        if module_path == path || qualifier == Some(module_path) {
+                            exact.push(id);
+                        } else if segment_suffix_match(module_path, path)
                             || qualifier.is_some_and(|q| segment_suffix_match(module_path, q))
                         {
-                            return Some(id);
+                            suffix.push(id);
                         }
                     }
                 }
             }
         }
-        None
+        match (exact.as_slice(), suffix.as_slice()) {
+            ([id], _) => Some(*id),
+            ([], [id]) => Some(*id),
+            _ => None,
+        }
     }
 }
 
 /// True when the two paths are equal, or the shorter is a suffix of the
 /// longer starting at a segment boundary (`::`, `.`, or `/`). Replaces
 /// bidirectional substring contains, which admitted mid-segment matches
-/// (`util` vs `xutil`) and mid-path infixes.
-fn segment_suffix_match(a: &str, b: &str) -> bool {
+/// (`util` vs `xutil`) and mid-path infixes. Shared with the
+/// resolution-context builders so every import-binding surface applies
+/// one boundary predicate.
+pub(crate) fn segment_suffix_match(a: &str, b: &str) -> bool {
     if a == b {
         return true;
     }
@@ -1455,6 +1466,57 @@ mod tests {
             cache.find_by_import_path("app::util", rust),
             Some(SymbolId::new(1).unwrap())
         );
+    }
+
+    fn rust_symbol_in_file(id: u32, file: u32, name: &str, module_path: &str) -> Symbol {
+        let mut sym = rust_symbol(id, name, module_path);
+        sym.file_id = FileId::new(file).unwrap();
+        sym
+    }
+
+    #[test]
+    fn find_by_import_path_prefers_structural_exact_over_suffix() {
+        let rust = LanguageId::new("rust");
+
+        // Vendored twin sorts first in insertion order; the structurally
+        // exact copy must still win (the avendor probe: first-pick bound
+        // the wrong copy by file-processing order).
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol_in_file(1, 1, "Foo", "avendor::lib::foo"));
+        cache.insert(rust_symbol_in_file(2, 2, "Foo", "lib::foo"));
+        assert_eq!(
+            cache.find_by_import_path("lib::foo::Foo", rust),
+            Some(SymbolId::new(2).unwrap()),
+            "exact qualifier match must beat an earlier-inserted suffix match"
+        );
+    }
+
+    #[test]
+    fn find_by_import_path_fails_closed_on_suffix_ambiguity() {
+        let rust = LanguageId::new("rust");
+
+        // Two suffix-only matches, no structural exact: iteration order is
+        // the only tiebreak left, and that is not identity evidence.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol_in_file(1, 1, "Foo", "avendor::lib::foo"));
+        cache.insert(rust_symbol_in_file(2, 2, "Foo", "bvendor::lib::foo"));
+        assert_eq!(
+            cache.find_by_import_path("lib::foo::Foo", rust),
+            None,
+            "suffix-ambiguous candidates must fail closed, not first-pick"
+        );
+    }
+
+    #[test]
+    fn find_by_import_path_fails_closed_on_exact_twins() {
+        let rust = LanguageId::new("rust");
+
+        // Two symbols share the exact module path: exactly-one applies to
+        // the exact tier too.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol_in_file(1, 1, "Foo", "lib::foo"));
+        cache.insert(rust_symbol_in_file(2, 2, "Foo", "lib::foo"));
+        assert_eq!(cache.find_by_import_path("lib::foo::Foo", rust), None);
     }
 
     #[test]
