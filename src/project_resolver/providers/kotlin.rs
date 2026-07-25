@@ -13,7 +13,6 @@ use crate::project_resolver::{
         compute_config_shas, extract_language_config_paths, get_layout_for_config,
         is_language_enabled, module_for_file_generic, parse_gradle_source_roots,
     },
-    memo::ResolutionMemo,
     persist::{ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -36,11 +35,7 @@ impl KotlinProjectPath {
 ///
 /// Handles Gradle Kotlin DSL (build.gradle.kts) project configurations
 /// to determine source roots for package path resolution.
-pub struct KotlinProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)] // Used for future caching optimizations
-    memo: ResolutionMemo<HashMap<KotlinProjectPath, Sha256Hash>>,
-}
+pub struct KotlinProvider {}
 
 impl Default for KotlinProvider {
     fn default() -> Self {
@@ -49,11 +44,9 @@ impl Default for KotlinProvider {
 }
 
 impl KotlinProvider {
-    /// Create a new Kotlin provider with empty memoization cache
+    /// Create a new Kotlin provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get module path for a Kotlin source file

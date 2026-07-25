@@ -245,6 +245,10 @@ fn test_pipeline_cache_import_resolution() {
 
 /// Integration test: Full pipeline isolation with temp directory.
 ///
+/// Both cwd-mutating tests take this lock: process cwd is global state and
+/// parallel test threads would read each other's temp `.codanna`.
+static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Creates isolated test environment with its own .codanna, tsconfig, and source files.
 /// Tests that build_resolution_context_with_pipeline_cache resolves path aliases correctly.
 #[test]
@@ -252,6 +256,8 @@ fn test_behavior_pipeline_cache_isolated() {
     use std::env;
     use std::fs;
     use tempfile::TempDir;
+
+    let _cwd_guard = CWD_LOCK.lock().unwrap();
 
     // Create isolated test environment
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -373,6 +379,81 @@ fn test_behavior_pipeline_cache_isolated() {
     );
 }
 
+/// Out-of-tree regression: module_path_from_file must resolve when the
+/// indexed tree (and its persisted absolute mapping globs) lies outside the
+/// workspace holding `.codanna`. The pre-fix code stripped the file path to
+/// workspace-relative before the glob lookup, which fails against absolute
+/// globs and silently nulls every TypeScript module path
+/// (wiki: story-bug-core-provider-config-lookup-out-of-tree).
+#[test]
+fn test_module_path_from_file_out_of_tree_absolute_mappings() {
+    use std::env;
+    use std::fs;
+    use tempfile::TempDir;
+
+    let _cwd_guard = CWD_LOCK.lock().unwrap();
+
+    let workspace = TempDir::new().expect("workspace dir");
+    let repo = TempDir::new().expect("repo dir");
+
+    let resolvers_dir = workspace.path().join(".codanna/index/resolvers");
+    fs::create_dir_all(&resolvers_dir).expect("create resolvers dir");
+    let src_dir = repo.path().join("src/components");
+    fs::create_dir_all(&src_dir).expect("create src");
+    fs::write(
+        src_dir.join("Button.ts"),
+        "export function Button() { return 'button'; }",
+    )
+    .expect("write Button.ts");
+
+    let tsconfig_path = repo.path().join("tsconfig.json");
+    fs::write(
+        &tsconfig_path,
+        r#"{"compilerOptions": {"baseUrl": ".", "paths": {"@components/*": ["src/components/*"]}}}"#,
+    )
+    .expect("write tsconfig");
+
+    // What TypeScriptProvider persists for an absolute config_files entry:
+    // absolute mapping globs keyed to the absolute tsconfig path.
+    let tsconfig_str = tsconfig_path.to_string_lossy();
+    let repo_str = repo.path().to_string_lossy();
+    let rules = format!(
+        r#"{{
+        "version": "1.0",
+        "hashes": {{"{tsconfig_str}": "test"}},
+        "mappings": {{"{repo_str}/**/*.ts": "{tsconfig_str}"}},
+        "rules": {{
+            "{tsconfig_str}": {{
+                "baseUrl": ".",
+                "paths": {{"@components/*": ["src/components/*"]}}
+            }}
+        }}
+    }}"#
+    );
+    fs::write(resolvers_dir.join("typescript_resolution.json"), rules).expect("write rules");
+
+    let original_dir = env::current_dir().expect("cwd");
+    env::set_current_dir(workspace.path()).expect("enter workspace");
+
+    use codanna::parsing::LanguageBehavior;
+    use codanna::parsing::typescript::behavior::TypeScriptBehavior;
+
+    let behavior = TypeScriptBehavior::new();
+    let module_path = behavior.module_path_from_file(
+        &src_dir.join("Button.ts"),
+        repo.path(),
+        &["ts", "tsx", "js", "jsx"],
+    );
+
+    env::set_current_dir(original_dir).expect("restore cwd");
+
+    assert_eq!(
+        module_path.as_deref(),
+        Some("src.components.Button"),
+        "absolute file path must match absolute mapping globs out-of-tree"
+    );
+}
+
 /// Test three-level visibility model via CallerContext.
 ///
 /// Visibility rules:
@@ -440,7 +521,7 @@ fn test_caller_context_visibility_model() {
     cache.insert(private_format);
 
     // Test 1: Same file - Private helper visible
-    let caller_same_file = CallerContext::new(file1, Some("src.components".into()), lang);
+    let caller_same_file = CallerContext::new(file1, Some("src.components".into()), lang, ".");
     let result = cache.resolve("helper", &caller_same_file, None, &[]);
     assert_eq!(
         result,
@@ -453,6 +534,7 @@ fn test_caller_context_visibility_model() {
         file1,                         // calling from file1
         Some("src.components".into()), // same module as Icon
         lang,
+        ".",
     );
     let result = cache.resolve("Icon", &caller_same_module, None, &[]);
     assert_eq!(
@@ -466,6 +548,7 @@ fn test_caller_context_visibility_model() {
         file1,                         // calling from file1
         Some("src.components".into()), // different from src.utils
         lang,
+        ".",
     );
     let result = cache.resolve("format", &caller_diff_module, None, &[]);
     assert_eq!(
@@ -479,6 +562,7 @@ fn test_caller_context_visibility_model() {
         file3,                    // calling from utils
         Some("src.utils".into()), // different from src.components
         lang,
+        ".",
     );
     let result = cache.resolve("Button", &caller_from_utils, None, &[]);
     assert_eq!(

@@ -63,12 +63,6 @@ impl Debouncer {
     pub fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
-
-    /// Get the number of pending changes.
-    #[allow(dead_code)]
-    pub fn pending_count(&self) -> usize {
-        self.pending.len()
-    }
 }
 
 #[cfg(test)]

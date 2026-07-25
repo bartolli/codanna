@@ -31,6 +31,8 @@ pub struct CollectStage {
     start_symbol_counter: u32,
 }
 
+type NameInFileCandidates = HashMap<(Arc<str>, FileId), Vec<(Range, SymbolId)>>;
+
 /// Ephemeral caches for relationship reconnection.
 ///
 /// Design from decisions.md:
@@ -42,8 +44,9 @@ pub struct CollectStage {
 struct CollectorCaches {
     /// Primary lookup: (name, file_id, range) -> SymbolId
     symbol_lookup: HashMap<(Arc<str>, FileId, Range), SymbolId>,
-    /// Fallback: (name, file_id) -> SymbolId for when range doesn't match exactly
-    name_in_file: HashMap<(Arc<str>, FileId), SymbolId>,
+    /// Fallback candidates per (name, file_id), with declared ranges so
+    /// the call site can pick the enclosing symbol among same-name ones
+    name_in_file: NameInFileCandidates,
     /// Path to FileId mapping for Phase 2 resolution
     file_ids: HashMap<PathBuf, FileId>,
 }
@@ -62,17 +65,14 @@ impl CollectorCaches {
         self.file_ids.insert(path, file_id);
     }
 
-    /// Lookup FileId by path (for Phase 2 cross-file resolution).
-    #[allow(dead_code)] // Used in Phase 2
-    fn lookup_file(&self, path: &PathBuf) -> Option<FileId> {
-        self.file_ids.get(path).copied()
-    }
-
     /// Insert a symbol into the cache. Uses Arc::clone for zero-copy.
     fn insert(&mut self, name: Arc<str>, file_id: FileId, range: Range, symbol_id: SymbolId) {
         self.symbol_lookup
             .insert((Arc::clone(&name), file_id, range), symbol_id);
-        self.name_in_file.insert((name, file_id), symbol_id);
+        self.name_in_file
+            .entry((name, file_id))
+            .or_default()
+            .push((range, symbol_id));
     }
 
     /// Lookup by exact (name, file_id, range) match.
@@ -83,8 +83,26 @@ impl CollectorCaches {
     }
 
     /// Fallback lookup by (name, file_id) when range doesn't match.
-    fn lookup_by_name_in_file(&self, name: &Arc<str>, file_id: FileId) -> Option<SymbolId> {
-        self.name_in_file.get(&(Arc::clone(name), file_id)).copied()
+    ///
+    /// Among same-name symbols the caller is the one whose declared range
+    /// encloses the call site, innermost on nesting. When none encloses
+    /// (e.g. a parser emits name-node-only symbol ranges), keep the
+    /// previous last-declared pick rather than dropping the attribution.
+    fn lookup_by_name_in_file(
+        &self,
+        name: &Arc<str>,
+        file_id: FileId,
+        call_site: Range,
+    ) -> Option<SymbolId> {
+        let candidates = self.name_in_file.get(&(Arc::clone(name), file_id))?;
+        candidates
+            .iter()
+            .filter(|(range, _)| {
+                range.start_line <= call_site.start_line && call_site.start_line <= range.end_line
+            })
+            .max_by_key(|(range, _)| range.start_line)
+            .or_else(|| candidates.last())
+            .map(|&(_, id)| id)
     }
 }
 
@@ -106,7 +124,7 @@ impl CollectorState {
             file_counter: 0,
             symbol_counter: 0,
             caches: CollectorCaches::new(),
-            current_batch: IndexBatch::new(),
+            current_batch: IndexBatch::with_capacity(batch_size, 0, 0),
             current_embed_batch: EmbeddingBatch::new(),
             batch_size,
             current_language: "unknown".into(),
@@ -128,7 +146,10 @@ impl CollectorState {
     }
 
     fn take_batch(&mut self) -> IndexBatch {
-        std::mem::take(&mut self.current_batch)
+        std::mem::replace(
+            &mut self.current_batch,
+            IndexBatch::with_capacity(self.batch_size, 0, 0),
+        )
     }
 
     fn take_embed_batch(&mut self) -> EmbeddingBatch {
@@ -291,9 +312,23 @@ impl CollectStage {
     }
 
     /// Process a single parsed file.
-    fn process_file(&self, state: &mut CollectorState, parsed: ParsedFile) {
+    fn process_file(&self, state: &mut CollectorState, mut parsed: ParsedFile) {
         let file_id = state.next_file_id();
         let file_path: Box<str> = parsed.path.to_string_lossy().into();
+
+        if !parsed.variable_bindings.is_empty() {
+            state
+                .current_batch
+                .variable_bindings
+                .insert(file_id, std::mem::take(&mut parsed.variable_bindings));
+        }
+
+        if !parsed.this_barrier_spans.is_empty() {
+            state
+                .current_batch
+                .this_barrier_spans
+                .insert(file_id, std::mem::take(&mut parsed.this_barrier_spans));
+        }
 
         // Set current language for embedding metadata
         state.current_language = parsed.language_id.as_str().into();
@@ -320,7 +355,7 @@ impl CollectStage {
             let symbol_id = state.next_symbol_id();
 
             // Cache for relationship resolution
-            let name: Arc<str> = raw_sym.name.as_ref().into();
+            let name: Arc<str> = raw_sym.name.clone();
             state
                 .caches
                 .insert(name.clone(), file_id, raw_sym.range, symbol_id);
@@ -337,17 +372,14 @@ impl CollectStage {
             // Create Symbol
             let symbol = create_symbol(
                 symbol_id,
-                &raw_sym,
+                raw_sym,
                 file_id,
                 file_path.clone(),
                 parsed.module_path.as_deref(),
                 parsed.language_id,
             );
 
-            state
-                .current_batch
-                .symbols
-                .push((symbol, parsed.path.clone()));
+            state.current_batch.symbols.push(symbol);
         }
 
         // Process imports
@@ -370,27 +402,27 @@ impl CollectStage {
 /// Create a Symbol from RawSymbol.
 fn create_symbol(
     id: SymbolId,
-    raw: &RawSymbol,
+    raw: RawSymbol,
     file_id: FileId,
     file_path: Box<str>,
     module_path: Option<&str>,
     language_id: crate::parsing::LanguageId,
 ) -> Symbol {
-    let mut symbol = Symbol::new(id, raw.name.clone(), raw.kind, file_id, raw.range)
+    let mut symbol = Symbol::new(id, raw.name, raw.kind, file_id, raw.range)
         .with_file_path(file_path)
         .with_visibility(raw.visibility)
         .with_language_id(language_id);
 
-    if let Some(sig) = &raw.signature {
-        symbol = symbol.with_signature(sig.clone());
+    if let Some(sig) = raw.signature {
+        symbol = symbol.with_signature(sig);
     }
-    if let Some(doc) = &raw.doc_comment {
-        symbol = symbol.with_doc(doc.clone());
+    if let Some(doc) = raw.doc_comment {
+        symbol = symbol.with_doc(doc);
     }
     if let Some(path) = module_path {
         symbol = symbol.with_module_path(path);
     }
-    if let Some(scope) = raw.scope_context.clone() {
+    if let Some(scope) = raw.scope_context {
         symbol = symbol.with_scope(scope);
     }
 
@@ -407,7 +439,7 @@ fn create_unresolved_relationship(
     // Try to resolve from_id using the cache (zero-copy: pass Arc reference)
     let from_id = caches
         .lookup(&raw.from_name, file_id, raw.from_range)
-        .or_else(|| caches.lookup_by_name_in_file(&raw.from_name, file_id));
+        .or_else(|| caches.lookup_by_name_in_file(&raw.from_name, file_id, raw.to_range));
 
     UnresolvedRelationship {
         from_id,
@@ -441,6 +473,8 @@ mod tests {
             raw_symbols: symbols,
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
+            variable_bindings: Vec::new(),
+            this_barrier_spans: Vec::new(),
         }
     }
 
@@ -477,13 +511,13 @@ mod tests {
 
         println!("Processed {files} files, {symbols} symbols");
         for batch in &batches {
-            for (sym, path) in &batch.symbols {
+            for sym in &batch.symbols {
                 println!(
                     "  - {} (id={}, file_id={}) in {}",
                     sym.name,
                     sym.id.value(),
                     sym.file_id.value(),
-                    path.display()
+                    sym.file_path
                 );
             }
         }
@@ -494,7 +528,7 @@ mod tests {
         // Collect all symbol IDs
         let all_ids: Vec<u32> = batches
             .iter()
-            .flat_map(|b| b.symbols.iter().map(|(s, _)| s.id.value()))
+            .flat_map(|b| b.symbols.iter().map(|s| s.id.value()))
             .collect();
 
         assert_eq!(all_ids, vec![1, 2, 3], "IDs should be sequential 1, 2, 3");
@@ -585,6 +619,120 @@ mod tests {
         assert_eq!(rel.from_id.unwrap().value(), 1, "caller should have id=1");
         assert_eq!(rel.from_name.as_ref(), "caller");
         assert_eq!(rel.to_name.as_ref(), "callee");
+    }
+
+    #[test]
+    fn from_id_fallback_attributes_to_enclosing_same_name_symbol() {
+        // Two same-name symbols in one file (production method + test-mod
+        // stub). When the exact (name, file, range) lookup misses, the
+        // caller is the symbol whose range encloses the call site — not
+        // whichever same-name symbol the cache saw last.
+        let (parsed_tx, parsed_rx) = bounded(100);
+        let (batch_tx, batch_rx) = bounded(100);
+
+        let mut parsed = make_parsed_file(
+            "test.rs",
+            vec![
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(5, 4, 30, 5)),
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(50, 4, 52, 5)),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "resolve",
+            Range::new(12, 8, 12, 20), // from_range: not a declared range -> fallback
+            "resolve_one",
+            Range::new(12, 8, 12, 30), // call site inside the FIRST symbol's body
+            RelationKind::Calls,
+        ));
+
+        parsed_tx.send(parsed).unwrap();
+        drop(parsed_tx);
+
+        let stage = CollectStage::new(100);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
+
+        let batches: Vec<_> = batch_rx.iter().collect();
+        let rel = &batches[0].unresolved_relationships[0];
+        assert_eq!(
+            rel.from_id.map(|id| id.value()),
+            Some(1),
+            "caller must be the enclosing symbol, not the later same-name stub"
+        );
+    }
+
+    fn collect_single_rel(parsed: ParsedFile) -> Option<u32> {
+        let (parsed_tx, parsed_rx) = bounded(100);
+        let (batch_tx, batch_rx) = bounded(100);
+        parsed_tx.send(parsed).unwrap();
+        drop(parsed_tx);
+        let stage = CollectStage::new(100);
+        let _ = stage.run(parsed_rx, batch_tx, None, None);
+        let batches: Vec<_> = batch_rx.iter().collect();
+        batches[0].unresolved_relationships[0]
+            .from_id
+            .map(|id| id.value())
+    }
+
+    #[test]
+    fn from_id_fallback_encloses_by_range_not_declaration_order() {
+        // Call site inside the SECOND same-name symbol attributes there.
+        let mut parsed = make_parsed_file(
+            "test.rs",
+            vec![
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(5, 4, 30, 5)),
+                RawSymbol::new("resolve", SymbolKind::Method, Range::new(50, 4, 60, 5)),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "resolve",
+            Range::new(55, 8, 55, 20),
+            "helper",
+            Range::new(55, 8, 55, 30),
+            RelationKind::Calls,
+        ));
+        assert_eq!(collect_single_rel(parsed), Some(2));
+    }
+
+    #[test]
+    fn from_id_fallback_picks_innermost_enclosing_on_nesting() {
+        // Nested same-name symbols (outer 5-40, inner 10-20): a call at
+        // line 15 belongs to the inner one.
+        let mut parsed = make_parsed_file(
+            "test.rs",
+            vec![
+                RawSymbol::new("run", SymbolKind::Function, Range::new(5, 0, 40, 1)),
+                RawSymbol::new("run", SymbolKind::Function, Range::new(10, 4, 20, 5)),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "run",
+            Range::new(15, 8, 15, 20),
+            "helper",
+            Range::new(15, 8, 15, 30),
+            RelationKind::Calls,
+        ));
+        assert_eq!(collect_single_rel(parsed), Some(2));
+    }
+
+    #[test]
+    fn from_id_fallback_without_enclosing_range_still_attributes() {
+        // Name-node-only symbol ranges (single line) never enclose a call
+        // site on another line; attribution must not drop to None.
+        let mut parsed = make_parsed_file(
+            "test.py",
+            vec![
+                make_raw_symbol("handler", SymbolKind::Function, 1),
+                make_raw_symbol("handler", SymbolKind::Function, 20),
+            ],
+        );
+        parsed.raw_relationships.push(RawRelationship::new(
+            "handler",
+            Range::new(3, 4, 3, 12),
+            "helper",
+            Range::new(3, 4, 3, 20),
+            RelationKind::Calls,
+        ));
+        assert!(collect_single_rel(parsed).is_some());
     }
 
     #[test]
@@ -721,6 +869,8 @@ mod tests {
             raw_symbols: vec![sym_with_doc, sym_without_doc, sym_with_short_doc],
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
+            variable_bindings: Vec::new(),
+            this_barrier_spans: Vec::new(),
         };
 
         parsed_tx.send(parsed).unwrap();
@@ -737,7 +887,7 @@ mod tests {
         assert_eq!(symbols.len(), 3);
 
         // Verify doc_comment is preserved on Symbol
-        let (sym1, _) = &symbols[0];
+        let sym1 = &symbols[0];
         assert_eq!(sym1.name.as_ref(), "documented_fn");
         assert!(
             sym1.doc_comment.is_some(),
@@ -748,24 +898,24 @@ mod tests {
             Some("This function does important work.\n\nIt handles the core logic.")
         );
 
-        let (sym2, _) = &symbols[1];
+        let sym2 = &symbols[1];
         assert_eq!(sym2.name.as_ref(), "plain_fn");
         assert!(
             sym2.doc_comment.is_none(),
             "Symbol without doc should have None"
         );
 
-        let (sym3, _) = &symbols[2];
+        let sym3 = &symbols[2];
         assert_eq!(sym3.name.as_ref(), "helper");
         assert_eq!(sym3.doc_comment.as_deref(), Some("Helper utility"));
 
         println!("doc_comment preservation verified:");
-        for (sym, path) in symbols {
+        for sym in symbols {
             println!(
                 "  {} (id={}) in {} doc={:?}",
                 sym.name,
                 sym.id.value(),
-                path.display(),
+                sym.file_path,
                 sym.doc_comment.as_ref().map(|d| if d.len() > 30 {
                     format!("{}...", &d[..30])
                 } else {

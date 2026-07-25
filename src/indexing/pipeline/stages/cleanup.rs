@@ -68,11 +68,29 @@ impl CleanupStage {
             reason: format!("Failed to start batch: {e}"),
         })?;
 
+        // Embedding removal is deferred until after the Tantivy commit so a
+        // rollback cannot leave in-memory semantic state ahead of the index.
+        let mut pending_embedding_removals: Vec<SymbolId> = Vec::new();
         for file in files {
-            let file_stats = self.cleanup_single_file(file)?;
-            stats.files_cleaned += 1;
-            stats.symbols_removed += file_stats.0;
-            stats.embeddings_removed += file_stats.1;
+            match self.cleanup_single_file(file) {
+                Ok((symbols_removed, symbol_ids)) => {
+                    stats.files_cleaned += 1;
+                    stats.symbols_removed += symbols_removed;
+                    pending_embedding_removals.extend(symbol_ids);
+                }
+                Err(e) => {
+                    // Discard staged deletes; leaving them in the shared
+                    // writer lets a later commit drop symbols for files
+                    // that were never reprocessed.
+                    if let Err(rollback_err) = self.index.rollback_batch() {
+                        tracing::warn!(
+                            target: "pipeline",
+                            "Rollback after cleanup failure also failed: {rollback_err}"
+                        );
+                    }
+                    return Err(e);
+                }
+            }
         }
 
         // Commit batch after all deletions
@@ -83,12 +101,15 @@ impl CleanupStage {
                 reason: format!("Failed to commit batch: {e}"),
             })?;
 
-        // Save embeddings to disk after all removals (critical for sync)
+        // Tantivy state is durable; now mutate and persist semantic state.
         if let Some(ref semantic) = self.semantic {
-            let semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
+            let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
                 path: PathBuf::new(),
                 reason: "Failed to lock semantic search".to_string(),
             })?;
+
+            semantic_guard.remove_embeddings(&pending_embedding_removals);
+            stats.embeddings_removed = pending_embedding_removals.len();
 
             semantic_guard
                 .save(&self.semantic_path)
@@ -101,17 +122,18 @@ impl CleanupStage {
         Ok(stats)
     }
 
-    /// Clean up a single file.
+    /// Clean up a single file's Tantivy documents.
     ///
-    /// Returns (symbols_removed, embeddings_removed).
-    fn cleanup_single_file(&self, path: &Path) -> PipelineResult<(usize, usize)> {
+    /// Returns (symbols_removed, symbol ids whose embeddings the caller
+    /// removes after the batch commits).
+    fn cleanup_single_file(&self, path: &Path) -> PipelineResult<(usize, Vec<SymbolId>)> {
         let path_str = path.to_string_lossy();
 
         // Step 1: Get file_id from path
         let file_info = self.index.get_file_info(&path_str)?;
         let Some((file_id, _hash, _mtime)) = file_info else {
             // File not in index, nothing to clean
-            return Ok((0, 0));
+            return Ok((0, Vec::new()));
         };
 
         // Step 2: Get all symbols for this file
@@ -119,29 +141,16 @@ impl CleanupStage {
         let symbol_ids: Vec<SymbolId> = symbols.iter().map(|s| s.id).collect();
         let symbol_count = symbol_ids.len();
 
-        // Step 3: Remove embeddings (if semantic search is enabled)
-        let embedding_count = if let Some(ref semantic) = self.semantic {
-            let mut semantic_guard = semantic.lock().map_err(|_| PipelineError::Parse {
-                path: path.to_path_buf(),
-                reason: "Failed to lock semantic search".to_string(),
-            })?;
-
-            semantic_guard.remove_embeddings(&symbol_ids);
-            symbol_ids.len()
-        } else {
-            0
-        };
-
-        // Step 4: Remove relationships (both outgoing and incoming)
+        // Step 3: Remove relationships (both outgoing and incoming)
         // This garbage-collects orphaned refs when a symbol is renamed/deleted
         for symbol_id in &symbol_ids {
             self.index.delete_relationships_for_symbol(*symbol_id)?;
         }
 
-        // Step 5: Remove file documents from Tantivy
+        // Step 4: Remove file documents from Tantivy
         self.index.remove_file_documents(&path_str)?;
 
-        Ok((symbol_count, embedding_count))
+        Ok((symbol_count, symbol_ids))
     }
 }
 

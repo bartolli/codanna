@@ -133,6 +133,10 @@ impl LanguageBehavior for PhpBehavior {
         &["$this"]
     }
 
+    fn self_alias_receiver_is_explicit(&self) -> bool {
+        true
+    }
+
     fn static_class_keywords(&self) -> &'static [&'static str] {
         &["parent", "self", "static"]
     }

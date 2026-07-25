@@ -208,108 +208,117 @@ pub trait ResolutionScope: Send + Sync {
         to_kind: crate::SymbolKind,
         rel_kind: crate::RelationKind,
     ) -> bool {
-        use crate::RelationKind::*;
-        use crate::SymbolKind::*;
+        default_compatible_relationship(from_kind, to_kind, rel_kind)
+    }
+}
 
-        match rel_kind {
-            Calls => {
-                // Executable code can call other executable code
-                let caller_can_call = matches!(from_kind, Function | Method | Macro | Module);
-                let callee_can_be_called = matches!(to_kind, Function | Method | Macro | Class);
-                caller_can_call && callee_can_be_called
-            }
-            CalledBy => {
-                // Reverse of Calls
-                let caller_can_call = matches!(to_kind, Function | Method | Macro | Module);
-                let callee_can_be_called = matches!(from_kind, Function | Method | Macro | Class);
-                callee_can_be_called && caller_can_call
-            }
-            Implements => {
-                // Types can implement interfaces/traits
-                matches!(from_kind, Struct | Enum | Class) && matches!(to_kind, Trait | Interface)
-            }
-            ImplementedBy => {
-                // Reverse of Implements
-                matches!(from_kind, Trait | Interface) && matches!(to_kind, Struct | Enum | Class)
-            }
-            Uses => {
-                // Most symbols can use/reference types and values
-                let can_use = matches!(
-                    from_kind,
-                    Function | Method | Struct | Class | Trait | Interface | Module | Enum
-                );
-                let can_be_used = matches!(
-                    to_kind,
-                    Struct
-                        | Enum
-                        | Class
-                        | Trait
-                        | Interface
-                        | TypeAlias
-                        | Constant
-                        | Variable
-                        | Function
-                        | Method
-                );
+/// Default kind-compatibility rules. Shared so language overrides can
+/// tighten individual arms without replicating the whole table.
+pub(crate) fn default_compatible_relationship(
+    from_kind: crate::SymbolKind,
+    to_kind: crate::SymbolKind,
+    rel_kind: crate::RelationKind,
+) -> bool {
+    use crate::RelationKind::*;
+    use crate::SymbolKind::*;
 
-                can_use && can_be_used
-            }
-            UsedBy => {
-                // Reverse of Uses
-                let can_use = matches!(
-                    to_kind,
-                    Function | Method | Struct | Class | Trait | Interface | Module | Enum
-                );
-                let can_be_used = matches!(
-                    from_kind,
-                    Struct
-                        | Enum
-                        | Class
-                        | Trait
-                        | Interface
-                        | TypeAlias
-                        | Constant
-                        | Variable
-                        | Function
-                        | Method
-                );
-                can_be_used && can_use
-            }
-            Defines => {
-                // Containers can define members
-                let container = matches!(
-                    from_kind,
-                    Trait | Interface | Module | Struct | Enum | Class
-                );
-                let member = matches!(to_kind, Method | Function | Constant | Field | Variable);
-                container && member
-            }
-            DefinedIn => {
-                // Reverse of Defines
-                let member = matches!(from_kind, Method | Function | Constant | Field | Variable);
-                let container =
-                    matches!(to_kind, Trait | Interface | Module | Struct | Enum | Class);
-                member && container
-            }
-            Extends => {
-                // Types can extend other types (inheritance)
-                let extendable = matches!(from_kind, Class | Interface | Trait | Struct | Enum);
-                let can_be_extended = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
-                extendable && can_be_extended
-            }
-            ExtendedBy => {
-                // Reverse of Extends
-                matches!(from_kind, Class | Interface | Trait | Struct | Enum)
-                    && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
-            }
-            References => {
-                // Very permissive - almost anything can reference anything
-                true
-            }
-            ReferencedBy => {
-                // Reverse of References - also permissive
-                true
-            }
+    match rel_kind {
+        Calls => {
+            // Executable code can call other executable code
+            let caller_can_call = matches!(from_kind, Function | Method | Macro | Module);
+            let callee_can_be_called = matches!(to_kind, Function | Method | Macro | Class);
+            caller_can_call && callee_can_be_called
+        }
+        CalledBy => {
+            // Reverse of Calls
+            let caller_can_call = matches!(to_kind, Function | Method | Macro | Module);
+            let callee_can_be_called = matches!(from_kind, Function | Method | Macro | Class);
+            callee_can_be_called && caller_can_call
+        }
+        Implements => {
+            // Types can implement interfaces/traits
+            matches!(from_kind, Struct | Enum | Class) && matches!(to_kind, Trait | Interface)
+        }
+        ImplementedBy => {
+            // Reverse of Implements
+            matches!(from_kind, Trait | Interface) && matches!(to_kind, Struct | Enum | Class)
+        }
+        Uses => {
+            // Most symbols can use/reference types and values
+            let can_use = matches!(
+                from_kind,
+                Function | Method | Struct | Class | Trait | Interface | Module | Enum
+            );
+            let can_be_used = matches!(
+                to_kind,
+                Struct
+                    | Enum
+                    | Class
+                    | Trait
+                    | Interface
+                    | TypeAlias
+                    | Constant
+                    | Variable
+                    | Function
+                    | Method
+            );
+
+            can_use && can_be_used
+        }
+        UsedBy => {
+            // Reverse of Uses
+            let can_use = matches!(
+                to_kind,
+                Function | Method | Struct | Class | Trait | Interface | Module | Enum
+            );
+            let can_be_used = matches!(
+                from_kind,
+                Struct
+                    | Enum
+                    | Class
+                    | Trait
+                    | Interface
+                    | TypeAlias
+                    | Constant
+                    | Variable
+                    | Function
+                    | Method
+            );
+            can_be_used && can_use
+        }
+        Defines => {
+            // Containers can define members
+            let container = matches!(
+                from_kind,
+                Trait | Interface | Module | Struct | Enum | Class
+            );
+            let member = matches!(to_kind, Method | Function | Constant | Field | Variable);
+            container && member
+        }
+        DefinedIn => {
+            // Reverse of Defines
+            let member = matches!(from_kind, Method | Function | Constant | Field | Variable);
+            let container = matches!(to_kind, Trait | Interface | Module | Struct | Enum | Class);
+            member && container
+        }
+        Extends => {
+            // Types can extend other types (inheritance)
+            let extendable = matches!(from_kind, Class | Interface | Trait | Struct | Enum);
+            let can_be_extended = matches!(to_kind, Class | Interface | Trait | Struct | Enum);
+            extendable && can_be_extended
+        }
+        ExtendedBy => {
+            // Reverse of Extends
+            matches!(from_kind, Class | Interface | Trait | Struct | Enum)
+                && matches!(to_kind, Class | Interface | Trait | Struct | Enum)
+        }
+        References => {
+            // Very permissive - almost anything can reference anything
+            true
+        }
+        ReferencedBy => {
+            // Reverse of References - also permissive
+            true
         }
     }
 }
@@ -382,8 +391,6 @@ pub trait InheritanceResolver: Send + Sync {
 /// This provides a default implementation that maintains backward compatibility
 /// while allowing languages to override with their own logic.
 pub struct GenericResolutionContext {
-    #[allow(dead_code)]
-    file_id: FileId, // Kept for future use when we need file-specific resolution
     symbols: HashMap<ScopeLevel, HashMap<String, SymbolId>>,
     scope_stack: Vec<ScopeType>,
     import_bindings: HashMap<String, ImportBinding>,
@@ -391,7 +398,7 @@ pub struct GenericResolutionContext {
 
 impl GenericResolutionContext {
     /// Create a new generic resolution context
-    pub fn new(file_id: FileId) -> Self {
+    pub fn new(_file_id: FileId) -> Self {
         let mut symbols = HashMap::new();
         symbols.insert(ScopeLevel::Local, HashMap::new());
         symbols.insert(ScopeLevel::Module, HashMap::new());
@@ -399,7 +406,6 @@ impl GenericResolutionContext {
         symbols.insert(ScopeLevel::Global, HashMap::new());
 
         Self {
-            file_id,
             symbols,
             scope_stack: vec![ScopeType::Global],
             import_bindings: HashMap::new(),
@@ -604,6 +610,7 @@ impl InheritanceResolver for GenericInheritanceResolver {
 ///     file_id: file_100,
 ///     module_path: Some("src.components".into()),
 ///     language_id: LanguageId::new("typescript"),
+///     separator: ".",
 /// };
 /// let result = cache.resolve("Button", &caller, None, &imports);
 /// ```
@@ -615,41 +622,74 @@ pub struct CallerContext {
     pub module_path: Option<Box<str>>,
     /// Language of the calling code (for cross-language filtering)
     pub language_id: LanguageId,
+    /// The caller language's `module_separator()`. Bounds the same-module
+    /// check: a foreign separator character inside a directory name
+    /// (`crate::widget.old`) must not read as a module boundary.
+    pub separator: &'static str,
 }
 
 impl CallerContext {
     /// Create caller context with explicit values.
-    pub fn new(file_id: FileId, module_path: Option<Box<str>>, language_id: LanguageId) -> Self {
+    ///
+    /// `separator` comes from the language behavior's `module_separator()`;
+    /// do not hardcode a per-language mapping at call sites.
+    pub fn new(
+        file_id: FileId,
+        module_path: Option<Box<str>>,
+        language_id: LanguageId,
+        separator: &'static str,
+    ) -> Self {
         Self {
             file_id,
             module_path,
             language_id,
+            separator,
         }
     }
 
     /// Create caller context from file and language (no module path).
+    ///
+    /// Without a module path `is_same_module` is always false, so the
+    /// separator is inert; it defaults to `::`.
     pub fn from_file(file_id: FileId, language_id: LanguageId) -> Self {
         Self {
             file_id,
             module_path: None,
             language_id,
+            separator: "::",
         }
     }
 
     /// Check if caller is in the same module as a target symbol.
     ///
-    /// Same module = module_path prefix match (e.g., "src.components" matches "src.components.Button").
+    /// Same module = equal module paths, or one nests under the other at a
+    /// module-separator boundary (e.g., "src.components" matches
+    /// "src.components.Button").
     /// Returns false if either lacks module_path (falls back to file check).
     pub fn is_same_module(&self, target_module_path: Option<&str>) -> bool {
         match (&self.module_path, target_module_path) {
             (Some(caller), Some(target)) => {
-                // Same module if one is prefix of the other
-                caller.starts_with(target) || target.starts_with(caller.as_ref())
+                is_module_prefix(target, caller, self.separator)
+                    || is_module_prefix(caller, target, self.separator)
             }
             // If either lacks module_path, fall back to file check (done by caller)
             _ => false,
         }
     }
+}
+
+/// True when `path` equals `prefix` or nests under it at a boundary of the
+/// caller language's module separator. Plain `starts_with` admits
+/// string-prefix siblings (`crate::widgets` vs `crate::widget`); a
+/// union-of-all-separators boundary admits foreign separator characters
+/// inside directory names (`crate::widget.old` vs `crate::widget`). Both
+/// leak private symbols across modules. Tier 3 compares same-language paths
+/// only, so one separator is always the right one. Residual limitation: the
+/// language's own separator inside a directory name (`pkg.v1` vs
+/// `pkg/v1.2/`) is indistinguishable in the joined-string encoding.
+fn is_module_prefix(prefix: &str, path: &str, separator: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(separator))
 }
 
 /// Trait for symbol cache used in pipeline resolution.
@@ -699,6 +739,13 @@ pub trait PipelineSymbolCache: Send + Sync {
     ///
     /// Returns all symbols with the given name for module path matching.
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId>;
+
+    /// Resolve a re-exported path ("pkg.helper") to the defining symbol.
+    ///
+    /// Default: no alias tracking.
+    fn resolve_module_alias(&self, _path: &str) -> Option<SymbolId> {
+        None
+    }
 }
 
 /// Result of multi-tier symbol resolution.
@@ -715,6 +762,53 @@ pub enum ResolveResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn caller_in(module_path: &str, separator: &'static str) -> CallerContext {
+        CallerContext::new(
+            FileId::new(1).unwrap(),
+            Some(module_path.into()),
+            crate::parsing::LanguageId::new("rust"),
+            separator,
+        )
+    }
+
+    #[test]
+    fn test_is_same_module_exact_and_nested() {
+        assert!(caller_in("crate::widget", "::").is_same_module(Some("crate::widget")));
+        assert!(caller_in("crate::widget::render", "::").is_same_module(Some("crate::widget")));
+        assert!(caller_in("crate::widget", "::").is_same_module(Some("crate::widget::render")));
+        assert!(caller_in("src.components.Button", ".").is_same_module(Some("src.components")));
+        assert!(caller_in("App\\Http\\Controllers", "\\").is_same_module(Some("App\\Http")));
+        assert!(caller_in("pkg/util/io", "/").is_same_module(Some("pkg/util")));
+    }
+
+    #[test]
+    fn test_is_same_module_rejects_string_prefix_siblings() {
+        assert!(!caller_in("crate::widgets", "::").is_same_module(Some("crate::widget")));
+        assert!(!caller_in("crate::widget", "::").is_same_module(Some("crate::widgets")));
+        assert!(!caller_in("src.components2", ".").is_same_module(Some("src.components")));
+        assert!(!caller_in("pkg/utils", "/").is_same_module(Some("pkg/util")));
+    }
+
+    #[test]
+    fn test_is_same_module_rejects_foreign_separator_in_component() {
+        // Directory named `widget.old` in a Rust tree: `.` is not a module
+        // boundary for a `::` language.
+        assert!(!caller_in("crate::widget.old", "::").is_same_module(Some("crate::widget")));
+        assert!(!caller_in("crate::widget", "::").is_same_module(Some("crate::widget.old")));
+        // Slash-named directory in a dot language.
+        assert!(!caller_in("pkg.v1/legacy", ".").is_same_module(Some("pkg.v1")));
+    }
+
+    #[test]
+    fn test_is_same_module_none_paths() {
+        assert!(!caller_in("crate::widget", "::").is_same_module(None));
+        let no_module = CallerContext::from_file(
+            FileId::new(1).unwrap(),
+            crate::parsing::LanguageId::new("rust"),
+        );
+        assert!(!no_module.is_same_module(Some("crate::widget")));
+    }
 
     #[test]
     fn test_default_compatibility_function_calls_function() {

@@ -18,7 +18,7 @@ use crate::parsing::{
     ParserContext, ScopeType,
 };
 use crate::types::SymbolCounter;
-use crate::{FileId, Range, Symbol, SymbolKind};
+use crate::{CompactString, FileId, Range, Symbol, SymbolKind};
 use std::any::Any;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -301,19 +301,15 @@ impl PythonParser {
         // Extract docstring
         let doc_comment = self
             .extract_function_docstring(node, code)
-            .map(|s| s.into_boxed_str());
+            .map(CompactString::from);
 
         // Build function signature with type annotations
         let signature = self.build_function_signature(node, code);
 
-        // For methods inside nested classes, use the full qualified name
-        let symbol_name = if let Some(class_name) = context.current_class() {
-            format!("{class_name}.{name}")
-        } else {
-            name.to_string()
-        };
-
-        let mut symbol = Symbol::new(symbol_id, symbol_name.as_str(), kind, file_id, range);
+        // Methods store bare names; the containing class lives in
+        // scope_context (ClassMember). Dotted "Class.method" lookup is a
+        // query-layer convenience, uniform across languages.
+        let mut symbol = Symbol::new(symbol_id, name, kind, file_id, range);
         symbol.doc_comment = doc_comment;
         symbol.signature = signature.map(|s| s.into_boxed_str());
         // Set the scope context based on where the function is defined
@@ -353,7 +349,7 @@ impl PythonParser {
         // Extract docstring
         let doc_comment = self
             .extract_class_docstring(node, code)
-            .map(|s| s.into_boxed_str());
+            .map(CompactString::from);
 
         let mut symbol = Symbol::new(symbol_id, name, SymbolKind::Class, file_id, range);
         symbol.doc_comment = doc_comment;
@@ -1012,14 +1008,29 @@ impl PythonParser {
     }
 
     /// Extract module path from 'from' import statement
+    ///
+    /// The module_name field is a `dotted_name` (absolute) or a
+    /// `relative_import` (leading dots, e.g. ".a", "..", "..sub.mod").
+    /// Scanning children for the first `dotted_name` instead would pick up
+    /// the imported NAME when the module is relative.
     fn extract_from_module_path<'a>(&self, node: Node, code: &'a str) -> Option<&'a str> {
-        // Find the first dotted_name node (the module path comes after 'from')
-        for child in node.children(&mut node.walk()) {
-            if child.kind() == "dotted_name" {
-                return Some(&code[child.byte_range()]);
-            }
+        let module = node.child_by_field_name("module_name")?;
+        match module.kind() {
+            "dotted_name" | "relative_import" => Some(&code[module.byte_range()]),
+            _ => None,
         }
-        None
+    }
+
+    /// Join a `from` module base with an imported name.
+    ///
+    /// A pure-dots base ("." or "..") already ends at a package boundary;
+    /// inserting another dot would read as one more relative level.
+    fn join_from_import(base_path: &str, name: &str) -> String {
+        if base_path.ends_with('.') {
+            format!("{base_path}{name}")
+        } else {
+            format!("{base_path}.{name}")
+        }
     }
 
     /// Check if import statement has wildcard (*)
@@ -1054,7 +1065,7 @@ impl PythonParser {
                 "dotted_name" if found_import_keyword => {
                     // This is an import name
                     let name = &code[child.byte_range()];
-                    let full_path = format!("{base_path}.{name}");
+                    let full_path = Self::join_from_import(base_path, name);
                     imports.push(Import {
                         path: full_path,
                         alias: None,
@@ -1088,7 +1099,7 @@ impl PythonParser {
             .map(|n| &code[n.byte_range()]);
 
         if let Some(import_name) = name {
-            let full_path = format!("{base_path}.{import_name}");
+            let full_path = Self::join_from_import(base_path, import_name);
             imports.push(Import {
                 path: full_path,
                 alias: alias.map(|s| s.to_string()),
@@ -1161,6 +1172,10 @@ impl PythonParser {
     }
 
     /// Extract individual base class names from superclasses list
+    ///
+    /// Direct children only. keyword_argument entries (metaclass=...,
+    /// total=...) are not bases; a subscript's value is the base
+    /// (Generic[T] -> Generic), never its type parameters.
     fn extract_base_class_names<'a>(node: Node, code: &'a str, base_classes: &mut Vec<&'a str>) {
         for child in node.children(&mut node.walk()) {
             match child.kind() {
@@ -1172,14 +1187,15 @@ impl PythonParser {
                     // Qualified base class: class Child(parent.Base)
                     base_classes.push(&code[child.byte_range()]);
                 }
-                "argument_list" => {
-                    // Nested argument list - recurse
-                    Self::extract_base_class_names(child, code, base_classes);
+                "subscript" => {
+                    // Generic base: class Model(Base[T])
+                    if let Some(value) = child.child_by_field_name("value") {
+                        if matches!(value.kind(), "identifier" | "attribute") {
+                            base_classes.push(&code[value.byte_range()]);
+                        }
+                    }
                 }
-                _ => {
-                    // Continue processing children for other node types
-                    Self::extract_base_class_names(child, code, base_classes);
-                }
+                _ => {}
             }
         }
     }
@@ -1213,14 +1229,14 @@ impl PythonParser {
         }
     }
 
-    /// Process assignment node with type annotation (x: int = 5 or x: int)
+    /// Process assignment node with a statically-known type: an annotation
+    /// (x: int = 5 or x: int) or a constructor call (x = ClassName(...)).
     fn process_assignment_with_type<'a>(
         &self,
         node: Node,
         code: &'a str,
         variable_types: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
-        // Only process assignments that have type annotations
         if let Some(type_node) = node.child_by_field_name("type") {
             // Extract variable name from the left side
             if let Some(target_node) = node.child_by_field_name("left") {
@@ -1230,7 +1246,50 @@ impl PythonParser {
                     variable_types.push((var_name, type_annotation, range));
                 }
             }
+            return;
         }
+
+        // Constructor form: plain-identifier target only — attribute targets
+        // (self.x = ...) are field-type territory, and their bare tail would
+        // collide with same-named locals.
+        let Some(target_node) = node.child_by_field_name("left") else {
+            return;
+        };
+        if target_node.kind() != "identifier" {
+            return;
+        }
+        let Some(callee) = node
+            .child_by_field_name("right")
+            .filter(|right| right.kind() == "call")
+            .and_then(|call| call.child_by_field_name("function"))
+        else {
+            return;
+        };
+        // Dotted constructors bind the bare class name (`pkg.Model()` -> Model),
+        // matching the ClassMember evidence the compat check consults. Only
+        // constructor-shaped callees qualify: an identifier or a dotted chain
+        // of identifiers. A call anywhere in the chain (`super().__new__`)
+        // yields a method result, not a constructed type.
+        let type_name = match callee.kind() {
+            "identifier" => &code[callee.byte_range()],
+            "attribute" => {
+                let mut object = callee.child_by_field_name("object");
+                while let Some(obj) = object {
+                    match obj.kind() {
+                        "identifier" => break,
+                        "attribute" => object = obj.child_by_field_name("object"),
+                        _ => return,
+                    }
+                }
+                match callee.child_by_field_name("attribute") {
+                    Some(tail) => &code[tail.byte_range()],
+                    None => return,
+                }
+            }
+            _ => return,
+        };
+        let var_name = &code[target_node.byte_range()];
+        variable_types.push((var_name, type_name, self.node_to_range(node)));
     }
 
     /// Extract variable name from assignment target
@@ -1345,6 +1404,66 @@ impl LanguageParser for PythonParser {
         Language::Python
     }
 
+    fn find_this_barrier_spans(&mut self, code: &str) -> Vec<Range> {
+        // A callable binding its own `self`/`cls` owns that name; a nested
+        // def or lambda without one captures the enclosing method's, so it
+        // stays transparent to the walk.
+        let mut spans = Vec::new();
+        let Some(tree) = self.parser.parse(code, None) else {
+            return spans;
+        };
+
+        fn binds_own_self(node: &Node, code: &str) -> bool {
+            let Some(params) = node.child_by_field_name("parameters") else {
+                return false;
+            };
+            let mut cursor = params.walk();
+            // A comment sits in the parameter list as a named child and can
+            // precede the first real parameter (`def f(  # noqa`).
+            let Some(first) = params
+                .named_children(&mut cursor)
+                .find(|n| n.kind() != "comment")
+            else {
+                return false;
+            };
+            // `self`, `self: Foo` and `self=None` nest the identifier one
+            // level down; a bare parameter is the identifier itself.
+            let ident = if first.kind() == "identifier" {
+                Some(first)
+            } else {
+                let mut inner = first.walk();
+                first
+                    .named_children(&mut inner)
+                    .find(|n| n.kind() == "identifier")
+            };
+            ident.is_some_and(|n| {
+                crate::parsing::python::SELF_ALIASES.contains(&&code[n.byte_range()])
+            })
+        }
+
+        fn walk(node: &Node, code: &str, spans: &mut Vec<Range>) {
+            // A lambda is transparent unless it rebinds the name itself
+            // (`lambda self: ...`), which makes it own its `self` the same
+            // way a def does.
+            if matches!(node.kind(), "function_definition" | "lambda") && binds_own_self(node, code)
+            {
+                spans.push(Range::new(
+                    node.start_position().row as u32,
+                    node.start_position().column as u16,
+                    node.end_position().row as u32,
+                    node.end_position().column as u16,
+                ));
+            }
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk(&child, code, spans);
+            }
+        }
+
+        walk(&tree.root_node(), code, &mut spans);
+        spans
+    }
+
     fn extract_doc_comment(&self, node: &Node, code: &str) -> Option<String> {
         match node.kind() {
             "function_definition" => self.extract_function_docstring(*node, code),
@@ -1381,17 +1500,25 @@ impl LanguageParser for PythonParser {
         method_calls
     }
 
-    fn find_implementations<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+    fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        // Python has no trait/interface implementation relationship.
+        // Class inheritance is emitted via find_extends: Implements edges
+        // require a Trait/Interface target and were vetoed by the
+        // relationship compatibility filter for Class bases.
+        Vec::new()
+    }
+
+    fn find_extends<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
         let tree = match self.parser.parse(code, None) {
             Some(tree) => tree,
             None => return Vec::new(),
         };
 
         let root_node = tree.root_node();
-        let mut implementations = Vec::new();
+        let mut extends = Vec::new();
 
-        self.find_implementations_in_node(root_node, code, &mut implementations);
-        implementations
+        self.find_implementations_in_node(root_node, code, &mut extends);
+        extends
     }
 
     fn find_uses<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
@@ -1560,16 +1687,22 @@ class Calculator:
         let symbols = parser.parse(code, FileId::new(1).unwrap(), &mut SymbolCounter::new());
 
         assert_eq!(symbols.len(), 4); // <module>, Calculator, __init__, add
-        assert!(
-            symbols
-                .iter()
-                .any(|s| s.name.as_ref() == "Calculator.__init__" && s.kind == SymbolKind::Method)
-        );
-        assert!(
-            symbols
-                .iter()
-                .any(|s| s.name.as_ref() == "Calculator.add" && s.kind == SymbolKind::Method)
-        );
+
+        // Methods store bare names; the class lives in ClassMember scope
+        let is_calculator_member = |s: &Symbol| {
+            matches!(
+                s.scope_context.as_ref(),
+                Some(crate::symbol::ScopeContext::ClassMember {
+                    class_name: Some(c)
+                }) if c.as_ref() == "Calculator"
+            )
+        };
+        assert!(symbols.iter().any(|s| s.name.as_ref() == "__init__"
+            && s.kind == SymbolKind::Method
+            && is_calculator_member(s)));
+        assert!(symbols.iter().any(|s| s.name.as_ref() == "add"
+            && s.kind == SymbolKind::Method
+            && is_calculator_member(s)));
 
         let class = symbols
             .iter()
@@ -1577,12 +1710,9 @@ class Calculator:
             .unwrap();
         let init_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "Calculator.__init__")
+            .find(|s| s.name.as_ref() == "__init__")
             .unwrap();
-        let add_method = symbols
-            .iter()
-            .find(|s| s.name.as_ref() == "Calculator.add")
-            .unwrap();
+        let add_method = symbols.iter().find(|s| s.name.as_ref() == "add").unwrap();
 
         println!(
             "✓ Found class_definition \"{}\" at {}:{}-{}:{}",
@@ -2085,7 +2215,7 @@ class Dog(Animal):
 "#;
         println!("Finding class inheritance relationships...");
         println!("---");
-        let implementations = parser.find_implementations(code);
+        let implementations = parser.find_extends(code);
 
         assert_eq!(implementations.len(), 1);
         assert_eq!(implementations[0].0, "Dog");
@@ -2109,6 +2239,22 @@ class Dog(Animal):
             implementations[0].2.start_column,
             implementations[0].2.end_line,
             implementations[0].2.end_column
+        );
+    }
+
+    #[test]
+    fn test_extends_skips_keyword_arguments_and_type_params() {
+        let mut parser = PythonParser::new().unwrap();
+        let code = r#"
+class Model(Base, Generic[T], metaclass=Meta):
+    pass
+"#;
+        let extends = parser.find_extends(code);
+        let bases: Vec<&str> = extends.iter().map(|(_, b, _)| *b).collect();
+        assert_eq!(
+            bases,
+            vec!["Base", "Generic"],
+            "keyword arguments and subscript type params are not bases"
         );
     }
 
@@ -2290,6 +2436,41 @@ def setup():
         }
     }
 
+    #[test]
+    fn test_constructor_assignment_binding_capture() {
+        let mut parser = PythonParser::new().unwrap();
+        let code = r#"
+def build():
+    m = Model()
+    n = pkg.mod.Model(x, y=2)
+    p: Declared = factory()
+    q = factory()
+    self.attr = Model()
+    a, b = Model(), Other()
+    cls = super().__new__(mcs)
+    r = obj.chain().Model()
+"#;
+        let var_types = parser.find_variable_types(code);
+
+        let has = |name: &str, typ: &str| var_types.iter().any(|(n, t, _)| *n == name && *t == typ);
+        // Constructor call binds the callee name; dotted callees bind the tail
+        assert!(has("m", "Model"));
+        assert!(has("n", "Model"));
+        // Annotation outranks the callee when both are present
+        assert!(has("p", "Declared"));
+        assert!(!has("p", "factory"));
+        // Callee name is captured verbatim; resolution fails closed on
+        // non-class names via the ClassMember compat check
+        assert!(has("q", "factory"));
+        // Attribute targets and tuple targets are not captured
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "attr"));
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "a" || *n == "b"));
+        // A call anywhere in the callee chain is a method result, not a
+        // constructor: no binding
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "cls"));
+        assert!(!var_types.iter().any(|(n, _, _)| *n == "r"));
+    }
+
     // Test additional variable type annotation cases
     #[test]
     fn test_various_variable_type_annotations() {
@@ -2386,7 +2567,7 @@ class Duck(Animal, Flyable, Swimmable):
 "#;
         println!("Finding multiple inheritance...");
         println!("---");
-        let implementations = parser.find_implementations(code);
+        let implementations = parser.find_extends(code);
 
         assert!(
             implementations
@@ -2485,13 +2666,10 @@ class APIClient:
         // Should find module, class, both methods, and response variable (enhanced extraction)
         assert_eq!(symbols.len(), 5);
 
-        let fetch_method = symbols
-            .iter()
-            .find(|s| s.name.as_ref() == "APIClient.fetch")
-            .unwrap();
+        let fetch_method = symbols.iter().find(|s| s.name.as_ref() == "fetch").unwrap();
         let sync_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "APIClient.sync_method")
+            .find(|s| s.name.as_ref() == "sync_method")
             .unwrap();
 
         // Both should be methods (inside class)
@@ -2642,11 +2820,11 @@ async def process_batch(items: List[str]) -> Dict[str, Any]:
             .unwrap();
         let async_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "AsyncWebService.fetch_user")
+            .find(|s| s.name.as_ref() == "fetch_user")
             .unwrap();
         let sync_method = symbols
             .iter()
-            .find(|s| s.name.as_ref() == "AsyncWebService.get_cache_key")
+            .find(|s| s.name.as_ref() == "get_cache_key")
             .unwrap();
         let async_func = symbols
             .iter()
@@ -2710,7 +2888,7 @@ async def process_batch(items: List[str]) -> Dict[str, Any]:
 class SimpleClass:
     pass
 "#;
-        let implementations1 = parser.find_implementations(code1);
+        let implementations1 = parser.find_extends(code1);
         assert_eq!(implementations1.len(), 0);
 
         // Qualified base class names
@@ -2718,7 +2896,7 @@ class SimpleClass:
 class Child(parent.Base):
     pass
 "#;
-        let implementations2 = parser.find_implementations(code2);
+        let implementations2 = parser.find_extends(code2);
         assert_eq!(implementations2.len(), 1);
         assert_eq!(implementations2[0].0, "Child");
         assert_eq!(implementations2[0].1, "parent.Base");
@@ -2728,7 +2906,7 @@ class Child(parent.Base):
 class Complex(SimpleBase, module.QualifiedBase, another.pkg.DeepBase):
     pass
 "#;
-        let implementations3 = parser.find_implementations(code3);
+        let implementations3 = parser.find_extends(code3);
         assert_eq!(implementations3.len(), 3);
         assert!(
             implementations3
@@ -2759,7 +2937,7 @@ class Outer:
     class AnotherInner(Outer.Inner):
         pass
 "#;
-        let implementations = parser.find_implementations(code);
+        let implementations = parser.find_extends(code);
 
         // Debug what we actually found
         println!("Found implementations:");
@@ -2826,7 +3004,7 @@ class Outer:
                     println!(
                         "{}    body: {}",
                         indent,
-                        &code[body.byte_range()].replace('\n', "\\n")
+                        code[body.byte_range()].replace('\n', "\\n")
                     );
                 }
             }

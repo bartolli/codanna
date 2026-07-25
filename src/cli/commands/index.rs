@@ -38,6 +38,24 @@ pub fn run(
         cli_config,
     } = args;
 
+    // Preflight: construct one parser per enabled language so configuration
+    // errors (e.g. malformed parser_options) fail the command here. The
+    // pipeline constructs parsers per worker thread and surfaces failures
+    // as per-file parse errors, which silently skips the language.
+    {
+        let registry = crate::parsing::registry::get_registry();
+        let registry = registry.lock().unwrap_or_else(|e| {
+            eprintln!("Error: language registry lock poisoned: {e}");
+            std::process::exit(1);
+        });
+        for definition in registry.iter_enabled(config) {
+            if let Err(e) = definition.create_parser(config) {
+                eprintln!("Error: cannot initialize {} parser: {e}", definition.name());
+                std::process::exit(2);
+            }
+        }
+    }
+
     // Determine paths to index
     let paths_to_index = if !paths.is_empty() {
         // CLI paths provided - add them to settings.toml first
@@ -243,8 +261,16 @@ fn index_directory(
 
     match indexer.index_directory_with_options(path, progress, dry_run, force, max_files) {
         Ok(stats) => {
-            // Print message only when no files need indexing (pipeline trace handles the rest)
-            if stats.files_indexed == 0 {
+            // Deletions leave the progress trace at zero width; report them
+            // explicitly so a cleanup-only run does not read as a no-op.
+            if stats.files_removed > 0 {
+                eprintln!(
+                    "Removed {} deleted file(s), {} symbol(s) from index",
+                    stats.files_removed, stats.symbols_removed
+                );
+            }
+            // Print message only when no work happened (pipeline trace handles the rest)
+            if stats.files_indexed == 0 && stats.files_removed == 0 {
                 eprintln!("Index up to date: {}", path.display());
             }
             stats.files_indexed

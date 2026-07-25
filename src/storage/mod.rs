@@ -1,11 +1,10 @@
 pub mod error;
-pub mod memory;
 pub mod metadata;
 pub mod metadata_keys;
 pub mod persistence;
 pub mod tantivy;
 pub use error::{StorageError, StorageResult};
-pub use metadata::{DataSource, IndexMetadata};
+pub use metadata::{DataSource, EMISSION_SEMANTICS_VERSION, IndexMetadata};
 pub use metadata_keys::MetadataKey;
 pub use persistence::IndexPersistence;
 pub use tantivy::{DocumentIndex, SearchResult};

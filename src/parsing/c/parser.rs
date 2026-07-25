@@ -783,7 +783,30 @@ impl CParser {
         }
     }
 
-    fn extract_calls_from_node(node: Node, code: &str, calls: &mut Vec<MethodCall>) {
+    /// Enclosing function name for a subtree walk; both call walkers use
+    /// it so the parse-stage twin guard's `from_name` equality holds.
+    fn enclosing_for_node<'a>(
+        node: Node,
+        code: &'a str,
+        current: Option<&'a str>,
+    ) -> Option<&'a str> {
+        if node.kind() == "function_definition" {
+            if let Some(declarator) = node.child_by_field_name("declarator") {
+                if let Some(name_node) = Self::find_function_name_node(declarator) {
+                    return Some(&code[name_node.byte_range()]);
+                }
+            }
+        }
+        current
+    }
+
+    fn extract_calls_from_node<'a>(
+        node: Node,
+        code: &'a str,
+        enclosing: Option<&'a str>,
+        calls: &mut Vec<MethodCall>,
+    ) {
+        let enclosing = Self::enclosing_for_node(node, code, enclosing);
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
                 let range = Range::new(
@@ -792,6 +815,7 @@ impl CParser {
                     node.end_position().row as u32,
                     node.end_position().column as u16,
                 );
+                let caller = enclosing.unwrap_or("<module>");
 
                 // C has no method concept; capture struct-field function-pointer calls
                 // (`vtable->draw(ctx)`, `obj.fn(args)`) so receiver type can flow downstream.
@@ -803,14 +827,14 @@ impl CParser {
                         .child_by_field_name("field")
                         .map(|n| code[n.byte_range()].trim())
                         .unwrap_or_else(|| code[function_node.byte_range()].trim());
-                    let mut call = MethodCall::new("", method_name, range);
+                    let mut call = MethodCall::new(caller, method_name, range);
                     if let Some(r) = receiver {
                         call = call.with_receiver(r);
                     }
                     calls.push(call);
                 } else {
                     let function_name = code[function_node.byte_range()].trim();
-                    calls.push(MethodCall::new("", function_name, range));
+                    calls.push(MethodCall::new(caller, function_name, range));
                 }
             }
         }
@@ -818,7 +842,7 @@ impl CParser {
         // Process children
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i as u32) {
-                Self::extract_calls_from_node(child, code, calls);
+                Self::extract_calls_from_node(child, code, enclosing, calls);
             }
         }
     }
@@ -827,28 +851,27 @@ impl CParser {
     fn find_calls_in_node<'a>(
         node: Node,
         code: &'a str,
+        enclosing: Option<&'a str>,
         calls: &mut Vec<(&'a str, &'a str, Range)>,
     ) {
-        // Simple implementation that doesn't track containing functions
+        let enclosing = Self::enclosing_for_node(node, code, enclosing);
         if node.kind() == "call_expression" {
             if let Some(function_node) = node.child_by_field_name("function") {
                 let target_name = &code[function_node.byte_range()];
-                // We don't have caller information in this simple implementation
                 let range = Range::new(
                     node.start_position().row as u32,
                     node.start_position().column as u16,
                     node.end_position().row as u32,
                     node.end_position().column as u16,
                 );
-                // Use empty string for caller as we don't track it in this simple implementation
-                calls.push(("", target_name, range));
+                calls.push((enclosing.unwrap_or("<module>"), target_name, range));
             }
         }
 
         // Process children
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i as u32) {
-                Self::find_calls_in_node(child, code, calls);
+                Self::find_calls_in_node(child, code, enclosing, calls);
             }
         }
     }
@@ -984,7 +1007,7 @@ impl LanguageParser for CParser {
         let root_node = tree.root_node();
         let mut calls = Vec::new();
 
-        Self::find_calls_in_node(root_node, code, &mut calls);
+        Self::find_calls_in_node(root_node, code, None, &mut calls);
         calls
     }
 
@@ -997,7 +1020,7 @@ impl LanguageParser for CParser {
         let root_node = tree.root_node();
         let mut calls = Vec::new();
 
-        Self::extract_calls_from_node(root_node, code, &mut calls);
+        Self::extract_calls_from_node(root_node, code, None, &mut calls);
 
         calls
     }

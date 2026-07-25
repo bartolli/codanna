@@ -9,8 +9,9 @@ use crate::relationship::RelationshipMetadata;
 use crate::symbol::ScopeContext;
 use crate::types::{CompactString, FileId, Range, SymbolId};
 use crate::{RelationKind, Symbol, SymbolKind, Visibility};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PARSE stage output - no IDs assigned yet
@@ -25,7 +26,7 @@ pub struct RawSymbol {
     pub kind: SymbolKind,
     pub range: Range,
     pub signature: Option<Box<str>>,
-    pub doc_comment: Option<Box<str>>,
+    pub doc_comment: Option<CompactString>,
     pub visibility: Visibility,
     pub scope_context: Option<ScopeContext>,
 }
@@ -48,7 +49,7 @@ impl RawSymbol {
         self
     }
 
-    pub fn with_doc_comment(mut self, doc: impl Into<Box<str>>) -> Self {
+    pub fn with_doc_comment(mut self, doc: impl Into<CompactString>) -> Self {
         self.doc_comment = Some(doc.into());
         self
     }
@@ -112,6 +113,29 @@ impl RawImport {
     }
 }
 
+/// A local variable binding with a statically-known type, captured at parse
+/// time by `LanguageParser::find_variable_types`.
+///
+/// In-memory only: rides `ParsedFile` -> `IndexBatch` -> `ResolutionContext`
+/// so receiver-type inference can consult constructor assignments and
+/// annotated locals. Never persisted; the stored edge metadata keeps the
+/// syntactic receiver.
+#[derive(Debug, Clone)]
+pub struct VariableBinding {
+    pub name: String,
+    pub type_name: String,
+    /// Range of the binding site (the assignment), for position-aware
+    /// last-binding-wins lookup within the caller's span.
+    pub range: Range,
+}
+
+/// Per-file typed-local bindings: the in-memory lane from Phase 1 to Phase 2.
+pub type FileBindings = HashMap<FileId, Vec<VariableBinding>>;
+
+/// Per-file this-barrier spans (non-arrow callables), in-memory lane to
+/// Phase 2 alongside [`FileBindings`]; never written to the index.
+pub type FileBarriers = HashMap<FileId, Vec<Range>>;
+
 /// Relationship extracted from parsing, before resolution.
 ///
 /// Contains ranges for disambiguation when multiple symbols share the same name:
@@ -165,6 +189,8 @@ pub struct ParsedFile {
     pub raw_symbols: Vec<RawSymbol>,
     pub raw_imports: Vec<RawImport>,
     pub raw_relationships: Vec<RawRelationship>,
+    pub variable_bindings: Vec<VariableBinding>,
+    pub this_barrier_spans: Vec<Range>,
 }
 
 impl ParsedFile {
@@ -177,6 +203,8 @@ impl ParsedFile {
             raw_symbols: Vec::new(),
             raw_imports: Vec::new(),
             raw_relationships: Vec::new(),
+            variable_bindings: Vec::new(),
+            this_barrier_spans: Vec::new(),
         }
     }
 
@@ -243,13 +271,19 @@ pub struct UnresolvedRelationship {
 #[derive(Debug)]
 pub struct IndexBatch {
     /// Symbols with their file paths (for Tantivy document creation)
-    pub symbols: Vec<(Symbol, PathBuf)>,
+    pub symbols: Vec<Symbol>,
     /// Imports ready to store
     pub imports: Vec<Import>,
     /// Relationships to resolve after all symbols are indexed
     pub unresolved_relationships: Vec<UnresolvedRelationship>,
     /// Files to register in the index
     pub file_registrations: Vec<FileRegistration>,
+    /// Per-file typed local bindings for receiver-type inference (in-memory
+    /// lane to Phase 2; never written to the index)
+    pub variable_bindings: FileBindings,
+    /// Per-file this-barrier spans (in-memory lane to Phase 2; never
+    /// written to the index)
+    pub this_barrier_spans: FileBarriers,
 }
 
 impl IndexBatch {
@@ -259,6 +293,8 @@ impl IndexBatch {
             imports: Vec::new(),
             unresolved_relationships: Vec::new(),
             file_registrations: Vec::new(),
+            variable_bindings: HashMap::new(),
+            this_barrier_spans: HashMap::new(),
         }
     }
 
@@ -268,6 +304,8 @@ impl IndexBatch {
             imports: Vec::with_capacity(imports),
             unresolved_relationships: Vec::with_capacity(rels),
             file_registrations: Vec::new(),
+            variable_bindings: HashMap::new(),
+            this_barrier_spans: HashMap::new(),
         }
     }
 
@@ -302,7 +340,7 @@ impl Default for IndexBatch {
 #[derive(Debug)]
 pub struct EmbeddingBatch {
     /// Embedding candidates: (symbol_id, doc_comment, language)
-    pub candidates: Vec<(SymbolId, Box<str>, Box<str>)>,
+    pub candidates: Vec<(SymbolId, CompactString, Box<str>)>,
 }
 
 impl EmbeddingBatch {
@@ -373,12 +411,49 @@ pub use crate::parsing::CallerContext;
 /// - `by_name`: name → `Vec<SymbolId>` for candidate resolution
 /// - `by_file_id`: FileId → `Vec<SymbolId>` for local symbol lookup
 ///
+/// Identity-ordered entry in the `by_name` candidate lists. Derived
+/// `Ord` compares file_path, then start_line, then id — the id arm only
+/// breaks ties within one run; the identity prefix is what holds across
+/// runs (ids are session-scoped).
+#[derive(Debug, PartialEq, Eq)]
+struct NameCandidate {
+    file_path: Box<str>,
+    start_line: u32,
+    id: crate::types::SymbolId,
+}
+
+impl Ord for NameCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.file_path
+            .cmp(&other.file_path)
+            .then_with(|| self.start_line.cmp(&other.start_line))
+            .then_with(|| self.id.value().cmp(&other.id.value()))
+    }
+}
+
+impl PartialOrd for NameCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 /// Memory: ~500 bytes/symbol, 600K symbols ≈ 300MB
+///
+/// `by_name` candidates stay sorted by symbol identity
+/// (file_path, start_line, id): insertion order is parse-completion
+/// order and ids are assigned in collect-arrival order — both vary run
+/// to run — so first-match consumers need a tree-stable order to pick
+/// deterministically. `by_file_id` lists stay sorted by (start_line, id)
+/// for the same reason: scope registration iterates them into last-wins
+/// name maps, so their order decides same-name winners.
 #[derive(Debug)]
 pub struct SymbolLookupCache {
     by_id: dashmap::DashMap<crate::types::SymbolId, crate::Symbol>,
-    by_name: dashmap::DashMap<Box<str>, Vec<crate::types::SymbolId>>,
-    by_file_id: dashmap::DashMap<crate::types::FileId, Vec<crate::types::SymbolId>>,
+    by_name: dashmap::DashMap<Box<str>, Vec<NameCandidate>>,
+    by_file_id: dashmap::DashMap<crate::types::FileId, Vec<(u32, crate::types::SymbolId)>>,
+    /// Re-exported paths: "pkg.helper" -> the symbol defined at "pkg.a.helper"
+    /// when pkg's namespace imports it. Populated by the Phase 2 pre-pass.
+    module_aliases: dashmap::DashMap<Box<str>, crate::types::SymbolId>,
 }
 
 impl Default for SymbolLookupCache {
@@ -394,6 +469,7 @@ impl SymbolLookupCache {
             by_id: dashmap::DashMap::new(),
             by_name: dashmap::DashMap::new(),
             by_file_id: dashmap::DashMap::new(),
+            module_aliases: dashmap::DashMap::new(),
         }
     }
 
@@ -403,6 +479,7 @@ impl SymbolLookupCache {
             by_id: dashmap::DashMap::with_capacity(symbols),
             by_name: dashmap::DashMap::with_capacity(symbols / 10), // Fewer unique names
             by_file_id: dashmap::DashMap::with_capacity(symbols / 50), // ~50 symbols/file avg
+            module_aliases: dashmap::DashMap::new(),
         }
     }
 
@@ -410,16 +487,35 @@ impl SymbolLookupCache {
     pub fn insert(&self, symbol: crate::Symbol) {
         let id = symbol.id;
         let file_id = symbol.file_id;
+        let start_line = symbol.range.start_line;
         let name: Box<str> = symbol.name.as_ref().into();
+        let candidate = NameCandidate {
+            file_path: symbol.file_path.clone(),
+            start_line,
+            id,
+        };
 
         // Insert into by_id
         self.by_id.insert(id, symbol);
 
-        // Insert into by_name (append to candidates)
-        self.by_name.entry(name).or_default().push(id);
+        // Insert into by_name at the identity-sorted position
+        {
+            let mut entry = self.by_name.entry(name).or_default();
+            let pos = entry
+                .binary_search(&candidate)
+                .unwrap_or_else(|insert_at| insert_at);
+            entry.insert(pos, candidate);
+        }
 
-        // Insert into by_file_id (append to file's symbols)
-        self.by_file_id.entry(file_id).or_default().push(id);
+        // Insert into by_file_id at the (start_line, id)-sorted position;
+        // file_path is constant within a file, so this is identity order
+        {
+            let mut entry = self.by_file_id.entry(file_id).or_default();
+            let pos = entry
+                .binary_search_by_key(&(start_line, id.0), |&(line, sid)| (line, sid.0))
+                .unwrap_or_else(|insert_at| insert_at);
+            entry.insert(pos, (start_line, id));
+        }
     }
 
     /// Get symbol by ID (O(1)).
@@ -435,21 +531,26 @@ impl SymbolLookupCache {
         self.by_id.get(&id)
     }
 
-    /// Get candidate symbol IDs by name (O(1)).
+    /// Get candidate symbol IDs by name (O(1)), in identity order.
     pub fn lookup_candidates(&self, name: &str) -> Vec<crate::types::SymbolId> {
         self.by_name
             .get(name)
-            .map(|r| r.value().clone())
+            .map(|r| r.value().iter().map(|c| c.id).collect())
             .unwrap_or_default()
     }
 
-    /// Get symbol IDs defined in a file (O(1)).
+    /// Whether any candidate exists for `name` (O(1), no clone).
+    pub fn has_candidates(&self, name: &str) -> bool {
+        self.by_name.contains_key(name)
+    }
+
+    /// Get symbol IDs defined in a file, in identity (source) order.
     ///
     /// Used by CONTEXT stage to find local symbols for a file.
     pub fn symbols_in_file(&self, file_id: crate::types::FileId) -> Vec<crate::types::SymbolId> {
         self.by_file_id
             .get(&file_id)
-            .map(|r| r.value().clone())
+            .map(|r| r.value().iter().map(|&(_, id)| id).collect())
             .unwrap_or_default()
     }
 
@@ -471,6 +572,174 @@ impl SymbolLookupCache {
     /// Number of unique names in cache.
     pub fn unique_names(&self) -> usize {
         self.by_name.len()
+    }
+
+    /// All file ids present in the cache.
+    pub fn file_ids(&self) -> Vec<crate::types::FileId> {
+        self.by_file_id.iter().map(|e| *e.key()).collect()
+    }
+
+    /// Register a re-exported path for a symbol.
+    pub fn register_module_alias(&self, path: &str, id: crate::types::SymbolId) {
+        self.module_aliases.insert(path.into(), id);
+    }
+
+    /// Resolve a re-exported path ("pkg.helper") to the defining symbol.
+    pub fn resolve_module_alias(&self, path: &str) -> Option<crate::types::SymbolId> {
+        self.module_aliases.get(path).map(|r| *r.value())
+    }
+
+    /// Populate module aliases from per-module import lists.
+    ///
+    /// Python semantics: an import binds the name in the importing module's
+    /// namespace, so `pkg/__init__.py: from pkg.a import helper` exposes
+    /// `pkg.helper` (module_path stripping already maps `__init__` to the
+    /// package itself; plain modules re-export the same way). Glob imports
+    /// (`from pkg.a import *`) expose the source module's public
+    /// module-level names. Entries are (module_path, imports) pairs with
+    /// paths already normalized to absolute form at parse time. Iterates so
+    /// re-export chains converge.
+    pub fn populate_module_aliases(
+        &self,
+        entries: &[(String, Vec<Import>)],
+        language: &LanguageId,
+    ) {
+        // Chains are shallow in practice; the cap only guards degenerate cycles.
+        const MAX_ROUNDS: usize = 8;
+
+        for _ in 0..MAX_ROUNDS {
+            let mut progressed = false;
+
+            for (module, imports) in entries {
+                for import in imports {
+                    if import.is_glob || import.path.starts_with('.') {
+                        continue;
+                    }
+                    let (module_part, name) = match import.path.rfind('.') {
+                        Some(pos) => (&import.path[..pos], &import.path[pos + 1..]),
+                        None => continue,
+                    };
+                    let local = import.alias.as_deref().unwrap_or(name);
+                    let alias_key = format!("{module}.{local}");
+                    if alias_key == import.path {
+                        continue;
+                    }
+                    if self.module_aliases.contains_key(alias_key.as_str()) {
+                        continue;
+                    }
+
+                    // The imported path may itself be a re-export (chain hop).
+                    let target = self.resolve_module_alias(&import.path).or_else(|| {
+                        self.lookup_candidates(name).into_iter().find(|&id| {
+                            self.by_id.get(&id).is_some_and(|sym| {
+                                sym.language_id.as_ref() == Some(language)
+                                    && (sym.module_path.as_deref() == Some(module_part)
+                                        || (sym.kind == crate::types::SymbolKind::Module
+                                            && sym.module_path.as_deref() == Some(&import.path)))
+                            })
+                        })
+                    });
+
+                    if let Some(id) = target {
+                        self.module_aliases.insert(alias_key.into(), id);
+                        progressed = true;
+                    }
+                }
+            }
+
+            progressed |= self.expand_glob_reexports(entries, language);
+
+            if !progressed {
+                break;
+            }
+        }
+    }
+
+    /// Expand `from module import *` re-exports.
+    ///
+    /// Exposes each public module-level name of the glob source under the
+    /// importing module, plus names the source itself re-exports (chained
+    /// globs converge through the caller's fixpoint loop). Inserts only
+    /// missing keys, so explicit imports of the same name win.
+    fn expand_glob_reexports(
+        &self,
+        entries: &[(String, Vec<Import>)],
+        language: &LanguageId,
+    ) -> bool {
+        use std::collections::HashMap;
+
+        // Glob source module -> importing modules
+        let mut globs: HashMap<&str, Vec<&str>> = HashMap::new();
+        for (module, imports) in entries {
+            for import in imports {
+                if import.is_glob && !import.path.starts_with('.') {
+                    globs
+                        .entry(import.path.as_str())
+                        .or_default()
+                        .push(module.as_str());
+                }
+            }
+        }
+        if globs.is_empty() {
+            return false;
+        }
+
+        let mut progressed = false;
+
+        // Names defined in the glob source module. `import *` without
+        // __all__ skips underscore-prefixed names; __all__ contents are not
+        // modeled (an alias is only consulted for paths source code
+        // actually imports).
+        for entry in self.by_id.iter() {
+            let sym = entry.value();
+            if sym.language_id.as_ref() != Some(language)
+                || sym.kind == crate::types::SymbolKind::Module
+                || sym.name.starts_with('_')
+                || !matches!(
+                    sym.scope_context,
+                    None | Some(crate::symbol::ScopeContext::Module)
+                        | Some(crate::symbol::ScopeContext::Global)
+                )
+            {
+                continue;
+            }
+            let Some(targets) = sym.module_path.as_deref().and_then(|mp| globs.get(mp)) else {
+                continue;
+            };
+            for module in targets {
+                let key = format!("{module}.{}", sym.name);
+                if !self.module_aliases.contains_key(key.as_str()) {
+                    self.module_aliases.insert(key.into(), sym.id);
+                    progressed = true;
+                }
+            }
+        }
+
+        // Names the glob source exposes via its own aliases (re-export chains).
+        let existing: Vec<(Box<str>, crate::types::SymbolId)> = self
+            .module_aliases
+            .iter()
+            .map(|e| (e.key().clone(), *e.value()))
+            .collect();
+        for (key, id) in existing {
+            let Some(pos) = key.rfind('.') else { continue };
+            let (src, name) = (&key[..pos], &key[pos + 1..]);
+            if name.starts_with('_') {
+                continue;
+            }
+            let Some(targets) = globs.get(src) else {
+                continue;
+            };
+            for module in targets {
+                let new_key = format!("{module}.{name}");
+                if !self.module_aliases.contains_key(new_key.as_str()) {
+                    self.module_aliases.insert(new_key.into(), id);
+                    progressed = true;
+                }
+            }
+        }
+
+        progressed
     }
 }
 
@@ -554,7 +823,12 @@ impl PipelineSymbolCache for SymbolLookupCache {
                 if sym.file_id == caller.file_id {
                     return Some(id);
                 }
-                // 2. Same module = always visible
+                // 2. Same module = always visible. Visibility semantics are
+                //    language-dependent (rust privates are module-visible;
+                //    kotlin privates are file-scoped) and Private is also
+                //    the unconfigured Symbol::new default, so this tier
+                //    stays visibility-blind — the resolve stage enforces
+                //    file-scoped-private via LanguageBehavior.
                 if caller.is_same_module(sym.module_path.as_deref()) {
                     return Some(id);
                 }
@@ -582,18 +856,16 @@ impl PipelineSymbolCache for SymbolLookupCache {
         self.by_id.get(&id).map(|r| r.value().clone())
     }
 
+    fn resolve_module_alias(&self, path: &str) -> Option<SymbolId> {
+        SymbolLookupCache::resolve_module_alias(self, path)
+    }
+
     fn symbols_in_file(&self, file_id: FileId) -> Vec<SymbolId> {
-        self.by_file_id
-            .get(&file_id)
-            .map(|r| r.value().clone())
-            .unwrap_or_default()
+        SymbolLookupCache::symbols_in_file(self, file_id)
     }
 
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId> {
-        self.by_name
-            .get(name)
-            .map(|r| r.value().clone())
-            .unwrap_or_default()
+        SymbolLookupCache::lookup_candidates(self, name)
     }
 }
 
@@ -625,6 +897,12 @@ impl SymbolLookupCache {
 
     /// Find symbol by import path and language.
     fn find_by_import_path(&self, path: &str, language_id: LanguageId) -> Option<SymbolId> {
+        // Re-exported path registered by the Phase 2 pre-pass - exact match
+        // ahead of the approximate module comparison below.
+        if let Some(id) = self.resolve_module_alias(path) {
+            return Some(id);
+        }
+
         // Extract the symbol name from path (last segment)
         let name = path
             .rsplit("::")
@@ -632,14 +910,25 @@ impl SymbolLookupCache {
             .or_else(|| path.rsplit('.').next())
             .or_else(|| path.rsplit('/').next())?;
 
+        // Qualifier: the import path minus its last segment
+        let qualifier = path
+            .rsplit_once("::")
+            .or_else(|| path.rsplit_once('.'))
+            .or_else(|| path.rsplit_once('/'))
+            .map(|(q, _)| q);
+
         // Look up candidates and filter by module path + language
         let candidates = self.lookup_candidates(name);
         for id in candidates {
             if let Some(sym) = self.by_id.get(&id) {
                 if sym.language_id.as_ref() == Some(&language_id) {
-                    // Check if module_path matches (approximately)
+                    // Module path matches at segment boundaries: against the
+                    // qualifier for symbols inside a module, against the full
+                    // path for module symbols imported by name.
                     if let Some(ref module_path) = sym.module_path {
-                        if path.contains(module_path.as_ref()) || module_path.contains(path) {
+                        if segment_suffix_match(module_path, path)
+                            || qualifier.is_some_and(|q| segment_suffix_match(module_path, q))
+                        {
                             return Some(id);
                         }
                     }
@@ -648,6 +937,20 @@ impl SymbolLookupCache {
         }
         None
     }
+}
+
+/// True when the two paths are equal, or the shorter is a suffix of the
+/// longer starting at a segment boundary (`::`, `.`, or `/`). Replaces
+/// bidirectional substring contains, which admitted mid-segment matches
+/// (`util` vs `xutil`) and mid-path infixes.
+fn segment_suffix_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let (longer, shorter) = if a.len() > b.len() { (a, b) } else { (b, a) };
+    longer
+        .strip_suffix(shorter)
+        .is_some_and(|prefix| prefix.ends_with("::") || prefix.ends_with(['.', '/']))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -671,6 +974,14 @@ pub struct ResolutionContext {
     pub scope: Box<dyn crate::parsing::ResolutionScope>,
     /// Unresolved relationships originating from this file
     pub unresolved_rels: Vec<UnresolvedRelationship>,
+    /// Typed local bindings in this file (parse-time capture), for
+    /// receiver-type inference on instance calls
+    pub variable_bindings: Vec<VariableBinding>,
+    /// Spans of non-arrow callables in this file (parse-time capture,
+    /// never persisted). `this` binds to the innermost enclosing
+    /// barrier; arrows contribute none, so the lexical-this walk
+    /// resolves a call site's owner by innermost containing span.
+    pub this_barrier_spans: Vec<Range>,
 }
 
 impl std::fmt::Debug for ResolutionContext {
@@ -793,6 +1104,45 @@ impl DiscoverResult {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Phase 1 orchestration options
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// File input for `Pipeline::run_phase1`.
+pub enum FileSource {
+    /// DISCOVER stage walks the root.
+    Walk(PathBuf),
+    /// Feeder thread sends the list; an empty list short-circuits to empty stats.
+    List(Vec<PathBuf>),
+}
+
+/// Progress rendering for `Pipeline::run_phase1`.
+#[derive(Default)]
+pub enum ProgressSink {
+    #[default]
+    Silent,
+    /// Single bar attached to the INDEX stage.
+    Bar(Arc<crate::io::status_line::ProgressBar>),
+    /// bar1 = EMBED, bar2 = INDEX. Pair with `Phase1Options::embed`;
+    /// bar1 has no producer otherwise.
+    Dual(Arc<crate::io::status_line::DualProgressBar>),
+}
+
+/// Embedding generation for `Pipeline::run_phase1`.
+///
+/// The EMBED stage runs iff present; pool and store are required together.
+pub struct EmbedOptions {
+    pub pool: Arc<crate::semantic::EmbeddingBackend>,
+    pub semantic: Arc<Mutex<crate::semantic::SimpleSemanticSearch>>,
+}
+
+/// Per-run options for `Pipeline::run_phase1`.
+#[derive(Default)]
+pub struct Phase1Options {
+    pub progress: ProgressSink,
+    pub embed: Option<EmbedOptions>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Error types
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -806,6 +1156,15 @@ pub enum PipelineError {
 
     #[error("Failed to parse file {path}: {reason}")]
     Parse { path: PathBuf, reason: String },
+
+    /// Parser could not be constructed for a language (configuration
+    /// error, not a file error). Fatal to the run: every file of the
+    /// language would silently drop out of the index otherwise.
+    #[error("cannot initialize {language} parser: {reason}")]
+    ParserConstruction {
+        language: crate::parsing::LanguageId,
+        reason: String,
+    },
 
     #[error("Unsupported file type: {path}")]
     UnsupportedFileType { path: PathBuf },
@@ -913,5 +1272,235 @@ mod tests {
 
         batch1.merge(batch2);
         assert_eq!(batch1.imports.len(), 1);
+    }
+
+    fn python_symbol(id: u32, file: u32, name: &str, module_path: &str) -> Symbol {
+        let mut sym = Symbol::new(
+            SymbolId::new(id).unwrap(),
+            name,
+            SymbolKind::Function,
+            FileId::new(file).unwrap(),
+            Range::new(1, 0, 1, 10),
+        );
+        sym.module_path = Some(module_path.into());
+        sym.language_id = Some(LanguageId::new("python"));
+        sym
+    }
+
+    fn import(path: &str, alias: Option<&str>) -> Import {
+        Import {
+            file_id: FileId::new(1).unwrap(),
+            path: path.to_string(),
+            alias: alias.map(String::from),
+            is_glob: false,
+            is_type_only: false,
+        }
+    }
+
+    fn python_id() -> LanguageId {
+        LanguageId::new("python")
+    }
+
+    #[test]
+    fn test_module_alias_reexport() {
+        let cache = SymbolLookupCache::new();
+        cache.insert(python_symbol(1, 1, "helper", "pkg.a"));
+
+        // pkg/__init__.py: from pkg.a import helper  => exposes pkg.helper
+        let entries = vec![("pkg".to_string(), vec![import("pkg.a.helper", None)])];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        assert_eq!(
+            cache.resolve_module_alias("pkg.helper"),
+            Some(SymbolId::new(1).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_module_alias_reexport_aliased_and_chain() {
+        let cache = SymbolLookupCache::new();
+        cache.insert(python_symbol(1, 1, "helper", "pkg.inner.a"));
+
+        // pkg/inner/__init__.py: from pkg.inner.a import helper
+        // pkg/__init__.py:       from pkg.inner import helper as h
+        // Chain converges regardless of entry order.
+        let entries = vec![
+            (
+                "pkg".to_string(),
+                vec![import("pkg.inner.helper", Some("h"))],
+            ),
+            (
+                "pkg.inner".to_string(),
+                vec![import("pkg.inner.a.helper", None)],
+            ),
+        ];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        let id = SymbolId::new(1).unwrap();
+        assert_eq!(cache.resolve_module_alias("pkg.inner.helper"), Some(id));
+        assert_eq!(cache.resolve_module_alias("pkg.h"), Some(id));
+        assert_eq!(cache.resolve_module_alias("pkg.helper"), None);
+    }
+
+    #[test]
+    fn test_module_alias_glob_reexport() {
+        let cache = SymbolLookupCache::new();
+        let mut public = python_symbol(1, 1, "BaseModel", "pkg.main");
+        public.scope_context = Some(crate::symbol::ScopeContext::Module);
+        cache.insert(public);
+        let mut private = python_symbol(2, 1, "_internal", "pkg.main");
+        private.scope_context = Some(crate::symbol::ScopeContext::Module);
+        cache.insert(private);
+
+        // pkg/__init__.py: from pkg.main import *
+        let mut glob = import("pkg.main", None);
+        glob.is_glob = true;
+        let entries = vec![("pkg".to_string(), vec![glob])];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        assert_eq!(
+            cache.resolve_module_alias("pkg.BaseModel"),
+            Some(SymbolId::new(1).unwrap())
+        );
+        // Underscore names are not glob-exported
+        assert_eq!(cache.resolve_module_alias("pkg._internal"), None);
+    }
+
+    #[test]
+    fn test_module_alias_glob_chain() {
+        let cache = SymbolLookupCache::new();
+        let mut sym = python_symbol(1, 1, "thing", "pkg.sub.impl");
+        sym.scope_context = Some(crate::symbol::ScopeContext::Module);
+        cache.insert(sym);
+
+        // pkg/sub/__init__.py: from pkg.sub.impl import *
+        // pkg/__init__.py:     from pkg.sub import *
+        let mut inner_glob = import("pkg.sub.impl", None);
+        inner_glob.is_glob = true;
+        let mut outer_glob = import("pkg.sub", None);
+        outer_glob.is_glob = true;
+        let entries = vec![
+            ("pkg".to_string(), vec![outer_glob]),
+            ("pkg.sub".to_string(), vec![inner_glob]),
+        ];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        let id = SymbolId::new(1).unwrap();
+        assert_eq!(cache.resolve_module_alias("pkg.sub.thing"), Some(id));
+        assert_eq!(cache.resolve_module_alias("pkg.thing"), Some(id));
+    }
+
+    #[test]
+    fn test_module_alias_skips_unresolved() {
+        let cache = SymbolLookupCache::new();
+        cache.insert(python_symbol(1, 1, "helper", "pkg.a"));
+
+        let entries = vec![(
+            "pkg".to_string(),
+            vec![import("os.path", None), import("pkg.b.missing", None)],
+        )];
+        cache.populate_module_aliases(&entries, &python_id());
+
+        assert_eq!(cache.resolve_module_alias("pkg.path"), None);
+        assert_eq!(cache.resolve_module_alias("pkg.missing"), None);
+    }
+
+    fn rust_symbol(id: u32, name: &str, module_path: &str) -> Symbol {
+        let mut sym = Symbol::new(
+            SymbolId::new(id).unwrap(),
+            name,
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            Range::new(1, 0, 1, 10),
+        );
+        sym.module_path = Some(module_path.into());
+        sym.language_id = Some(LanguageId::new("rust"));
+        sym
+    }
+
+    #[test]
+    fn find_by_import_path_matches_at_segment_boundaries_only() {
+        let rust = LanguageId::new("rust");
+
+        // Substring-colliding module paths must not match (old
+        // bidirectional contains admitted both).
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "helper", "util"));
+        assert_eq!(cache.find_by_import_path("xutil::helper", rust), None);
+
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "helper", "app::core"));
+        assert_eq!(cache.find_by_import_path("myapp::core::helper", rust), None);
+
+        // Exact qualifier match survives.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "helper", "app::util"));
+        assert_eq!(
+            cache.find_by_import_path("app::util::helper", rust),
+            Some(SymbolId::new(1).unwrap())
+        );
+
+        // Relative import: qualifier is a segment-suffix of the module path.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "func", "crate::module::helpers"));
+        assert_eq!(
+            cache.find_by_import_path("helpers::func", rust),
+            Some(SymbolId::new(1).unwrap())
+        );
+
+        // Module symbol imported by its full path.
+        let cache = SymbolLookupCache::new();
+        cache.insert(rust_symbol(1, "util", "app::util"));
+        assert_eq!(
+            cache.find_by_import_path("app::util", rust),
+            Some(SymbolId::new(1).unwrap())
+        );
+    }
+
+    #[test]
+    fn symbols_in_file_returns_identity_order() {
+        let mk = |id: u32, line: u32| {
+            let mut sym = Symbol::new(
+                SymbolId::new(id).unwrap(),
+                "sym",
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                Range::new(line, 0, line + 1, 0),
+            );
+            sym.language_id = Some(LanguageId::new("rust"));
+            sym
+        };
+        let expected: Vec<SymbolId> = [(1, 10), (3, 30), (2, 50)]
+            .iter()
+            .map(|&(id, _)| SymbolId::new(id).unwrap())
+            .collect();
+
+        // Insertion order varies run to run (collect-arrival); the
+        // returned order must be source order either way.
+        let forward = SymbolLookupCache::new();
+        for &(id, line) in &[(1u32, 10u32), (3, 30), (2, 50)] {
+            forward.insert(mk(id, line));
+        }
+        let reverse = SymbolLookupCache::new();
+        for &(id, line) in &[(2u32, 50u32), (3, 30), (1, 10)] {
+            reverse.insert(mk(id, line));
+        }
+
+        assert_eq!(forward.symbols_in_file(FileId::new(1).unwrap()), expected);
+        assert_eq!(reverse.symbols_in_file(FileId::new(1).unwrap()), expected);
+    }
+
+    #[test]
+    fn segment_suffix_match_boundary_cases() {
+        assert!(segment_suffix_match("app.util", "app.util"));
+        assert!(segment_suffix_match("app.util", "util"));
+        assert!(segment_suffix_match("util", "app.util"));
+        assert!(segment_suffix_match("app::util", "util"));
+        assert!(segment_suffix_match("a/b/c", "c"));
+
+        assert!(!segment_suffix_match("app.xutil", "util"));
+        assert!(!segment_suffix_match("xutil", "util"));
+        assert!(!segment_suffix_match("myapp.core", "app.core"));
+        assert!(!segment_suffix_match("app.core.util", "app.core"));
     }
 }

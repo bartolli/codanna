@@ -14,7 +14,7 @@ use codanna::project_resolver::{
     },
     registry::SimpleProviderRegistry,
 };
-use codanna::storage::IndexMetadata;
+use codanna::storage::{EMISSION_SEMANTICS_VERSION, IndexMetadata};
 use codanna::{IndexPersistence, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,7 +89,7 @@ fn initialize_providers(
         if !invalid_paths.is_empty() {
             // Collect all invalid paths for error reporting
             for path in &invalid_paths {
-                eprintln!("  ✗ {} config file not found: {}", lang_id, path.display());
+                eprintln!("  - {} config file not found: {}", lang_id, path.display());
             }
             validation_errors.push((lang_id.to_string(), invalid_paths));
             continue;
@@ -116,7 +116,7 @@ fn initialize_providers(
         for (lang, paths) in &validation_errors {
             error_details.push_str(&format!("\n{lang} configuration:\n"));
             for path in paths {
-                error_details.push_str(&format!("  • {} not found\n", path.display()));
+                error_details.push_str(&format!("  - {} not found\n", path.display()));
             }
         }
         error_details.push_str("\nSuggestion: Check paths in .codanna/settings.toml");
@@ -187,6 +187,20 @@ fn seed_indexer_with_config_paths(
     }
 
     report
+}
+
+fn create_facade_or_exit(settings: Arc<Settings>) -> IndexFacade {
+    IndexFacade::new(settings).unwrap_or_else(|e| {
+        eprintln!("Error: Failed to create index: {e}");
+        let suggestions = e.recovery_suggestions();
+        if !suggestions.is_empty() {
+            eprintln!("\nSuggestions:");
+            for suggestion in suggestions {
+                eprintln!("  - {suggestion}");
+            }
+        }
+        std::process::exit(codanna::io::ExitCode::from_error(&e) as i32);
+    })
 }
 
 /// Entry point with tokio async runtime.
@@ -288,7 +302,7 @@ async fn main() {
                 if !suggestions.is_empty() {
                     eprintln!("\nSuggestions:");
                     for suggestion in suggestions {
-                        eprintln!("  • {suggestion}");
+                        eprintln!("  - {suggestion}");
                     }
                 }
                 std::process::exit(1);
@@ -338,14 +352,70 @@ async fn main() {
         _ => false,
     };
 
+    // Emission-semantics gate: an index stamped with a different (or no)
+    // emission version must not be read or incrementally extended -- a
+    // partial rewrite leaves a silent hybrid mixing row semantics.
+    // `codanna index` heals by full rebuild; everything else (including
+    // dry-run, whose pre-dispatch path sync can write) refuses with the
+    // heal command. `--force` clears unconditionally and needs no gate.
+    let mut emission_heal = false;
+    if needs_indexer
+        && persistence.exists()
+        && !matches!(cli.command, Commands::Index { force: true, .. })
+    {
+        let stored = IndexMetadata::load(&config.index_path)
+            .ok()
+            .and_then(|m| m.emission_version);
+        if stored != Some(EMISSION_SEMANTICS_VERSION) {
+            let stored_txt = stored.map_or_else(|| "none".to_string(), |v| format!("v{v}"));
+            let current = EMISSION_SEMANTICS_VERSION;
+            if matches!(cli.command, Commands::Index { dry_run: false, .. }) {
+                eprintln!(
+                    "Index emission semantics changed (index: {stored_txt}, binary: v{current}). Rebuilding from scratch."
+                );
+                emission_heal = true;
+            } else {
+                eprintln!(
+                    "Error: index emission semantics changed (index: {stored_txt}, binary: v{current})."
+                );
+                eprintln!(
+                    "Reading it would mix stale and current rows. Run 'codanna index' to rebuild."
+                );
+                // Client-spawned stdio servers lose stderr: a pre-handshake
+                // exit surfaces as an opaque connection failure. Serve a
+                // degraded handshake (zero tools, heal command in the
+                // instructions field), then exit with the gate code when the
+                // session ends. HTTP/HTTPS serve is terminal-launched, where
+                // stderr is already visible.
+                if matches!(
+                    cli.command,
+                    Commands::Serve {
+                        http: false,
+                        https: false,
+                        ..
+                    }
+                ) && config.server.mode != "http"
+                {
+                    codanna::cli::commands::serve::run_stale_stdio(stored, current).await;
+                }
+                std::process::exit(codanna::io::ExitCode::IndexCorrupted as i32);
+            }
+        }
+    }
+
     // Load existing index or create new one (only if command needs it)
     let settings = Arc::new(config.clone());
+    // Captured before facade creation: creating a facade manufactures the
+    // index directory, so persistence.exists() afterwards cannot tell a
+    // real index from one this process just created.
+    let index_preexisted = persistence.exists();
     let mut indexer: Option<IndexFacade> = if !needs_indexer {
         None
     } else {
         Some({
             // Force flag always means fresh index, regardless of path source (CLI or settings.toml)
-            let force_recreate_index = matches!(cli.command, Commands::Index { force: true, .. });
+            let force_recreate_index =
+                matches!(cli.command, Commands::Index { force: true, .. }) || emission_heal;
             if persistence.exists() && !force_recreate_index {
                 tracing::debug!(target: "cli", "found existing index at {}", config.index_path.display());
                 // Use lazy loading for simple commands to improve startup time
@@ -375,11 +445,11 @@ async fn main() {
                     }
                     Err(e) => {
                         eprintln!("Warning: Could not load index: {e}. Creating new index.");
-                        IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+                        create_facade_or_exit(settings.clone())
                     }
                 }
             } else {
-                if force_recreate_index && persistence.exists() {
+                if force_recreate_index && persistence.exists() && !emission_heal {
                     eprintln!("Force re-indexing requested, creating new index");
                 } else if !persistence.exists() {
                     tracing::debug!(
@@ -398,7 +468,7 @@ async fn main() {
                 }
 
                 // Create a new indexer with the given settings (after clearing)
-                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+                create_facade_or_exit(settings.clone())
             }
         })
     };
@@ -432,7 +502,8 @@ async fn main() {
     // Sync indexed paths with config - auto-index new directories
     // This handles changes made while the index was not in use (e.g., add-dir command)
     // Skip sync if force flag is present (force means fresh start, not incremental)
-    let is_force_index = matches!(cli.command, Commands::Index { force: true, .. });
+    let is_force_index =
+        matches!(cli.command, Commands::Index { force: true, .. }) || emission_heal;
 
     // Progress is enabled by default from settings, can be disabled with --no-progress
     let no_progress_flag = matches!(
@@ -533,8 +604,18 @@ async fn main() {
     // Track whether sync made changes (for later check); None means sync did not run
     let mut sync_made_changes: Option<bool> = None;
 
+    // The index command owns indexing work. On a freshly created index
+    // (e.g. after `rm -rf .codanna/index`), stored_paths defaults empty
+    // and sync would read every configured root as a config change,
+    // running the full pass pre-dispatch and leaving the command phase
+    // to no-op ("Index up to date"). Removal sync after `remove-dir`
+    // needs a pre-existing index by definition, so this gate never
+    // skips it.
+    let index_command_fresh_index =
+        matches!(cli.command, Commands::Index { .. }) && !index_preexisted;
+
     if let Some(ref mut idx) = indexer {
-        if persistence.exists() && !is_force_index {
+        if persistence.exists() && !is_force_index && !index_command_fresh_index {
             // Load stored indexed_paths from metadata
             match IndexMetadata::load(&config.index_path) {
                 Ok(metadata) => {
@@ -585,7 +666,7 @@ async fn main() {
                             if !suggestions.is_empty() {
                                 eprintln!("\nRecovery steps:");
                                 for suggestion in suggestions {
-                                    eprintln!("  • {suggestion}");
+                                    eprintln!("  - {suggestion}");
                                 }
                             }
                             use codanna::io::ExitCode;
@@ -605,13 +686,13 @@ async fn main() {
                     eprintln!("\nRecovery steps:");
                     let suggestions = e.recovery_suggestions();
                     if suggestions.is_empty() {
-                        eprintln!("  • Run 'codanna index' to rebuild metadata");
+                        eprintln!("  - Run 'codanna index' to rebuild metadata");
                     } else {
                         for suggestion in suggestions {
-                            eprintln!("  • {suggestion}");
+                            eprintln!("  - {suggestion}");
                         }
                     }
-                    eprintln!("  • Or use 'codanna index --force' for a full rebuild");
+                    eprintln!("  - Or use 'codanna index --force' for a full rebuild");
 
                     sync_made_changes = None;
                 }

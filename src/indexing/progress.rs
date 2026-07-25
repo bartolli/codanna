@@ -18,6 +18,12 @@ pub struct IndexStats {
     /// Number of symbols that failed embedding generation
     pub embeddings_failed: usize,
 
+    /// Files removed by deleted-file cleanup
+    pub files_removed: usize,
+
+    /// Symbols removed by deleted-file cleanup
+    pub symbols_removed: usize,
+
     /// Time elapsed during indexing
     pub elapsed: Duration,
 

@@ -1,12 +1,12 @@
 # PHP Grammar Analysis
 
-*Generated: 2026-03-15 18:41:01 UTC*
+*Generated: 2026-07-24 23:20:45 UTC*
 
 ## Statistics
 - Total nodes in grammar JSON: 161
 - Nodes found in comprehensive.php: 177
 - Nodes handled by parser: 176
-- Symbol kinds extracted: 8
+- Symbol kinds extracted: 9
 
 ## Successfully Handled Nodes
 These nodes are in examples and handled by parser:
@@ -258,6 +258,7 @@ These grammar nodes aren't in comprehensive.php:
 ## Symbol Kinds Extracted
 - Class
 - Constant
+- Enum
 - Field
 - Function
 - Interface

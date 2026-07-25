@@ -117,9 +117,24 @@ impl ReadStage {
             })
             .collect();
 
-        // Wait for all threads
+        // Wait for all threads. A panicked worker's unread files never
+        // reached PARSE; returning Ok would report success on a silently
+        // incomplete index (same convention as join_read_workers).
+        let mut panicked_workers = 0usize;
         for handle in handles {
-            let _ = handle.join();
+            if handle.join().is_err() {
+                tracing::error!(target: "pipeline", "READ worker panicked");
+                panicked_workers += 1;
+            }
+        }
+
+        if panicked_workers > 0 {
+            return Err(PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: format!(
+                    "{panicked_workers} READ worker(s) panicked; their files never reached PARSE"
+                ),
+            });
         }
 
         Ok((

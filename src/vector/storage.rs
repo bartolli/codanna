@@ -116,6 +116,9 @@ impl MmapVectorStorage {
         }
 
         let file = File::open(&path)?;
+        // SAFETY: the file is never modified while a map is alive. All
+        // in-process writes go through write_batch, which drops the map
+        // (invalidate_cache) before touching the file; reads remap after.
         let mmap = unsafe { MmapOptions::new().map(&file)? };
 
         // Read and validate header
@@ -170,9 +173,11 @@ impl MmapVectorStorage {
             .collect();
         self.validate_vectors(&owned_vectors)?;
         self.ensure_storage_ready()?;
+        // Drop the map before any file write: mutating a mapped file is
+        // undefined behavior per the memmap2 contract. The next read remaps.
+        self.invalidate_cache();
         self.append_vectors(&owned_vectors)?;
         self.update_metadata(vectors.len())?;
-        self.invalidate_cache();
         Ok(())
     }
 
@@ -194,6 +199,10 @@ impl MmapVectorStorage {
 
     /// Appends vectors to the storage file.
     fn append_vectors(&self, vectors: &[(VectorId, Vec<f32>)]) -> Result<(), VectorStorageError> {
+        debug_assert!(
+            self.mmap.is_none(),
+            "file must not be written while mapped (memmap2 UB)"
+        );
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -419,6 +428,8 @@ impl MmapVectorStorage {
     fn ensure_mapped(&mut self) -> Result<(), VectorStorageError> {
         if self.mmap.is_none() {
             let file = File::open(&self.path)?;
+            // SAFETY: same invariant as `open` — write_batch drops the map
+            // before any file write, so a live map never aliases a mutation.
             let mmap = unsafe { MmapOptions::new().map(&file)? };
 
             // Update vector count from file
@@ -431,6 +442,11 @@ impl MmapVectorStorage {
 
     fn update_header_count(&self) -> Result<(), VectorStorageError> {
         use std::io::{Seek, SeekFrom};
+
+        debug_assert!(
+            self.mmap.is_none(),
+            "file must not be written while mapped (memmap2 UB)"
+        );
 
         let mut file = OpenOptions::new().write(true).open(&self.path)?;
 
@@ -527,6 +543,36 @@ mod tests {
 
         // Open existing storage should fail (not initialized)
         assert!(MmapVectorStorage::open(&temp_dir, segment).is_err());
+    }
+
+    #[test]
+    fn test_write_after_read_drops_map_before_writing() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(4).unwrap();
+
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+
+        let first = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0, 3.0, 4.0])];
+        let batch: Vec<(VectorId, &[f32])> =
+            first.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        storage.write_batch(&batch).unwrap();
+
+        // Read maps the file; a second write must drop the map first
+        // (append_vectors/update_header_count debug_assert the invariant).
+        assert!(storage.read_vector(VectorId::new(1).unwrap()).is_some());
+        assert!(storage.mmap.is_some());
+
+        let second = [(VectorId::new(2).unwrap(), vec![5.0f32, 6.0, 7.0, 8.0])];
+        let batch: Vec<(VectorId, &[f32])> =
+            second.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        storage.write_batch(&batch).unwrap();
+
+        assert_eq!(storage.vector_count(), 2);
+        assert_eq!(
+            storage.read_vector(VectorId::new(2).unwrap()).unwrap(),
+            vec![5.0f32, 6.0, 7.0, 8.0]
+        );
     }
 
     #[test]

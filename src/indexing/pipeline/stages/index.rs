@@ -13,13 +13,17 @@
 
 use crate::indexing::IndexStats;
 use crate::indexing::pipeline::types::{
-    IndexBatch, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
+    IndexBatch, PipelineError, PipelineResult, SymbolLookupCache, UnresolvedRelationship,
 };
 use crate::io::status_line::ProgressBar;
 use crate::storage::DocumentIndex;
 use crossbeam_channel::Receiver;
 use rayon::prelude::*;
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Index stage for Tantivy writes.
 ///
@@ -37,6 +41,10 @@ pub struct IndexStage {
     progress: Option<Arc<ProgressBar>>,
     /// Optional progress callback (alternative to progress bar).
     progress_callback: Option<IndexProgressCallback>,
+    /// Starting (file, symbol) counters; seeds the durable high-water
+    /// mark so a partial run never persists counters below ids consumed
+    /// by earlier generations.
+    counter_floor: (u32, u32),
 }
 
 impl IndexStage {
@@ -50,7 +58,15 @@ impl IndexStage {
             batches_per_commit: batches_per_commit.max(1),
             progress: None,
             progress_callback: None,
+            counter_floor: (0, 0),
         }
+    }
+
+    /// Seed the durable-counter high-water mark with the run's starting
+    /// counters (from `get_start_counters`).
+    pub fn with_counter_floor(mut self, file: u32, symbol: u32) -> Self {
+        self.counter_floor = (file, symbol);
+        self
     }
 
     /// Add progress bar for live updates.
@@ -75,6 +91,8 @@ impl IndexStage {
     ) -> PipelineResult<(
         IndexStats,
         Vec<UnresolvedRelationship>,
+        super::super::FileBindings,
+        super::super::FileBarriers,
         SymbolLookupCache,
         std::time::Duration,
     )> {
@@ -82,7 +100,10 @@ impl IndexStage {
 
         let mut stats = IndexStats::new();
         let mut pending_relationships: Vec<UnresolvedRelationship> = Vec::new();
+        let mut pending_bindings = super::super::FileBindings::new();
+        let mut pending_barriers = super::super::FileBarriers::new();
         let mut batch_count = 0;
+        let mut failed_files_total = 0usize;
         let mut input_wait = Duration::ZERO;
 
         // Pre-allocate cache based on expected symbols (will grow if needed)
@@ -91,74 +112,130 @@ impl IndexStage {
         // Start initial batch - StorageError converts to PipelineError via #[from]
         self.index.start_batch()?;
 
+        let (mut file_high_water, mut symbol_high_water) = self.counter_floor;
+
         loop {
             // Track input wait (time blocked on recv)
             let recv_start = Instant::now();
-            let batch = match receiver.recv() {
+            let mut batch = match receiver.recv() {
                 Ok(b) => b,
                 Err(_) => break, // Channel closed
             };
             input_wait += recv_start.elapsed();
 
-            self.process_batch(&batch, &mut stats, &symbol_cache)?;
-
             // Accumulate relationships for Phase 2
-            pending_relationships.extend(batch.unresolved_relationships);
+            pending_relationships.extend(std::mem::take(&mut batch.unresolved_relationships));
+            pending_bindings.extend(std::mem::take(&mut batch.variable_bindings));
+            pending_barriers.extend(std::mem::take(&mut batch.this_barrier_spans));
+
+            for registration in &batch.file_registrations {
+                file_high_water = file_high_water.max(registration.file_id.value());
+            }
+            for symbol in &batch.symbols {
+                symbol_high_water = symbol_high_water.max(symbol.id.value());
+            }
+
+            failed_files_total += self.process_batch(batch, &mut stats, &symbol_cache)?;
 
             batch_count += 1;
 
             // Commit every N batches
             if batch_count % self.batches_per_commit == 0 {
+                self.persist_counters(file_high_water, symbol_high_water)?;
                 self.commit_and_restart()?;
             }
         }
 
         // Final commit
+        self.persist_counters(file_high_water, symbol_high_water)?;
         self.index.commit_batch()?;
 
-        Ok((stats, pending_relationships, symbol_cache, input_wait))
+        // Clean work is committed and durable; failed files are unregistered
+        // (no content hash) so the next run re-visits them. The stage still
+        // fails so the run does not report success over a known gap.
+        if failed_files_total > 0 {
+            return Err(PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: format!(
+                    "{failed_files_total} file(s) had failed index writes and were left \
+                     unregistered; re-run indexing to fill the gap"
+                ),
+            });
+        }
+
+        Ok((
+            stats,
+            pending_relationships,
+            pending_bindings,
+            pending_barriers,
+            symbol_cache,
+            input_wait,
+        ))
     }
 
     /// Process a single batch.
     ///
     /// Writes symbols, imports, and file registrations to Tantivy in parallel.
     /// Accumulates symbols in cache for Phase 2 resolution.
+    ///
+    /// Returns the number of files in this batch that were left unregistered
+    /// because a write failed.
     fn process_batch(
         &self,
-        batch: &IndexBatch,
+        batch: IndexBatch,
         stats: &mut IndexStats,
         symbol_cache: &SymbolLookupCache,
-    ) -> PipelineResult<()> {
-        // Write file registrations in parallel
-        batch
-            .file_registrations
-            .par_iter()
-            .for_each(|registration| {
-                if let Err(e) = self.index.store_file_registration(registration) {
-                    tracing::warn!(
-                        target: "pipeline",
-                        "Failed to store file registration for {}: {e}",
-                        registration.path.display()
-                    );
-                }
-            });
-        let files_in_batch = batch.file_registrations.len();
-        stats.files_indexed += files_in_batch;
+    ) -> PipelineResult<usize> {
+        // Symbols are written before file registrations: a file whose symbol
+        // writes fail must not be registered with its content hash, or the
+        // next incremental run treats it as up-to-date and the gap becomes
+        // permanent. COLLECT keeps a file's registration and symbols in one
+        // batch, so the skip below covers every registration for the file.
+        let failed_files: Mutex<HashSet<Box<str>>> = Mutex::new(HashSet::new());
 
         // Write symbols to Tantivy in parallel
         // SymbolLookupCache uses DashMap which is concurrent-safe
-        batch.symbols.par_iter().for_each(|(symbol, path)| {
-            if let Err(e) = self.index.index_symbol(symbol, &path.to_string_lossy()) {
-                tracing::warn!(
+        let symbols_in_batch = batch.symbols.len();
+        batch.symbols.into_par_iter().for_each(|symbol| {
+            if let Err(e) = self.index.index_symbol(&symbol, &symbol.file_path) {
+                tracing::error!(
                     target: "pipeline",
                     "Failed to index symbol {}: {e}",
                     symbol.name
                 );
+                if let Ok(mut failed) = failed_files.lock() {
+                    failed.insert(symbol.file_path.clone());
+                }
             }
             // Insert into cache for O(1) Phase 2 resolution (DashMap is concurrent)
-            symbol_cache.insert(symbol.clone());
+            symbol_cache.insert(symbol);
         });
-        stats.symbols_found += batch.symbols.len();
+        stats.symbols_found += symbols_in_batch;
+
+        let failed = failed_files
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // Write file registrations in parallel, skipping failed files
+        let registration_failures = AtomicUsize::new(0);
+        batch
+            .file_registrations
+            .par_iter()
+            .filter(|registration| !failed.contains(registration.path.to_string_lossy().as_ref()))
+            .for_each(|registration| {
+                if let Err(e) = self.index.store_file_registration(registration) {
+                    tracing::error!(
+                        target: "pipeline",
+                        "Failed to store file registration for {}: {e}",
+                        registration.path.display()
+                    );
+                    registration_failures.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+        let files_in_batch = batch.file_registrations.len();
+        let files_failed = failed.len() + registration_failures.load(Ordering::Relaxed);
+        stats.files_indexed += files_in_batch - files_failed;
+        stats.files_failed += files_failed;
 
         // Write imports in parallel
         batch.imports.par_iter().for_each(|import| {
@@ -185,13 +262,30 @@ impl IndexStage {
             callback(files_in_batch as u64);
         }
 
-        Ok(())
+        Ok(files_failed)
     }
 
     /// Commit current batch and start a new one.
     fn commit_and_restart(&self) -> PipelineResult<()> {
         self.index.commit_batch()?;
         self.index.start_batch()?;
+        Ok(())
+    }
+
+    /// Stage the id-counter high-water mark into the open batch so docs
+    /// and counters become durable in ONE commit. A run that dies after
+    /// any commit leaves the persisted counters at or above every
+    /// committed id; the next generation cannot re-issue a live id.
+    fn persist_counters(&self, file: u32, symbol: u32) -> PipelineResult<()> {
+        use crate::storage::MetadataKey;
+        if file > 0 {
+            self.index
+                .store_metadata(MetadataKey::FileCounter, u64::from(file))?;
+        }
+        if symbol > 0 {
+            self.index
+                .store_metadata(MetadataKey::SymbolCounter, u64::from(symbol))?;
+        }
         Ok(())
     }
 
@@ -202,7 +296,16 @@ impl IndexStage {
     pub fn index_batch(&self, batch: IndexBatch) -> PipelineResult<()> {
         let symbol_cache = SymbolLookupCache::new();
         let mut stats = IndexStats::new();
-        self.process_batch(&batch, &mut stats, &symbol_cache)
+        let failed = self.process_batch(batch, &mut stats, &symbol_cache)?;
+        if failed > 0 {
+            return Err(PipelineError::Parse {
+                path: PathBuf::new(),
+                reason: format!(
+                    "{failed} file(s) had failed index writes and were left unregistered"
+                ),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -227,6 +330,7 @@ mod tests {
             FileId::new(file_id).unwrap(),
             Range::new(1, 0, 1, 10),
         )
+        .with_file_path(format!("test_{file_id}.rs"))
     }
 
     fn make_test_batch(file_id: u32, symbol_count: usize) -> IndexBatch {
@@ -244,9 +348,7 @@ mod tests {
         for i in 0..symbol_count {
             let sym_id = (file_id - 1) * symbol_count as u32 + i as u32 + 1;
             let symbol = make_test_symbol(sym_id, &format!("sym_{sym_id}"), file_id);
-            batch
-                .symbols
-                .push((symbol, PathBuf::from(format!("test_{file_id}.rs"))));
+            batch.symbols.push(symbol);
         }
 
         batch
@@ -269,7 +371,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, rels, symbol_cache, _) = result.unwrap();
+        let (stats, rels, _, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Indexed {} files, {} symbols, cache has {} entries",
@@ -303,7 +405,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, _, symbol_cache, _) = result.unwrap();
+        let (stats, _, _, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Indexed {} files, {} symbols with batches_per_commit=2, cache has {} entries",
@@ -315,6 +417,56 @@ mod tests {
         assert_eq!(stats.files_indexed, 5);
         assert_eq!(stats.symbols_found, 10);
         assert_eq!(symbol_cache.len(), 10);
+    }
+
+    /// Crash-window regression: docs must never be durable above the
+    /// persisted counters. Run the stage WITHOUT the pipeline's tail
+    /// save_final_counters; the stored counters must already cover
+    /// every committed id.
+    #[test]
+    fn counters_are_durable_at_every_commit_without_tail_save() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+
+        let (batch_tx, batch_rx) = bounded(10);
+        batch_tx.send(make_test_batch(1, 3)).unwrap(); // symbol ids 1..=3
+        batch_tx.send(make_test_batch(2, 3)).unwrap(); // symbol ids 4..=6
+        drop(batch_tx);
+
+        let stage = IndexStage::new(Arc::clone(&index), 1);
+        stage.run(batch_rx).unwrap();
+
+        assert_eq!(
+            index.get_next_symbol_id().unwrap(),
+            7,
+            "symbol counter must cover every committed id without a tail save"
+        );
+        assert_eq!(
+            index.get_next_file_id().unwrap(),
+            3,
+            "file counter must cover every committed registration"
+        );
+    }
+
+    /// A run whose batches carry ids below the starting counters (an
+    /// incremental run over an existing index) must not regress the
+    /// persisted counters below the floor.
+    #[test]
+    fn counter_floor_prevents_regression_below_prior_generations() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+
+        let (batch_tx, batch_rx) = bounded(10);
+        batch_tx.send(make_test_batch(1, 2)).unwrap(); // file id 1, symbol ids 1..=2
+        drop(batch_tx);
+
+        let stage = IndexStage::new(Arc::clone(&index), 1).with_counter_floor(10, 20);
+        stage.run(batch_rx).unwrap();
+
+        assert_eq!(index.get_next_file_id().unwrap(), 11);
+        assert_eq!(index.get_next_symbol_id().unwrap(), 21);
     }
 
     #[test]
@@ -347,7 +499,7 @@ mod tests {
         let result = stage.run(batch_rx);
 
         assert!(result.is_ok());
-        let (stats, rels, symbol_cache, _) = result.unwrap();
+        let (stats, rels, _, _, symbol_cache, _) = result.unwrap();
 
         println!(
             "Accumulated {} relationships for Phase 2, cache has {} symbols",
@@ -386,15 +538,15 @@ mod tests {
         let sym2 = make_test_symbol(2, "process_data", 1); // Duplicate name, different ID
         let sym3 = make_test_symbol(3, "validate_input", 1);
 
-        batch.symbols.push((sym1, PathBuf::from("test.rs")));
-        batch.symbols.push((sym2, PathBuf::from("test.rs")));
-        batch.symbols.push((sym3, PathBuf::from("test.rs")));
+        batch.symbols.push(sym1);
+        batch.symbols.push(sym2);
+        batch.symbols.push(sym3);
 
         batch_tx.send(batch).unwrap();
         drop(batch_tx);
 
         let stage = IndexStage::new(Arc::clone(&index), 10);
-        let (_, _, symbol_cache, _) = stage.run(batch_rx).unwrap();
+        let (_, _, _, _, symbol_cache, _) = stage.run(batch_rx).unwrap();
 
         // Verify lookup by name returns correct candidates
         let candidates = symbol_cache.lookup_candidates("process_data");

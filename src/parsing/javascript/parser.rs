@@ -354,6 +354,17 @@ impl JavaScriptParser {
                                 tracing::debug!(
                                     "[javascript] found default export of '{symbol_name}'"
                                 );
+                            } else if let Some(name_node) = next.child_by_field_name("name") {
+                                // Inline declaration form (`export default function Foo`):
+                                // the declaration extracts via the recursion below; the
+                                // name still registers so the default-export visibility
+                                // pass covers the symbol.
+                                let symbol_name = &code[name_node.byte_range()];
+                                self.default_exported_symbols
+                                    .insert(symbol_name.to_string());
+                                tracing::debug!(
+                                    "[javascript] found inline default export declaration '{symbol_name}'"
+                                );
                             }
                         }
                     }
@@ -376,9 +387,19 @@ impl JavaScriptParser {
                     }
                 }
 
-                // Still process children for nested declarations (e.g., export function foo())
-                if !found_default {
-                    for child in children {
+                // Still process children for nested declarations (e.g., export function foo()).
+                // Under `export default`, only declaration children recurse: the inline
+                // `export default function Foo() {}` form must extract, while
+                // `export default <identifier>` re-exports carry no declaration to walk.
+                for child in children {
+                    if !found_default
+                        || matches!(
+                            child.kind(),
+                            "function_declaration"
+                                | "generator_function_declaration"
+                                | "class_declaration"
+                        )
+                    {
                         self.extract_symbols_from_node(
                             child,
                             code,
@@ -1343,9 +1364,9 @@ impl JavaScriptParser {
 
                     if let Some(context) = function_context.or(inferred_context) {
                         let range = Range {
-                            start_line: (node.start_position().row + 1) as u32,
+                            start_line: node.start_position().row as u32,
                             start_column: node.start_position().column as u16,
-                            end_line: (node.end_position().row + 1) as u32,
+                            end_line: node.end_position().row as u32,
                             end_column: node.end_position().column as u16,
                         };
                         calls.push((context, fn_name, range));
@@ -1393,6 +1414,17 @@ impl JavaScriptParser {
         // Recurse to children
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
+            // Function children of an export_statement were already walked by
+            // the wrapper arm above with their own name as context; a second
+            // visit duplicates every call edge inside them.
+            if node.kind() == "export_statement"
+                && matches!(
+                    child.kind(),
+                    "function_declaration" | "generator_function_declaration"
+                )
+            {
+                continue;
+            }
             self.extract_calls_recursive(&child, code, function_context, calls);
         }
     }
@@ -1468,9 +1500,9 @@ impl JavaScriptParser {
                     {
                         if let Some(context) = function_context {
                             let range = Range {
-                                start_line: (node.start_position().row + 1) as u32,
+                                start_line: node.start_position().row as u32,
                                 start_column: node.start_position().column as u16,
-                                end_line: (node.end_position().row + 1) as u32,
+                                end_line: node.end_position().row as u32,
                                 end_column: node.end_position().column as u16,
                             };
 
@@ -1811,6 +1843,37 @@ impl LanguageParser for JavaScriptParser {
 
     fn language(&self) -> crate::parsing::Language {
         crate::parsing::Language::JavaScript
+    }
+
+    fn find_this_barrier_spans(&mut self, code: &str) -> Vec<Range> {
+        // Non-arrow callables own their `this`; arrows bind lexically and
+        // contribute no barrier.
+        let mut spans = Vec::new();
+        if let Some(tree) = self.parser.parse(code, None) {
+            fn walk(node: &tree_sitter::Node, spans: &mut Vec<Range>) {
+                if BARRIERS.contains(&node.kind()) {
+                    spans.push(Range::new(
+                        node.start_position().row as u32,
+                        node.start_position().column as u16,
+                        node.end_position().row as u32,
+                        node.end_position().column as u16,
+                    ));
+                }
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    walk(&child, spans);
+                }
+            }
+            const BARRIERS: &[&str] = &[
+                "method_definition",
+                "function_declaration",
+                "function_expression",
+                "generator_function",
+                "generator_function_declaration",
+            ];
+            walk(&tree.root_node(), &mut spans);
+        }
+        spans
     }
 
     fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {

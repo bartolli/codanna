@@ -122,6 +122,8 @@ fn static_call_filters_ambiguous_by_class_name() {
             "RawSymbol",
             true,
         )],
+        variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, stats) = stage.resolve(&context);
@@ -150,7 +152,6 @@ fn instance_call_skips_static_filter() {
 
     let cache = Arc::new(SymbolLookupCache::new());
     cache.insert(make_caller(1, caller_file));
-    let symbol_method_id = SymbolId::new(2).unwrap();
     cache.insert(make_method_on_class(2, "new", symbol_file, Some("Symbol")));
     cache.insert(make_method_on_class(
         3,
@@ -174,18 +175,20 @@ fn instance_call_skips_static_filter() {
             "RawSymbol",
             false, // instance call -> static-call filter must be skipped
         )],
+        variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
-    let (batch, _stats) = stage.resolve(&context);
+    let (batch, stats) = stage.resolve(&context);
 
-    let rel = batch
-        .relationships
-        .first()
-        .expect("one resolved relationship");
-    assert_eq!(
-        rel.to_id, symbol_method_id,
-        "instance call must bypass the static-call filter and fall through to priority logic (insertion-order pick)"
+    // The static-call filter is bypassed (no receiver-class pick), and the
+    // instance receiver's type is unknown, so resolution fails closed
+    // rather than falling through to an insertion-order guess.
+    assert!(
+        batch.is_empty(),
+        "instance call with unknown-type receiver must not resolve"
     );
+    assert_eq!(stats.resolved, 0);
 }
 
 #[test]
@@ -223,6 +226,8 @@ fn static_call_no_match_returns_notfound() {
             "NoSuchType",
             true,
         )],
+        variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -269,6 +274,8 @@ fn static_call_matches_via_module_path_fallback() {
             "Target",
             true,
         )],
+        variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -326,6 +333,8 @@ fn static_call_multi_survivor_routes_through_disambiguate_priority() {
             "RawSymbol",
             true,
         )],
+        variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);
@@ -383,6 +392,8 @@ fn static_call_overrides_found_in_file_scope() {
             "RawSymbol",
             true,
         )],
+        variable_bindings: vec![],
+        this_barrier_spans: vec![],
     };
 
     let (batch, _stats) = stage.resolve(&context);

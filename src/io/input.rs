@@ -52,21 +52,6 @@ pub struct JsonRpcError {
     pub data: Option<serde_json::Value>,
 }
 
-/// Standard JSON-RPC 2.0 error codes.
-#[allow(dead_code)]
-pub mod error_codes {
-    /// Parse error
-    pub const PARSE_ERROR: i32 = -32700;
-    /// Invalid request
-    pub const INVALID_REQUEST: i32 = -32600;
-    /// Method not found
-    pub const METHOD_NOT_FOUND: i32 = -32601;
-    /// Invalid params
-    pub const INVALID_PARAMS: i32 = -32602;
-    /// Internal error
-    pub const INTERNAL_ERROR: i32 = -32603;
-}
-
 // Future implementation for parsing JSON-RPC requests from stdin
 // This would enable codanna to be used as a backend for IDEs
 //

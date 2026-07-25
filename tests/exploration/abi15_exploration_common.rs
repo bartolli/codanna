@@ -27,7 +27,7 @@ pub fn parse_code(parser: &mut Parser, code: &str) -> tree_sitter::Tree {
 pub fn print_node_tree(node: Node, code: &str, indent: usize) {
     let node_text = &code[node.byte_range()];
     let truncated = if node_text.len() > 60 {
-        format!("{}...", &node_text[..57].replace('\n', " "))
+        format!("{}...", node_text[..57].replace('\n', " "))
     } else {
         node_text.replace('\n', " ")
     };

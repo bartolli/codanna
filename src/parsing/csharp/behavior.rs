@@ -94,6 +94,11 @@ impl StatefulBehavior for CSharpBehavior {
 }
 
 impl LanguageBehavior for CSharpBehavior {
+    /// partial classes split one type across files.
+    fn type_members_span_files(&self) -> bool {
+        true
+    }
+
     fn language_id(&self) -> crate::parsing::registry::LanguageId {
         crate::parsing::registry::LanguageId::new("csharp")
     }

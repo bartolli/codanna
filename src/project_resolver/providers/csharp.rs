@@ -10,7 +10,6 @@ use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
     helpers::{compute_config_shas, extract_language_config_paths, is_language_enabled},
-    memo::ResolutionMemo,
     persist::{ResolutionIndex, ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -46,11 +45,7 @@ pub struct CsprojInfo {
 ///
 /// Handles .csproj parsing to determine namespace mappings.
 /// C# uses dot-separated namespaces (e.g., Microsoft.EntityFrameworkCore.Internal).
-pub struct CSharpProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)]
-    memo: ResolutionMemo<HashMap<CsprojPath, Sha256Hash>>,
-}
+pub struct CSharpProvider {}
 
 impl Default for CSharpProvider {
     fn default() -> Self {
@@ -59,11 +54,9 @@ impl Default for CSharpProvider {
 }
 
 impl CSharpProvider {
-    /// Create a new C# provider with empty memoization cache
+    /// Create a new C# provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get namespace for a C# source file based on project configuration

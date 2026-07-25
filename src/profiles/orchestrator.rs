@@ -13,6 +13,41 @@ use super::project::ProfilesConfig;
 use super::provider_registry::ProviderSource;
 use std::path::Path;
 
+/// Rollback failures are collected, not swallowed: a failed restore means
+/// the user's backed-up files were not returned to the workspace, and a
+/// failed lockfile save leaves disk state claiming the install succeeded.
+fn fail_with_rollback(
+    primary: ProfileError,
+    backup: Option<&ProfileBackup>,
+    lockfile_rollback: Option<(&mut ProfileLockfile, &Path, &str)>,
+) -> ProfileError {
+    let mut failures = Vec::new();
+
+    if let Some((lockfile, path, profile_name)) = lockfile_rollback {
+        lockfile.remove_profile(profile_name);
+        if let Err(e) = lockfile.save(path) {
+            failures.push(format!("lockfile rollback save failed: {e}"));
+        }
+    }
+
+    if let Some(b) = backup {
+        if let Err(e) = restore_profile(b) {
+            failures.push(format!("backup restore failed: {e}"));
+        }
+    }
+
+    if failures.is_empty() {
+        return primary;
+    }
+    for failure in &failures {
+        eprintln!("Warning: {failure}");
+    }
+    ProfileError::RollbackFailed {
+        primary: Box::new(primary),
+        failures,
+    }
+}
+
 /// Install a profile to a workspace with atomic operations
 ///
 /// This orchestrates the complete installation with rollback support:
@@ -110,10 +145,7 @@ pub fn install_profile(
     ) {
         Ok(result) => result,
         Err(e) => {
-            if let Some(b) = backup {
-                let _ = restore_profile(&b);
-            }
-            return Err(e);
+            return Err(fail_with_rollback(e, backup.as_ref(), None));
         }
     };
 
@@ -136,10 +168,7 @@ pub fn install_profile(
     let integrity = match calculate_integrity(&absolute_files) {
         Ok(hash) => hash,
         Err(e) => {
-            if let Some(b) = backup {
-                let _ = restore_profile(&b);
-            }
-            return Err(e);
+            return Err(fail_with_rollback(e, backup.as_ref(), None));
         }
     };
 
@@ -158,11 +187,9 @@ pub fn install_profile(
     // 7. Update lockfile (with rollback on error)
     lockfile.add_profile(entry);
     if let Err(e) = lockfile.save(&lockfile_path) {
+        // The failed save is not retried; only in-memory removal + restore.
         lockfile.remove_profile(profile_name);
-        if let Some(b) = backup {
-            let _ = restore_profile(&b);
-        }
-        return Err(e);
+        return Err(fail_with_rollback(e, backup.as_ref(), None));
     }
 
     // 8. Update team profiles configuration (with rollback on error)
@@ -179,14 +206,11 @@ pub fn install_profile(
     profiles_config.add_profile(&profile_ref);
 
     if let Err(e) = profiles_config.save(&profiles_config_path) {
-        // Roll back lockfile
-        lockfile.remove_profile(profile_name);
-        let _ = lockfile.save(&lockfile_path);
-        // Restore backup
-        if let Some(b) = backup {
-            let _ = restore_profile(&b);
-        }
-        return Err(e);
+        return Err(fail_with_rollback(
+            e,
+            backup.as_ref(),
+            Some((&mut lockfile, &lockfile_path, profile_name)),
+        ));
     }
 
     Ok(())
@@ -214,4 +238,55 @@ fn current_timestamp() -> String {
     let seconds = time_of_day % 60;
 
     format!("{years:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression: profiles.json save failure (step 8) must roll back the
+    // persisted lockfile and surface the error instead of swallowing the
+    // rollback outcome.
+    #[test]
+    #[cfg(unix)]
+    fn profiles_config_save_failure_rolls_back_lockfile() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let profiles_dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+
+        let pdir = profiles_dir.path().join("demo");
+        std::fs::create_dir_all(&pdir).unwrap();
+        std::fs::write(
+            pdir.join("profile.json"),
+            r#"{"name":"demo","version":"0.1.0","files":["hello.md"]}"#,
+        )
+        .unwrap();
+        std::fs::write(pdir.join("hello.md"), "hi").unwrap();
+
+        // Read-only profiles.json forces the step-8 save to fail
+        let codanna_dir = workspace.path().join(".codanna");
+        std::fs::create_dir_all(&codanna_dir).unwrap();
+        let profiles_json = codanna_dir.join("profiles.json");
+        std::fs::write(&profiles_json, r#"{"version":1,"profiles":[]}"#).unwrap();
+        let mut perms = std::fs::metadata(&profiles_json).unwrap().permissions();
+        perms.set_mode(0o444);
+        std::fs::set_permissions(&profiles_json, perms).unwrap();
+
+        let result = install_profile(
+            "demo",
+            profiles_dir.path(),
+            workspace.path(),
+            false,
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+
+        // Rollback persisted: lockfile no longer claims the profile
+        let lockfile =
+            ProfileLockfile::load(&workspace.path().join(".codanna/profiles.lock.json")).unwrap();
+        assert!(lockfile.get_profile("demo").is_none());
+    }
 }

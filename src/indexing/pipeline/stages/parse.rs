@@ -7,11 +7,13 @@ use crate::Settings;
 use crate::indexing::pipeline::types::{
     FileContent, ParsedFile, PipelineError, PipelineResult, RawImport, RawRelationship, RawSymbol,
 };
-use crate::parsing::{LanguageId, LanguageParser, get_registry, normalize_for_module_path};
+use crate::parsing::{
+    LanguageBehavior, LanguageId, LanguageParser, get_registry, normalize_for_module_path,
+};
 use crate::types::{FileId, SymbolCounter};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Thread-local parser cache.
@@ -67,8 +69,8 @@ fn create_parser(
 
     registry
         .create_parser(language_id, settings)
-        .map_err(|e| PipelineError::Parse {
-            path: Default::default(),
+        .map_err(|e| PipelineError::ParserConstruction {
+            language: language_id,
             reason: e.to_string(),
         })
 }
@@ -91,15 +93,46 @@ fn detect_language(path: &Path) -> PipelineResult<LanguageId> {
         })
 }
 
+/// Construct one parser per language present in `files`.
+///
+/// Change-driven paths call this before their destructive cleanup: a
+/// parser that cannot construct (config error) would otherwise fail
+/// AFTER the modified files' old rows were removed, turning a config
+/// mistake into durable row loss. Only languages in the change set are
+/// constructed; unknown extensions pass (discover already filtered).
+pub fn preflight_file_parsers(files: &[PathBuf], settings: &Settings) -> PipelineResult<()> {
+    let mut seen = std::collections::HashSet::new();
+    for path in files {
+        let Ok(language_id) = detect_language(path) else {
+            continue;
+        };
+        if seen.insert(language_id) {
+            create_parser(language_id, settings)?;
+        }
+    }
+    Ok(())
+}
+
 /// Parse stage configuration.
 #[derive(Debug, Clone)]
 pub struct ParseStage {
     settings: Arc<Settings>,
+    /// Root of the tree being indexed, for module-path computation when the
+    /// file lies outside `settings.workspace_root` (out-of-tree indexing).
+    module_root: Option<PathBuf>,
 }
 
 impl ParseStage {
     pub fn new(settings: Arc<Settings>) -> Self {
-        Self { settings }
+        Self {
+            settings,
+            module_root: None,
+        }
+    }
+
+    pub fn with_module_root(mut self, root: Option<PathBuf>) -> Self {
+        self.module_root = root;
+        self
     }
 
     /// Get the settings.
@@ -109,7 +142,7 @@ impl ParseStage {
 
     /// Parse a file using this stage's settings.
     pub fn parse(&self, content: FileContent) -> PipelineResult<ParsedFile> {
-        parse_file(content, &self.settings)
+        parse_file_with_root(content, &self.settings, self.module_root.as_deref())
     }
 }
 
@@ -121,6 +154,15 @@ impl ParseStage {
 /// 3. Extracts symbols, imports, and relationships
 /// 4. Returns ParsedFile with RawSymbols (no IDs assigned)
 pub fn parse_file(content: FileContent, settings: &Settings) -> PipelineResult<ParsedFile> {
+    parse_file_with_root(content, settings, None)
+}
+
+/// Parse a single file, with a module root for out-of-tree files.
+pub fn parse_file_with_root(
+    content: FileContent,
+    settings: &Settings,
+    module_root: Option<&Path>,
+) -> PipelineResult<ParsedFile> {
     let language_id = detect_language(&content.path)?;
 
     PARSER_CACHE.with(|cache| {
@@ -131,7 +173,7 @@ pub fn parse_file(content: FileContent, settings: &Settings) -> PipelineResult<P
 
         let parser = parser_cache.get_or_create(language_id)?;
 
-        parse_with_parser(content, language_id, parser, settings)
+        parse_with_parser(content, language_id, parser, settings, module_root)
     })
 }
 
@@ -141,14 +183,21 @@ fn parse_with_parser(
     language_id: LanguageId,
     parser: &mut dyn LanguageParser,
     settings: &Settings,
+    module_root: Option<&Path>,
 ) -> PipelineResult<ParsedFile> {
     // Use a dummy file_id and counter - we just need to extract symbols
     // Real IDs are assigned in COLLECT stage
     let dummy_file_id = FileId::new(1).unwrap();
     let mut counter = SymbolCounter::new();
 
+    // One behavior instance serves module_path computation and import
+    // normalization below
+    let behavior = create_behavior(language_id);
+
     // Compute module_path using the language behavior
-    let module_path = compute_module_path(&content.path, language_id, settings);
+    let module_path = behavior
+        .as_deref()
+        .and_then(|b| compute_module_path(b, &content.path, settings, module_root));
 
     // Parse symbols
     let symbols = parser.parse(&content.content, dummy_file_id, &mut counter);
@@ -157,7 +206,7 @@ fn parse_with_parser(
     let raw_symbols: Vec<RawSymbol> = symbols
         .into_iter()
         .map(|sym| {
-            let mut raw = RawSymbol::new(sym.name.clone(), sym.kind, sym.range);
+            let mut raw = RawSymbol::new(sym.name, sym.kind, sym.range);
             if let Some(sig) = sym.signature {
                 raw = raw.with_signature(sig);
             }
@@ -172,12 +221,19 @@ fn parse_with_parser(
         })
         .collect();
 
-    // Extract imports (without FileId)
+    // Extract imports (without FileId), normalized to canonical form
+    // (e.g. Python relative imports resolved against the file's module path)
     let imports = parser.find_imports(&content.content, dummy_file_id);
     let raw_imports: Vec<RawImport> = imports
         .into_iter()
         .map(|imp| {
-            let mut raw = RawImport::new(&imp.path);
+            let path = behavior
+                .as_deref()
+                .and_then(|b| {
+                    b.normalize_import_path(&imp.path, module_path.as_deref(), &content.path)
+                })
+                .unwrap_or(imp.path);
+            let mut raw = RawImport::new(&path);
             if let Some(alias) = imp.alias {
                 raw = raw.with_alias(alias);
             }
@@ -194,6 +250,22 @@ fn parse_with_parser(
     // Extract relationships
     let raw_relationships = extract_relationships(parser, &content.content);
 
+    // Typed local bindings feed receiver-type inference in Phase 2
+    let variable_bindings = parser
+        .find_variable_types(&content.content)
+        .into_iter()
+        .map(
+            |(name, type_name, range)| crate::indexing::pipeline::VariableBinding {
+                name: name.to_string(),
+                type_name: type_name.to_string(),
+                range,
+            },
+        )
+        .collect();
+
+    // This-barrier spans feed the lexical-this walk in Phase 2
+    let this_barrier_spans = parser.find_this_barrier_spans(&content.content);
+
     Ok(ParsedFile {
         path: content.path,
         content_hash: content.hash,
@@ -202,7 +274,17 @@ fn parse_with_parser(
         raw_symbols,
         raw_imports,
         raw_relationships,
+        variable_bindings,
+        this_barrier_spans,
     })
+}
+
+/// Create the language behavior for a registered language.
+fn create_behavior(language_id: LanguageId) -> Option<Box<dyn LanguageBehavior>> {
+    let registry = get_registry();
+    let registry_guard = registry.lock().ok()?;
+    let definition = registry_guard.get(language_id)?;
+    Some(definition.create_behavior())
 }
 
 /// Compute module_path for a file using the language behavior.
@@ -213,19 +295,15 @@ fn parse_with_parser(
 /// - For TypeScript/JavaScript: path relative to tsconfig/jsconfig
 /// - For other languages: path relative to project root
 fn compute_module_path(
+    behavior: &dyn LanguageBehavior,
     file_path: &Path,
-    language_id: LanguageId,
     settings: &Settings,
+    module_root: Option<&Path>,
 ) -> Option<String> {
-    let registry = get_registry();
-    let registry_guard = registry.lock().ok()?;
-    let definition = registry_guard.get(language_id)?;
-    let behavior = definition.create_behavior();
-
     // Get extensions from settings.toml (single source of truth)
     let extensions: Vec<&str> = settings
         .languages
-        .get(language_id.as_str())
+        .get(behavior.language_id().as_str())
         .map(|config| config.extensions.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
 
@@ -238,7 +316,43 @@ fn compute_module_path(
     // Language behaviors expect absolute paths to strip_prefix(workspace_root)
     let normalized_path = normalize_for_module_path(file_path, workspace_root);
 
-    behavior.module_path_from_file(&normalized_path, workspace_root, &extensions)
+    let strip_base = select_strip_base(
+        &normalized_path,
+        workspace_root,
+        module_root,
+        &settings.indexed_paths_cache,
+    );
+
+    behavior.module_path_from_file(&normalized_path, strip_base, &extensions)
+}
+
+/// Pick the root that module paths are computed relative to.
+///
+/// The base must contain the file or every behavior's `strip_prefix` fails
+/// and the file gets no module path — which silently drops cross-file
+/// private-symbol resolution downstream. Priority: `workspace_root` (keeps
+/// in-tree runs unchanged), then the root being indexed, then the longest
+/// registered indexed path (incremental runs have no walk root).
+fn select_strip_base<'a>(
+    normalized_path: &Path,
+    workspace_root: &'a Path,
+    module_root: Option<&'a Path>,
+    indexed_paths: &'a [PathBuf],
+) -> &'a Path {
+    if normalized_path.starts_with(workspace_root) {
+        return workspace_root;
+    }
+    if let Some(root) = module_root.filter(|r| normalized_path.starts_with(r)) {
+        return root;
+    }
+    if let Some(root) = indexed_paths
+        .iter()
+        .filter(|r| normalized_path.starts_with(r))
+        .max_by_key(|r| r.as_os_str().len())
+    {
+        return root.as_path();
+    }
+    workspace_root
 }
 
 /// Extract relationships from parsed content.
@@ -274,24 +388,41 @@ fn extract_relationships(parser: &mut dyn LanguageParser, content: &str) -> Vec<
         );
     }
 
+    // Method-channel records end here; the bare-segment absorb below is
+    // scoped to them — plain-vs-plain must not absorb (a nested
+    // `foo(Bar::foo())` keeps both records).
+    let method_records = relationships.len();
+
     // Plain function calls (legacy - no caller_range available)
     for (caller, called, call_site) in parser.find_calls(content) {
-        // Avoid duplicates - method_calls should be comprehensive
-        // but some parsers might return both
-        let already_exists = relationships.iter().any(|r| {
+        // Method-call records absorb their plain-call twins. Parsers that
+        // visit a scoped call (`Type::method`) in both find_calls (full
+        // path) and find_method_calls (bare name + receiver) emit two
+        // records for one site; verbatim comparison alone misses the
+        // qualified form, so the method-call record also absorbs on
+        // last-`::`-segment match at the same call-site line.
+        let bare = called.rsplit_once("::").map_or(called, |(_, tail)| tail);
+        let already_exists = relationships.iter().enumerate().any(|(i, r)| {
             r.from_name.as_ref() == caller
-                && r.to_name.as_ref() == called
                 && r.to_range.start_line == call_site.start_line
+                && (r.to_name.as_ref() == called
+                    || (i < method_records && r.to_name.as_ref() == bare))
         });
         if !already_exists {
             // from_range = call_site triggers fallback to name-only lookup in COLLECT
-            relationships.push(RawRelationship::new(
-                caller,
-                call_site, // no caller_range available, use call_site
-                called,
-                call_site, // to_range = call site
-                crate::RelationKind::Calls,
-            ));
+            relationships.push(
+                RawRelationship::new(
+                    caller,
+                    call_site, // no caller_range available, use call_site
+                    called,
+                    call_site, // to_range = call site
+                    crate::RelationKind::Calls,
+                )
+                .with_metadata(
+                    crate::relationship::RelationshipMetadata::new()
+                        .at_position(call_site.start_line, call_site.start_column),
+                ),
+            );
         }
     }
 
@@ -359,6 +490,53 @@ pub fn compute_hash(content: &[u8]) -> u64 {
 mod tests {
     use super::*;
     use crate::types::Range;
+
+    #[test]
+    fn test_select_strip_base_workspace_wins_in_tree() {
+        let indexed = [PathBuf::from("/ws")];
+        let base = select_strip_base(
+            Path::new("/ws/src/lib.rs"),
+            Path::new("/ws"),
+            Some(Path::new("/ws/src")),
+            &indexed,
+        );
+        assert_eq!(base, Path::new("/ws"));
+    }
+
+    #[test]
+    fn test_select_strip_base_module_root_out_of_tree() {
+        let base = select_strip_base(
+            Path::new("/repo/src/widget/mod.rs"),
+            Path::new("/ws"),
+            Some(Path::new("/repo")),
+            &[],
+        );
+        assert_eq!(base, Path::new("/repo"));
+    }
+
+    #[test]
+    fn test_select_strip_base_indexed_path_longest_match() {
+        let indexed = [PathBuf::from("/repo"), PathBuf::from("/repo/vendor/lib")];
+        let base = select_strip_base(
+            Path::new("/repo/vendor/lib/src/a.rs"),
+            Path::new("/ws"),
+            None,
+            &indexed,
+        );
+        assert_eq!(base, Path::new("/repo/vendor/lib"));
+    }
+
+    #[test]
+    fn test_select_strip_base_unmatched_falls_back_to_workspace() {
+        let indexed = [PathBuf::from("/other")];
+        let base = select_strip_base(
+            Path::new("/elsewhere/a.rs"),
+            Path::new("/ws"),
+            Some(Path::new("/repo")),
+            &indexed,
+        );
+        assert_eq!(base, Path::new("/ws"));
+    }
 
     #[test]
     fn test_compute_hash() {
@@ -503,6 +681,53 @@ fn add_items() {
             !meta.static_call,
             "static_call must be false for instance method calls"
         );
+    }
+
+    #[test]
+    fn test_qualified_call_twin_absorbed_by_method_call() {
+        let settings = Arc::new(Settings::default());
+        init_parser_cache(settings.clone());
+
+        let content = FileContent::new(
+            "test.rs".into(),
+            r#"
+pub struct Alpha;
+impl Alpha {
+    pub fn new() -> Self { Alpha }
+}
+pub struct Beta;
+impl Beta {
+    pub fn new() -> Self { Beta }
+}
+fn build_alpha() {
+    let _a = Alpha::new();
+}
+"#
+            .to_string(),
+            "twin_hash".to_string(),
+        );
+
+        let parsed = parse_file(content, &settings).unwrap();
+        let calls: Vec<_> = parsed
+            .raw_relationships
+            .iter()
+            .filter(|r| {
+                r.from_name.as_ref() == "build_alpha" && r.kind == crate::RelationKind::Calls
+            })
+            .collect();
+        assert_eq!(
+            calls.len(),
+            1,
+            "one call site must persist one edge; qualified plain-call twin must be absorbed: {calls:?}"
+        );
+        let rel = calls[0];
+        assert_eq!(rel.to_name.as_ref(), "new");
+        let meta = rel
+            .metadata
+            .as_ref()
+            .expect("surviving edge is the receiver-carrying record");
+        assert_eq!(meta.receiver.as_deref(), Some("Alpha"));
+        assert!(meta.static_call);
     }
 
     #[test]

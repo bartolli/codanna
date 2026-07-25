@@ -178,6 +178,11 @@ impl IndexPersistence {
             IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
 
         metadata.update_counts(facade.symbol_count() as u32, facade.file_count());
+        // The gate upstream guarantees an existing index only reaches an
+        // incremental save when its stamp already matches; a fresh seed is
+        // this binary's output by construction. Stamping here is truthful
+        // in both cases.
+        metadata.emission_version = Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION);
 
         // Update indexed paths for sync detection on next load
         let indexed_paths: Vec<PathBuf> = facade.get_indexed_paths().iter().cloned().collect();

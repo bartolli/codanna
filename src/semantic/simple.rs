@@ -30,6 +30,14 @@ pub enum SemanticSearchError {
 
     #[error("Invalid ID: {id}\nSuggestion: {suggestion}")]
     InvalidId { id: u32, suggestion: String },
+
+    #[error(
+        "Embedding pool exhausted: no instance available after {waited:?} (pool size {pool_size})\nSuggestion: An embedder is wedged or leaked. Sample the process to capture stacks, then restart the run."
+    )]
+    PoolExhausted {
+        pool_size: usize,
+        waited: std::time::Duration,
+    },
 }
 
 /// Advanced semantic search engine for documentation analysis
@@ -503,7 +511,6 @@ impl SimpleSemanticSearch {
         } else {
             SemanticMetadata::new(model_name, self.dimensions, self.embeddings.len())
         };
-        metadata.save(path)?;
 
         // Create storage with our dimension
         let dimension = VectorDimension::new(self.dimensions).map_err(|e| {
@@ -513,7 +520,24 @@ impl SimpleSemanticSearch {
             }
         })?;
 
-        let mut storage = SemanticVectorStorage::new(path, dimension)?;
+        // Stage the vector file, then rename over the live one: a crash at
+        // any point leaves the previous generation loadable instead of the
+        // delete-then-rewrite window destroying all persisted embeddings.
+        let staging_dir = path.join(".staging");
+        if staging_dir.exists() {
+            std::fs::remove_dir_all(&staging_dir).map_err(|e| {
+                SemanticSearchError::StorageError {
+                    message: format!("Failed to clear stale staging dir: {e}"),
+                    suggestion: "Check directory permissions".to_string(),
+                }
+            })?;
+        }
+        std::fs::create_dir_all(&staging_dir).map_err(|e| SemanticSearchError::StorageError {
+            message: format!("Failed to create staging dir: {e}"),
+            suggestion: "Check directory permissions".to_string(),
+        })?;
+
+        let mut storage = SemanticVectorStorage::new(&staging_dir, dimension)?;
 
         // Convert HashMap to Vec for batch save
         let embeddings: Vec<(SymbolId, Vec<f32>)> = self
@@ -524,6 +548,29 @@ impl SimpleSemanticSearch {
 
         // Save all embeddings
         storage.save_batch(&embeddings)?;
+        drop(storage);
+
+        let staged_vec = staging_dir.join("segment_0.vec");
+        // write(true): Windows FlushFileBuffers requires GENERIC_WRITE
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&staged_vec)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| SemanticSearchError::StorageError {
+                message: format!("Failed to sync staged vector file: {e}"),
+                suggestion: "Check disk space and staged-file write access".to_string(),
+            })?;
+        std::fs::rename(&staged_vec, path.join("segment_0.vec")).map_err(|e| {
+            SemanticSearchError::StorageError {
+                message: format!("Failed to swap vector file into place: {e}"),
+                suggestion: "Check directory permissions".to_string(),
+            }
+        })?;
+        let _ = std::fs::remove_dir_all(&staging_dir);
+
+        // Metadata is written only after the vector file is in place, so it
+        // never claims embeddings that are not durably on disk.
+        metadata.save(path)?;
 
         // Save language mappings as a JSON file (convert SymbolId to u32 for serialization)
         let languages_path = path.join("languages.json");
@@ -538,10 +585,17 @@ impl SimpleSemanticSearch {
                 suggestion: "This is likely a bug in the code".to_string(),
             }
         })?;
-        std::fs::write(&languages_path, languages_json).map_err(|e| {
+        let languages_tmp = path.join("languages.json.tmp");
+        std::fs::write(&languages_tmp, languages_json).map_err(|e| {
             SemanticSearchError::StorageError {
                 message: format!("Failed to write language mappings: {e}"),
                 suggestion: "Check disk space and file permissions".to_string(),
+            }
+        })?;
+        std::fs::rename(&languages_tmp, &languages_path).map_err(|e| {
+            SemanticSearchError::StorageError {
+                message: format!("Failed to swap language mappings into place: {e}"),
+                suggestion: "Check directory permissions".to_string(),
             }
         })?;
 
@@ -729,6 +783,35 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
+    fn test_save_survives_stale_staging_and_reloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut search = SimpleSemanticSearch::new().unwrap();
+        search
+            .index_doc_comment(SymbolId::new(1).unwrap(), "Parse JSON data")
+            .unwrap();
+        search.save(dir.path()).unwrap();
+
+        // Simulated crash: staging dir left behind by an interrupted save
+        let staging = dir.path().join(".staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("segment_0.vec"), b"garbage from a dead save").unwrap();
+
+        // Old generation still loads
+        let loaded = SimpleSemanticSearch::load(dir.path()).unwrap();
+        assert_eq!(loaded.embedding_count(), 1);
+
+        // Next save clears stale staging and swaps in the new generation
+        search
+            .index_doc_comment(SymbolId::new(2).unwrap(), "Connect to database")
+            .unwrap();
+        search.save(dir.path()).unwrap();
+        assert!(!staging.exists());
+        let reloaded = SimpleSemanticSearch::load(dir.path()).unwrap();
+        assert_eq!(reloaded.embedding_count(), 2);
+    }
 
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]

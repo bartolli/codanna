@@ -4,7 +4,101 @@ use crate::Symbol;
 use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
 use crate::io::args::parse_positional_args;
+use crate::io::envelope::EntityType;
+use crate::mcp::service::{
+    FindSymbolTarget, SymbolResolution, accepted_params_line, missing_param_message,
+    resolve_find_symbol_target, resolve_symbol_or_id, tool_param_spec,
+};
 use serde::Serialize;
+
+/// Print a terminal envelope and exit with the envelope's own exit_code.
+/// The single choke point keeping the declared `exit_code` field and the
+/// delivered process exit synchronized on every JSON error path.
+fn emit_envelope_and_exit<T: Serialize>(envelope: crate::io::envelope::Envelope<T>) -> ! {
+    println!("{}", envelope.to_json().expect("envelope serialization"));
+    std::process::exit(envelope.exit_code.into());
+}
+
+/// Render an envelope as JSON, applying --fields projection when requested.
+/// An unknown projection field emits an InvalidQuery error envelope and
+/// exits 2, mirroring the unknown-argument rejection register.
+pub(crate) fn render_envelope_json<T: Serialize>(
+    envelope: &crate::io::envelope::Envelope<T>,
+    fields: Option<&Vec<String>>,
+) -> String {
+    use crate::io::envelope::{Envelope, FieldProjectionError, ResultCode};
+    match fields {
+        None => envelope.to_json().expect("envelope serialization"),
+        Some(f) => match envelope.to_json_with_fields(f) {
+            Ok(json) => json,
+            Err(FieldProjectionError::UnknownField { field, available }) => {
+                let err: Envelope<()> = Envelope::error(
+                    ResultCode::InvalidQuery,
+                    format!("Unknown field '{field}' in --fields"),
+                )
+                .with_hint(format!(
+                    "Available top-level fields: {}",
+                    available.join(", ")
+                ));
+                emit_envelope_and_exit(err);
+            }
+            Err(FieldProjectionError::Serde(e)) => panic!("envelope serialization: {e}"),
+        },
+    }
+}
+
+/// Print an INVALID_QUERY envelope for an ambiguous symbol name and exit 2.
+/// Mirrors the MCP handlers' refuse-and-list policy: JSON mode must never
+/// merge relationships across same-named symbols.
+fn exit_ambiguous(entity: EntityType, name: &str, candidates: Vec<Symbol>) -> ! {
+    use crate::io::envelope::{Envelope, ResultCode};
+    let count = candidates.len();
+    let mut envelope = Envelope::error(
+        ResultCode::InvalidQuery,
+        format!("Ambiguous: found {count} symbol(s) named '{name}'"),
+    )
+    .with_entity_type(entity)
+    .with_query(name)
+    .with_count(count)
+    .with_hint("Ambiguous name: re-run with symbol_id:<id> using a candidate from data");
+    envelope.data = Some(candidates);
+    emit_envelope_and_exit(envelope);
+}
+
+/// Print an INDEX_ERROR envelope and exit 2. A backend failure must be
+/// distinguishable from a legitimate zero-match result.
+fn exit_index_error(entity: EntityType, query: &str, error: impl std::fmt::Display) -> ! {
+    use crate::io::envelope::{Envelope, ResultCode};
+    let envelope: Envelope<()> = Envelope::error(
+        ResultCode::IndexError,
+        format!("Index query failed: {error}"),
+    )
+    .with_entity_type(entity)
+    .with_query(query);
+    emit_envelope_and_exit(envelope);
+}
+
+/// Reject an invalid argument set: INVALID_QUERY envelope (JSON) or stderr
+/// message (text), exit 2 in both modes. One emitter for missing required
+/// params and unknown keys alike — the two failure directions of the same
+/// parsing layer.
+fn exit_invalid_args(tool: &str, message: &str, accepted: &[&str], json: bool) -> ! {
+    let accepted_list = if accepted.is_empty() {
+        format!("{tool} accepts no key:value parameters")
+    } else {
+        accepted_params_line(tool)
+    };
+    if json {
+        use crate::io::envelope::{Envelope, ResultCode};
+        let envelope: Envelope<()> =
+            Envelope::error(ResultCode::InvalidQuery, message).with_hint(accepted_list);
+        emit_envelope_and_exit(envelope);
+    } else {
+        eprintln!("Error: {message}");
+        eprintln!("{accepted_list}");
+        std::process::exit(2);
+    }
+}
 
 // MCP tool JSON output structures
 #[derive(Debug, Serialize)]
@@ -12,7 +106,9 @@ struct IndexInfo {
     symbol_count: usize,
     file_count: usize,
     relationship_count: usize,
-    symbol_kinds: SymbolKindBreakdown,
+    symbol_kinds: std::collections::BTreeMap<String, usize>,
+    /// Per-language symbol counts (schema `indexInfo.languages`)
+    languages: std::collections::BTreeMap<String, usize>,
     semantic_search: SemanticSearchInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     documents: Option<DocumentsInfo>,
@@ -30,14 +126,6 @@ struct CollectionInfo {
     name: String,
     chunk_count: usize,
     file_count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct SymbolKindBreakdown {
-    functions: usize,
-    methods: usize,
-    structs: usize,
-    traits: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,6 +167,8 @@ struct SymbolInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
     module_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language_id: Option<String>,
 }
 
 /// Search result with nested symbol for consistent JSON output.
@@ -105,6 +195,7 @@ impl From<crate::storage::tantivy::SearchResult> for SearchSymbolResult {
                 doc_comment: sr.doc_comment,
                 signature: sr.signature,
                 module_path: sr.module_path,
+                language_id: sr.language_id,
             },
             score: sr.score,
             highlights: sr.highlights,
@@ -128,14 +219,8 @@ pub async fn run(
         // Parse JSON arguments if provided (backward compatibility)
         match serde_json::from_str::<serde_json::Value>(args_str) {
             Ok(serde_json::Value::Object(map)) => Some(map),
-            Ok(_) => {
-                eprintln!("Error: Arguments must be a JSON object");
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("Error parsing arguments: {e}");
-                std::process::exit(1);
-            }
+            Ok(_) => exit_invalid_args(&tool, "Arguments must be a JSON object", &[], json),
+            Err(e) => exit_invalid_args(&tool, &format!("Failed to parse --args: {e}"), &[], json),
         }
     } else {
         // Start with empty map if no --args
@@ -223,6 +308,91 @@ pub async fn run(
     // Convert to Option<Map> only if we have arguments
     let arguments = arguments.filter(|map| !map.is_empty());
 
+    // Validate the tool name up front: JSON mode never reaches the dispatch
+    // match below, so its unknown-tool arm cannot cover this.
+    const KNOWN_TOOLS: &[&str] = &[
+        "find_symbol",
+        "get_calls",
+        "find_callers",
+        "analyze_impact",
+        "get_index_info",
+        "search_symbols",
+        "semantic_search_docs",
+        "semantic_search_with_context",
+        "search_documents",
+    ];
+    if !KNOWN_TOOLS.contains(&tool.as_str()) {
+        if json {
+            use crate::io::exit_code::ExitCode;
+            use crate::io::format::JsonResponse;
+            let response = JsonResponse::error(
+                ExitCode::GeneralError,
+                &format!("Unknown tool: {tool}"),
+                vec![
+                    "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents",
+                ],
+            );
+            println!("{}", serde_json::to_string_pretty(&response).unwrap());
+        } else {
+            eprintln!("Unknown tool: {tool}");
+            eprintln!(
+                "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents"
+            );
+        }
+        std::process::exit(1);
+    }
+
+    // One validation surface for both output modes (replaces the per-tool
+    // checks that used to sit duplicated in the JSON collection blocks and
+    // the text dispatch): unknown keys reject instead of silently dropping,
+    // and missing required params error as INVALID_QUERY, exit 2.
+    let mut arguments = arguments;
+    {
+        let (accepted, requires_one_of) = tool_param_spec(&tool);
+
+        // `depth:` is a documented alias of `max_depth:` on analyze_impact —
+        // the envelope's own meta field is named `depth`, so the surface must
+        // accept the key it emits.
+        if tool == "analyze_impact" {
+            if let Some(map) = arguments.as_mut() {
+                if let Some(depth) = map.remove("depth") {
+                    if map.contains_key("max_depth") {
+                        exit_invalid_args(
+                            &tool,
+                            "analyze_impact accepts either 'depth' or 'max_depth', not both",
+                            accepted,
+                            json,
+                        );
+                    }
+                    map.insert("max_depth".to_string(), depth);
+                }
+            }
+        }
+
+        if let Some(map) = arguments.as_ref() {
+            for key in map.keys() {
+                if !accepted.contains(&key.as_str()) {
+                    exit_invalid_args(
+                        &tool,
+                        &format!("Unknown parameter '{key}' for {tool}"),
+                        accepted,
+                        json,
+                    );
+                }
+            }
+        }
+
+        if !requires_one_of.is_empty() {
+            let satisfied = arguments
+                .as_ref()
+                .is_some_and(|map| requires_one_of.iter().any(|k| map.contains_key(*k)));
+            if !satisfied {
+                exit_invalid_args(&tool, &missing_param_message(&tool), accepted, json);
+            }
+        }
+    }
+    let arguments = arguments;
+
     // Collect data for find_symbol if JSON output is requested
     let find_symbol_data = if json && tool == "find_symbol" {
         let name = arguments
@@ -235,19 +405,22 @@ pub async fn run(
             .and_then(|v| v.as_str());
 
         if let Some(symbol_name) = name {
-            let symbols = facade.find_symbols_by_name(symbol_name, language);
+            // One resolution policy with the MCP handler: the symbol_id:
+            // form resolves by id here exactly as it does in text mode.
+            let symbols = match resolve_find_symbol_target(&facade, symbol_name, language) {
+                FindSymbolTarget::Symbols { symbols, .. } => symbols,
+                // Non-numeric id: nothing to look up; renders the
+                // not_found envelope exactly like an unmatched name.
+                FindSymbolTarget::InvalidId(_) => Vec::new(),
+            };
             if !symbols.is_empty() {
                 use crate::symbol::context::ContextIncludes;
                 let mut results = Vec::new();
 
                 for symbol in symbols {
                     // Get full context with callers using the same approach as MCP
-                    let context = facade.get_symbol_context(
-                        symbol.id,
-                        ContextIncludes::CALLERS
-                            | ContextIncludes::IMPLEMENTATIONS
-                            | ContextIncludes::DEFINITIONS,
-                    );
+                    let context =
+                        facade.get_symbol_context(symbol.id, ContextIncludes::SYMBOL_CARD);
 
                     // Build result with context if available
                     if let Some(ctx) = context {
@@ -276,7 +449,9 @@ pub async fn run(
         None
     };
 
-    // Collect data for get_calls if JSON output is requested
+    // Collect data for get_calls if JSON output is requested.
+    // Resolution goes through the shared service layer: ambiguous names
+    // refuse-and-list (exit 2) exactly like the MCP handler, never aggregate.
     let get_calls_data = if json && tool == "get_calls" {
         let symbol_id = arguments
             .as_ref()
@@ -286,21 +461,14 @@ pub async fn run(
         let function_name = arguments
             .as_ref()
             .and_then(|m| m.get("function_name"))
-            .and_then(|v| v.as_str());
-        let language = arguments
-            .as_ref()
-            .and_then(|m| m.get("lang"))
-            .and_then(|v| v.as_str());
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        if let Some(id) = symbol_id {
-            use crate::symbol::context::ContextIncludes;
-
-            // Direct lookup by symbol ID
-            if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
+        use crate::symbol::context::ContextIncludes;
+        match resolve_symbol_or_id(&facade, symbol_id, function_name) {
+            SymbolResolution::Resolved { symbol, .. } => {
                 let mut all_calls = Vec::new();
-
-                let context = facade.get_symbol_context(symbol.id, ContextIncludes::CALLS);
-                if let Some(ctx) = context {
+                if let Some(ctx) = facade.get_symbol_context(symbol.id, ContextIncludes::CALLS) {
                     if let Some(calls) = ctx.relationships.calls {
                         for (called, metadata) in calls {
                             all_calls.push(CallRelation {
@@ -311,65 +479,26 @@ pub async fn run(
                         }
                     }
                 }
-
-                Some(all_calls)
-            } else {
-                None // Symbol not found
-            }
-        } else if let Some(func_name) = function_name {
-            use crate::symbol::context::ContextIncludes;
-            use std::collections::HashSet;
-
-            // Find ALL symbols with this name
-            let symbols = facade.find_symbols_by_name(func_name, language);
-            let function_symbols: Vec<_> = symbols
-                .into_iter()
-                .filter(|s| {
-                    matches!(
-                        s.kind,
-                        crate::SymbolKind::Function | crate::SymbolKind::Method
-                    )
-                })
-                .collect();
-
-            if function_symbols.is_empty() {
-                None // Function not found
-            } else {
-                // Aggregate calls from ALL symbols with this name (same as MCP handler)
-                let mut all_calls = Vec::new();
-                let mut seen_ids = HashSet::new();
-
-                for symbol in function_symbols {
-                    let context = facade.get_symbol_context(symbol.id, ContextIncludes::CALLS);
-                    if let Some(ctx) = context {
-                        if let Some(calls) = ctx.relationships.calls {
-                            for (called, metadata) in calls {
-                                // Deduplicate by symbol ID
-                                if seen_ids.insert(called.id) {
-                                    all_calls.push(CallRelation {
-                                        symbol: called,
-                                        call_line: metadata
-                                            .as_ref()
-                                            .and_then(|m| m.line)
-                                            .map(|l| l + 1),
-                                        call_column: metadata.as_ref().and_then(|m| m.column),
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-
                 Some(all_calls)
             }
-        } else {
-            None
+            SymbolResolution::NotFoundById(_) | SymbolResolution::NotFoundByName(_) => None,
+            SymbolResolution::Ambiguous { name, candidates } => {
+                exit_ambiguous(EntityType::Calls, &name, candidates)
+            }
+            SymbolResolution::MissingParam => exit_invalid_args(
+                &tool,
+                &missing_param_message(&tool),
+                tool_param_spec(&tool).0,
+                json,
+            ),
         }
     } else {
         None
     };
 
-    // Collect data for find_callers if JSON output is requested
+    // Collect data for find_callers if JSON output is requested.
+    // Same shared resolution policy as get_calls: refuse-and-list on
+    // ambiguity, never merge callers of unrelated same-named symbols.
     let find_callers_data = if json && tool == "find_callers" {
         let symbol_id = arguments
             .as_ref()
@@ -379,15 +508,11 @@ pub async fn run(
         let function_name = arguments
             .as_ref()
             .and_then(|m| m.get("function_name"))
-            .and_then(|v| v.as_str());
-        let language = arguments
-            .as_ref()
-            .and_then(|m| m.get("lang"))
-            .and_then(|v| v.as_str());
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        if let Some(id) = symbol_id {
-            // Direct lookup by symbol ID
-            if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
+        match resolve_symbol_or_id(&facade, symbol_id, function_name) {
+            SymbolResolution::Resolved { symbol, .. } => {
                 let callers = facade.get_calling_functions_with_metadata(symbol.id);
                 let all_callers: Vec<_> = callers
                     .into_iter()
@@ -398,39 +523,17 @@ pub async fn run(
                     })
                     .collect();
                 Some(all_callers)
-            } else {
-                None // Symbol not found
             }
-        } else if let Some(func_name) = function_name {
-            use std::collections::HashSet;
-
-            // Find all functions with this name
-            let symbols = facade.find_symbols_by_name(func_name, language);
-            if !symbols.is_empty() {
-                let mut all_callers = Vec::new();
-                let mut seen_ids = HashSet::new();
-
-                // Check all symbols with this name and deduplicate (same as MCP handler)
-                for symbol in &symbols {
-                    let callers = facade.get_calling_functions_with_metadata(symbol.id);
-                    for (caller, metadata) in callers {
-                        // Deduplicate by symbol ID
-                        if seen_ids.insert(caller.id) {
-                            all_callers.push(CallRelation {
-                                symbol: caller,
-                                call_line: metadata.as_ref().and_then(|m| m.line).map(|l| l + 1),
-                                call_column: metadata.as_ref().and_then(|m| m.column),
-                            });
-                        }
-                    }
-                }
-
-                Some(all_callers)
-            } else {
-                None // Function not found
+            SymbolResolution::NotFoundById(_) | SymbolResolution::NotFoundByName(_) => None,
+            SymbolResolution::Ambiguous { name, candidates } => {
+                exit_ambiguous(EntityType::Callers, &name, candidates)
             }
-        } else {
-            None
+            SymbolResolution::MissingParam => exit_invalid_args(
+                &tool,
+                &missing_param_message(&tool),
+                tool_param_spec(&tool).0,
+                json,
+            ),
         }
     } else {
         None
@@ -447,14 +550,9 @@ pub async fn run(
             .as_ref()
             .and_then(|m| m.get("symbol_name"))
             .and_then(|v| v.as_str());
-        let language = arguments
-            .as_ref()
-            .and_then(|m| m.get("lang"))
-            .and_then(|v| v.as_str());
 
-        if let Some(id) = symbol_id {
-            // Direct lookup by symbol ID
-            if let Some(symbol) = facade.get_symbol(crate::SymbolId(id)) {
+        match resolve_symbol_or_id(&facade, symbol_id, symbol_name.map(|s| s.to_string())) {
+            SymbolResolution::Resolved { symbol, .. } => {
                 let max_depth = arguments
                     .as_ref()
                     .and_then(|m| m.get("max_depth"))
@@ -472,43 +570,17 @@ pub async fn run(
                 }
 
                 Some(impacted_symbols)
-            } else {
-                None // Symbol not found
             }
-        } else if let Some(sym_name) = symbol_name {
-            use std::collections::HashSet;
-
-            // Find ALL symbols with this name (same as MCP handler)
-            let symbols = facade.find_symbols_by_name(sym_name, language);
-
-            if symbols.is_empty() {
-                None // Symbol not found
-            } else {
-                let max_depth = arguments
-                    .as_ref()
-                    .and_then(|m| m.get("max_depth"))
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(3) as usize;
-
-                // Aggregate impact from ALL symbols with this name (same as MCP handler)
-                let mut all_impacted_ids = HashSet::new();
-                for symbol in &symbols {
-                    let impacted_ids = facade.get_impact_radius(symbol.id, Some(max_depth));
-                    all_impacted_ids.extend(impacted_ids);
-                }
-
-                // Convert SymbolIds to full Symbols
-                let mut impacted_symbols = Vec::new();
-                for id in all_impacted_ids {
-                    if let Some(sym) = facade.get_symbol(id) {
-                        impacted_symbols.push(sym);
-                    }
-                }
-
-                Some(impacted_symbols)
+            SymbolResolution::NotFoundById(_) | SymbolResolution::NotFoundByName(_) => None,
+            SymbolResolution::Ambiguous { name, candidates } => {
+                exit_ambiguous(EntityType::ImpactGraph, &name, candidates)
             }
-        } else {
-            None
+            SymbolResolution::MissingParam => exit_invalid_args(
+                &tool,
+                &missing_param_message(&tool),
+                tool_param_spec(&tool).0,
+                json,
+            ),
         }
     } else {
         None
@@ -541,21 +613,24 @@ pub async fn run(
                 .and_then(|m| m.get("lang"))
                 .and_then(|v| v.as_str());
 
-            // Parse the kind filter if provided
-            let kind_filter = kind.as_ref().and_then(|k| match k.to_lowercase().as_str() {
-                "function" => Some(crate::SymbolKind::Function),
-                "struct" => Some(crate::SymbolKind::Struct),
-                "trait" => Some(crate::SymbolKind::Trait),
-                "method" => Some(crate::SymbolKind::Method),
-                "field" => Some(crate::SymbolKind::Field),
-                "module" => Some(crate::SymbolKind::Module),
-                "constant" => Some(crate::SymbolKind::Constant),
-                _ => None,
-            });
+            // One kind vocabulary (SymbolKind::from_str); unknown kinds
+            // error instead of silently returning unfiltered results.
+            let kind_filter = match kind.as_deref().map(str::parse::<crate::SymbolKind>) {
+                None => None,
+                Some(Ok(k)) => Some(k),
+                Some(Err(e)) => {
+                    use crate::io::envelope::{Envelope, ResultCode};
+                    let envelope: Envelope<()> =
+                        Envelope::error(ResultCode::InvalidQuery, format!("{e}"))
+                            .with_entity_type(EntityType::SearchResult)
+                            .with_query(q);
+                    emit_envelope_and_exit(envelope);
+                }
+            };
 
             match facade.search(q, limit as usize, kind_filter, module, language) {
                 Ok(results) => Some(results),
-                Err(_) => Some(Vec::new()),
+                Err(e) => exit_index_error(EntityType::SearchResult, q, e),
             }
         } else {
             None
@@ -627,7 +702,7 @@ pub async fn run(
                             .collect();
                         Some(semantic_results)
                     }
-                    Err(_) => Some(Vec::new()),
+                    Err(e) => exit_index_error(EntityType::SearchResult, q, e),
                 }
             } else {
                 None
@@ -682,10 +757,7 @@ pub async fn run(
                                 // Get full context for each symbol
                                 let context = facade.get_symbol_context(
                                     symbol.id,
-                                    ContextIncludes::CALLERS
-                                        | ContextIncludes::CALLS
-                                        | ContextIncludes::IMPLEMENTATIONS
-                                        | ContextIncludes::DEFINITIONS,
+                                    ContextIncludes::SYMBOL_CARD | ContextIncludes::CALLS,
                                 );
 
                                 context.map(|ctx| SemanticSearchWithContextResult {
@@ -700,7 +772,7 @@ pub async fn run(
                             .collect();
                         Some(context_results)
                     }
-                    Err(_) => Some(Vec::new()),
+                    Err(e) => exit_index_error(EntityType::SearchResult, q, e),
                 }
             } else {
                 None
@@ -728,16 +800,7 @@ pub async fn run(
         let file_count = facade.file_count();
         let relationship_count = facade.relationship_count();
 
-        // Count symbols by kind
-        let mut kind_counts = std::collections::HashMap::new();
-        for symbol in facade.get_all_symbols() {
-            *kind_counts.entry(symbol.kind).or_insert(0) += 1;
-        }
-
-        let functions = *kind_counts.get(&crate::SymbolKind::Function).unwrap_or(&0);
-        let methods = *kind_counts.get(&crate::SymbolKind::Method).unwrap_or(&0);
-        let structs = *kind_counts.get(&crate::SymbolKind::Struct).unwrap_or(&0);
-        let traits = *kind_counts.get(&crate::SymbolKind::Trait).unwrap_or(&0);
+        let (symbol_kinds, languages) = facade.symbol_stats();
 
         // Get semantic search info
         let semantic_search = if let Some(metadata) = facade.get_semantic_metadata() {
@@ -769,12 +832,8 @@ pub async fn run(
             symbol_count,
             file_count: file_count as usize,
             relationship_count,
-            symbol_kinds: SymbolKindBreakdown {
-                functions,
-                methods,
-                structs,
-                traits,
-            },
+            symbol_kinds,
+            languages,
             semantic_search,
             documents,
         })
@@ -811,15 +870,82 @@ pub async fn run(
                 preview_config: Some(config.documents.search.clone()),
             };
 
+            // Auto-sync collections before searching — same behavior as the
+            // MCP handler; JSON mode must not return stale chunks.
+            for (name, coll_config) in &config.documents.collections {
+                if let Err(e) =
+                    store.index_collection(name, coll_config, &config.documents.defaults)
+                {
+                    tracing::warn!(target: "rag", "auto-sync failed for collection '{}': {}", name, e);
+                }
+            }
+
             match store.search(search_query) {
                 Ok(results) => Some((query, results)),
-                Err(_) => Some((query, Vec::new())),
+                Err(e) => exit_index_error(EntityType::Document, &query, e),
             }
         } else {
             None
         }
     } else {
         None
+    };
+
+    // Text mode plans its exit code before the facade moves into the
+    // server: the outcome comes from the same shared resolution service
+    // the JSON path uses (not_found -> 1, ambiguous -> 2); the handler
+    // still renders the text. Search-class tools keep exit 0 on empty
+    // text results — they declare no envelope to contradict.
+    let text_exit: i32 = if json {
+        0
+    } else {
+        match tool.as_str() {
+            "find_symbol" => {
+                let name = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("name"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream");
+                let lang = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str());
+                let found = match resolve_find_symbol_target(&facade, name, lang) {
+                    FindSymbolTarget::Symbols { symbols, .. } => !symbols.is_empty(),
+                    FindSymbolTarget::InvalidId(_) => false,
+                };
+                if found { 0 } else { 1 }
+            }
+            "get_calls" | "find_callers" | "analyze_impact" => {
+                let symbol_id = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                    .map(|id| id as u32);
+                let name_key = if tool == "analyze_impact" {
+                    "symbol_name"
+                } else {
+                    "function_name"
+                };
+                let symbol_name = arguments
+                    .as_ref()
+                    .and_then(|m| m.get(name_key))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                match resolve_symbol_or_id(&facade, symbol_id, symbol_name) {
+                    SymbolResolution::Resolved { .. } => 0,
+                    SymbolResolution::NotFoundById(_) | SymbolResolution::NotFoundByName(_) => 1,
+                    SymbolResolution::Ambiguous { .. } => 2,
+                    SymbolResolution::MissingParam => exit_invalid_args(
+                        &tool,
+                        &missing_param_message(&tool),
+                        tool_param_spec(&tool).0,
+                        json,
+                    ),
+                }
+            }
+            _ => 0,
+        }
     };
 
     // Embedded mode - use already loaded facade directly
@@ -838,278 +964,246 @@ pub async fn run(
     use crate::mcp::*;
     use rmcp::handler::server::wrapper::Parameters;
 
-    let result = match tool.as_str() {
-        "find_symbol" => {
-            let name = arguments
-                .as_ref()
-                .and_then(|m| m.get("name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    eprintln!("Error: find_symbol requires 'name' parameter");
-                    std::process::exit(1);
-                });
-            let lang = arguments
-                .as_ref()
-                .and_then(|m| m.get("lang"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            server
-                .find_symbol(Parameters(FindSymbolRequest {
-                    name: name.to_string(),
-                    lang,
-                }))
-                .await
-        }
-        "get_calls" => {
-            let function_name = arguments
-                .as_ref()
-                .and_then(|m| m.get("function_name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
+    // JSON mode already collected everything above through the shared
+    // service layer — one execution per invocation. The JSON emit arms
+    // below use only pre-collected data; handler dispatch is text-only.
+    let result = if json {
+        Ok(rmcp::model::CallToolResult::success(vec![]))
+    } else {
+        match tool.as_str() {
+            "find_symbol" => {
+                let name = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("name"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream");
+                let lang = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                server
+                    .find_symbol(Parameters(FindSymbolRequest {
+                        name: name.to_string(),
+                        lang,
+                    }))
+                    .await
+            }
+            "get_calls" => {
+                let function_name = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("function_name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
-            let symbol_id = arguments
-                .as_ref()
-                .and_then(|m| m.get("symbol_id"))
-                .and_then(|v| v.as_u64())
-                .map(|id| id as u32);
+                let symbol_id = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                    .map(|id| id as u32);
 
-            // Require either function_name or symbol_id
-            if function_name.is_none() && symbol_id.is_none() {
-                eprintln!(
-                    "Error: get_calls requires either 'function_name' or 'symbol_id' parameter"
-                );
+                server
+                    .get_calls(Parameters(GetCallsRequest {
+                        function_name,
+                        symbol_id,
+                    }))
+                    .await
+            }
+            "find_callers" => {
+                let function_name = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("function_name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let symbol_id = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                    .map(|id| id as u32);
+
+                server
+                    .find_callers(Parameters(FindCallersRequest {
+                        function_name,
+                        symbol_id,
+                    }))
+                    .await
+            }
+            "analyze_impact" => {
+                let symbol_name = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_name"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let symbol_id = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("symbol_id"))
+                    .and_then(|v| v.as_u64())
+                    .map(|id| id as u32);
+
+                let max_depth = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("max_depth"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(3) as u32;
+                server
+                    .analyze_impact(Parameters(AnalyzeImpactRequest {
+                        symbol_name,
+                        symbol_id,
+                        max_depth,
+                    }))
+                    .await
+            }
+            "get_index_info" => {
+                use crate::mcp::GetIndexInfoRequest;
+                use rmcp::handler::server::wrapper::Parameters;
+                server
+                    .get_index_info(Parameters(GetIndexInfoRequest {}))
+                    .await
+            }
+            "search_symbols" => {
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream");
+                let limit = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as u32;
+                let kind = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("kind"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let module = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("module"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let lang = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                server
+                    .search_symbols(Parameters(SearchSymbolsRequest {
+                        query: query.to_string(),
+                        limit,
+                        kind,
+                        module,
+                        lang,
+                    }))
+                    .await
+            }
+            "semantic_search_docs" => {
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream");
+                let limit = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(10) as u32;
+                let threshold = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("threshold"))
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as f32);
+                let lang = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                server
+                    .semantic_search_docs(Parameters(SemanticSearchRequest {
+                        query: query.to_string(),
+                        limit,
+                        threshold,
+                        lang,
+                    }))
+                    .await
+            }
+            "semantic_search_with_context" => {
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream");
+                let limit = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as u32;
+                let threshold = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("threshold"))
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as f32);
+                let lang = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("lang"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                server
+                    .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
+                        query: query.to_string(),
+                        limit,
+                        threshold,
+                        lang,
+                    }))
+                    .await
+            }
+            "search_documents" => {
+                use crate::mcp::SearchDocumentsRequest;
+                let query = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("query"))
+                    .and_then(|v| v.as_str())
+                    .expect("required param validated upstream")
+                    .to_string();
+                let collection = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("collection"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let limit = arguments
+                    .as_ref()
+                    .and_then(|m| m.get("limit"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as u32;
+                server
+                    .search_documents(Parameters(SearchDocumentsRequest {
+                        query,
+                        collection,
+                        limit,
+                    }))
+                    .await
+            }
+            _ => {
+                if json {
+                    use crate::io::exit_code::ExitCode;
+                    use crate::io::format::JsonResponse;
+                    let response = JsonResponse::error(
+                        ExitCode::GeneralError,
+                        &format!("Unknown tool: {tool}"),
+                        vec![
+                            "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents",
+                        ],
+                    );
+                    println!("{}", serde_json::to_string_pretty(&response).unwrap());
+                } else {
+                    eprintln!("Unknown tool: {tool}");
+                    eprintln!(
+                        "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents"
+                    );
+                }
                 std::process::exit(1);
             }
-
-            server
-                .get_calls(Parameters(GetCallsRequest {
-                    function_name,
-                    symbol_id,
-                }))
-                .await
-        }
-        "find_callers" => {
-            let function_name = arguments
-                .as_ref()
-                .and_then(|m| m.get("function_name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            let symbol_id = arguments
-                .as_ref()
-                .and_then(|m| m.get("symbol_id"))
-                .and_then(|v| v.as_u64())
-                .map(|id| id as u32);
-
-            // Require either function_name or symbol_id
-            if function_name.is_none() && symbol_id.is_none() {
-                eprintln!(
-                    "Error: find_callers requires either 'function_name' or 'symbol_id' parameter"
-                );
-                std::process::exit(1);
-            }
-
-            server
-                .find_callers(Parameters(FindCallersRequest {
-                    function_name,
-                    symbol_id,
-                }))
-                .await
-        }
-        "analyze_impact" => {
-            let symbol_name = arguments
-                .as_ref()
-                .and_then(|m| m.get("symbol_name"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            let symbol_id = arguments
-                .as_ref()
-                .and_then(|m| m.get("symbol_id"))
-                .and_then(|v| v.as_u64())
-                .map(|id| id as u32);
-
-            // Require either symbol_name or symbol_id
-            if symbol_name.is_none() && symbol_id.is_none() {
-                eprintln!(
-                    "Error: analyze_impact requires either 'symbol_name' or 'symbol_id' parameter"
-                );
-                std::process::exit(1);
-            }
-
-            let max_depth = arguments
-                .as_ref()
-                .and_then(|m| m.get("max_depth"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(3) as u32;
-            server
-                .analyze_impact(Parameters(AnalyzeImpactRequest {
-                    symbol_name,
-                    symbol_id,
-                    max_depth,
-                }))
-                .await
-        }
-        "get_index_info" => {
-            use crate::mcp::GetIndexInfoRequest;
-            use rmcp::handler::server::wrapper::Parameters;
-            server
-                .get_index_info(Parameters(GetIndexInfoRequest {}))
-                .await
-        }
-        "search_symbols" => {
-            let query = arguments
-                .as_ref()
-                .and_then(|m| m.get("query"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    eprintln!("Error: search_symbols requires 'query' parameter");
-                    std::process::exit(1);
-                });
-            let limit = arguments
-                .as_ref()
-                .and_then(|m| m.get("limit"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(10) as u32;
-            let kind = arguments
-                .as_ref()
-                .and_then(|m| m.get("kind"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let module = arguments
-                .as_ref()
-                .and_then(|m| m.get("module"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let lang = arguments
-                .as_ref()
-                .and_then(|m| m.get("lang"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            server
-                .search_symbols(Parameters(SearchSymbolsRequest {
-                    query: query.to_string(),
-                    limit,
-                    kind,
-                    module,
-                    lang,
-                }))
-                .await
-        }
-        "semantic_search_docs" => {
-            let query = arguments
-                .as_ref()
-                .and_then(|m| m.get("query"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    eprintln!("Error: semantic_search_docs requires 'query' parameter");
-                    std::process::exit(1);
-                });
-            let limit = arguments
-                .as_ref()
-                .and_then(|m| m.get("limit"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(10) as u32;
-            let threshold = arguments
-                .as_ref()
-                .and_then(|m| m.get("threshold"))
-                .and_then(|v| v.as_f64())
-                .map(|v| v as f32);
-            let lang = arguments
-                .as_ref()
-                .and_then(|m| m.get("lang"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            server
-                .semantic_search_docs(Parameters(SemanticSearchRequest {
-                    query: query.to_string(),
-                    limit,
-                    threshold,
-                    lang,
-                }))
-                .await
-        }
-        "semantic_search_with_context" => {
-            let query = arguments
-                .as_ref()
-                .and_then(|m| m.get("query"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    eprintln!("Error: semantic_search_with_context requires 'query' parameter");
-                    std::process::exit(1);
-                });
-            let limit = arguments
-                .as_ref()
-                .and_then(|m| m.get("limit"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(5) as u32;
-            let threshold = arguments
-                .as_ref()
-                .and_then(|m| m.get("threshold"))
-                .and_then(|v| v.as_f64())
-                .map(|v| v as f32);
-            let lang = arguments
-                .as_ref()
-                .and_then(|m| m.get("lang"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            server
-                .semantic_search_with_context(Parameters(SemanticSearchWithContextRequest {
-                    query: query.to_string(),
-                    limit,
-                    threshold,
-                    lang,
-                }))
-                .await
-        }
-        "search_documents" => {
-            use crate::mcp::SearchDocumentsRequest;
-            let query = arguments
-                .as_ref()
-                .and_then(|m| m.get("query"))
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| {
-                    eprintln!("Error: search_documents requires 'query' parameter");
-                    std::process::exit(1);
-                })
-                .to_string();
-            let collection = arguments
-                .as_ref()
-                .and_then(|m| m.get("collection"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let limit = arguments
-                .as_ref()
-                .and_then(|m| m.get("limit"))
-                .and_then(|v| v.as_u64())
-                .unwrap_or(5) as u32;
-            server
-                .search_documents(Parameters(SearchDocumentsRequest {
-                    query,
-                    collection,
-                    limit,
-                }))
-                .await
-        }
-        _ => {
-            if json {
-                use crate::io::exit_code::ExitCode;
-                use crate::io::format::JsonResponse;
-                let response = JsonResponse::error(
-                    ExitCode::GeneralError,
-                    &format!("Unknown tool: {tool}"),
-                    vec![
-                        "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents",
-                    ],
-                );
-                println!("{}", serde_json::to_string_pretty(&response).unwrap());
-            } else {
-                eprintln!("Unknown tool: {tool}");
-                eprintln!(
-                    "Available tools: find_symbol, get_calls, find_callers, analyze_impact, get_index_info, search_symbols, semantic_search_docs, semantic_search_with_context, search_documents"
-                );
-            }
-            std::process::exit(1);
         }
     };
 
@@ -1130,11 +1224,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 }
             } else if json && tool == "find_symbol" {
                 // Use pre-collected data for JSON output
@@ -1172,8 +1266,7 @@ pub async fn run(
                         }
 
                         // Envelope serialization is infallible for simple types
-                        println!("{}", envelope.to_json().expect("envelope serialization"));
-                        std::process::exit(3);
+                        emit_envelope_and_exit(envelope);
                     } else {
                         let count = symbol_contexts.len();
                         let mut envelope = Envelope::success(symbol_contexts)
@@ -1195,11 +1288,8 @@ pub async fn run(
                             envelope = envelope.with_hint(hint);
                         }
 
-                        let output = match &fields {
-                            Some(f) => envelope.to_json_with_fields(f),
-                            None => envelope.to_json(),
-                        };
-                        println!("{}", output.expect("envelope serialization"));
+                        let output = render_envelope_json(&envelope, fields.as_ref());
+                        println!("{output}");
                     }
                 }
             } else if json && tool == "get_calls" {
@@ -1246,11 +1336,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 } else {
                     let mut envelope: Envelope<()> =
                         Envelope::not_found(format!("Function '{identifier}' not found"))
@@ -1270,8 +1360,7 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(3);
+                    emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "find_callers" {
                 use crate::io::envelope::{EntityType, Envelope};
@@ -1317,11 +1406,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 } else {
                     let mut envelope: Envelope<()> =
                         Envelope::not_found(format!("Function '{identifier}' not found"))
@@ -1341,8 +1430,7 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(3);
+                    emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "analyze_impact" {
                 use crate::io::envelope::{EntityType, Envelope};
@@ -1388,11 +1476,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 } else {
                     // Symbol not found
                     let mut envelope: Envelope<()> =
@@ -1409,8 +1497,7 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(3);
+                    emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "search_symbols" {
                 use crate::io::envelope::{EntityType, Envelope, ResultCode};
@@ -1459,11 +1546,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 } else {
                     let envelope: Envelope<()> = Envelope::error(
                         ResultCode::InvalidQuery,
@@ -1473,8 +1560,7 @@ pub async fn run(
                     .with_query(query)
                     .with_hint("Check query syntax");
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(1);
+                    emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "semantic_search_docs" {
                 use crate::io::envelope::{EntityType, Envelope, ResultCode};
@@ -1520,11 +1606,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 } else if !has_semantic_search {
                     let envelope: Envelope<()> =
                         Envelope::error(ResultCode::IndexError, "Semantic search is not enabled")
@@ -1534,8 +1620,7 @@ pub async fn run(
                                 "Enable semantic search in settings.toml and rebuild the index",
                             );
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(1);
+                    emit_envelope_and_exit(envelope);
                 } else {
                     let envelope: Envelope<()> = Envelope::error(
                         ResultCode::InvalidQuery,
@@ -1545,8 +1630,7 @@ pub async fn run(
                     .with_query(query)
                     .with_hint("Check query syntax");
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(1);
+                    emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "semantic_search_with_context" {
                 use crate::io::envelope::{EntityType, Envelope, ResultCode};
@@ -1592,11 +1676,11 @@ pub async fn run(
                         envelope = envelope.with_hint(hint);
                     }
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
+                    }
                 } else if !has_semantic_search {
                     let envelope: Envelope<()> =
                         Envelope::error(ResultCode::IndexError, "Semantic search is not enabled")
@@ -1606,8 +1690,7 @@ pub async fn run(
                                 "Enable semantic search in settings.toml and rebuild the index",
                             );
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(1);
+                    emit_envelope_and_exit(envelope);
                 } else {
                     let envelope: Envelope<()> = Envelope::error(
                         ResultCode::InvalidQuery,
@@ -1617,8 +1700,7 @@ pub async fn run(
                     .with_query(query)
                     .with_hint("Check query syntax");
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(1);
+                    emit_envelope_and_exit(envelope);
                 }
             } else if json && tool == "search_documents" {
                 use crate::io::envelope::{EntityType, Envelope};
@@ -1665,14 +1747,10 @@ pub async fn run(
                             )
                     };
 
-                    let output = match &fields {
-                        Some(f) => envelope.to_json_with_fields(f),
-                        None => envelope.to_json(),
-                    };
-                    println!("{}", output.expect("envelope serialization"));
-
-                    if count == 0 {
-                        std::process::exit(1);
+                    let output = render_envelope_json(&envelope, fields.as_ref());
+                    println!("{output}");
+                    if envelope.exit_code != 0 {
+                        std::process::exit(envelope.exit_code.into());
                     }
                 } else {
                     let envelope: Envelope<()> = Envelope::error(
@@ -1683,20 +1761,22 @@ pub async fn run(
                     .with_query(query)
                     .with_hint("Run 'codanna documents index' to create the index");
 
-                    println!("{}", envelope.to_json().expect("envelope serialization"));
-                    std::process::exit(1);
+                    emit_envelope_and_exit(envelope);
                 }
             } else {
                 // Default text output
                 for content in &call_result.content {
-                    match &**content {
-                        rmcp::model::RawContent::Text(text_content) => {
+                    match content {
+                        rmcp::model::ContentBlock::Text(text_content) => {
                             println!("{}", text_content.text);
                         }
                         _ => {
                             eprintln!("Warning: Non-text content returned");
                         }
                     }
+                }
+                if text_exit != 0 {
+                    std::process::exit(text_exit);
                 }
             }
         }
@@ -1707,11 +1787,10 @@ pub async fn run(
                     Envelope::error(ResultCode::InternalError, e.message.to_string())
                         .with_hint("Check the tool name and arguments");
 
-                println!("{}", envelope.to_json().expect("envelope serialization"));
-                std::process::exit(1);
+                emit_envelope_and_exit(envelope);
             } else {
                 eprintln!("Error calling tool: {}", e.message);
-                std::process::exit(1);
+                std::process::exit(2);
             }
         }
     }

@@ -44,12 +44,12 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
             Err(e) => {
                 tracing::warn!("[https] failed to load index: {e}");
                 crate::log_event!("https", "starting", "empty index");
-                IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+                IndexFacade::new(settings.clone())?
             }
         }
     } else {
         crate::log_event!("https", "starting", "no existing index");
-        IndexFacade::new(settings.clone()).expect("Failed to create IndexFacade")
+        IndexFacade::new(settings.clone())?
     };
     let indexer = Arc::new(RwLock::new(facade));
 

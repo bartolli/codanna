@@ -10,7 +10,6 @@ use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
     helpers::{compute_config_shas, extract_language_config_paths, is_language_enabled},
-    memo::ResolutionMemo,
     persist::{ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -33,11 +32,7 @@ impl SwiftPackagePath {
 ///
 /// Handles Swift Package Manager (Package.swift) project configurations
 /// to determine source roots for module path resolution.
-pub struct SwiftProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)] // Used for future caching optimizations
-    memo: ResolutionMemo<HashMap<SwiftPackagePath, Sha256Hash>>,
-}
+pub struct SwiftProvider {}
 
 impl Default for SwiftProvider {
     fn default() -> Self {
@@ -46,11 +41,9 @@ impl Default for SwiftProvider {
 }
 
 impl SwiftProvider {
-    /// Create a new Swift provider with empty memoization cache
+    /// Create a new Swift provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get module path for a Swift source file

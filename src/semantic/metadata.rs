@@ -100,9 +100,18 @@ impl SemanticMetadata {
                 suggestion: "This is likely a bug in the code".to_string(),
             })?;
 
-        std::fs::write(&metadata_path, json).map_err(|e| SemanticSearchError::StorageError {
+        // Temp-then-rename: a crash mid-write cannot leave a truncated
+        // metadata.json next to a valid vector file.
+        let tmp_path = path.join("metadata.json.tmp");
+        std::fs::write(&tmp_path, json).map_err(|e| SemanticSearchError::StorageError {
             message: format!("Failed to write metadata: {e}"),
             suggestion: "Check disk space and file permissions".to_string(),
+        })?;
+        std::fs::rename(&tmp_path, &metadata_path).map_err(|e| {
+            SemanticSearchError::StorageError {
+                message: format!("Failed to swap metadata into place: {e}"),
+                suggestion: "Check directory permissions".to_string(),
+            }
         })?;
 
         Ok(())

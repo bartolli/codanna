@@ -4,7 +4,9 @@
 //! GDScript language. GDScript shares similarities with Python-style modules
 //! and classes, but has its own surface syntax and export semantics.
 
-use crate::parsing::resolution::{ImportBinding, InheritanceResolver, ResolutionScope};
+use crate::parsing::resolution::{
+    ImportBinding, ImportOrigin, InheritanceResolver, ResolutionScope,
+};
 use crate::parsing::{ScopeLevel, ScopeType};
 use crate::{FileId, SymbolId};
 use std::collections::{HashMap, HashSet};
@@ -222,9 +224,14 @@ impl ResolutionScope for GdscriptResolutionContext {
     }
 
     fn register_import_binding(&mut self, binding: ImportBinding) {
-        if let Some(symbol_id) = binding.resolved_symbol {
-            self.import_scope
-                .insert(binding.exposed_name.clone(), symbol_id);
+        // import_scope feeds resolve(), whose hits are identity-grade for
+        // the receiver anchor and inheritance chain walk. External/Unknown
+        // bindings carry name-guessed ids (cache tier 3), not identity.
+        if binding.origin == ImportOrigin::Internal {
+            if let Some(symbol_id) = binding.resolved_symbol {
+                self.import_scope
+                    .insert(binding.exposed_name.clone(), symbol_id);
+            }
         }
         self.import_bindings
             .insert(binding.exposed_name.clone(), binding);
@@ -344,6 +351,47 @@ impl InheritanceResolver for GdscriptInheritanceResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_import_binding_never_feeds_resolve() {
+        let file_id = FileId::new(1).unwrap();
+        let mut context = GdscriptResolutionContext::new(file_id);
+        let import = crate::parsing::Import {
+            path: "res://addons/vendor/logger.gd".to_string(),
+            file_id,
+            alias: None,
+            is_glob: false,
+            is_type_only: false,
+        };
+
+        context.register_import_binding(ImportBinding {
+            import: import.clone(),
+            exposed_name: "Logger".to_string(),
+            origin: ImportOrigin::External,
+            resolved_symbol: Some(SymbolId::new(7).unwrap()),
+        });
+        context.register_import_binding(ImportBinding {
+            import: import.clone(),
+            exposed_name: "Guessed".to_string(),
+            origin: ImportOrigin::Unknown,
+            resolved_symbol: Some(SymbolId::new(9).unwrap()),
+        });
+        // Name-guessed ids from unimported files must not resolve.
+        assert_eq!(context.resolve("Logger"), None);
+        assert_eq!(context.resolve("Guessed"), None);
+        // Binding records stay available for bookkeeping.
+        assert!(context.import_binding("Logger").is_some());
+        assert!(context.import_binding("Guessed").is_some());
+
+        let real_id = SymbolId::new(8).unwrap();
+        context.register_import_binding(ImportBinding {
+            import,
+            exposed_name: "Real".to_string(),
+            origin: ImportOrigin::Internal,
+            resolved_symbol: Some(real_id),
+        });
+        assert_eq!(context.resolve("Real"), Some(real_id));
+    }
 
     #[test]
     fn test_resolution_context_basic_scopes() {

@@ -47,7 +47,7 @@ class User extends BaseEntity implements Serializable {
                 println!(
                     "{}  Full text: '{}'",
                     indent,
-                    &code[node.byte_range()].lines().next().unwrap_or("")
+                    code[node.byte_range()].lines().next().unwrap_or("")
                 );
 
                 // Show all children with field names
@@ -128,7 +128,7 @@ const typed: Map<string, Session> = new Map();
         fn print_node_tree(node: tree_sitter::Node, code: &str, indent: usize) {
             let node_text = &code[node.byte_range()];
             let truncated = if node_text.len() > 40 {
-                format!("{}...", &node_text[..40].replace('\n', "\\n"))
+                format!("{}...", node_text[..40].replace('\n', "\\n"))
             } else {
                 node_text.replace('\n', "\\n")
             };
@@ -730,7 +730,7 @@ class DatabaseLogger implements Logger {
                                 "{}    Child: [{}] '{}'",
                                 indent,
                                 child.kind(),
-                                &code[child.byte_range()].lines().next().unwrap_or("")
+                                code[child.byte_range()].lines().next().unwrap_or("")
                             );
 
                             if child.kind() == "method_declaration" {
@@ -758,7 +758,7 @@ class DatabaseLogger implements Logger {
                                 "{}    Child: [{}] '{}'",
                                 indent,
                                 child.kind(),
-                                &code[child.byte_range()].lines().next().unwrap_or("")
+                                code[child.byte_range()].lines().next().unwrap_or("")
                             );
 
                             if child.kind() == "method_declaration" {
@@ -1221,7 +1221,7 @@ class DatabaseLogger implements Logger {
         fn print_go_node_tree(node: tree_sitter::Node, code: &str, indent: usize) {
             let node_text = &code[node.byte_range()];
             let truncated = if node_text.len() > 50 {
-                format!("{}...", &node_text[..50].replace('\n', "\\n"))
+                format!("{}...", node_text[..50].replace('\n', "\\n"))
             } else {
                 node_text.replace('\n', "\\n")
             };

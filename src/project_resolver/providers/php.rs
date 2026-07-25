@@ -10,7 +10,6 @@ use crate::config::Settings;
 use crate::project_resolver::{
     ResolutionResult, Sha256Hash,
     helpers::{compute_config_shas, extract_language_config_paths, is_language_enabled},
-    memo::ResolutionMemo,
     persist::{ResolutionIndex, ResolutionPersistence, ResolutionRules},
     provider::ProjectResolutionProvider,
 };
@@ -51,11 +50,7 @@ pub struct ComposerAutoloadInfo {
 ///
 /// Handles composer.json parsing to determine namespace mappings for PSR-4 resolution.
 /// PHP uses backslash-separated namespaces (e.g., App\Controllers\UserController).
-pub struct PhpProvider {
-    /// Thread-safe memoization cache for computed resolution data
-    #[allow(dead_code)]
-    memo: ResolutionMemo<HashMap<ComposerJsonPath, Sha256Hash>>,
-}
+pub struct PhpProvider {}
 
 impl Default for PhpProvider {
     fn default() -> Self {
@@ -64,11 +59,9 @@ impl Default for PhpProvider {
 }
 
 impl PhpProvider {
-    /// Create a new PHP provider with empty memoization cache
+    /// Create a new PHP provider
     pub fn new() -> Self {
-        Self {
-            memo: ResolutionMemo::new(),
-        }
+        Self {}
     }
 
     /// Get namespace for a PHP source file based on PSR-4 mappings

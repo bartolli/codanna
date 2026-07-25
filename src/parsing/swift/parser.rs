@@ -1714,9 +1714,20 @@ impl LanguageParser for SwiftParser {
         method_calls
     }
 
-    fn find_implementations<'a>(&mut self, _code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
-        // Swift protocol conformance is declared with class/struct, handled in find_extends
-        Vec::new()
+    fn find_implementations<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        // Swift's colon-merged heritage list cannot discriminate superclass
+        // from protocol at parse time. Emit every heritage pair on both the
+        // Extends and Implements channels; the resolution kind gates keep
+        // Implements only for protocol (Interface) targets and Extends only
+        // for the rest (SwiftResolutionContext::is_compatible_relationship).
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut results = Vec::new();
+        self.collect_extends(tree.root_node(), code, &mut results, None, 0);
+        results
     }
 
     fn find_extends<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {

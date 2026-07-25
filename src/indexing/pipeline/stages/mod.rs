@@ -25,7 +25,7 @@ pub use cleanup::{CleanupStage, CleanupStats};
 pub use collect::{CollectStage, EmbedTotalCallback};
 pub use discover::DiscoverStage;
 pub use index::{IndexProgressCallback, IndexStage};
-pub use parse::{ParseStage, compute_hash, init_parser_cache, parse_file};
+pub use parse::{ParseStage, compute_hash, init_parser_cache, parse_file, preflight_file_parsers};
 pub use read::ReadStage;
 
 // Phase 2 stages

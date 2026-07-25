@@ -9,19 +9,23 @@
 //! ```text
 //! Parser
 //!   ├─ find_variable_types() ──┐
-//!   └─ find_method_calls() ────┼─→ MethodCallResolver (per file)
-//!                              │      - variable_types: HashMap<String, String>
-//!                              │      - method_calls: Vec<MethodCall>
-//!                              │
+//!   └─ find_method_calls() ────┼─→ MethodCall records (receiver, static flag,
+//!                              │   caller range) attached as relationship
+//!                              │   metadata by the PARSE stage
 //!                              ↓
-//!                       LanguageBehavior::resolve_method_call()
+//!                  ResolveStage::resolve_one()
+//!                    ├─ super()-receiver calls → resolve_super_call()
+//!                    ├─ qualified static calls → resolve_static_call()
+//!                    └─ everything else → scope ladder + receiver gates
+//!                       (is_receiver_compat / is_instance_type_compatible)
 //! ```
 //!
 //! # Separation of Concerns
 //!
-//! - `MethodCallResolver` - owns DATA (variable types, method calls)
-//! - `LanguageBehavior` - owns LOGIC (language-specific resolution)
-//! - Indexer - orchestrates WHEN to call what
+//! - `MethodCall` - owns DATA (receiver, static flag, call site)
+//! - `ResolveStage` - owns resolution (tiers, receiver gates, disambiguation)
+//! - `LanguageBehavior` - answers language questions the stage asks
+//!   (separators, self aliases, receiver compatibility)
 
 use crate::Range;
 use std::collections::HashMap;

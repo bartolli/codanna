@@ -61,7 +61,7 @@ pub struct Symbol {
     pub file_path: Box<str>,
     pub signature: Option<Box<str>>,
     /// Documentation comment extracted from source (e.g., /// or /** */ in Rust)
-    pub doc_comment: Option<Box<str>>,
+    pub doc_comment: Option<CompactString>,
     /// Full module path (e.g., "crate::storage::memory" or "std::collections")
     pub module_path: Option<Box<str>>,
     /// Visibility of the symbol
@@ -141,7 +141,7 @@ impl Symbol {
         self
     }
 
-    pub fn with_doc(mut self, doc: impl Into<Box<str>>) -> Self {
+    pub fn with_doc(mut self, doc: impl Into<CompactString>) -> Self {
         self.doc_comment = Some(doc.into());
         self
     }
@@ -383,6 +383,26 @@ mod tests {
             symbol.signature.as_deref(),
             Some("fn add(a: i32, b: i32) -> i32")
         );
+    }
+
+    #[test]
+    fn test_symbol_clone_shares_payload_allocations() {
+        let symbol = Symbol::new(
+            SymbolId::new(1).unwrap(),
+            "shared_name",
+            SymbolKind::Function,
+            FileId::new(1).unwrap(),
+            Range::new(1, 0, 3, 1),
+        )
+        .with_doc("shared doc comment");
+
+        let cloned = symbol.clone();
+
+        assert!(std::sync::Arc::ptr_eq(&symbol.name, &cloned.name));
+        assert!(std::sync::Arc::ptr_eq(
+            symbol.doc_comment.as_ref().unwrap(),
+            cloned.doc_comment.as_ref().unwrap()
+        ));
     }
 
     #[test]
