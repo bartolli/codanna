@@ -319,7 +319,7 @@ fn file_scoped_private_member_single_candidate_fails_closed_for_kotlin() {
 }
 
 #[test]
-fn private_member_single_candidate_resolves_for_module_private_languages() {
+fn private_member_single_candidate_fails_closed_at_found_member_gate() {
     use codanna::Visibility;
 
     let cache = Arc::new(SymbolLookupCache::new());
@@ -331,10 +331,33 @@ fn private_member_single_candidate_resolves_for_module_private_languages() {
     let (batch, _stats) = resolve(cache, relation(RelationKind::Calls, "helper", 1));
     assert_eq!(
         batch.len(),
+        0,
+        "a receiver-less cross-file member pick on the same-module rung \
+         carries no receiver, import, or inheritance witness: the \
+         Found-arm member gate fails closed (module identity plus \
+         candidate count is not evidence for a member)"
+    );
+}
+
+#[test]
+fn private_function_single_candidate_resolves_for_module_private_languages() {
+    use codanna::Visibility;
+
+    let cache = Arc::new(SymbolLookupCache::new());
+    cache.insert(caller(1, SymbolKind::Method, 1, "app.main"));
+    let mut target = free_fn(2, "helper", 2, "app.main.util");
+    target.visibility = Visibility::Private;
+    cache.insert(target);
+
+    let (batch, _stats) = resolve(cache, relation(RelationKind::Calls, "helper", 1));
+    assert_eq!(
+        batch.len(),
         1,
         "languages without file-scoped privates keep the pre-existing \
-         same-module visibility (rust ancestor-module privates; Private \
-         is also the unconfigured Symbol::new default)"
+         same-module visibility for non-members (rust ancestor-module \
+         privates; Private is also the unconfigured Symbol::new \
+         default) — neither the kotlin veto nor the member gate covers \
+         a Function pick"
     );
 }
 

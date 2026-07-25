@@ -407,12 +407,15 @@ fn ambiguous_mixed_kind_candidates_filter_to_method_survivor() {
 
 #[test]
 fn calls_to_method_passthrough_preserved_via_cache_resolve_path() {
+    // Same-file target: the vehicle stays on the kind-filter duty. A
+    // cross-file member with no receiver, import, or inheritance
+    // witness now dies at the Found-arm member gate before kind
+    // compatibility is observable.
     let caller_file = FileId::new(1).unwrap();
-    let target_file = FileId::new(2).unwrap();
 
     let cache = Arc::new(SymbolLookupCache::new());
     cache.insert(make_symbol(1, "caller", SymbolKind::Method, caller_file));
-    cache.insert(make_symbol(2, "kind", SymbolKind::Method, target_file));
+    cache.insert(make_symbol(2, "kind", SymbolKind::Method, caller_file));
 
     let stage = ResolveStage::new(Arc::clone(&cache), build_behaviors());
 

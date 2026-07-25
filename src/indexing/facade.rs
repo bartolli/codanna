@@ -2553,4 +2553,176 @@ mod tests {
         facade.index_directory(&src, false).unwrap();
         assert_resolves(&facade, "seeded incremental");
     }
+
+    // Found-arm member gate: a bare call whose sole same-language
+    // candidate is another class's member — no receiver, no import, no
+    // inheritance witness — fails closed. Module identity plus
+    // candidate count is not evidence for a member pick; the same rule
+    // already gates the Ambiguous path in `disambiguate`.
+    #[test]
+    fn java_bare_cross_file_member_pick_fails_closed_without_witness() {
+        for force in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(
+                src.join("Widget.java"),
+                "package p;\npublic class Widget { public void setup() { } }\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("Factory.java"),
+                "package p;\npublic class Factory { public void make() { setup(); } }\n",
+            )
+            .unwrap();
+
+            let settings = Settings {
+                index_path: dir.path().join("index"),
+                workspace_root: None,
+                ..Default::default()
+            };
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&src, force).unwrap();
+
+            let makes = facade.find_symbols_by_name("make", None);
+            assert_eq!(makes.len(), 1, "one make symbol expected (force={force})");
+            let callees = facade.get_called_functions(makes[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert!(
+                callees.is_empty(),
+                "unwitnessed cross-file member pick must fail closed \
+                 (force={force}), got: {picked:?}"
+            );
+        }
+    }
+
+    // Receiver-carrying exemption, both directions: a binding-inferred
+    // receiver whose type places the member on the chain is class
+    // evidence and survives the Found-arm gate; a chain-mismatched
+    // receiver dies (pre-gate, at the instance-type check). TypeScript
+    // fixture: its binding channel emits the name-to-type shape from
+    // `const w = new Widget()`, and its class members are tier-3
+    // visible cross-module, so the row reaches the Found arm (python
+    // methods are not Public at tier 3 and detour to the typed-receiver
+    // global path; kotlin records expression-text types; java's
+    // `collect_variable_types` is a stub). No import statement: import
+    // identity must not mask the receiver evidence under test.
+    #[test]
+    fn receiver_typed_member_call_survives_gate_and_mismatch_dies() {
+        for force in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(
+                src.join("widget.ts"),
+                "export class Widget {\n    setup(): void {\n    }\n}\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("gadget.ts"),
+                "export class Gadget {\n    frob(): void {\n    }\n}\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("factory.ts"),
+                "export function good(): void {\n    const w = new Widget();\n    w.setup();\n}\n\nexport function bad(): void {\n    const g = new Gadget();\n    g.setup();\n}\n",
+            )
+            .unwrap();
+
+            let settings = Settings {
+                index_path: dir.path().join("index"),
+                workspace_root: None,
+                ..Default::default()
+            };
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&src, force).unwrap();
+
+            let named = |name: &str| {
+                let syms = facade.find_symbols_by_name(name, None);
+                assert_eq!(syms.len(), 1, "one {name} symbol expected (force={force})");
+                syms.into_iter().next().unwrap()
+            };
+
+            let good_callees = facade.get_called_functions(named("good").id);
+            assert!(
+                good_callees.iter().any(|s| s.name.as_ref() == "setup"
+                    && facade
+                        .get_file_path(s.file_id)
+                        .unwrap_or_default()
+                        .ends_with("widget.ts")),
+                "chain-verified receiver call must survive the gate \
+                 (force={force}), got: {good_callees:?}"
+            );
+
+            let bad_callees = facade.get_called_functions(named("bad").id);
+            assert!(
+                !bad_callees.iter().any(|s| s.name.as_ref() == "setup"),
+                "chain-mismatched receiver call must fail closed \
+                 (force={force}), got: {bad_callees:?}"
+            );
+        }
+    }
+
+    // Own-scope exemption: a bare call to the caller's own non-public
+    // member keeps its same-file evidence — the gate fires only on
+    // cross-file picks. The cross-file public decoy guards that the
+    // pick stays on the caller's own member.
+    #[test]
+    fn own_member_bare_call_survives_gate() {
+        for force in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(
+                src.join("Widget.java"),
+                "package p;\npublic class Widget {\n    private void setup() { }\n    public void make() { setup(); }\n}\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("Decoy.java"),
+                "package p;\npublic class Decoy { public void setup() { } }\n",
+            )
+            .unwrap();
+
+            let settings = Settings {
+                index_path: dir.path().join("index"),
+                workspace_root: None,
+                ..Default::default()
+            };
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&src, force).unwrap();
+
+            let makes = facade.find_symbols_by_name("make", None);
+            assert_eq!(makes.len(), 1, "one make symbol expected (force={force})");
+            let callees = facade.get_called_functions(makes[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert!(
+                callees.iter().any(|s| s.name.as_ref() == "setup"
+                    && facade
+                        .get_file_path(s.file_id)
+                        .unwrap_or_default()
+                        .ends_with("Widget.java")),
+                "own-member bare call must survive on same-file evidence \
+                 (force={force}), got: {picked:?}"
+            );
+        }
+    }
 }

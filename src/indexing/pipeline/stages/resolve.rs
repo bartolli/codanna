@@ -267,6 +267,9 @@ impl ResolveStage {
                 ) {
                     return None;
                 }
+                if self.is_unevidenced_cross_file_member_pick(to_id, unresolved, &caller, context) {
+                    return None;
+                }
                 self.accept_unwitnessed_pick(from_id, to_id, unresolved)
             }
             ResolveResult::Ambiguous(candidates) => {
@@ -386,6 +389,58 @@ impl ResolveStage {
         }
         self.get_behavior(language_id)
             .is_some_and(|b| b.private_members_are_file_scoped())
+    }
+
+    /// Member predicate shared by the `disambiguate` gate and the
+    /// Found-arm gate: Method/Field kind, or parser-declared ClassMember
+    /// scope. Kind check alongside scope because some parsers leave
+    /// member scope_context untracked (kotlin suspend members among the
+    /// census's scope_none rows), and those slip a scope-only gate.
+    fn is_member_kind_or_scope(sym: &Symbol) -> bool {
+        matches!(
+            sym.kind,
+            crate::SymbolKind::Method | crate::SymbolKind::Field
+        ) || matches!(
+            sym.scope_context,
+            Some(crate::symbol::ScopeContext::ClassMember { .. })
+        )
+    }
+
+    /// The `disambiguate` member gate on the single-survivor Found path:
+    /// a Calls pick of another file's member with no import identity is
+    /// module identity plus candidate count — not evidence for a member
+    /// (a survivor's KIND is evidence too). Same-file picks keep their
+    /// local evidence (the caller's own members live in its file);
+    /// imported picks keep the import identity tier 2 resolved through;
+    /// a pick whose receiver type inferred is chain-verified already
+    /// (`is_instance_type_compatible` ran before this gate). Self-alias
+    /// receivers never infer — their evidence is the self-form arm and
+    /// the inheritance walk, and what those miss fails closed here.
+    /// Calls-only — Defines rows route through the
+    /// `accept_unwitnessed_pick` containment rescue.
+    fn is_unevidenced_cross_file_member_pick(
+        &self,
+        to_id: SymbolId,
+        unresolved: &UnresolvedRelationship,
+        caller: &CallerContext,
+        context: &ResolutionContext,
+    ) -> bool {
+        if unresolved.kind != RelationKind::Calls {
+            return false;
+        }
+        let Some(sym) = self.symbol_cache.get_ref(to_id) else {
+            return false;
+        };
+        if !Self::is_member_kind_or_scope(&sym) || sym.file_id == caller.file_id {
+            return false;
+        }
+        if self
+            .infer_receiver_type(unresolved, &caller.language_id, context)
+            .is_some()
+        {
+            return false;
+        }
+        !self.is_imported(&sym, &context.imports, context)
     }
 
     /// Filter candidates by static-call receiver type.
@@ -1530,20 +1585,10 @@ impl ResolveStage {
                 // static fall-through — `Type::name` calls whose class-match
                 // filter left multiple class-correct copies — keeps the
                 // same-module tiebreak (receiver type IS class evidence).
-                use crate::symbol::ScopeContext;
-                // Kind check alongside scope: parsers leave scope_context
-                // None on some members (kotlin suspend members among the
-                // census's 120 scope_none rows), and those slipped a
-                // scope-only gate to wrong cross-file member picks.
                 let is_member = self
                     .symbol_cache
                     .get_ref(same_module[0])
-                    .is_some_and(|sym| {
-                        matches!(
-                            sym.kind,
-                            crate::SymbolKind::Method | crate::SymbolKind::Field
-                        ) || matches!(sym.scope_context, Some(ScopeContext::ClassMember { .. }))
-                    });
+                    .is_some_and(|sym| Self::is_member_kind_or_scope(&sym));
                 let class_evidenced_static = unresolved
                     .metadata
                     .as_ref()
