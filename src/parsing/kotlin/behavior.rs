@@ -135,6 +135,10 @@ impl LanguageBehavior for KotlinBehavior {
         true
     }
 
+    fn implicit_this_dispatch(&self) -> bool {
+        true
+    }
+
     fn configure_symbol(&self, symbol: &mut Symbol, module_path: Option<&str>) {
         if let Some(path) = module_path {
             let full_path = self.format_module_path(path, &symbol.name);

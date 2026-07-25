@@ -358,6 +358,17 @@ pub trait LanguageBehavior: Send + Sync {
         false
     }
 
+    /// True when a bare receiver-less call inside a class body can
+    /// dispatch to an instance member (implicit this) AND the parser
+    /// emits no receiver for it. The resolve stage then tries the
+    /// inheritance-witness walk for bare calls. Default false: python
+    /// bare calls never reach members (self is explicit), and csharp/cpp
+    /// parsers emit a `this` receiver for member dispatch, which routes
+    /// through the self-form arm instead.
+    fn implicit_this_dispatch(&self) -> bool {
+        false
+    }
+
     /// Consumed by `ResolveStage::resolve_static_call` pre-gate.
     fn static_class_keywords(&self) -> &'static [&'static str] {
         &[]

@@ -111,6 +111,10 @@ impl LanguageBehavior for JavaBehavior {
         true
     }
 
+    fn implicit_this_dispatch(&self) -> bool {
+        true
+    }
+
     /// Format module path for Java packages using dot notation
     fn format_module_path(&self, base_path: &str, symbol_name: &str) -> String {
         if base_path.is_empty() {

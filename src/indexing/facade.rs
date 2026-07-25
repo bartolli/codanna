@@ -2291,14 +2291,13 @@ mod tests {
         );
     }
 
-    // Lane-parity lock: a receiver-less call to a member two classes
-    // share resolves identically through the force lane (fresh CLI
-    // index) and the non-force incremental lane. The lanes used to
-    // disagree — persisted rows rehydrate module_path None as Some(""),
-    // which flipped tier-3 same-module verdicts and let disambiguate's
-    // imported arm first-pick an unrelated class's member. The decoy
-    // package sorts before the real base so an order-luck pick cannot
-    // read as inherited-member resolution.
+    // Lane-parity lock for the inheritance-witness arm: a bare call to a
+    // member the caller's class inherits resolves to the imported
+    // parent's member — never the same-name decoy that sorts first —
+    // identically in the force lane and the incremental lane. History:
+    // before the module_path round-trip fix the incremental lane
+    // first-picked the decoy while the force lane failed closed; before
+    // the witness arm both lanes failed closed.
     #[test]
     fn incremental_lane_matches_fresh_verdict_on_receiverless_member_call() {
         for force in [false, true] {
@@ -2334,11 +2333,81 @@ mod tests {
             let runs = facade.find_symbols_by_name("run", None);
             assert_eq!(runs.len(), 1, "one run symbol expected (force={force})");
             let callees = facade.get_called_functions(runs[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert_eq!(
+                callees.len(),
+                1,
+                "inherited bare call must resolve on the witness (force={force}), got: {picked:?}"
+            );
+            let path = facade.get_file_path(callees[0].file_id).unwrap_or_default();
             assert!(
-                callees.is_empty(),
-                "receiver-less two-candidate member call must fail closed \
-                 in both lanes (force={force}), got: {:?}",
-                callees.iter().map(|s| s.name.as_ref()).collect::<Vec<_>>()
+                callees[0].name.as_ref() == "helper" && path.ends_with("z/Base.java"),
+                "must resolve to the inherited parent's member, not the decoy \
+                 (force={force}), got: {picked:?}"
+            );
+        }
+    }
+
+    // Inheritance-witness arm, kotlin same-package shape (the ktor
+    // witness class): the parent is not imported, so the hop resolves
+    // through the exactly-one same-module Class survivor — the same
+    // evidence the Extends edge itself resolves through.
+    #[test]
+    fn kotlin_bare_call_to_inherited_member_resolves_on_witness() {
+        for force in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let src = dir.path().join("src");
+            std::fs::create_dir_all(&src).unwrap();
+            std::fs::write(
+                src.join("Base.kt"),
+                "package p\n\nopen class Base {\n    protected fun helper() {\n    }\n}\n",
+            )
+            .unwrap();
+            std::fs::write(
+                src.join("Child.kt"),
+                "package p\n\nclass Child : Base() {\n    fun run() {\n        helper()\n    }\n}\n",
+            )
+            .unwrap();
+
+            let settings = Settings {
+                index_path: dir.path().join("index"),
+                workspace_root: None,
+                ..Default::default()
+            };
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&src, force).unwrap();
+
+            let runs = facade.find_symbols_by_name("run", None);
+            assert_eq!(runs.len(), 1, "one run symbol expected (force={force})");
+            let callees = facade.get_called_functions(runs[0].id);
+            let picked: Vec<String> = callees
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}@{}",
+                        s.name,
+                        facade.get_file_path(s.file_id).unwrap_or_default()
+                    )
+                })
+                .collect();
+            assert_eq!(
+                callees.len(),
+                1,
+                "inherited bare call must resolve on the witness (force={force}), got: {picked:?}"
+            );
+            let path = facade.get_file_path(callees[0].file_id).unwrap_or_default();
+            assert!(
+                callees[0].name.as_ref() == "helper" && path.ends_with("Base.kt"),
+                "must resolve to the superclass member (force={force}), got: {picked:?}"
             );
         }
     }
