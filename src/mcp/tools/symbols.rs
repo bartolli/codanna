@@ -126,14 +126,8 @@ impl CodeIntelligenceServer {
 
                 if let Some(defines) = &ctx.relationships.defines {
                     if !defines.is_empty() {
-                        let methods = defines
-                            .iter()
-                            .filter(|s| s.kind == crate::SymbolKind::Method)
-                            .count();
-                        if methods > 0 {
-                            result.push_str(&format!("Defines: {methods} method(s)\n"));
-                            has_relationships = true;
-                        }
+                        result.push_str(&format_defines_line(defines.iter().map(|s| s.kind)));
+                        has_relationships = true;
                     }
                 }
 
@@ -616,5 +610,74 @@ impl CodeIntelligenceServer {
         }
 
         Ok(CallToolResult::success(vec![ContentBlock::text(result)]))
+    }
+}
+
+/// Member summary for the Defines card line, counted per kind.
+/// Methods sort first so method-only cards stay byte-identical to the
+/// prior `Defines: N method(s)` rendering; other kinds follow by name.
+fn format_defines_line(kinds: impl Iterator<Item = crate::SymbolKind>) -> String {
+    let mut kind_counts: Vec<(crate::SymbolKind, usize)> = Vec::new();
+    for kind in kinds {
+        match kind_counts.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, n)) => *n += 1,
+            None => kind_counts.push((kind, 1)),
+        }
+    }
+    kind_counts.sort_by_key(|&(k, _)| (k != crate::SymbolKind::Method, format!("{k:?}")));
+    let parts: Vec<String> = kind_counts
+        .iter()
+        .map(|(k, n)| {
+            let label = format!("{k:?}").to_lowercase();
+            format!("{n} {label}(s)")
+        })
+        .collect();
+    format!("Defines: {}\n", parts.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_defines_line;
+    use crate::SymbolKind;
+
+    #[test]
+    fn method_only_matches_prior_rendering() {
+        let kinds = vec![SymbolKind::Method; 5];
+        assert_eq!(
+            format_defines_line(kinds.into_iter()),
+            "Defines: 5 method(s)\n"
+        );
+    }
+
+    #[test]
+    fn mixed_kinds_render_methods_first() {
+        let kinds = vec![
+            SymbolKind::Constant,
+            SymbolKind::Method,
+            SymbolKind::Constant,
+            SymbolKind::Method,
+        ];
+        assert_eq!(
+            format_defines_line(kinds.into_iter()),
+            "Defines: 2 method(s), 2 constant(s)\n"
+        );
+    }
+
+    #[test]
+    fn non_method_members_render_without_methods() {
+        let kinds = vec![SymbolKind::Constant, SymbolKind::Constant];
+        assert_eq!(
+            format_defines_line(kinds.into_iter()),
+            "Defines: 2 constant(s)\n"
+        );
+    }
+
+    #[test]
+    fn non_method_kinds_sort_by_name() {
+        let kinds = vec![SymbolKind::Field, SymbolKind::Constant];
+        assert_eq!(
+            format_defines_line(kinds.into_iter()),
+            "Defines: 1 constant(s), 1 field(s)\n"
+        );
     }
 }
