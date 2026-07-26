@@ -127,10 +127,10 @@ impl Settings {
             } else if line.starts_with("max_retry_attempts = ") {
                 result.push_str("\n# Retry attempts for transient file system errors\n");
                 result.push_str("# Exponential backoff: 100ms, 200ms, 400ms delays\n");
-            } else if line.starts_with("ignore_patterns = ") {
-                result.push_str("\n# Additional patterns to ignore during indexing\n");
             } else if line.starts_with("indexed_paths = ") {
                 result.push_str("\n# List of directories to index\n");
+                result
+                    .push_str("# Ignore rules: .gitignore and .codannaignore (gitignore syntax)\n");
                 result.push_str("# Add folders using: codanna add-dir <path>\n");
                 result.push_str("# Remove folders using: codanna remove-dir <path>\n");
                 result.push_str("# List all folders using: codanna list-dirs\n");

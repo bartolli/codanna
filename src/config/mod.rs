@@ -103,10 +103,6 @@ pub struct IndexingConfig {
     #[serde(default = "default_max_retry_attempts")]
     pub max_retry_attempts: u32,
 
-    /// Patterns to ignore during indexing
-    #[serde(default)]
-    pub ignore_patterns: Vec<String>,
-
     /// List of directories to index
     /// This list is managed by the add-dir and remove-dir commands
     #[serde(default)]
@@ -352,12 +348,6 @@ impl Default for IndexingConfig {
             parallelism: default_parallelism(),
             tantivy_heap_mb: default_tantivy_heap_mb(),
             max_retry_attempts: default_max_retry_attempts(),
-            ignore_patterns: vec![
-                "target/**".to_string(),
-                "node_modules/**".to_string(),
-                ".git/**".to_string(),
-                "*.generated.*".to_string(),
-            ],
             indexed_paths: Vec::new(),
             batch_size: default_batch_size(),
             batches_per_commit: default_batches_per_commit(),
@@ -625,6 +615,8 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("settings.toml");
 
+        // ignore_patterns and include_tests are stale keys (the former
+        // was removed as a dead knob); loading must tolerate them.
         let toml_content = r#"
 version = 2
 
@@ -645,9 +637,6 @@ enabled = false
         let settings = Settings::load_from(&config_path).unwrap();
         assert_eq!(settings.version, 2);
         assert_eq!(settings.indexing.parallelism, 4);
-        assert_eq!(settings.indexing.ignore_patterns, vec!["custom/**"]);
-        // Default ignore patterns should be replaced by custom ones
-        assert_eq!(settings.indexing.ignore_patterns.len(), 1);
         assert_eq!(settings.mcp.max_context_size, 200000);
         assert!(!settings.languages["rust"].enabled);
     }
@@ -763,8 +752,6 @@ enabled = true
         // Default values should still be present
         assert_eq!(settings.version, 1);
         assert_eq!(settings.mcp.max_context_size, 100_000);
-        // Default ignore patterns should be present
-        assert!(!settings.indexing.ignore_patterns.is_empty());
     }
 
     #[test]
@@ -806,8 +793,6 @@ default = "info"
         assert_eq!(settings.mcp.max_context_size, 50000);
         // Env var overrides logging default
         assert_eq!(settings.logging.default, "debug");
-        // Default ignore patterns should be present
-        assert!(!settings.indexing.ignore_patterns.is_empty());
 
         // Clean up
         unsafe {
