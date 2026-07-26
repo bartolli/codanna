@@ -424,9 +424,11 @@ impl Settings {
     /// Create settings specifically for init_config_file
     /// This populates all dynamic fields based on the current environment
     pub fn for_init() -> Result<Self, Box<dyn std::error::Error>> {
-        // Create settings with project-specific values in one initialization
+        // getcwd resolves symlinks on unix but not necessarily elsewhere;
+        // the recorded root must be canonical (see normalize_loaded).
+        let cwd = std::env::current_dir()?;
         let settings = Self {
-            workspace_root: Some(std::env::current_dir()?),
+            workspace_root: Some(cwd.canonicalize().unwrap_or(cwd)),
             // All other fields use defaults (including registry languages)
             ..Self::default()
         };
@@ -463,9 +465,20 @@ impl Settings {
                 if settings.workspace_root.is_none() {
                     settings.workspace_root = Self::workspace_root();
                 }
-                settings.sync_indexed_path_cache();
-                settings
+                settings.normalize_loaded()
             })
+    }
+
+    /// Recorded paths are compared (`starts_with` / `strip_prefix`) against
+    /// canonicalized file paths downstream; a symlink component in a recorded
+    /// path silently kills those comparisons. Canonicalize at the load
+    /// boundary; nonexistent paths stay verbatim.
+    fn normalize_loaded(mut self) -> Self {
+        if let Some(root) = self.workspace_root.take() {
+            self.workspace_root = Some(root.canonicalize().unwrap_or(root));
+        }
+        self.sync_indexed_path_cache();
+        self
     }
 
     /// Find the workspace root by looking for .codanna directory
@@ -538,10 +551,7 @@ impl Settings {
             .merge(Toml::file(path))
             .merge(Env::prefixed("CI_").split("_"))
             .extract()
-            .map(|mut settings: Settings| {
-                settings.sync_indexed_path_cache();
-                settings
-            })
+            .map(Settings::normalize_loaded)
             .map_err(Box::new)
     }
 
@@ -640,6 +650,76 @@ enabled = false
         assert_eq!(settings.indexing.ignore_patterns.len(), 1);
         assert_eq!(settings.mcp.max_context_size, 200000);
         assert!(!settings.languages["rust"].enabled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_from_canonicalizes_symlinked_workspace_root() {
+        let temp_dir = TempDir::new().unwrap();
+        let real = temp_dir.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = temp_dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let config_path = temp_dir.path().join("settings.toml");
+        fs::write(
+            &config_path,
+            format!("workspace_root = \"{}\"\n", link.display()),
+        )
+        .unwrap();
+
+        let settings = Settings::load_from(&config_path).unwrap();
+        assert_eq!(
+            settings.workspace_root,
+            Some(real.canonicalize().unwrap()),
+            "recorded root carrying a symlink component must load canonicalized"
+        );
+    }
+
+    #[test]
+    fn load_from_keeps_nonexistent_workspace_root_verbatim() {
+        let temp_dir = TempDir::new().unwrap();
+        let gone = temp_dir.path().join("no-such-dir");
+
+        let config_path = temp_dir.path().join("settings.toml");
+        fs::write(
+            &config_path,
+            format!("workspace_root = \"{}\"\n", gone.display()),
+        )
+        .unwrap();
+
+        let settings = Settings::load_from(&config_path)
+            .expect("nonexistent recorded root must not error the load");
+        assert_eq!(settings.workspace_root, Some(gone));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_from_canonicalizes_indexed_paths_cache_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let real = temp_dir.path().join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = temp_dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let config_path = temp_dir.path().join("settings.toml");
+        fs::write(
+            &config_path,
+            format!("[indexing]\nindexed_paths = [\"{}\"]\n", link.display()),
+        )
+        .unwrap();
+
+        let settings = Settings::load_from(&config_path).unwrap();
+        assert_eq!(
+            settings.indexed_paths_cache,
+            vec![real.canonicalize().unwrap()],
+            "comparison cache must hold canonical paths"
+        );
+        assert_eq!(
+            settings.indexing.indexed_paths,
+            vec![link],
+            "serialized list must round-trip the user's file verbatim"
+        );
     }
 
     #[test]

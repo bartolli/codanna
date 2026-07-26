@@ -4,8 +4,17 @@ use super::Settings;
 use std::path::{Path, PathBuf};
 
 impl Settings {
+    /// The cache is the comparison surface (strip-base selection tests
+    /// canonicalized file paths against it); hand-edited or legacy entries
+    /// may carry symlink components, so canonicalize here. The serialized
+    /// `indexing.indexed_paths` stays verbatim to round-trip the user's file.
     pub(super) fn sync_indexed_path_cache(&mut self) {
-        self.indexed_paths_cache = self.indexing.indexed_paths.clone();
+        self.indexed_paths_cache = self
+            .indexing
+            .indexed_paths
+            .iter()
+            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+            .collect();
     }
 
     /// Add a folder to the list of indexed paths

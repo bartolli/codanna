@@ -3317,6 +3317,123 @@ mod tests {
         assert_eq!(facade.relationship_count(), fresh);
     }
 
+    // Strip-base lock: a recorded workspace_root carrying a symlink
+    // component must derive module paths identical to the canonical
+    // control. Settings go through Settings::load_from — the boundary
+    // that canonicalizes — because hand-built Settings bypass the fix.
+    // Fresh lane; the CLI witness shape (indexing a subdir of the
+    // recorded root, so the workspace_root tier is the one that matters).
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_recorded_root_derives_canonical_module_paths_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let pkg = root.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("base.py"), "def helper():\n    pass\n").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let module_for = |leg: &str, recorded_root: &std::path::Path| {
+            let toml_path = dir.path().join(format!("settings-{leg}.toml"));
+            std::fs::write(
+                &toml_path,
+                format!(
+                    "workspace_root = \"{}\"\nindex_path = \"{}\"\n",
+                    recorded_root.display(),
+                    dir.path().join(format!("index-{leg}")).display(),
+                ),
+            )
+            .unwrap();
+            let settings = Settings::load_from(&toml_path).unwrap();
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&pkg, true).unwrap();
+            let syms = facade.find_symbols_by_name("helper", None);
+            assert_eq!(syms.len(), 1, "one helper expected ({leg})");
+            syms[0].module_path.clone()
+        };
+
+        let control = module_for("control", &canonical_root);
+        let probe = module_for("probe", &link);
+        assert_eq!(
+            control.as_deref(),
+            Some("pkg.base"),
+            "control must derive relative to the recorded root"
+        );
+        assert_eq!(
+            probe, control,
+            "symlinked recorded root must match the canonical control"
+        );
+    }
+
+    // Watcher-lane strip lock: index_file_single normalizes the incoming
+    // absolute path against workspace_root for storage. A symlinked
+    // recorded root made that strip fail, storing the file under its
+    // absolute path — keyed differently from the batch lane's relative
+    // form, so the re-index minted a DUPLICATE identity instead of
+    // replacing the row. Both legs re-index one changed file through
+    // facade.index_file after a batch seed and must agree with the
+    // canonical control on symbol count, module path, and stored form.
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_recorded_root_single_file_reindex_keeps_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let pkg = root.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let leg = |leg: &str, recorded_root: &std::path::Path| {
+            std::fs::write(pkg.join("base.py"), "def helper():\n    pass\n").unwrap();
+            let toml_path = dir.path().join(format!("settings-sf-{leg}.toml"));
+            std::fs::write(
+                &toml_path,
+                format!(
+                    "workspace_root = \"{}\"\nindex_path = \"{}\"\n",
+                    recorded_root.display(),
+                    dir.path().join(format!("index-sf-{leg}")).display(),
+                ),
+            )
+            .unwrap();
+            let settings = Settings::load_from(&toml_path).unwrap();
+            let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+            facade.index_directory(&pkg, true).unwrap();
+
+            std::fs::write(
+                pkg.join("base.py"),
+                "def helper():\n    pass\n\ndef extra():\n    pass\n",
+            )
+            .unwrap();
+            facade.index_file(pkg.join("base.py")).unwrap();
+
+            let syms = facade.find_symbols_by_name("helper", None);
+            assert_eq!(
+                syms.len(),
+                1,
+                "single-file re-index must replace the row, not mint a \
+                 duplicate identity ({leg})"
+            );
+            let stored = facade.get_file_path(syms[0].file_id).unwrap_or_default();
+            (syms[0].module_path.clone(), stored)
+        };
+
+        let (control_module, control_path) = leg("control", &canonical_root);
+        let (probe_module, probe_path) = leg("probe", &link);
+        assert_eq!(
+            control_module.as_deref(),
+            Some("pkg.base"),
+            "control must derive relative to the recorded root"
+        );
+        assert_eq!(
+            (probe_module, probe_path),
+            (control_module, control_path),
+            "symlinked recorded root must match the canonical control"
+        );
+    }
+
     /// Names of symbols holding an inbound edge to the (single) symbol
     /// called `name`. Sorted so comparisons are order-independent.
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
