@@ -107,6 +107,13 @@ def builder_commit(workspace):
         return None
 
 
+def leg_family(label):
+    """`pre.run1` / `pre.run2` are re-runs of ONE leg; sharing a binary
+    there is the design. The guard exists for cross-family reuse
+    (pre vs post over one build)."""
+    return re.sub(r"\.run\d+$", "", label)
+
+
 def record_leg_binary(out_dir, label, commit):
     """Record this leg's binary identity and reject a re-used binary.
 
@@ -132,7 +139,7 @@ def record_leg_binary(out_dir, label, commit):
         clash = [
             other
             for other, seen in ledger.items()
-            if seen == commit and other != label
+            if seen == commit and leg_family(other) != leg_family(label)
         ]
         if clash:
             raise SystemExit(
@@ -358,6 +365,12 @@ def cmd_run(args):
         if not p.is_file():
             raise SystemExit(f"{what} {p} is not a file")
     semantic_on = args.semantic == "on"
+    if args.incremental and args.runs != 1:
+        # The incremental leg replaces the plain leg entirely; silently
+        # ignoring --runs would report single-run dumps as union sets.
+        raise SystemExit(
+            "--incremental and --runs N are separate legs: run them as two invocations"
+        )
     parity_ok = True
     for spec in args.corpus:
         name, fixture, pin = parse_corpus_spec(spec)
@@ -400,10 +413,22 @@ def cmd_run(args):
         raise SystemExit("incremental leg: lane parity broken (see diffs above)")
 
 
+def leg_dump(out: Path, label: str) -> list[str]:
+    # Plain legs write {label}.edges (union under --runs N); incremental
+    # legs write {label}.fresh.edges. Prefer the plain form, fall back to
+    # the incremental leg's fresh dump rather than crashing on it.
+    plain = out / f"{label}.edges"
+    fresh = out / f"{label}.fresh.edges"
+    target = plain if plain.is_file() else fresh
+    if not target.is_file():
+        raise SystemExit(f"no dump for label {label!r} in {out} (looked for {plain.name}, {fresh.name})")
+    return target.read_text().splitlines()
+
+
 def cmd_diff(args):
     out = Path(args.out).resolve() / args.corpus
-    old = (out / f"{args.old}.edges").read_text().splitlines()
-    new = (out / f"{args.new}.edges").read_text().splitlines()
+    old = leg_dump(out, args.old)
+    new = leg_dump(out, args.new)
     old_set, new_set = set(old), set(new)
     dropped = sorted(old_set - new_set)
     gained = sorted(new_set - old_set)
