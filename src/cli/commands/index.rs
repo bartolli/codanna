@@ -80,8 +80,12 @@ pub fn run(
                             skipped.path.display(),
                             parent.display()
                         ),
+                        // Registration state, not index state: the path is
+                        // already in indexed_paths. Saying "already indexed"
+                        // here claims the content exists, which is false
+                        // right after the index dir is removed by hand.
                         SkipReason::AlreadyPresent if !force => {
-                            println!("{}: Already indexed", skipped.path.display())
+                            println!("{}: already in settings.toml", skipped.path.display())
                         }
                         SkipReason::AlreadyPresent => {}
                         SkipReason::FileNotPersisted => println!(
