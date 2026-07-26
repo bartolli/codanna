@@ -3007,4 +3007,275 @@ mod tests {
             );
         }
     }
+
+    // Regression: re-indexing a file used to delete every edge pointing INTO
+    // it. CleanupStage removed relationships in both directions for the
+    // file's symbols, and the re-index that followed re-derived only that
+    // file's OWN outgoing edges -- so edges owned by unchanged files died
+    // silently and healed only on --force. Witnessed on gin @ 9914178:
+    // 2159 -> 1969 edges after touching two files, identical under the CLI
+    // lane, `serve --watch`, and the `codanna mcp <TOOL> --watch` preflight.
+    #[test]
+    fn reindexing_a_file_preserves_edges_pointing_into_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            src.join("base.py"),
+            "class Base:\n    def helper(self):\n        return 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("child.py"),
+            "from pkg.base import Base\n\n\
+             class Child(Base):\n    def run(self):\n        return self.helper()\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        // The incremental lane has no walk root; its strip base comes from
+        // registered indexed paths (see .claude/rules/verification-gate.md).
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        let fresh = facade.relationship_count();
+        assert!(
+            fresh > 0,
+            "seed pass must produce cross-file edges to make this meaningful"
+        );
+        let inbound_before = inbound_edge_names(&facade, "helper");
+        assert!(
+            !inbound_before.is_empty(),
+            "fixture must produce at least one caller of helper before the touch"
+        );
+
+        // Touch the edge TARGET file. Its own content is semantically
+        // unchanged; the edges at risk originate in child.py, which is
+        // untouched.
+        std::fs::write(
+            src.join("base.py"),
+            "class Base:\n    def helper(self):\n        return 1\n\n# touched\n",
+        )
+        .unwrap();
+        facade.index_file(src.join("base.py")).unwrap();
+
+        assert_eq!(
+            inbound_edge_names(&facade, "helper"),
+            inbound_before,
+            "edges owned by the unchanged child.py must survive a re-index of base.py"
+        );
+        assert_eq!(
+            facade.relationship_count(),
+            fresh,
+            "re-indexing a file must not shed edges pointing into it"
+        );
+    }
+
+    // Rebind must not resurrect. A symbol the edit genuinely removed has no
+    // replacement, so its inbound edges stay dead -- this is the invariant
+    // that makes deleting them during cleanup safe. A best-effort rebind that
+    // left unmatched captures in place would trade a recall gap for an edge
+    // pointing at a symbol that no longer exists.
+    #[test]
+    fn reindexing_drops_inbound_edges_whose_target_the_edit_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            src.join("base.py"),
+            "class Base:\n    def helper(self):\n        return 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("child.py"),
+            "from pkg.base import Base\n\n\
+             class Child(Base):\n    def run(self):\n        return self.helper()\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        assert_eq!(
+            inbound_edge_names(&facade, "helper").len(),
+            1,
+            "fixture must start with one caller of helper"
+        );
+
+        // The edit deletes helper outright.
+        std::fs::write(
+            src.join("base.py"),
+            "class Base:\n    def other(self):\n        return 1\n",
+        )
+        .unwrap();
+        facade.index_file(src.join("base.py")).unwrap();
+
+        assert!(
+            facade.find_symbols_by_name("helper", None).is_empty(),
+            "helper is gone from source, so it must be gone from the index"
+        );
+        let run = facade.find_symbols_by_name("run", None);
+        assert_eq!(run.len(), 1, "run must still exist");
+        // Asserting merely "no callee named helper" is too weak: a
+        // best-effort rebind would re-point the edge at some OTHER symbol in
+        // the file and slip past that check. run called exactly one thing,
+        // and that thing is gone, so its callee set must be empty.
+        let callees: Vec<String> = facade
+            .get_called_functions(run[0].id)
+            .iter()
+            .map(|s| s.name.to_string())
+            .collect();
+        assert!(
+            callees.is_empty(),
+            "an edge whose target the edit removed must be dropped, not rebound \
+             to a surviving symbol; got: {callees:?}"
+        );
+    }
+
+    // The batch incremental lane is a separate entry point from the
+    // single-file lane the watcher uses, and it is the one behind bare
+    // `codanna index` and the `codanna mcp <TOOL> --watch` preflight. Both
+    // must preserve inbound edges; fixing only one leaves the defect live for
+    // the CLI-only agent workflow.
+    #[test]
+    fn batch_incremental_reindex_preserves_edges_pointing_into_the_changed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("__init__.py"), "").unwrap();
+        std::fs::write(
+            src.join("base.py"),
+            "class Base:\n    def helper(self):\n        return 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("child.py"),
+            "from pkg.base import Base\n\n\
+             class Child(Base):\n    def run(self):\n        return self.helper()\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        let fresh = facade.relationship_count();
+        let inbound_before = inbound_edge_names(&facade, "helper");
+        assert!(
+            !inbound_before.is_empty(),
+            "fixture must produce at least one caller of helper before the touch"
+        );
+
+        std::fs::write(
+            src.join("base.py"),
+            "class Base:\n    def helper(self):\n        return 1\n\n# touched\n",
+        )
+        .unwrap();
+        // Re-index through the DIRECTORY lane, not index_file.
+        facade.index_directory(&src, false).unwrap();
+
+        assert_eq!(
+            inbound_edge_names(&facade, "helper"),
+            inbound_before,
+            "batch incremental must preserve edges owned by the unchanged child.py"
+        );
+        assert_eq!(
+            facade.relationship_count(),
+            fresh,
+            "batch incremental must not shed edges pointing into the changed file"
+        );
+    }
+
+    // Two files edited in one run, with edges between them. The naive capture
+    // (exclude only the captured file's own symbols) records a from-id living
+    // in the OTHER changed file, which is itself getting fresh ids -- the
+    // rebind then persists an edge from a dead symbol. Witnessed on gin as 4
+    // `<orphan:Some(N)>` rows gained; single-file tests cannot reach it.
+    #[test]
+    fn reindexing_two_mutually_referencing_files_at_once_creates_no_orphan_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("__init__.py"), "").unwrap();
+        let base = "class Base:\n    def helper(self):\n        return 1\n";
+        let child = "from pkg.base import Base\n\n\
+                     class Child(Base):\n    def run(self):\n        return self.helper()\n";
+        std::fs::write(src.join("base.py"), base).unwrap();
+        std::fs::write(src.join("child.py"), child).unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        let fresh = facade.relationship_count();
+
+        // Touch BOTH ends of the cross-file edge in the same run.
+        std::fs::write(src.join("base.py"), format!("{base}\n# touched\n")).unwrap();
+        std::fs::write(src.join("child.py"), format!("{child}\n# touched\n")).unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert_eq!(
+            facade.relationship_count(),
+            fresh,
+            "editing both ends at once must not gain duplicate or orphan edges"
+        );
+        // Every surviving edge must have a live symbol on both ends.
+        let helper = facade.find_symbols_by_name("helper", None);
+        assert_eq!(helper.len(), 1);
+        for (from, to, _) in facade.get_relationships_for_symbol(helper[0].id).unwrap() {
+            assert!(
+                facade.get_symbol(from).is_some(),
+                "edge from a dead symbol id {from:?} survived the rebind"
+            );
+            assert!(
+                facade.get_symbol(to).is_some(),
+                "edge to a dead symbol id {to:?} survived the rebind"
+            );
+        }
+    }
+
+    /// Names of symbols holding an inbound edge to the (single) symbol
+    /// called `name`. Sorted so comparisons are order-independent.
+    fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
+        let targets = facade.find_symbols_by_name(name, None);
+        assert_eq!(targets.len(), 1, "fixture expects exactly one `{name}`");
+        let mut callers: Vec<String> = facade
+            .get_relationships_for_symbol(targets[0].id)
+            .unwrap()
+            .into_iter()
+            .filter(|(_, to, _)| *to == targets[0].id)
+            .map(|(from, _, rel)| {
+                let from_name = facade
+                    .get_symbol(from)
+                    .map(|s| s.name.to_string())
+                    .unwrap_or_else(|| format!("<{from:?}>"));
+                format!("{from_name}:{:?}", rel.kind)
+            })
+            .collect();
+        callers.sort();
+        callers
+    }
 }
