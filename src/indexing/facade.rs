@@ -1046,6 +1046,51 @@ impl IndexFacade {
         path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
 
+    /// Files the index walk would discover under `scope`.
+    ///
+    /// Decided by the same walker `index_directory` uses, rooted at the
+    /// OWNING registered indexed path -- so .gitignore/.codannaignore
+    /// chains, the dot-file skip, and enabled-extension filters apply
+    /// exactly as the batch walk applies them, including to scopes
+    /// inside ignored directories. Empty when no registered root
+    /// contains `scope`.
+    pub fn discoverable_files(&self, scope: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let scope = Self::canonical_or_raw(scope);
+        let Some(root) = self
+            .settings
+            .indexed_paths_cache
+            .iter()
+            .filter(|r| scope.starts_with(r))
+            .max_by_key(|r| r.as_os_str().len())
+        else {
+            return Vec::new();
+        };
+        crate::indexing::walker::FileWalker::new(Arc::clone(&self.settings))
+            .walk(root)
+            .filter(|p| p.starts_with(&scope))
+            .collect()
+    }
+
+    /// Directories the index walk would traverse under `scope`, with the
+    /// same root-anchored ignore chains as [`Self::discoverable_files`].
+    /// Feeds watch registration for created directories.
+    pub fn discoverable_dirs(&self, scope: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let scope = Self::canonical_or_raw(scope);
+        let Some(root) = self
+            .settings
+            .indexed_paths_cache
+            .iter()
+            .filter(|r| scope.starts_with(r))
+            .max_by_key(|r| r.as_os_str().len())
+        else {
+            return Vec::new();
+        };
+        crate::indexing::walker::FileWalker::new(Arc::clone(&self.settings))
+            .walk_dirs(root)
+            .filter(|p| p.starts_with(&scope))
+            .collect()
+    }
+
     pub fn index_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
@@ -3315,6 +3360,118 @@ mod tests {
              that shifts every line in the target file"
         );
         assert_eq!(facade.relationship_count(), fresh);
+    }
+
+    // Watcher-eligibility parity lock: discoverable_files answers "would
+    // the index walk pick this file up" by WALKING FROM THE REGISTERED
+    // ROOT, so .gitignore/.codannaignore chains apply exactly as the
+    // batch walk applies them -- including to scopes INSIDE an ignored
+    // directory, which a walk rooted at the scope itself would miss.
+    #[test]
+    fn discoverable_files_match_walk_semantics_from_registered_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let pkg = root.join("pkg");
+        std::fs::create_dir_all(pkg.join("generated")).unwrap();
+        std::fs::create_dir_all(pkg.join("newmod")).unwrap();
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+        std::fs::write(root.join(".codannaignore"), "vendor/\n").unwrap();
+        std::fs::write(pkg.join("a.py"), "def a():\n    pass\n").unwrap();
+        std::fs::write(pkg.join("generated/b.py"), "def b():\n    pass\n").unwrap();
+        std::fs::write(root.join("vendor/c.py"), "def c():\n    pass\n").unwrap();
+        std::fs::write(pkg.join(".hidden.py"), "def h():\n    pass\n").unwrap();
+        std::fs::write(pkg.join("d.txt"), "not code").unwrap();
+        std::fs::write(pkg.join("newmod/e.py"), "def e():\n    pass\n").unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(root.clone())
+            .expect("register indexed path");
+        let facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let canonical_root = root.canonicalize().unwrap();
+        let names = |scope: &std::path::Path| -> Vec<String> {
+            let mut v: Vec<String> = facade
+                .discoverable_files(scope)
+                .into_iter()
+                .map(|p| {
+                    p.strip_prefix(&canonical_root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            v.sort();
+            v
+        };
+
+        assert_eq!(
+            names(&root),
+            vec!["pkg/a.py", "pkg/newmod/e.py"],
+            "root scope: ignore chains, dot-files, and extensions filter"
+        );
+        assert_eq!(
+            names(&pkg.join("newmod")),
+            vec!["pkg/newmod/e.py"],
+            "subtree scope restricts to the subtree"
+        );
+        assert_eq!(
+            names(&pkg.join("generated")),
+            Vec::<String>::new(),
+            "a scope inside an ignored directory is empty because the \
+             chain anchors at the registered root"
+        );
+        assert_eq!(
+            names(&dir.path().join("outside")),
+            Vec::<String>::new(),
+            "a scope outside every registered root is empty"
+        );
+    }
+
+    // Companion to discoverable_files for watch registration: dirs the
+    // walk would traverse under a scope, ignore chains anchored at the
+    // registered root. An empty new module dir is yielded (it needs a
+    // watch before files land in it); an ignored subtree is not.
+    #[test]
+    fn discoverable_dirs_yield_traversable_subtree_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("newmod/empty_sub")).unwrap();
+        std::fs::create_dir_all(root.join("newmod/generated/deep")).unwrap();
+        std::fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(root.clone())
+            .expect("register indexed path");
+        let facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let mut dirs: Vec<String> = facade
+            .discoverable_dirs(&root.join("newmod"))
+            .into_iter()
+            .map(|p| {
+                p.strip_prefix(&canonical_root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        dirs.sort();
+        assert_eq!(
+            dirs,
+            vec!["newmod", "newmod/empty_sub"],
+            "empty dirs watched, ignored subtree pruned by the root-anchored chain"
+        );
     }
 
     // Strip-base lock: a recorded workspace_root carrying a symlink

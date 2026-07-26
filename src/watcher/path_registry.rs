@@ -53,6 +53,13 @@ impl PathRegistry {
         new_dirs
     }
 
+    /// Register a directory to watch directly (registered roots, created
+    /// directories). Returns true when the directory was not already
+    /// watched.
+    pub fn add_watch_dir(&mut self, dir: PathBuf) -> bool {
+        self.watch_dirs.insert(dir)
+    }
+
     /// Remove a path from the registry.
     ///
     /// Note: Does not remove watch directories even if empty, as other
@@ -185,6 +192,25 @@ mod tests {
         // Should watch current directory
         assert_eq!(dirs.len(), 1);
         assert!(dirs.contains(&PathBuf::from(".")));
+    }
+
+    #[test]
+    fn add_watch_dir_dedupes_against_existing_watches() {
+        let mut registry = PathRegistry::new();
+        registry.add_paths(vec![PathBuf::from("/project/src/main.rs")]);
+
+        assert!(
+            !registry.add_watch_dir(PathBuf::from("/project/src")),
+            "parent dir of a tracked file is already watched"
+        );
+        assert!(
+            registry.add_watch_dir(PathBuf::from("/project")),
+            "a root not yet watched registers"
+        );
+        assert!(
+            !registry.add_watch_dir(PathBuf::from("/project")),
+            "second registration dedupes"
+        );
     }
 
     #[test]

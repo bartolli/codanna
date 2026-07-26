@@ -24,23 +24,25 @@ impl FileWalker {
         Self { settings }
     }
 
+    /// Walker configuration shared by the file and directory walks:
+    /// .gitignore chains (+ global, + exclude), .codannaignore, no
+    /// symlink following, gitignore active outside git repos.
+    fn configured_builder(root: &Path) -> WalkBuilder {
+        let mut builder = WalkBuilder::new(root);
+        builder
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .follow_links(false)
+            .max_depth(None)
+            .require_git(false);
+        builder.add_custom_ignore_filename(".codannaignore");
+        builder
+    }
+
     /// Walk a directory and return an iterator of files to index
     pub fn walk(&self, root: &Path) -> impl Iterator<Item = PathBuf> {
-        let mut builder = WalkBuilder::new(root);
-
-        // Configure the walker
-        builder
-            .hidden(false) // Don't traverse hidden directories by default
-            .git_ignore(true) // Respect .gitignore files
-            .git_global(true) // Respect global gitignore
-            .git_exclude(true) // Respect .git/info/exclude
-            .follow_links(false) // Don't follow symlinks by default
-            .max_depth(None) // No depth limit
-            .require_git(false); // Allow gitignore to work in non-git directories
-
-        // Always support .codannaignore files for custom ignore patterns (follows .gitignore pattern)
-        builder.add_custom_ignore_filename(".codannaignore");
-
         // The ignore crate's override feature is for INCLUDING files, not excluding them.
         // To add custom ignore patterns, we need to use a different approach.
         // For now, we'll rely on .gitignore and .codannaignore files.
@@ -53,7 +55,7 @@ impl FileWalker {
         let enabled_extensions = self.get_enabled_extensions();
 
         // Build and filter the walker
-        builder
+        Self::configured_builder(root)
             .build()
             .filter_map(Result::ok) // Skip files we can't access
             .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
@@ -80,6 +82,25 @@ impl FileWalker {
 
                 None
             })
+    }
+
+    /// Directories the index walk would traverse under `root`, ignore
+    /// chains applied. Feeds watch registration for created directories;
+    /// dot-directories below the root are skipped, mirroring the file
+    /// walk's dot-file skip (keeps .git trees out of watch sets).
+    pub fn walk_dirs(&self, root: &Path) -> impl Iterator<Item = PathBuf> {
+        Self::configured_builder(root)
+            .build()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_dir()))
+            .filter(|entry| {
+                entry.depth() == 0
+                    || entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| !n.starts_with('.'))
+            })
+            .map(|entry| entry.path().to_path_buf())
     }
 
     /// Get list of enabled file extensions from the registry
@@ -156,6 +177,38 @@ mod tests {
         // Should only find the visible file (hidden files are filtered out)
         assert_eq!(files.len(), 1);
         assert!(files[0].ends_with("visible.rs"));
+    }
+
+    // walk_dirs feeds the watcher's directory-chain registration: a new
+    // directory subtree gets watches only where the index walk would
+    // traverse -- an ignored tree (node_modules, generated/) is pruned
+    // by the same chains before any kernel watch is added.
+    #[test]
+    fn walk_dirs_prunes_ignored_subtrees() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join("newmod/empty_sub")).unwrap();
+        fs::create_dir_all(root.join("generated/deep")).unwrap();
+        fs::write(root.join(".gitignore"), "generated/\n").unwrap();
+
+        let settings = create_test_settings();
+        let walker = FileWalker::new(settings);
+
+        let mut dirs: Vec<_> = walker
+            .walk_dirs(root)
+            .map(|p| p.strip_prefix(root).unwrap().to_path_buf())
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect();
+        dirs.sort();
+
+        assert_eq!(
+            dirs,
+            vec![
+                std::path::PathBuf::from("newmod"),
+                std::path::PathBuf::from("newmod/empty_sub"),
+            ],
+            "empty traversable dirs are yielded, ignored subtrees pruned"
+        );
     }
 
     #[test]

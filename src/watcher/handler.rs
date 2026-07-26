@@ -48,6 +48,14 @@ pub trait WatchHandler: Send + Sync {
     /// Used at startup to compute which directories to watch.
     async fn tracked_paths(&self) -> Vec<PathBuf>;
 
+    /// Root directories this handler owns.
+    ///
+    /// Watched directly, and created directories under them extend the
+    /// watch set. Default: none.
+    async fn watch_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     /// Handle a file modification event (called after debouncing).
     async fn on_modify(&self, path: &Path) -> Result<WatchAction, WatchError>;
 

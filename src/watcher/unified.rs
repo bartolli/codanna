@@ -45,6 +45,10 @@ pub struct UnifiedWatcher {
     index_path: PathBuf,
     /// Workspace root for path resolution.
     workspace_root: PathBuf,
+    /// Registered watch roots from handlers; scopes created-directory
+    /// handling and stays watched even when a root holds no indexed
+    /// file directly.
+    handler_roots: Vec<PathBuf>,
 }
 
 impl UnifiedWatcher {
@@ -96,6 +100,8 @@ impl UnifiedWatcher {
         for dir in new_dirs {
             self.watch_directory(&dir)?;
         }
+
+        self.register_handler_roots().await;
 
         // Subscribe to broadcaster for IndexReloaded events
         let mut broadcast_rx = self.broadcaster.subscribe();
@@ -165,6 +171,14 @@ impl UnifiedWatcher {
     /// Handle an incoming file event.
     async fn handle_event(&mut self, event: Event) {
         for path in event.paths {
+            // A created directory never matches a file handler (extension
+            // gate); it is the watcher's own concern: extend the watch set
+            // and catch up files that landed before the watch existed.
+            if matches!(event.kind, EventKind::Create(_)) && path.is_dir() {
+                self.handle_created_directory(&path).await;
+                continue;
+            }
+
             // Check if any handler cares about this path
             let matched = self.handlers.iter().any(|h| h.matches(&path));
             if !matched {
@@ -179,8 +193,10 @@ impl UnifiedWatcher {
             }
 
             match event.kind {
-                EventKind::Modify(_) => {
-                    // Debounce modifications
+                EventKind::Create(_) | EventKind::Modify(_) => {
+                    // Debounce creations and modifications alike; the
+                    // exists() re-check in process_modification handles
+                    // paths that vanish before the debounce fires.
                     self.debouncer.record(path);
                 }
                 EventKind::Remove(_) => {
@@ -190,6 +206,62 @@ impl UnifiedWatcher {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Register handler watch roots: watched directly so directory
+    /// creation at the top of a root is visible even when the root
+    /// holds no indexed file itself.
+    async fn register_handler_roots(&mut self) {
+        let mut roots = Vec::new();
+        for handler in &self.handlers {
+            roots.extend(handler.watch_roots().await);
+        }
+        for root in &roots {
+            if self.registry.add_watch_dir(root.clone()) {
+                if let Err(e) = self.watch_directory(root) {
+                    tracing::warn!("[watcher] failed to watch root: {e}");
+                }
+            }
+        }
+        self.handler_roots = roots;
+    }
+
+    /// A directory appeared under a registered root: watch every
+    /// traversable directory of the new subtree (ignore chains anchored
+    /// at the root prune ignored trees), then route the files already
+    /// inside through the normal debounce -> eligibility -> reindex path.
+    async fn handle_created_directory(&mut self, path: &Path) {
+        if !self.handler_roots.iter().any(|r| path.starts_with(r)) {
+            return;
+        }
+
+        let (dirs, files) = {
+            let facade = self.facade.read().await;
+            (
+                facade.discoverable_dirs(path),
+                facade.discoverable_files(path),
+            )
+        };
+
+        for dir in dirs {
+            if self.registry.add_watch_dir(dir.clone()) {
+                if let Err(e) = self.watch_directory(&dir) {
+                    tracing::warn!("[watcher] failed to watch created dir: {e}");
+                }
+            }
+        }
+        if !files.is_empty() {
+            crate::log_event!(
+                "watcher",
+                "created dir",
+                "{} ({} files to catch up)",
+                path.display(),
+                files.len()
+            );
+        }
+        for file in files {
+            self.debouncer.record(file);
         }
     }
 
@@ -416,6 +488,9 @@ impl UnifiedWatcher {
             }
         }
 
+        // Config reload can add or drop roots; re-register them.
+        self.register_handler_roots().await;
+
         crate::log_event!(
             "watcher",
             "watching",
@@ -539,6 +614,7 @@ impl UnifiedWatcherBuilder {
             chunking_config: self.chunking_config,
             index_path,
             workspace_root,
+            handler_roots: Vec::new(),
         })
     }
 }
