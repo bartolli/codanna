@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-07-26
+
+Pick-discipline and lane-parity release. Every bare-name resolution pick is evidence-gated: import bindings resolve exact-first then exactly-one at every surface, member picks require containment or kind evidence, and candidate order never decides an edge — insertion-order dependence is gone. Incremental re-indexing keeps the edges pointing into a changed file: cleanup captures inbound edges and rebinds them to the replacement symbols by containing type, then peer ordinal, then line, so re-indexing a file no longer sheds its callers' edges (previously up to 8.8% of a corpus call graph after two file touches). `serve --watch` indexes newly created files and directories.
+
+### Breaking Changes
+
+- Emission-semantics version 3 (was 1): indexes built by earlier binaries refuse before any tool runs — read commands exit `7` with the heal command; `codanna index` rebuilds from scratch automatically with a message. One rebuild per workspace crosses the gap.
+- `indexing.ignore_patterns` setting removed. No code path ever consumed it; exclusion is `.gitignore` + `.codannaignore` (gitignore syntax, per-directory chains), honored identically by batch indexing and the watcher. Settings files still carrying the key load clean.
+- `module_path` round-trips absent-vs-empty faithfully: a symbol without module identity persists the field absent instead of `""`. JSON consumers treating the empty string as the no-module sentinel must read absence; Java rows are the main visible surface.
+- Resolved-relationship counts drop where the new gates refuse unevidenced picks: ktor 22132 -> 20451 composed (-7.6%), MediatR 267 -> 139 (-48%), three.js -892 in the import-binding class. Stratified source reads of the dropped masses: the three.js src-side sample is 20/20 wrong cross-bundle picks; the ktor sample is 4/20 wrong (stdlib and cross-module captures) and 16/20 correct-by-luck single-candidate picks the resolver could not evidence. Dropped recall returns through evidence supply (receiver inference), not through restored guessing.
+
+### Added
+
+- Self-form and bare calls in a class body resolve to inherited members, and self-form calls resolve to cross-file members of the same type (split definitions), extending the class-membership evidence channel.
+- `builder_commit` in `index.meta` and `get_index_info --json`: the commit the building binary was compiled from, suffixed `-dirty` when built from a modified tree. Descriptive only; absent for tarball builds and indexes written before the stamp existed.
+
+### Fixed
+
+- Incremental re-index preserves cross-file edges into the changed files across all three entry points (`codanna index`, `serve --watch`, `mcp <tool> --watch`), including under range-shifting edits. Indexes built by earlier versions heal the accumulated loss at the forced rebuild. File renames are outside this guarantee: a renamed file's inbound edges still drop until a force re-index.
+- `serve --watch` indexes created files and directories: registered roots are watched directly, a directory created under one extends the watch set to its traversable subtree with catch-up, and eligibility is decided by the batch walker itself, so `.gitignore`/`.codannaignore` bind identically on both lanes. Previously a file created during a watch session stayed out of the index until a manual re-index.
+- Recorded workspace paths load canonicalized: a symlink component in a hand-edited or copied `settings.toml` no longer disables the workspace-root module-path tier or forks single-file re-index identity from the batch lane.
+- PHP enum declarations are containers with class evidence and enum cases are `Constant` members; calls resolve through enum receivers.
+- `self` in Python nested defs binds to the lexical enclosing method's class, recovering calls the 0.11.1 veto refused.
+- Defines cards count members of every kind, not methods only.
+- `codanna index` on an already-registered path reports registration state instead of a claim about index contents.
+
 ## [0.11.1] - 2026-07-24
 
 ### Fixed
