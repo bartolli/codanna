@@ -14,6 +14,9 @@ Enforces the measurement protocol invariants that prose could not:
     re-indexing touched files must not change the edge set. Without this leg
     the battery only ever measured fresh indexes, and an 8.8% inbound-edge
     loss on the incremental lane survived every run.
+  - touch shape (--touch-shape, default prepend): the touch SHIFTS ranges, so
+    line-sensitive identity paths are exercised. An append-only touch reported
+    parity on three corpora while a prepend still dropped edges.
 
 Usage:
   e2e-battery.py run  --binary PATH --label NAME --dump PATH \
@@ -172,7 +175,28 @@ def touch_targets(edge_lines, count):
     return [Path(p) for p, _ in ranked[:count]]
 
 
-def incremental_leg(binary, dump, corpus, out_dir, label, semantic_on, touch_n):
+def strip_lines(edge_line):
+    """Edge identity with every line number removed.
+
+    Dump identity is `name@file:line/kind` and the call line is its own
+    column, so a touch that SHIFTS ranges relabels every row of the touched
+    files even when the edge set is unchanged. Comparing shifted dumps
+    verbatim reports that relabeling as a wall of drops and gains. Line-free
+    identity is the only comparison that isolates real movement under a
+    shifting edit.
+    """
+    parts = edge_line.split("\t")
+    if len(parts) < 3:
+        return edge_line
+    endpoints = [re.sub(r":\d+/", "/", p) for p in parts[1:3]]
+    # parts[3] is the call line; it shifts with the symbol.
+    tail = parts[4:]
+    return "\t".join([parts[0], *endpoints, *tail])
+
+
+def incremental_leg(
+    binary, dump, corpus, out_dir, label, semantic_on, touch_n, touch_shape
+):
     """Fresh index, then touch N files and re-index WITHOUT force.
 
     The fresh dump is the oracle: re-indexing files whose content is
@@ -205,8 +229,17 @@ def incremental_leg(binary, dump, corpus, out_dir, label, semantic_on, touch_n):
         )
     try:
         for path in targets:
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write("\n")
+            if touch_shape == "append":
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write("\n")
+            else:
+                # Prepend: every symbol below shifts, which is what ordinary
+                # editing does. An append leaves all start lines intact and so
+                # cannot exercise any line-sensitive identity path.
+                text = path.read_text(encoding="utf-8", errors="surrogateescape")
+                path.write_text(
+                    "\n" + text, encoding="utf-8", errors="surrogateescape"
+                )
         # Bare `index` drives the incremental lane over the registered
         # indexed paths -- the same entry point as production.
         run([str(binary), "index"], cwd=ws)
@@ -220,7 +253,13 @@ def incremental_leg(binary, dump, corpus, out_dir, label, semantic_on, touch_n):
     incr_file.write_text("\n".join(incr) + ("\n" if incr else ""))
     run(["rm", "-rf", str(ws)])
 
-    fresh_set, incr_set = set(fresh), set(incr)
+    # A shifting touch relabels rows of the touched files; compare on
+    # line-free identity so the diff shows movement, not renumbering.
+    if touch_shape == "append":
+        fresh_set, incr_set = set(fresh), set(incr)
+    else:
+        fresh_set = {strip_lines(line) for line in fresh}
+        incr_set = {strip_lines(line) for line in incr}
     dropped = sorted(fresh_set - incr_set)
     gained = sorted(incr_set - fresh_set)
     (out_dir / f"drop-{label}.fresh-incr.txt").write_text(
@@ -231,7 +270,7 @@ def incremental_leg(binary, dump, corpus, out_dir, label, semantic_on, touch_n):
     )
     touched = ", ".join(p.name for p in targets)
     print(
-        f"INCREMENTAL {out_dir.name} {label}: touched {len(targets)} "
+        f"INCREMENTAL {out_dir.name} {label} [{touch_shape}]: touched {len(targets)} "
         f"({touched}); fresh {len(fresh_set)} -> incremental {len(incr_set)}: "
         f"dropped {len(dropped)}, gained {len(gained)}"
     )
@@ -260,7 +299,14 @@ def cmd_run(args):
         print(f"== {name} @ {pin[:9]} binary={args.label} semantic={args.semantic}")
         if args.incremental:
             parity_ok &= incremental_leg(
-                binary, dump, corpus, out_dir, args.label, semantic_on, args.incremental
+                binary,
+                dump,
+                corpus,
+                out_dir,
+                args.label,
+                semantic_on,
+                args.incremental,
+                args.touch_shape,
             )
             continue
         if args.runs == 1:
@@ -328,6 +374,15 @@ def main():
         help="incremental lane leg: index fresh, touch the N files carrying the "
         "most cross-file inbound edges, re-index without force, and diff against "
         "the fresh dump (the oracle). Exits non-zero on any diff.",
+    )
+    r.add_argument(
+        "--touch-shape",
+        choices=["prepend", "append"],
+        default="prepend",
+        help="how --incremental edits a file. prepend (default) shifts every "
+        "symbol below it, which is what ordinary editing does and what "
+        "exercises line-sensitive identity paths; append leaves all start "
+        "lines intact and is the control.",
     )
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="dropped/gained between two captured legs")
