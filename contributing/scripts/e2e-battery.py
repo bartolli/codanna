@@ -10,11 +10,15 @@ Enforces the measurement protocol invariants that prose could not:
     confirmed against the index log line)
   - sorted dumps, optional two-run determinism, union sets for scatter corpora
   - diff mechanics (comm order encapsulated; dropped/gained labeled)
+  - incremental lane parity (--incremental N): the fresh dump is the oracle;
+    re-indexing touched files must not change the edge set. Without this leg
+    the battery only ever measured fresh indexes, and an 8.8% inbound-edge
+    loss on the incremental lane survived every run.
 
 Usage:
   e2e-battery.py run  --binary PATH --label NAME --dump PATH \
                       --corpus NAME=FIXTURE_PATH@PIN [...] \
-                      --out DIR [--runs N] [--semantic on|off]
+                      --out DIR [--runs N] [--semantic on|off] [--incremental N]
   e2e-battery.py diff --out DIR --corpus NAME --old LABEL --new LABEL
 
 Pins are REQUIRED per corpus (numbers rot; the caller states them).
@@ -138,6 +142,108 @@ def leg(binary, dump, corpus, out_dir, label, suffix, semantic_on):
     return edge_file
 
 
+def edge_endpoint_file(field):
+    """File path out of a dump endpoint `name@/abs/path.go:236/Method`."""
+    at = field.rfind("@")
+    if at < 0:
+        return None
+    rest = field[at + 1 :]
+    colon = rest.rfind(":")
+    return rest[:colon] if colon > 0 else None
+
+
+def touch_targets(edge_lines, count):
+    """Files carrying the most CROSS-FILE inbound edges, most first.
+
+    That population is the one at risk: a file's own inbound edges are
+    re-derived by its own re-parse, so only edges owned by OTHER files can
+    go missing. Ties break on path so the touch set is reproducible.
+    """
+    inbound = {}
+    for line in edge_lines:
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        src, dst = edge_endpoint_file(parts[1]), edge_endpoint_file(parts[2])
+        if not src or not dst or src == dst:
+            continue
+        inbound[dst] = inbound.get(dst, 0) + 1
+    ranked = sorted(inbound.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [Path(p) for p, _ in ranked[:count]]
+
+
+def incremental_leg(binary, dump, corpus, out_dir, label, semantic_on, touch_n):
+    """Fresh index, then touch N files and re-index WITHOUT force.
+
+    The fresh dump is the oracle: re-indexing files whose content is
+    semantically unchanged must leave the edge set identical. Any diff is
+    the finding. This is the leg that makes load-bearing invariant 12
+    ("the lanes must agree") checkable at corpus scale.
+    """
+    ws = out_dir / f"ws-{label}.incr"
+    if ws.exists():
+        raise SystemExit(f"workspace {ws} already exists; legs never reuse")
+    ws.mkdir(parents=True)
+    run([str(binary), "init"], cwd=ws)
+    set_semantic(ws, semantic_on)
+
+    log = run([str(binary), "index", str(corpus)], cwd=ws)
+    log_text = (log.stdout or "") + (log.stderr or "")
+    verify_semantic_in_log(log_text, semantic_on, f"{out_dir.name} {label}.incr fresh")
+    tantivy = ws / ".codanna" / "index" / "tantivy"
+    if not tantivy.is_dir():
+        raise SystemExit(f"{out_dir.name} {label}.incr: no tantivy dir after index")
+    fresh = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
+    fresh_file = out_dir / f"{label}.fresh.edges"
+    fresh_file.write_text("\n".join(fresh) + ("\n" if fresh else ""))
+
+    targets = touch_targets(fresh, touch_n)
+    if not targets:
+        raise SystemExit(
+            f"{out_dir.name}: no cross-file inbound edges in the fresh dump; "
+            f"the incremental leg would prove nothing"
+        )
+    try:
+        for path in targets:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write("\n")
+        # Bare `index` drives the incremental lane over the registered
+        # indexed paths -- the same entry point as production.
+        run([str(binary), "index"], cwd=ws)
+        incr = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
+    finally:
+        # The corpus dir is reused by later legs, and ensure_corpus rejects a
+        # dirty tree. Restoring here keeps the touch invisible to the protocol.
+        run(["git", "-C", str(corpus), "checkout", "--", "."])
+
+    incr_file = out_dir / f"{label}.incr.edges"
+    incr_file.write_text("\n".join(incr) + ("\n" if incr else ""))
+    run(["rm", "-rf", str(ws)])
+
+    fresh_set, incr_set = set(fresh), set(incr)
+    dropped = sorted(fresh_set - incr_set)
+    gained = sorted(incr_set - fresh_set)
+    (out_dir / f"drop-{label}.fresh-incr.txt").write_text(
+        "\n".join(dropped) + ("\n" if dropped else "")
+    )
+    (out_dir / f"gain-{label}.fresh-incr.txt").write_text(
+        "\n".join(gained) + ("\n" if gained else "")
+    )
+    touched = ", ".join(p.name for p in targets)
+    print(
+        f"INCREMENTAL {out_dir.name} {label}: touched {len(targets)} "
+        f"({touched}); fresh {len(fresh_set)} -> incremental {len(incr_set)}: "
+        f"dropped {len(dropped)}, gained {len(gained)}"
+    )
+    if dropped or gained:
+        print(
+            f"   LANE PARITY BROKEN - the fresh lane is the oracle\n"
+            f"   {out_dir / f'drop-{label}.fresh-incr.txt'}\n"
+            f"   {out_dir / f'gain-{label}.fresh-incr.txt'}"
+        )
+    return not (dropped or gained)
+
+
 def cmd_run(args):
     out = Path(args.out).resolve()
     binary = Path(args.binary).resolve()
@@ -146,11 +252,17 @@ def cmd_run(args):
         if not p.is_file():
             raise SystemExit(f"{what} {p} is not a file")
     semantic_on = args.semantic == "on"
+    parity_ok = True
     for spec in args.corpus:
         name, fixture, pin = parse_corpus_spec(spec)
         corpus = ensure_corpus(out, name, fixture, pin)
         out_dir = out / name
         print(f"== {name} @ {pin[:9]} binary={args.label} semantic={args.semantic}")
+        if args.incremental:
+            parity_ok &= incremental_leg(
+                binary, dump, corpus, out_dir, args.label, semantic_on, args.incremental
+            )
+            continue
         if args.runs == 1:
             leg(binary, dump, corpus, out_dir, args.label, "", semantic_on)
         else:
@@ -171,6 +283,8 @@ def cmd_run(args):
                     f"SCATTER {name} {args.label}: runs differ; union "
                     f"{len(lines)} rows (apply the corpus's documented exclusions)"
                 )
+    if not parity_ok:
+        raise SystemExit("incremental leg: lane parity broken (see diffs above)")
 
 
 def cmd_diff(args):
@@ -207,6 +321,14 @@ def main():
     r.add_argument("--out", required=True, help="battery output root")
     r.add_argument("--runs", type=int, default=1, help="runs per leg (2 for scatter corpora)")
     r.add_argument("--semantic", choices=["on", "off"], default="off")
+    r.add_argument(
+        "--incremental",
+        type=int,
+        metavar="N",
+        help="incremental lane leg: index fresh, touch the N files carrying the "
+        "most cross-file inbound edges, re-index without force, and diff against "
+        "the fresh dump (the oracle). Exits non-zero on any diff.",
+    )
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="dropped/gained between two captured legs")
     d.add_argument("--out", required=True)
