@@ -36,6 +36,40 @@ const ALL_RELATION_KINDS: [RelationKind; 12] = [
     RelationKind::ReferencedBy,
 ];
 
+/// Containing type of a class member, when the parser recorded one.
+///
+/// This is the identity that tells `Alpha::make` from `Beta::make`. Symbols
+/// that are not class members have no containing type and compare equal on
+/// `None`, which is correct: their name and kind already identify them within
+/// the file unless the file defines the same free function twice.
+fn member_scope(symbol: &crate::Symbol) -> Option<String> {
+    match symbol.scope_context {
+        Some(crate::symbol::ScopeContext::ClassMember { ref class_name }) => {
+            class_name.as_ref().map(|n| n.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Symbols sharing `name`, `kind`, and containing scope with `target`, in
+/// file order.
+///
+/// Position within this group is what tells apart symbols the scope cannot
+/// split -- python `@overload` stubs are all module-level functions of the
+/// same name in one file, so `Field` appears many times with no containing
+/// type. Order survives any edit that shifts lines; it changes only when a
+/// peer is added or removed, and the group-size check turns that into a
+/// fail-closed.
+fn peer_group<'a>(symbols: &'a [crate::Symbol], target: &crate::Symbol) -> Vec<&'a crate::Symbol> {
+    let scope = member_scope(target);
+    let mut peers: Vec<&crate::Symbol> = symbols
+        .iter()
+        .filter(|s| s.name == target.name && s.kind == target.kind && member_scope(s) == scope)
+        .collect();
+    peers.sort_by_key(|s| (s.range.start_line, s.range.start_column));
+    peers
+}
+
 /// Statistics from cleanup operations.
 #[derive(Debug, Default, Clone)]
 pub struct CleanupStats {
@@ -61,9 +95,18 @@ pub struct CapturedInboundEdge {
     pub target_file: PathBuf,
     pub target_name: String,
     pub target_kind: SymbolKind,
-    /// Start line of the target as it stood before the re-index. Used ONLY to
-    /// break a (name, kind) tie -- never as part of the primary key, because
-    /// an edit above a symbol shifts its range.
+    /// Containing type of the target, when it is a class member. This is what
+    /// tells two same-named members apart -- `Alpha::make` from `Beta::make`
+    /// -- and unlike the line it survives any edit that shifts ranges.
+    pub target_scope: Option<String>,
+    /// Position of the target among its same-(name, kind, scope) peers in file
+    /// order, with the peer count it was taken from. Discriminates symbols the
+    /// scope cannot split; the count is what makes a changed peer set fail
+    /// closed rather than rebind to the wrong peer.
+    pub target_ordinal: usize,
+    pub target_peer_count: usize,
+    /// Start line as it stood before the re-index. Last-resort tie-break only;
+    /// an edit above the symbol invalidates it.
     pub target_line: u32,
     pub relationship: Relationship,
 }
@@ -244,6 +287,8 @@ impl CleanupStage {
 
         let mut captured = Vec::new();
         for symbol in &symbols {
+            let peers = peer_group(&symbols, symbol);
+            let ordinal = peers.iter().position(|s| s.id == symbol.id).unwrap_or(0);
             for kind in ALL_RELATION_KINDS {
                 for (from, _to, relationship) in self.index.get_relationships_to(symbol.id, kind)? {
                     if in_flight.contains(&from) {
@@ -254,6 +299,9 @@ impl CleanupStage {
                         target_file: path.to_path_buf(),
                         target_name: symbol.name.to_string(),
                         target_kind: symbol.kind,
+                        target_scope: member_scope(symbol),
+                        target_ordinal: ordinal,
+                        target_peer_count: peers.len(),
                         target_line: symbol.range.start_line,
                         relationship,
                     });
@@ -314,24 +362,48 @@ impl CleanupStage {
                 .iter()
                 .filter(|s| s.name.as_ref() == edge.target_name && s.kind == edge.target_kind)
                 .collect();
-            let target = match candidates.as_slice() {
-                [only] => *only,
-                // A file routinely holds several symbols sharing name and
-                // kind (rust impl blocks each defining `new`, overload sets).
-                // The line breaks the tie when the edit did not move it;
-                // codanna's own types/mod.rs alone carries 556 inbound edges
-                // to three different `new`. Ranges that DID shift stay
-                // ambiguous and fail closed.
-                _ => {
-                    let mut exact = candidates
+            // Three discriminators, most durable first. Containing type
+            // splits rust impl blocks and class overloads and survives any
+            // range shift. Position among same-scope peers splits what the
+            // scope cannot -- python `@overload` stubs share name, kind, and
+            // module scope -- and survives shifts too, guarded by a peer-count
+            // check so an added or removed sibling fails closed instead of
+            // rebinding to its neighbour. The line is last and any edit above
+            // the symbol invalidates it.
+            let target: &crate::Symbol = if let [only] = candidates.as_slice() {
+                only
+            } else {
+                let by_scope: Vec<&crate::Symbol> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|s| member_scope(s) == edge.target_scope)
+                    .collect();
+                let mut narrowed = if by_scope.is_empty() {
+                    candidates.clone()
+                } else {
+                    by_scope
+                };
+                narrowed.sort_by_key(|s| (s.range.start_line, s.range.start_column));
+
+                let picked = if narrowed.len() == 1 {
+                    Some(narrowed[0])
+                } else if narrowed.len() == edge.target_peer_count {
+                    narrowed.get(edge.target_ordinal).copied()
+                } else {
+                    let mut exact = narrowed
                         .iter()
+                        .copied()
                         .filter(|s| s.range.start_line == edge.target_line);
                     match (exact.next(), exact.next()) {
-                        (Some(one), None) => *one,
-                        _ => {
-                            stats.dropped += 1;
-                            continue;
-                        }
+                        (Some(one), None) => Some(one),
+                        _ => None,
+                    }
+                };
+                match picked {
+                    Some(one) => one,
+                    None => {
+                        stats.dropped += 1;
+                        continue;
                     }
                 }
             };

@@ -3257,6 +3257,66 @@ mod tests {
         }
     }
 
+    // The line is a proxy for identity and any edit above a symbol breaks it.
+    // Two impl blocks each defining `new` are told apart by their containing
+    // type, which no range shift can move. Verified with a PREPEND, not an
+    // append: appending leaves every start line intact and so cannot exercise
+    // the tie at all.
+    #[test]
+    fn rebind_disambiguates_same_name_members_by_scope_across_a_line_shift() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let types = "pub struct Alpha;\npub struct Beta;\n\
+                     impl Alpha {\n    pub fn make() -> u32 { 1 }\n}\n\
+                     impl Beta {\n    pub fn make() -> u32 { 2 }\n}\n";
+        std::fs::write(src.join("types.rs"), types).unwrap();
+        std::fs::write(
+            src.join("user.rs"),
+            "use crate::types::Alpha;\npub fn go() -> u32 { Alpha::make() }\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        let fresh = facade.relationship_count();
+        let go = facade.find_symbols_by_name("go", None);
+        assert_eq!(go.len(), 1);
+        let before: Vec<String> = facade
+            .get_called_functions(go[0].id)
+            .iter()
+            .map(|s| s.name.to_string())
+            .collect();
+        assert!(
+            before.iter().any(|n| n == "make"),
+            "fixture must resolve Alpha::make before the shift; got {before:?}"
+        );
+
+        // PREPEND: every symbol in types.rs shifts down one line.
+        std::fs::write(src.join("types.rs"), format!("// shifted\n{types}")).unwrap();
+        facade.index_file(src.join("types.rs")).unwrap();
+
+        let go = facade.find_symbols_by_name("go", None);
+        let after: Vec<String> = facade
+            .get_called_functions(go[0].id)
+            .iter()
+            .map(|s| s.name.to_string())
+            .collect();
+        assert_eq!(
+            after, before,
+            "an edge into one of two same-named members must survive an edit \
+             that shifts every line in the target file"
+        );
+        assert_eq!(facade.relationship_count(), fresh);
+    }
+
     /// Names of symbols holding an inbound edge to the (single) symbol
     /// called `name`. Sorted so comparisons are order-independent.
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
