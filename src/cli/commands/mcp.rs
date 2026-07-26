@@ -106,6 +106,11 @@ struct IndexInfo {
     symbol_count: usize,
     file_count: usize,
     relationship_count: usize,
+    /// Commit of the binary that last wrote this index, `-dirty` when built
+    /// from a modified tree. Absent for indexes written before the stamp
+    /// existed and for binaries built without a work tree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    builder_commit: Option<String>,
     symbol_kinds: std::collections::BTreeMap<String, usize>,
     /// Per-language symbol counts (schema `indexInfo.languages`)
     languages: std::collections::BTreeMap<String, usize>,
@@ -828,10 +833,15 @@ pub async fn run(
         // TODO: Add fast stats-only document store loader
         let documents: Option<DocumentsInfo> = None;
 
+        let builder_commit = crate::storage::IndexMetadata::load(&config.index_path)
+            .ok()
+            .and_then(|m| m.builder_commit);
+
         Some(IndexInfo {
             symbol_count,
             file_count: file_count as usize,
             relationship_count,
+            builder_commit,
             symbol_kinds,
             languages,
             semantic_search,

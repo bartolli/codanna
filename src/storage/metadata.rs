@@ -13,6 +13,17 @@ use std::path::{Path, PathBuf};
 /// over rows from another version leaves a silent hybrid.
 pub const EMISSION_SEMANTICS_VERSION: u32 = 3;
 
+/// Short commit of the binary, `-dirty` when it was built from a modified
+/// tree. `None` when built without a work tree (release tarballs), which
+/// distinguishes a packaged build from a local one.
+///
+/// Descriptive only. Unlike [`EMISSION_SEMANTICS_VERSION`] this never gates
+/// a read: binaries are rebuilt constantly during development and an index
+/// stays valid across them.
+pub fn builder_commit() -> Option<&'static str> {
+    option_env!("CODANNA_GIT_COMMIT")
+}
+
 /// Metadata about the index state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexMetadata {
@@ -41,6 +52,15 @@ pub struct IndexMetadata {
     /// as a mismatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emission_version: Option<u32>,
+
+    /// Commit of the binary that last wrote this index, `-dirty` when that
+    /// binary came from a modified tree. Two binaries reporting the same
+    /// `--version` between releases are told apart by this field and by
+    /// nothing else.
+    ///
+    /// Descriptive: no read path compares it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builder_commit: Option<String>,
 }
 
 /// Describes where the index data came from
@@ -67,6 +87,7 @@ impl Default for IndexMetadata {
             last_modified: crate::indexing::get_utc_timestamp(),
             indexed_paths: None,
             emission_version: None,
+            builder_commit: None,
         }
     }
 }
@@ -177,5 +198,36 @@ mod tests {
         let meta = IndexMetadata::new();
         let json = serde_json::to_string(&meta).expect("serialize");
         assert!(!json.contains("emission_version"));
+        assert!(!json.contains("builder_commit"));
+    }
+
+    // The stamp exists to separate two binaries reporting the same
+    // `--version`, so it has to survive the round trip verbatim -- including
+    // the `-dirty` suffix, which is what says the commit does not identify
+    // the code that ran.
+    #[test]
+    fn builder_commit_round_trips_including_dirty_suffix() {
+        let mut meta = IndexMetadata::new();
+        meta.builder_commit = Some("1f48208-dirty".to_string());
+        let json = serde_json::to_string(&meta).expect("serialize");
+        let back: IndexMetadata = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.builder_commit.as_deref(), Some("1f48208-dirty"));
+    }
+
+    // Indexes written before the stamp existed stay readable: unlike
+    // emission_version, absence here carries no verdict.
+    #[test]
+    fn metadata_without_builder_commit_reads_as_unknown() {
+        let prior = r#"{
+            "version": 1,
+            "data_source": "Fresh",
+            "symbol_count": 42,
+            "file_count": 7,
+            "last_modified": 0,
+            "emission_version": 3
+        }"#;
+        let meta: IndexMetadata = serde_json::from_str(prior).expect("parse");
+        assert_eq!(meta.builder_commit, None);
+        assert_eq!(meta.emission_version, Some(3));
     }
 }

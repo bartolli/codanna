@@ -183,6 +183,7 @@ impl IndexPersistence {
         // this binary's output by construction. Stamping here is truthful
         // in both cases.
         metadata.emission_version = Some(crate::storage::metadata::EMISSION_SEMANTICS_VERSION);
+        metadata.builder_commit = crate::storage::metadata::builder_commit().map(str::to_string);
 
         // Update indexed paths for sync detection on next load
         let indexed_paths: Vec<PathBuf> = facade.get_indexed_paths().iter().cloned().collect();

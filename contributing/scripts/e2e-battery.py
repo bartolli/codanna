@@ -17,6 +17,10 @@ Enforces the measurement protocol invariants that prose could not:
   - touch shape (--touch-shape, default prepend): the touch SHIFTS ranges, so
     line-sensitive identity paths are exercised. An append-only touch reported
     parity on three corpora while a prepend still dropped edges.
+  - binary identity: each leg records the commit its index was stamped with
+    and two legs may not share one. `--version` does not separate builds
+    between releases, so a pre/post pair over one binary otherwise diffs it
+    against itself and reports a confident empty result.
 
 Usage:
   e2e-battery.py run  --binary PATH --label NAME --dump PATH \
@@ -29,9 +33,9 @@ No cargo invocations here: binaries are built by the caller.
 """
 
 import argparse
+import json
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -87,6 +91,67 @@ def ensure_corpus(out, name, fixture, pin):
     return corpus
 
 
+def builder_commit(workspace):
+    """Commit stamped into the index by the binary that wrote it.
+
+    `None` for a binary built without a work tree (release tarballs) or an
+    index written before the stamp existed. Either way the caller decides
+    what an unknown means; this only reports.
+    """
+    meta = workspace / ".codanna" / "index" / "index.meta"
+    if not meta.exists():
+        return None
+    try:
+        return json.loads(meta.read_text()).get("builder_commit")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def record_leg_binary(out_dir, label, commit):
+    """Record this leg's binary identity and reject a re-used binary.
+
+    `--binary` is the one input the protocol cannot verify from the corpus:
+    two legs pointed at the same build produce a confident empty diff that
+    reads exactly like "the change had no effect". Comparing the stamps
+    turns that into an error.
+    """
+    ledger_path = out_dir / "binaries.json"
+    ledger = {}
+    if ledger_path.exists():
+        try:
+            ledger = json.loads(ledger_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            ledger = {}
+
+    if commit is None:
+        print(
+            f"   binary {label}: no commit stamp (tarball build, or an index "
+            f"written before the stamp existed) - legs unverifiable"
+        )
+    else:
+        clash = [
+            other
+            for other, seen in ledger.items()
+            if seen == commit and other != label
+        ]
+        if clash:
+            raise SystemExit(
+                f"{out_dir.name}: leg '{label}' and leg(s) {clash} were built "
+                f"from the same binary ({commit}). A pre/post pair over one "
+                f"build diffs a binary against itself; rebuild the other leg."
+            )
+        if commit.endswith("-dirty"):
+            print(
+                f"   binary {label}: {commit} - built from a modified tree, "
+                f"so the commit does not identify the code that ran"
+            )
+        else:
+            print(f"   binary {label}: {commit}")
+
+    ledger[label] = commit
+    ledger_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n")
+
+
 def set_semantic(workspace, enabled):
     """Flip [semantic_search] enabled in settings.toml and read it back."""
     settings = workspace / ".codanna" / "settings.toml"
@@ -140,6 +205,7 @@ def leg(binary, dump, corpus, out_dir, label, suffix, semantic_on):
     edges = run([str(dump), str(tantivy)]).stdout.splitlines()
     edge_file = out_dir / f"{label}{suffix}.edges"
     edge_file.write_text("\n".join(sorted(edges)) + ("\n" if edges else ""))
+    record_leg_binary(out_dir, f"{label}{suffix}", builder_commit(ws))
     run(["rm", "-rf", str(ws)])
     print(f"EDGES {out_dir.name} {label}{suffix}: {len(edges)}")
     return edge_file
@@ -220,6 +286,7 @@ def incremental_leg(
     fresh = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
     fresh_file = out_dir / f"{label}.fresh.edges"
     fresh_file.write_text("\n".join(fresh) + ("\n" if fresh else ""))
+    record_leg_binary(out_dir, label, builder_commit(ws))
 
     targets = touch_targets(fresh, touch_n)
     if not targets:
