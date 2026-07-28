@@ -348,9 +348,18 @@ async fn main() {
     // `codanna index` heals by full rebuild; everything else (including
     // dry-run, whose pre-dispatch path sync can write) refuses with the
     // heal command. `--force` clears unconditionally and needs no gate.
+    // `persistence.exists()` is satisfied by a bare `tantivy/meta.json`, which
+    // `serve` writes on startup before anything is indexed. Such a directory
+    // carries no `index.meta`, so there are no stored semantics to conflict
+    // with and nothing to mix -- it is empty, not stale. Gating it made a
+    // server refuse the skeleton it had just created itself, disabling every
+    // tool until the workspace was indexed by hand. An index predating
+    // emission stamping still has `index.meta` (without the field), so it
+    // continues to gate and heal as before.
     let mut emission_heal = false;
     if needs_indexer
         && persistence.exists()
+        && config.index_path.join("index.meta").exists()
         && !matches!(cli.command, Commands::Index { force: true, .. })
     {
         let stored = IndexMetadata::load(&config.index_path)
