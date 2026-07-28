@@ -8,6 +8,80 @@ use std::sync::Arc;
 use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
 
+/// Stdio transport that tolerates client probes sent before the handshake.
+///
+/// rmcp requires `initialize` to be the very first message and treats anything
+/// else as fatal (`ServerInitializeError::ExpectedInitializeRequest`), which
+/// terminates the process. Some clients probe with a non-standard request
+/// first -- Antigravity opens with `server/discover` -- and the server dies
+/// before it can serve anyone.
+///
+/// This filters stdin until `initialize` arrives: unknown pre-handshake
+/// requests are answered with JSON-RPC "method not found" instead of killing
+/// the server, and pre-handshake notifications are dropped. Once `initialize`
+/// is seen every byte is forwarded untouched, so normal sessions are
+/// unaffected. Writing directly to stdout here is safe because rmcp has not
+/// produced any output yet at that point.
+fn handshake_tolerant_stdio() -> (tokio::io::DuplexStream, tokio::io::Stdout) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    const BUFFER_BYTES: usize = 64 * 1024;
+    let (mut inbound, transport_side) = tokio::io::duplex(BUFFER_BYTES);
+
+    tokio::spawn(async move {
+        let mut reader = BufReader::new(tokio::io::stdin());
+        let mut line = String::new();
+        let mut handshake_seen = false;
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+
+            if !handshake_seen {
+                match serde_json::from_str::<serde_json::Value>(&line) {
+                    Ok(message) => {
+                        let method = message.get("method").and_then(|m| m.as_str());
+                        if method != Some("initialize") {
+                            if let Some(id) = message.get("id") {
+                                // A request needs an answer; a notification does not.
+                                let response = serde_json::json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "error": {
+                                        "code": -32601,
+                                        "message": format!(
+                                            "Unknown method: {}",
+                                            method.unwrap_or_default()
+                                        ),
+                                    },
+                                });
+                                let mut stdout = tokio::io::stdout();
+                                let _ = stdout
+                                    .write_all(format!("{response}\n").as_bytes())
+                                    .await;
+                                let _ = stdout.flush().await;
+                            }
+                            continue;
+                        }
+                        handshake_seen = true;
+                    }
+                    // Unparseable input is rmcp's to reject, not ours to hide.
+                    Err(_) => handshake_seen = true,
+                }
+            }
+
+            if inbound.write_all(line.as_bytes()).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    (transport_side, tokio::io::stdout())
+}
+
 /// PID lockfile guard for stdio MCP servers. Prevents two concurrent
 /// `codanna serve` (stdio) processes from racing the tantivy writer on the
 /// same `.codanna/index/`. Removed automatically on drop. HTTP/HTTPS modes
@@ -400,8 +474,8 @@ async fn run_stdio_server(
     }
 
     // Start server with stdio transport
-    use rmcp::{ServiceExt, transport::stdio};
-    let service = match server.serve(stdio()).await {
+    use rmcp::ServiceExt;
+    let service = match server.serve(handshake_tolerant_stdio()).await {
         Ok(service) => service,
         Err(e) => {
             eprintln!("Failed to start MCP server: {e}");
@@ -423,10 +497,10 @@ async fn run_stdio_server(
 /// never touches the index, so no serve lock is taken and no watcher
 /// starts. The caller exits with the gate code when this returns.
 pub async fn run_stale_stdio(stored: Option<u32>, current: u32) {
-    use rmcp::{ServiceExt, transport::stdio};
+    use rmcp::ServiceExt;
 
     let server = crate::mcp::StaleIndexServer::new(stored, current);
-    match server.serve(stdio()).await {
+    match server.serve(handshake_tolerant_stdio()).await {
         Ok(service) => {
             if let Err(e) = service.waiting().await {
                 eprintln!("Degraded MCP server error: {e}");
