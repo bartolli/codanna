@@ -59,9 +59,7 @@ fn handshake_tolerant_stdio() -> (tokio::io::DuplexStream, tokio::io::Stdout) {
                                     },
                                 });
                                 let mut stdout = tokio::io::stdout();
-                                let _ = stdout
-                                    .write_all(format!("{response}\n").as_bytes())
-                                    .await;
+                                let _ = stdout.write_all(format!("{response}\n").as_bytes()).await;
                                 let _ = stdout.flush().await;
                             }
                             continue;
