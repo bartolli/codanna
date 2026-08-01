@@ -64,19 +64,40 @@ echo "[6/6] Check docs build"
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 echo "PASS: docs"
 
-# Local-only: MCP server test (not in GitHub Actions)
+# Local-only: MCP server test (not in GitHub Actions).
+# Runs in a scratch workspace it seeds itself: this repo's .codanna/
+# is watched by a live MCP server on dev machines (serve.lock), and
+# tests never target a live index.
 echo ""
-echo "Local-only: MCP server test"
-if [ -d ".codanna/index" ]; then
-    ./target/debug/codanna mcp-test
-    if [ $? -eq 0 ]; then
-        echo "PASS: MCP server"
-    else
-        echo "FAIL: MCP server test"
-        exit 1
-    fi
+echo "Local-only: MCP server test (scratch workspace)"
+codanna_bin="$(pwd -P)/target/debug/codanna"
+mcp_scratch=$(mktemp -d)
+trap 'rm -rf "$mcp_scratch"' EXIT
+# Canonical path: a symlinked workspace root breaks module-identity
+# strip-base comparison on macOS (/tmp -> /private/tmp).
+mcp_scratch=$(cd "$mcp_scratch" && pwd -P)
+mkdir -p "$mcp_scratch/src" "$mcp_scratch/.codanna"
+cat > "$mcp_scratch/src/probe.rs" <<'FIXTURE'
+pub fn mcp_probe_target() -> i32 {
+    1
+}
+FIXTURE
+cat > "$mcp_scratch/.codanna/settings.toml" <<SETTINGS
+index_path = ".codanna/index"
+
+[indexing]
+indexed_paths = ["$mcp_scratch/src"]
+
+[semantic_search]
+enabled = false
+SETTINGS
+if (cd "$mcp_scratch" \
+    && "$codanna_bin" index src --no-progress > /dev/null \
+    && "$codanna_bin" mcp-test > /dev/null); then
+    echo "PASS: MCP server"
 else
-    echo "SKIP: no index found (run 'codanna init && codanna index src' first)"
+    echo "FAIL: MCP server test"
+    exit 1
 fi
 
 echo ""
