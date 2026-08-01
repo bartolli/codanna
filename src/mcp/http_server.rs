@@ -221,7 +221,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
                 .with_cancellation_token(ct.child_token())
                 .with_sse_keep_alive(Some(Duration::from_secs(15)))
                 .with_sse_retry(None)
-                .with_stateful_mode(true)
+                .with_legacy_session_mode(true)
                 .with_json_response(false);
             let cfg = match config.mcp.allowed_hosts.clone() {
                 Some(hosts) => cfg.with_allowed_hosts(hosts),

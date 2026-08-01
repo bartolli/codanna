@@ -23,3 +23,6 @@ mod test_file_path_portable;
 
 #[path = "cli/test_index_seed_ownership.rs"]
 mod test_index_seed_ownership;
+
+#[path = "cli/test_serve_stdio_dual_generation.rs"]
+mod test_serve_stdio_dual_generation;
