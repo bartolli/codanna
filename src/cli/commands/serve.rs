@@ -288,7 +288,9 @@ async fn run_stdio_server(
         facade.symbol_count(),
         facade.has_semantic_search()
     );
-    let server = crate::mcp::CodeIntelligenceServer::new(facade);
+    let broadcaster = Arc::new(crate::mcp::notifications::NotificationBroadcaster::new(100));
+    let server =
+        crate::mcp::CodeIntelligenceServer::new(facade).with_broadcaster(broadcaster.clone());
 
     // Load document store and attach to server (shared with watcher later)
     let document_store_arc = crate::documents::load_from_settings(&config);
@@ -321,11 +323,8 @@ async fn run_stdio_server(
 
     // Start unified file watcher if enabled
     if watch || config.file_watch.enabled {
-        use crate::mcp::notifications::NotificationBroadcaster;
         use crate::watcher::UnifiedWatcher;
         use crate::watcher::handlers::{CodeFileHandler, ConfigFileHandler, DocumentFileHandler};
-
-        let broadcaster = Arc::new(NotificationBroadcaster::new(100));
 
         let workspace_root = config
             .workspace_root

@@ -132,12 +132,20 @@ struct ServeSession {
     rx: Receiver<String>,
 }
 
+fn spawn_serve_watch(workspace: &Path) -> ServeSession {
+    spawn_serve_with_args(workspace, &["serve", "--watch"])
+}
+
 fn spawn_serve(workspace: &Path) -> ServeSession {
+    spawn_serve_with_args(workspace, &["serve"])
+}
+
+fn spawn_serve_with_args(workspace: &Path, args: &[&str]) -> ServeSession {
     let bin = codanna_binary();
     let test_home = workspace.join(".home");
     std::fs::create_dir_all(&test_home).expect("create test home");
     let mut child = Command::new(&bin)
-        .args(["serve"])
+        .args(args)
         .current_dir(workspace)
         .env("HOME", &test_home)
         .stdin(Stdio::piped())
@@ -419,4 +427,183 @@ fn serve_stdio_unsupported_version_fails_closed_per_request() {
     drop(session.stdin);
     let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
     assert!(status.success(), "clean exit after refusal session");
+}
+
+/// List results carry the cache contract: `ttlMs` 3600000 and
+/// `cacheScope` "private". The tool list is static per binary;
+/// `toolsListChanged` covers upgrades.
+#[test]
+fn serve_stdio_tools_list_carries_cache_contract() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve(workspace.path());
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": stateless_meta() }
+        })
+    )
+    .expect("write tools/list");
+    session.stdin.flush().expect("flush");
+
+    let tools = recv_json(&session.rx);
+    assert_eq!(
+        tools["result"]["ttlMs"], 3_600_000,
+        "list results carry the locked ttlMs\n{tools}"
+    );
+    assert_eq!(
+        tools["result"]["cacheScope"], "private",
+        "list results carry the locked cacheScope\n{tools}"
+    );
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(status.success(), "clean exit, got {status:?}");
+}
+
+/// A stateless client opts in via `subscriptions/listen`; a watched
+/// file created afterwards produces a change notification tagged with
+/// the subscription id.
+#[test]
+fn serve_stdio_listen_delivers_tagged_change_notifications() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_watch(workspace.path());
+
+    // Establish the stateless session first: `subscriptions/listen` as
+    // the session's very first request is not dispatched by rmcp's
+    // first-request path (recorded story limitation).
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": stateless_meta() }
+        })
+    )
+    .expect("write session opener");
+    session.stdin.flush().expect("flush opener");
+    let opener = recv_json(&session.rx);
+    assert_eq!(opener["id"], 1, "opener response id\n{opener}");
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "subscriptions/listen",
+            "params": {
+                "_meta": stateless_meta(),
+                "notifications": {
+                    "resourcesListChanged": true,
+                    "resourceSubscriptions": ["file://src/alpha.rs"]
+                }
+            }
+        })
+    )
+    .expect("write listen");
+    session.stdin.flush().expect("flush listen");
+
+    let ack = recv_json(&session.rx);
+    assert_eq!(
+        ack["method"], "notifications/subscriptions/acknowledged",
+        "listen is acknowledged, not refused\n{ack}"
+    );
+    assert_eq!(
+        ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], 2,
+        "acknowledgment carries the subscription id\n{ack}"
+    );
+
+    // The watch lane emits FileReindexed for modifies AND creates
+    // (the create fix routes creates through the reindex leg), mapped
+    // to notifications/resources/updated on the subscribed URI.
+    let fixture = workspace.path().join("src/alpha.rs");
+    let mut content = std::fs::read_to_string(&fixture).expect("read fixture");
+    content.push_str("\npub fn gamma() -> i32 {\n    3\n}\n");
+    std::fs::write(&fixture, content).expect("modify watched file");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let tagged = loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("change notification before timeout");
+        let line = session
+            .rx
+            .recv_timeout(remaining)
+            .expect("server line before timeout");
+        let msg: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if msg["method"] == "notifications/resources/updated" {
+            break msg;
+        }
+    };
+    assert_eq!(
+        tagged["params"]["uri"], "file://src/alpha.rs",
+        "notification names the subscribed resource\n{tagged}"
+    );
+    assert_eq!(
+        tagged["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], 2,
+        "notification carries the subscription id\n{tagged}"
+    );
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(status.success(), "clean exit, got {status:?}");
+}
+
+/// A stateless session that never opts in via `subscriptions/listen`
+/// receives zero unsolicited notifications when watched files change.
+#[test]
+fn serve_stdio_no_optin_no_unsolicited_notifications() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_watch(workspace.path());
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": stateless_meta() }
+        })
+    )
+    .expect("write opener");
+    session.stdin.flush().expect("flush opener");
+    let opener = recv_json(&session.rx);
+    assert_eq!(opener["id"], 1, "opener response id\n{opener}");
+
+    let fixture = workspace.path().join("src/alpha.rs");
+    let mut content = std::fs::read_to_string(&fixture).expect("read fixture");
+    content.push_str("\npub fn delta() -> i32 {\n    4\n}\n");
+    std::fs::write(&fixture, content).expect("modify watched file");
+
+    // Quiet window well past debounce (500ms) + reindex.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        match session.rx.recv_timeout(remaining) {
+            Ok(line) => {
+                let msg: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(method) = msg["method"].as_str() {
+                    panic!("unsolicited notification without opt-in: {method}\n{msg}");
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(status.success(), "clean exit, got {status:?}");
 }

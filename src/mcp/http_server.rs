@@ -182,7 +182,8 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
             let server = CodeIntelligenceServer::new_with_facade(
                 indexer_for_service.clone(),
                 config_for_service.clone(),
-            );
+            )
+            .with_broadcaster(broadcaster.clone());
 
             // Attach document store if available
             let server = if let Some(ref store_arc) = document_store_for_service {

@@ -34,6 +34,23 @@ impl StaleIndexServer {
 }
 
 impl ServerHandler for StaleIndexServer {
+    // ttl_ms 0 = do-not-cache: the degraded zero-tool list is
+    // transient by design; a heal and restart replaces it.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: Vec::new(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: Some(0),
+            cache_scope: Some(rmcp::model::CacheScope::Private),
+        })
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(

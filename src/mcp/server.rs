@@ -57,6 +57,7 @@ pub struct CodeIntelligenceServer {
     pub document_store: Option<Arc<RwLock<DocumentStore>>>,
     tool_router: ToolRouter<Self>,
     pub(super) peer: Arc<Mutex<Option<Peer<RoleServer>>>>,
+    broadcaster: Option<Arc<crate::mcp::notifications::NotificationBroadcaster>>,
 }
 
 impl CodeIntelligenceServer {
@@ -66,6 +67,7 @@ impl CodeIntelligenceServer {
             document_store: None,
             tool_router: Self::symbols_router() + Self::search_router(),
             peer: Arc::new(Mutex::new(None)),
+            broadcaster: None,
         }
     }
 
@@ -76,6 +78,7 @@ impl CodeIntelligenceServer {
             document_store: None,
             tool_router: Self::symbols_router() + Self::search_router(),
             peer: Arc::new(Mutex::new(None)),
+            broadcaster: None,
         }
     }
 
@@ -86,7 +89,17 @@ impl CodeIntelligenceServer {
             document_store: None,
             tool_router: Self::symbols_router() + Self::search_router(),
             peer: Arc::new(Mutex::new(None)),
+            broadcaster: None,
         }
+    }
+
+    /// Wire the watch-lane broadcaster; enables `subscriptions/listen`.
+    pub fn with_broadcaster(
+        mut self,
+        broadcaster: Arc<crate::mcp::notifications::NotificationBroadcaster>,
+    ) -> Self {
+        self.broadcaster = Some(broadcaster);
+        self
     }
 
     /// Add document store for document search capability
@@ -136,12 +149,91 @@ impl CodeIntelligenceServer {
     }
 }
 
+/// Cache lifetime for list results. The tool list is static per
+/// binary; `toolsListChanged` covers upgrades.
+pub(crate) const LIST_CACHE_TTL_MS: u64 = 3_600_000;
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for CodeIntelligenceServer {
+    // Suppresses the tool_handler-generated list_tools, which leaves
+    // ttl_ms/cache_scope unset; 2026-07-28 requires both on list results.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: Some(LIST_CACHE_TTL_MS),
+            cache_scope: Some(rmcp::model::CacheScope::Private),
+        })
+    }
+
+    // The watch lane emits resource-level changes only; tool and prompt
+    // categories are never accepted.
+    fn accepted_subscription_filter(
+        &self,
+        requested: &rmcp::model::SubscriptionFilter,
+    ) -> Option<rmcp::model::SubscriptionFilter> {
+        let mut accepted = requested.clone();
+        accepted.tools_list_changed = None;
+        accepted.prompts_list_changed = None;
+        Some(accepted)
+    }
+
+    async fn listen(
+        &self,
+        context: rmcp::service::SubscriptionContext,
+    ) -> Result<(), rmcp::ErrorData> {
+        use rmcp::service::SubscriptionSendError;
+        use tokio::sync::broadcast::error::RecvError;
+
+        let Some(broadcaster) = self.broadcaster.as_ref() else {
+            // No watch lane wired (serve without file watching): hold the
+            // stream open until the client cancels; nothing will flow.
+            context.cancelled().await;
+            return Ok(());
+        };
+        let mut events = broadcaster.subscribe();
+        let sink = context.sink();
+
+        loop {
+            let send_result = tokio::select! {
+                _ = context.cancelled() => break,
+                event = events.recv() => match event {
+                    Ok(crate::mcp::notifications::FileChangeEvent::FileReindexed { path }) => {
+                        sink.notify_resource_updated(format!("file://{}", path.display())).await
+                    }
+                    Ok(_) => sink.notify_resource_list_changed().await,
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
+                },
+            };
+            match send_result {
+                Ok(()) => {}
+                // The client did not opt in to this category or URI;
+                // the filter is doing its job, keep the stream open.
+                Err(SubscriptionSendError::NotificationNotAccepted(_)) => {}
+                Err(SubscriptionSendError::SubscriptionClosed) => break,
+                Err(e) => {
+                    tracing::debug!(target: "mcp", "listen send failed: {e}");
+                    break;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_tools()
+                .enable_resources()
+                .enable_resources_list_changed()
+                .enable_resources_subscribe()
                 .build(),
         )
         .with_server_info(
