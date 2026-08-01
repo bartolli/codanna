@@ -607,3 +607,74 @@ fn serve_stdio_no_optin_no_unsolicited_notifications() {
     let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
     assert!(status.success(), "clean exit, got {status:?}");
 }
+
+/// The legacy notification lane emits only standard MCP methods:
+/// no `notifications/codanna/*` custom notifications reach the wire.
+/// Stateless sessions are covered by the no-opt-in lock, which
+/// rejects any unsolicited method including `notifications/message`.
+#[test]
+fn serve_stdio_legacy_lane_sends_no_custom_notifications() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_watch(workspace.path());
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "legacy-notify-test", "version": "0"}
+            }
+        })
+    )
+    .expect("write initialize");
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    )
+    .expect("write initialized");
+    session.stdin.flush().expect("flush handshake");
+    let init = recv_json(&session.rx);
+    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+
+    let fixture = workspace.path().join("src/alpha.rs");
+    let mut content = std::fs::read_to_string(&fixture).expect("read fixture");
+    content.push_str("\npub fn epsilon() -> i32 {\n    5\n}\n");
+    std::fs::write(&fixture, content).expect("modify watched file");
+
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let mut standard_seen = Vec::new();
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        match session.rx.recv_timeout(remaining) {
+            Ok(line) => {
+                let msg: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if let Some(method) = msg["method"].as_str() {
+                    assert!(
+                        !method.starts_with("notifications/codanna/"),
+                        "custom notification on the wire: {method}\n{msg}"
+                    );
+                    standard_seen.push(method.to_string());
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        standard_seen
+            .iter()
+            .any(|m| m == "notifications/resources/updated"),
+        "legacy lane still delivers the standard resource notification, saw: {standard_seen:?}"
+    );
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(status.success(), "clean exit, got {status:?}");
+}
