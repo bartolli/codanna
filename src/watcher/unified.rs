@@ -350,6 +350,11 @@ impl UnifiedWatcher {
                             }
                         }
                     }
+                    Err(e) if is_writer_lock_contention(&e) => {
+                        tracing::info!(
+                            "[{handler_name}] reindex skipped: another serve process holds the index writer; hot-reload converges"
+                        );
+                    }
                     Err(e) => {
                         tracing::error!("[{handler_name}] reindex failed: {e}");
                     }
@@ -359,7 +364,13 @@ impl UnifiedWatcher {
             WatchAction::RemoveCode { path } => {
                 let mut indexer = self.facade.write().await;
                 if let Err(e) = indexer.remove_file(&path) {
-                    tracing::error!("[{handler_name}] failed to remove: {e}");
+                    if is_writer_lock_contention(&e) {
+                        tracing::info!(
+                            "[{handler_name}] remove skipped: another serve process holds the index writer; hot-reload converges"
+                        );
+                    } else {
+                        tracing::error!("[{handler_name}] failed to remove: {e}");
+                    }
                 } else {
                     crate::log_event!(handler_name, "removed");
                     self.broadcaster
@@ -622,5 +633,33 @@ impl UnifiedWatcherBuilder {
 impl Default for UnifiedWatcherBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Another serve process holds the Tantivy index writer for this
+/// workspace: its watcher indexes the change and this process
+/// converges via hot-reload. Tantivy surfaces the contention as a
+/// lockfile-acquire failure in the storage error chain; that text is
+/// the only marker crossing the boxed layers.
+fn is_writer_lock_contention(e: &crate::IndexError) -> bool {
+    e.to_string().contains("Failed to acquire Lockfile")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writer_lock_contention_is_classified_from_the_error_chain() {
+        let contended = crate::IndexError::General(
+            "Pipeline error: Storage error: Tantivy error: \
+             Failed to acquire Lockfile: LockBusy. \
+             Some(\"Failed to acquire index lock.\")"
+                .to_string(),
+        );
+        assert!(is_writer_lock_contention(&contended));
+
+        let unrelated = crate::IndexError::General("Pipeline error: parse failed".to_string());
+        assert!(!is_writer_lock_contention(&unrelated));
     }
 }
