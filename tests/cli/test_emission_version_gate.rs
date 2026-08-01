@@ -376,6 +376,133 @@ fn serve_stale_stdio_completes_degraded_handshake() {
     );
 }
 
+/// Run a serve session in the workspace: legacy handshake, then
+/// tools/list. Returns the initialize instructions, the tool count,
+/// and the exit status after stdin EOF.
+fn serve_session(workspace: &Path) -> (String, usize, std::process::ExitStatus) {
+    let bin = codanna_binary();
+    let test_home = workspace.join(".home");
+    std::fs::create_dir_all(&test_home).expect("create test home");
+
+    let mut child = Command::new(&bin)
+        .args(["serve"])
+        .current_dir(workspace)
+        .env("HOME", &test_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn serve");
+    let mut stdin = child.stdin.take().expect("child stdin");
+    let stdout = child.stdout.take().expect("child stdout");
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(l) => {
+                    if tx.send(l).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    writeln!(
+        stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "fresh-gate-test", "version": "0"}
+            }
+        })
+    )
+    .expect("write initialize");
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    )
+    .expect("write initialized");
+    writeln!(
+        stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    )
+    .expect("write tools/list");
+    stdin.flush().expect("flush session");
+
+    let init = recv_json(&rx);
+    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+    let instructions = init["result"]["instructions"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let tools = recv_json(&rx);
+    let tool_count = tools["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("tools/list result carries a tools array\n{tools}"))
+        .len();
+
+    drop(stdin);
+    let status = wait_with_timeout(&mut child, Duration::from_secs(10));
+    (instructions, tool_count, status)
+}
+
+/// Fresh-workspace skeleton is empty, not stale: with no registered
+/// indexed paths, serve's startup manufactures a bare tantivy
+/// directory and never writes `index.meta`. A second serve must list
+/// all tools rather than gate-refuse the skeleton it created itself.
+#[test]
+fn serve_twice_in_fresh_workspace_serves_all_tools() {
+    let workspace = TempDir::new().expect("temp dir");
+    // No indexed_paths: registered paths make serve index at startup
+    // and stamp index.meta, which is the healthy shape, not this bug's.
+    let codanna_dir = workspace.path().join(".codanna");
+    std::fs::create_dir_all(&codanna_dir).expect("create .codanna");
+    std::fs::write(
+        codanna_dir.join("settings.toml"),
+        "index_path = \".codanna/index\"\n\n[semantic_search]\nenabled = false\n",
+    )
+    .expect("write settings");
+
+    let (instructions, tool_count, status) = serve_session(workspace.path());
+    assert!(
+        !instructions.contains("INDEX STALE"),
+        "first serve is not stale\n{instructions}"
+    );
+    assert_eq!(tool_count, 9, "first serve lists all tools");
+    assert!(status.success(), "first serve exits clean, got {status:?}");
+
+    // Reproducer precondition: the skeleton exists with no stored
+    // emission semantics.
+    assert!(
+        workspace.path().join(".codanna/index/tantivy").exists(),
+        "first serve manufactures the index skeleton"
+    );
+    assert!(
+        !meta_path(workspace.path()).exists(),
+        "the skeleton has no index.meta -- it is empty, not stale"
+    );
+
+    let (instructions, tool_count, status) = serve_session(workspace.path());
+    assert!(
+        !instructions.contains("INDEX STALE"),
+        "a fresh skeleton is not stale\n{instructions}"
+    );
+    assert_eq!(tool_count, 9, "second serve lists all tools");
+    assert!(
+        status.success(),
+        "second serve exits clean, not with the gate code, got {status:?}"
+    );
+}
+
 #[test]
 fn force_bypasses_gate_and_restamps() {
     let workspace = seed_workspace();

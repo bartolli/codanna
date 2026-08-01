@@ -348,9 +348,15 @@ async fn main() {
     // `codanna index` heals by full rebuild; everything else (including
     // dry-run, whose pre-dispatch path sync can write) refuses with the
     // heal command. `--force` clears unconditionally and needs no gate.
+    // Gate only real indexes: serve's own startup manufactures a bare
+    // tantivy skeleton with no index.meta, and a skeleton is empty,
+    // not stale. Every index written since stamping began has
+    // index.meta (pre-stamping ones carry it without the version
+    // field and keep gating).
     let mut emission_heal = false;
     if needs_indexer
         && persistence.exists()
+        && IndexMetadata::exists(&config.index_path)
         && !matches!(cli.command, Commands::Index { force: true, .. })
     {
         let stored = IndexMetadata::load(&config.index_path)

@@ -126,6 +126,12 @@ impl IndexMetadata {
         Ok(())
     }
 
+    /// True when a metadata file exists at the index root -- the
+    /// marker separating a real index from a manufactured skeleton.
+    pub fn exists(base_path: &Path) -> bool {
+        base_path.join("index.meta").exists()
+    }
+
     /// Load metadata from file
     pub fn load(base_path: &Path) -> IndexResult<Self> {
         let metadata_path = base_path.join("index.meta");
