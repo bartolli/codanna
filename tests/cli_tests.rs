@@ -26,3 +26,6 @@ mod test_index_seed_ownership;
 
 #[path = "cli/test_serve_stdio_dual_generation.rs"]
 mod test_serve_stdio_dual_generation;
+
+#[path = "cli/test_serve_http_sessionless.rs"]
+mod test_serve_http_sessionless;
