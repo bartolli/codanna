@@ -241,7 +241,9 @@ HTTP_PID=""
 http_start() {
     local ws=$1 port=$2 scheme=$3
     shift 3
-    (cd "$ws" && "$BIN" serve "$@" --bind "127.0.0.1:$port" > /dev/null 2>&1) &
+    # exec replaces the subshell so $! is the server itself; without it
+    # http_stop kills the wrapper and the server outlives the run.
+    (cd "$ws" && exec "$BIN" serve "$@" --bind "127.0.0.1:$port" > /dev/null 2>&1) &
     HTTP_PID=$!
     local i=0
     while [ $i -lt 50 ]; do
