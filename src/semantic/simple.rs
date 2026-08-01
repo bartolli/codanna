@@ -523,15 +523,20 @@ impl SimpleSemanticSearch {
         // Stage the vector file, then rename over the live one: a crash at
         // any point leaves the previous generation loadable instead of the
         // delete-then-rewrite window destroying all persisted embeddings.
-        let staging_dir = path.join(".staging");
-        if staging_dir.exists() {
-            std::fs::remove_dir_all(&staging_dir).map_err(|e| {
-                SemanticSearchError::StorageError {
-                    message: format!("Failed to clear stale staging dir: {e}"),
-                    suggestion: "Check directory permissions".to_string(),
-                }
-            })?;
-        }
+        // The staging dir is unique per save invocation: concurrent savers
+        // exist across processes (two serve processes watching one
+        // workspace) AND within one process (serve modes hold more than one
+        // facade). A shared staging path lets one saver yank another's
+        // in-flight directory (ENOENT mid-batch) or promote another's
+        // half-written file. Each save promotes only a file it wrote and
+        // synced itself; the live-file rename stays last-wins-atomic.
+        clear_stale_staging(path);
+        static STAGING_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let staging_dir = path.join(format!(
+            ".staging-{}-{}",
+            std::process::id(),
+            STAGING_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&staging_dir).map_err(|e| SemanticSearchError::StorageError {
             message: format!("Failed to create staging dir: {e}"),
             suggestion: "Check directory permissions".to_string(),
@@ -566,11 +571,12 @@ impl SimpleSemanticSearch {
                 suggestion: "Check directory permissions".to_string(),
             }
         })?;
-        let _ = std::fs::remove_dir_all(&staging_dir);
 
         // Metadata is written only after the vector file is in place, so it
-        // never claims embeddings that are not durably on disk.
-        metadata.save(path)?;
+        // never claims embeddings that are not durably on disk. Its temp
+        // file stages in this save's own dir for the same collision-freedom
+        // as the vector file.
+        metadata.save_staged(&staging_dir, path)?;
 
         // Save language mappings as a JSON file (convert SymbolId to u32 for serialization)
         let languages_path = path.join("languages.json");
@@ -585,7 +591,7 @@ impl SimpleSemanticSearch {
                 suggestion: "This is likely a bug in the code".to_string(),
             }
         })?;
-        let languages_tmp = path.join("languages.json.tmp");
+        let languages_tmp = staging_dir.join("languages.json.tmp");
         std::fs::write(&languages_tmp, languages_json).map_err(|e| {
             SemanticSearchError::StorageError {
                 message: format!("Failed to write language mappings: {e}"),
@@ -598,6 +604,10 @@ impl SimpleSemanticSearch {
                 suggestion: "Check directory permissions".to_string(),
             }
         })?;
+
+        // Bytes only, never correctness: every artifact this save produced
+        // has been renamed out already.
+        let _ = std::fs::remove_dir_all(&staging_dir);
 
         Ok(())
     }
@@ -780,9 +790,95 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     dot_product / (magnitude_a * magnitude_b)
 }
 
+/// Remove leftover staging directories owned by no live process: the
+/// legacy fixed `.staging` name, and `.staging-<pid>-<seq>` dirs whose
+/// pid is dead (a crashed save). A live pid keeps its dirs — those are
+/// in-flight saves, whether a co-run process's or another facade's in
+/// this one. Best-effort: a leftover dir costs bytes, not correctness,
+/// so removal failures are ignored.
+fn clear_stale_staging(path: &Path) {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let dead = match name.strip_prefix(".staging") {
+            Some("") => true,
+            Some(suffix) => {
+                let pid = suffix
+                    .strip_prefix('-')
+                    .and_then(|rest| rest.split('-').next())
+                    .and_then(|p| p.parse::<u32>().ok());
+                match pid {
+                    Some(pid) => !crate::io::process::pid_is_alive(pid),
+                    None => true,
+                }
+            }
+            None => false,
+        };
+        if dead {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two savers on one semantic directory (the serve co-run shape:
+    /// two --watch processes on one workspace) must not destroy each
+    /// other's in-flight staging: every save succeeds and the promoted
+    /// generation is a complete one.
+    #[test]
+    fn concurrent_saves_do_not_destroy_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let mut handles = Vec::new();
+        for seed in 1..=2u32 {
+            let path = path.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let mut search = SimpleSemanticSearch::new_empty(8, "test-remote");
+                let items: Vec<(SymbolId, Vec<f32>, String)> = (1..=16u32)
+                    .map(|i| {
+                        let id = SymbolId::new(seed * 100 + i).unwrap();
+                        let v: Vec<f32> = (0..8).map(|d| (seed * 100 + i + d) as f32).collect();
+                        (id, v, "rust".to_string())
+                    })
+                    .collect();
+                search.store_embeddings(items);
+
+                barrier.wait();
+                let mut errors = Vec::new();
+                for _ in 0..50 {
+                    if let Err(e) = search.save(&path) {
+                        errors.push(e.to_string());
+                    }
+                }
+                errors
+            }));
+        }
+
+        let mut all_errors = Vec::new();
+        for h in handles {
+            all_errors.extend(h.join().expect("saver thread panicked"));
+        }
+        assert!(
+            all_errors.is_empty(),
+            "concurrent saves must not destroy each other's staging:\n{all_errors:#?}"
+        );
+
+        let loaded = SimpleSemanticSearch::load(&path).unwrap();
+        assert_eq!(
+            loaded.embedding_count(),
+            16,
+            "the promoted generation is complete"
+        );
+    }
 
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]

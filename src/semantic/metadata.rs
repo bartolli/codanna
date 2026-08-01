@@ -92,7 +92,19 @@ impl SemanticMetadata {
 
     /// Save metadata to a JSON file
     pub fn save(&self, path: &Path) -> Result<(), SemanticSearchError> {
-        let metadata_path = path.join("metadata.json");
+        self.save_staged(path, path)
+    }
+
+    /// Save metadata, writing the temp file under `staging_dir` before
+    /// renaming into `live_dir`. Callers with concurrent savers pass a
+    /// per-save staging dir so temp names never collide; `save` is the
+    /// single-writer case with both in the live dir.
+    pub fn save_staged(
+        &self,
+        staging_dir: &Path,
+        live_dir: &Path,
+    ) -> Result<(), SemanticSearchError> {
+        let metadata_path = live_dir.join("metadata.json");
 
         let json =
             serde_json::to_string_pretty(self).map_err(|e| SemanticSearchError::StorageError {
@@ -102,7 +114,7 @@ impl SemanticMetadata {
 
         // Temp-then-rename: a crash mid-write cannot leave a truncated
         // metadata.json next to a valid vector file.
-        let tmp_path = path.join("metadata.json.tmp");
+        let tmp_path = staging_dir.join("metadata.json.tmp");
         std::fs::write(&tmp_path, json).map_err(|e| SemanticSearchError::StorageError {
             message: format!("Failed to write metadata: {e}"),
             suggestion: "Check disk space and file permissions".to_string(),

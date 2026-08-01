@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::config::Settings;
 use crate::indexing::facade::IndexFacade;
+use crate::io::process::pid_is_alive;
 
 /// PID lockfile guard for stdio MCP servers. Prevents two concurrent
 /// `codanna serve` (stdio) processes from racing the tantivy writer on the
@@ -93,18 +94,6 @@ impl Drop for ServeLockGuard {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
-}
-
-fn pid_is_alive(pid: u32) -> bool {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
-    let pid = Pid::from_u32(pid);
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        true,
-        ProcessRefreshKind::nothing(),
-    );
-    sys.process(pid).is_some()
 }
 
 /// Arguments for the serve command.
