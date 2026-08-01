@@ -29,3 +29,6 @@ mod test_serve_stdio_dual_generation;
 
 #[path = "cli/test_serve_http_sessionless.rs"]
 mod test_serve_http_sessionless;
+
+#[path = "cli/test_mcp_test_client_generation.rs"]
+mod test_mcp_test_client_generation;

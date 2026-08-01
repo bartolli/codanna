@@ -516,29 +516,6 @@ fn probe_tolerant_stdio(
     (transport_side, tokio::io::stdout())
 }
 
-/// Run the MCP test command.
-pub async fn run_mcp_test(
-    server_binary: Option<PathBuf>,
-    cli_config: Option<PathBuf>,
-    tool: Option<String>,
-    args: Option<String>,
-    delay: Option<u64>,
-) {
-    use crate::mcp::client::CodeIntelligenceClient;
-
-    // Get server binary path (default to current executable)
-    let server_path = server_binary
-        .unwrap_or_else(|| std::env::current_exe().expect("Failed to get current executable path"));
-
-    // Run the test
-    if let Err(e) =
-        CodeIntelligenceClient::test_server(server_path, cli_config, tool, args, delay).await
-    {
-        eprintln!("MCP test failed: {e}");
-        std::process::exit(1);
-    }
-}
-
 #[cfg(test)]
 mod serve_lock_tests {
     use super::*;
