@@ -201,11 +201,30 @@ impl UnifiedWatcher {
     /// Handle an incoming file event.
     async fn handle_event(&mut self, event: Event) {
         for path in event.paths {
-            // A created directory never matches a file handler (extension
-            // gate); it is the watcher's own concern: extend the watch set
-            // and catch up files that landed before the watch existed.
-            if matches!(event.kind, EventKind::Create(_)) && path.is_dir() {
+            // A directory never matches a file handler (extension gate);
+            // it is the watcher's own concern: extend the watch set and
+            // catch up files that landed before the watch existed. Disk
+            // truth decides, not event kind -- a dir rename's to-side
+            // arrives as Modify(Name), never Create.
+            if path.is_dir() {
                 self.handle_created_directory(&path).await;
+                continue;
+            }
+
+            // A vanished path that prefixes watched directories is a
+            // directory removal observation (dir-rename from-side or true
+            // dir delete). It arrives as Modify(Name) or a stale Create
+            // with NO per-file events following; one removal observation
+            // stands in for the subtree and the wave's batch sync
+            // re-derives the owning root.
+            if !path.exists()
+                && self
+                    .registry
+                    .watch_dirs()
+                    .iter()
+                    .any(|dir| dir.starts_with(&path))
+            {
+                self.debouncer.record_removal(path);
                 continue;
             }
 
@@ -766,6 +785,91 @@ fn is_writer_lock_contention(e: &crate::IndexError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Settings;
+    use crate::watcher::handlers::CodeFileHandler;
+    use notify::event::{ModifyKind, RenameMode};
+    use std::path::Path;
+
+    async fn watcher_over(dir: &Path, root: &Path) -> UnifiedWatcher {
+        let mut settings = Settings {
+            index_path: dir.join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings
+            .add_indexed_path(root.to_path_buf())
+            .expect("register indexed path");
+        let facade = Arc::new(RwLock::new(IndexFacade::new(Arc::new(settings)).unwrap()));
+        let handler = CodeFileHandler::new(Arc::clone(&facade), dir.to_path_buf());
+        handler.init_cache().await;
+        UnifiedWatcher::builder()
+            .handler(handler)
+            .broadcaster(Arc::new(NotificationBroadcaster::new(16)))
+            .indexer(facade)
+            .workspace_root(dir.to_path_buf())
+            .build()
+            .unwrap()
+    }
+
+    // A dir rename's from-side arrives as Modify(Name) on a path that no
+    // longer exists, and no per-file events follow. A vanished path that
+    // prefixes watched directories is a directory removal observation:
+    // it must enter the removal wave, not fall to the unmatched trace.
+    #[tokio::test]
+    async fn vanished_watched_dir_records_a_removal_observation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/a.py"), "def a():\n    pass\n").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let pkg = canonical_root.join("pkg");
+
+        let mut watcher = watcher_over(dir.path(), &root).await;
+        watcher.registry.add_watch_dir(pkg.clone());
+
+        std::fs::remove_dir_all(&pkg).unwrap();
+        watcher
+            .handle_event(Event {
+                kind: EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+                paths: vec![pkg],
+                attrs: Default::default(),
+            })
+            .await;
+
+        assert!(
+            watcher.debouncer.has_pending_removals(),
+            "a vanished watched directory must record a removal observation"
+        );
+    }
+
+    // A dir rename's to-side arrives as Modify(Name) on a path that IS a
+    // directory -- never as Create. Disk truth decides the route: an
+    // existing directory under a handler root runs created-directory
+    // catch-up regardless of event kind.
+    #[tokio::test]
+    async fn existing_dir_routes_to_catchup_regardless_of_event_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("pkg_renamed")).unwrap();
+        std::fs::write(root.join("pkg_renamed/a.py"), "def a():\n    pass\n").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let mut watcher = watcher_over(dir.path(), &root).await;
+        watcher.handler_roots = vec![canonical_root.clone()];
+
+        watcher
+            .handle_event(Event {
+                kind: EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
+                paths: vec![canonical_root.join("pkg_renamed")],
+                attrs: Default::default(),
+            })
+            .await;
+
+        assert!(
+            watcher.debouncer.has_pending(),
+            "an existing directory's files must enter the catch-up debounce on any event kind"
+        );
+    }
 
     #[test]
     fn writer_lock_contention_is_classified_from_the_error_chain() {
