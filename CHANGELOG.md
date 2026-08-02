@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-08-02
+
+Incremental-refactor and watcher-notification patch release. Renames, renames combined with edits, and deletions now converge the incremental index to the same relationship set as a fresh index: files that reference a moved or deleted target are re-analyzed in the same run, so each relationship follows the current source evidence. Applies across batch indexing, `serve --watch`, and `mcp <TOOL> --watch`. Resource subscribers receive list-change notifications when watched files are created and one list-change notification when they are deleted. Index format, emission semantics, and settings are unchanged; no automatic rebuild.
+
+If an earlier version processed a rename or deletion, relationships already lost from that index restore on the next edit of the referencing files, or all at once with `codanna index --force`.
+
+### Fixed
+
+- Byte-identical file and directory renames preserve inbound relationships; incremental discovery pairs deleted and new paths by content hash when the pairing is unique in both directions.
+- Files referencing a renamed, edited-and-renamed, or deleted target are re-analyzed in the same incremental run. A relationship survives only where the referencing file's imports and calls still support it: a rename plus content edit recovers the relationships its callers' evidence supports, and a stale import that still names the old path no longer retains its relationship.
+- `serve --watch` settles removal waves through the shared incremental lane. Directory events route by disk truth, so a directory rename reported as modify events with no per-file events still converges; genuine directory deletion still removes the subtree.
+- Watched file creation emits `notifications/resources/list_changed`; modification of a known file remains a URI-filtered `notifications/resources/updated`. Deleting a watched file emits one list-change notification, including when the file was created during the same watch session.
+
+### Known Limitations
+
+- A symbol moved between two files that are both edited in one change set can lose its callers' relationships until those callers are next re-indexed; under-report only, heals on edit or `codanna index --force`.
+- Re-indexing after a rename or deletion re-analyzes every file that referenced the target; incremental latency scales with the number of referencing files.
+- Directory-rename, removal-wave, and list-change notification witnesses cover macOS/FSEvents; Linux/inotify remains unwitnessed.
+- A delete followed by recreation inside one debounce-and-refresh window can omit the recreation's second list-change notification.
+
 ## [0.13.0] - 2026-08-01
 
 MCP 2026-07-28 migration release. All transports serve the new generation — the spec revision that removes protocol-level sessions and the `initialize` handshake — alongside the legacy generation through its deprecation window: dispatch is per-session on stdio, per-request on HTTP/HTTPS. Index format, emission semantics, and settings are unchanged; no rebuild.
