@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-08-01
+
+MCP 2026-07-28 migration release. All transports serve the new generation — the spec revision that removes protocol-level sessions and the `initialize` handshake — alongside the legacy generation through its deprecation window: dispatch is per-session on stdio, per-request on HTTP/HTTPS. Index format, emission semantics, and settings are unchanged; no rebuild.
+
+### Added
+
+- MCP 2026-07-28 stateless generation on stdio, HTTP, and HTTPS (rmcp 3.1.0): `server/discover` answered as the required RPC and stdio back-compat probe; HTTP requests with 2026-07-28 `_meta` are served per-request without minting a session (`MCP-Protocol-Version` header required; `Mcp-Name` header required on name-bearing methods); tool results carry `resultType: "complete"` on the stateless wire and omit it for legacy peers per spec.
+- `subscriptions/listen`: stateless clients opt in to resource-change notifications with per-category and per-URI filters; notifications are tagged with the subscription id. Sessions without opt-in receive nothing unsolicited.
+- Tool and prompt list results carry the cache contract: `ttlMs` 3600000, `cacheScope` "private" (the stale server serves `ttlMs` 0).
+- Protocol conformance matrix instrument for contributors: `contributing/scripts/mcp-conformance-matrix.sh` runs the release binary across {stdio, http} x {legacy, stateless} x {fresh, stale index} plus TLS and probe-death cells in scratch workspaces.
+
+### Changed
+
+- `codanna mcp-test` connects Discover-only (2026-07-28). Against a server that dies on the probe — every shipped release up to 0.12.0 — it fails with a diagnostic naming the probe death instead of a raw connection error; the legacy `initialize` fallback is removed because no shipped server survives the probe to trigger it.
+
+### Fixed
+
+- Stdio serve no longer dies on a pre-handshake `server/discover` probe: the probe is answered with a full discover result on both the live and the stale-index server. Previously any 2026-07-28 client's first contact killed the process before serving anyone. Reported with a working fix by Vinicios Lugli (#117); both fixes carry co-author credit.
+- A fresh, never-indexed workspace serves all tools on every `serve` start: the emission gate reads only real indexes (`index.meta` present). Previously the skeleton directory that serve itself created on first start was refused as stale on the second start — zero tools, permanently, for any directory resolving to a shared unindexed `.codanna`.
+- Multiple serve processes watching one workspace: the losing watcher of the Tantivy writer logs the hot-reload convergence path at info instead of an error per edit burst, and semantic search saves stage in per-save directories — concurrent savers (a second serve, `codanna index` under a live serve) could previously destroy each other's in-flight save or promote a partially written vector file.
+
+### Removed
+
+- The `notifications/codanna/*` custom wire notifications (file-reindexed, file-created, file-deleted, index-reloaded). No wire consumer existed; standard MCP notifications carry the watch lane on both protocol generations.
+
 ## [0.12.0] - 2026-07-26
 
 Pick-discipline and lane-parity release. Every bare-name resolution pick is evidence-gated: import bindings resolve exact-first then exactly-one at every surface, member picks require containment or kind evidence, and candidate order never decides an edge — insertion-order dependence is gone. Incremental re-indexing keeps the edges pointing into a changed file: cleanup captures inbound edges and rebinds them to the replacement symbols by containing type, then peer ordinal, then line, so re-indexing a file no longer sheds its callers' edges (previously up to 8.8% of a corpus call graph after two file touches). `serve --watch` indexes newly created files and directories.
