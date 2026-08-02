@@ -8,7 +8,12 @@ Enforces the measurement protocol invariants that prose could not:
   - fresh workspace per leg (never reused; stale indexed_paths double-index)
   - verified semantic toggle (written to settings.toml, then read back AND
     confirmed against the index log line)
-  - sorted dumps, optional two-run determinism, union sets for scatter corpora
+  - sorted dumps, optional two-run determinism; scatter corpora declare
+    --scatter-exclude patterns: the post-exclusion union is the corpus's
+    reproducible anchor, and scatter rows matching no pattern fail the run
+  - every run's dumps, diffs, and printed summary are preserved under
+    .logs/battery/<date>-<label>/ (gitignored; survives session cleanup,
+    not `git clean -x`)
   - diff mechanics (comm order encapsulated; dropped/gained labeled)
   - incremental lane parity (--incremental N): the fresh dump is the oracle;
     re-indexing touched files must not change the edge set. Without this leg
@@ -41,9 +46,13 @@ No cargo invocations here: binaries are built by the caller.
 """
 
 import argparse
+import io
 import json
 import re
+import shutil
 import subprocess
+import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -120,6 +129,76 @@ def leg_family(label):
     there is the design. The guard exists for cross-family reuse
     (pre vs post over one build)."""
     return re.sub(r"\.run\d+$", "", label)
+
+
+class _Tee:
+    """Mirror stdout into a buffer so the printed summary persists with
+    the dumps."""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, s):
+        for st in self.streams:
+            st.write(s)
+        return len(s)
+
+    def flush(self):
+        for st in self.streams:
+            st.flush()
+
+
+def parse_scatter_excludes(specs):
+    """NAME=pat[,pat...] -> {name: [compiled patterns]}."""
+    excludes = {}
+    for spec in specs or []:
+        m = re.fullmatch(r"([A-Za-z0-9_.-]+)=(.+)", spec)
+        if not m:
+            raise SystemExit(
+                f"bad --scatter-exclude '{spec}' (want NAME=pat[,pat...])"
+            )
+        name, pats = m.groups()
+        excludes[name] = [re.compile(p) for p in pats.split(",") if p]
+    return excludes
+
+
+def apply_exclusions(rows, pats):
+    return [r for r in sorted(rows) if not any(p.search(r) for p in pats)]
+
+
+def preserve_evidence(out, label, summary):
+    """Copy dumps, diffs, and the printed summary into the repo's
+    gitignored evidence home (.logs/battery/).
+
+    Scratch --out dirs are ephemeral; the dumps and diffs are the
+    artifacts a later session needs. Same durability class as the
+    goldens: survives session cleanup, not `git clean -x`.
+    """
+    try:
+        root = Path(__file__).resolve().parents[2] / ".logs" / "battery"
+        if out == root or root in out.parents:
+            return
+        base = root / f"{datetime.now():%Y-%m-%d-%H%M}-{label}"
+        dest, n = base, 2
+        while dest.exists():
+            dest = base.with_name(f"{base.name}-{n}")
+            n += 1
+        for corpus_dir in sorted(p for p in out.iterdir() if p.is_dir()):
+            files = [
+                f
+                for pat in ("*.edges", "*.txt", "*.json")
+                for f in corpus_dir.glob(pat)
+            ]
+            if not files:
+                continue
+            (dest / corpus_dir.name).mkdir(parents=True, exist_ok=True)
+            for f in files:
+                shutil.copy2(f, dest / corpus_dir.name / f.name)
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "summary.txt").write_text(summary)
+        print(f"evidence preserved: {dest}", file=sys.stderr)
+    except OSError as e:
+        print(f"WARNING: evidence preservation failed: {e}", file=sys.stderr)
 
 
 def record_leg_binary(out_dir, label, commit):
@@ -309,7 +388,7 @@ def incremental_leg(
             f"{out_dir.name}: no cross-file inbound edges in the fresh dump; "
             f"the incremental leg would prove nothing"
         )
-    if touch_shape in ("rename", "rename-edit", "delete"):
+    if touch_shape in ("rename", "rename-edit", "delete", "mixed"):
         return relocation_leg(
             binary,
             dump,
@@ -387,27 +466,39 @@ def relocation_leg(
     Shapes: `rename` moves each target to stem_renamed byte-identically
     (discovery pairs by content hash); `rename-edit` moves it AND appends
     one newline, so no pair forms and the change set is unpaired
-    deleted-plus-new; `delete` removes it outright. In every shape caller
+    deleted-plus-new; `delete` removes it outright; `mixed` assigns the
+    three shapes round-robin across the ranked targets, composing them
+    in ONE change set -- the refactor-burst shape. In every shape caller
     invalidation re-resolves the files owning inbound edges
     (adr-relocation-caller-invalidation), and the oracle is a FRESH index
     of the mutated tree -- paths change, so the pre-mutation dump cannot
     be compared. Dropped rows (recall loss) AND gained rows
     (over-retention) both fail the leg.
     """
+    cycle = ["rename", "rename-edit", "delete"]
+    if shape == "mixed":
+        if len(targets) < len(cycle):
+            raise SystemExit(
+                "--touch-shape mixed composes rename, rename-edit, and "
+                "delete in one change set: needs --incremental >= 3"
+            )
+        per_target = [cycle[i % len(cycle)] for i in range(len(targets))]
+    else:
+        per_target = [shape] * len(targets)
     mutations = []
-    for path in targets:
+    for ts, path in zip(per_target, targets):
         new = path.with_name(path.stem + "_renamed" + path.suffix)
-        if shape == "rename":
-            mutations.append((path, new, None))
-        elif shape == "rename-edit":
-            mutations.append((path, new, path.read_bytes()))
+        if ts == "rename":
+            mutations.append((ts, path, new, None))
+        elif ts == "rename-edit":
+            mutations.append((ts, path, new, path.read_bytes()))
         else:
-            mutations.append((path, None, path.read_bytes()))
+            mutations.append((ts, path, None, path.read_bytes()))
     try:
-        for old, new, saved in mutations:
-            if shape == "rename":
+        for ts, old, new, saved in mutations:
+            if ts == "rename":
                 old.rename(new)
-            elif shape == "rename-edit":
+            elif ts == "rename-edit":
                 new.write_bytes(saved + b"\n")
                 old.unlink()
             else:
@@ -434,8 +525,8 @@ def relocation_leg(
         # Plain filesystem mutations, restored in place: git checkout
         # cannot see renames and would leave the corpus dirty for the
         # next leg.
-        for old, new, saved in mutations:
-            if shape == "rename":
+        for ts, old, new, saved in mutations:
+            if ts == "rename":
                 if new.exists() and not old.exists():
                     new.rename(old)
             else:
@@ -462,7 +553,10 @@ def relocation_leg(
     (out_dir / f"gain-{label}.oracle-incr.txt").write_text(
         "\n".join(gained) + ("\n" if gained else "")
     )
-    mutated = ", ".join(p.name for p in targets)
+    if shape == "mixed":
+        mutated = ", ".join(f"{p.name}[{ts}]" for ts, p, _, _ in mutations)
+    else:
+        mutated = ", ".join(p.name for p in targets)
     print(
         f"INCREMENTAL {out_dir.name} {label} [{shape}]: mutated {len(targets)} "
         f"({mutated}); oracle {len(oracle_set)} -> incremental {len(incr_set)}: "
@@ -496,27 +590,32 @@ def cmd_run(args):
         raise SystemExit(
             "--incremental and --runs N are separate legs: run them as two invocations"
         )
-    parity_ok = True
-    for spec in args.corpus:
-        name, fixture, pin = parse_corpus_spec(spec)
-        corpus = ensure_corpus(out, name, fixture, pin)
-        out_dir = out / name
-        print(f"== {name} @ {pin[:9]} binary={args.label} semantic={args.semantic}")
-        if args.incremental:
-            parity_ok &= incremental_leg(
-                binary,
-                dump,
-                corpus,
-                out_dir,
-                args.label,
-                semantic_on,
-                args.incremental,
-                args.touch_shape,
-            )
-            continue
-        if args.runs == 1:
-            leg(binary, dump, corpus, out_dir, args.label, "", semantic_on)
-        else:
+    excludes = parse_scatter_excludes(args.scatter_exclude)
+    capture = io.StringIO()
+    saved_stdout = sys.stdout
+    sys.stdout = _Tee(saved_stdout, capture)
+    try:
+        parity_ok = True
+        for spec in args.corpus:
+            name, fixture, pin = parse_corpus_spec(spec)
+            corpus = ensure_corpus(out, name, fixture, pin)
+            out_dir = out / name
+            print(f"== {name} @ {pin[:9]} binary={args.label} semantic={args.semantic}")
+            if args.incremental:
+                parity_ok &= incremental_leg(
+                    binary,
+                    dump,
+                    corpus,
+                    out_dir,
+                    args.label,
+                    semantic_on,
+                    args.incremental,
+                    args.touch_shape,
+                )
+                continue
+            if args.runs == 1:
+                leg(binary, dump, corpus, out_dir, args.label, "", semantic_on)
+                continue
             files = [
                 leg(binary, dump, corpus, out_dir, args.label, f".run{i+1}", semantic_on)
                 for i in range(args.runs)
@@ -527,15 +626,51 @@ def cmd_run(args):
             union = out_dir / f"{args.label}.edges"
             union.write_text("\n".join(sorted(lines)) + ("\n" if lines else ""))
             texts = [f.read_text() for f in files]
+            pats = excludes.get(name)
             if all(t == texts[0] for t in texts[1:]):
                 print(f"DETERMINISM {name} {args.label}: byte-identical x{args.runs}")
-            else:
+                if pats:
+                    post = apply_exclusions(lines, pats)
+                    print(
+                        f"   post-exclusion {len(post)} rows "
+                        f"(the reproducible anchor for this corpus)"
+                    )
+                continue
+            inter = set(texts[0].splitlines())
+            for t in texts[1:]:
+                inter &= set(t.splitlines())
+            scatter = lines - inter
+            if pats is None:
                 print(
                     f"SCATTER {name} {args.label}: runs differ; union "
-                    f"{len(lines)} rows (apply the corpus's documented exclusions)"
+                    f"{len(lines)} rows (no --scatter-exclude declared; the "
+                    f"union count is not a reproducible anchor)"
                 )
-    if not parity_ok:
-        raise SystemExit("incremental leg: lane parity broken (see diffs above)")
+                continue
+            post = apply_exclusions(lines, pats)
+            post_f = out_dir / f"{args.label}.post-exclusion.edges"
+            post_f.write_text("\n".join(post) + ("\n" if post else ""))
+            print(
+                f"SCATTER {name} {args.label}: union {len(lines)} rows, "
+                f"scatter {len(scatter)}; post-exclusion {len(post)} rows "
+                f"(the reproducible anchor; {post_f.name})"
+            )
+            unconfined = sorted(
+                r for r in scatter if not any(p.search(r) for p in pats)
+            )
+            if unconfined:
+                unc_f = out_dir / f"unconfined-{args.label}.txt"
+                unc_f.write_text("\n".join(unconfined) + "\n")
+                print(
+                    f"   SCATTER NOT CONFINED - {len(unconfined)} row(s) match "
+                    f"no exclusion pattern\n   {unc_f}"
+                )
+                parity_ok = False
+        if not parity_ok:
+            raise SystemExit("lane parity broken (see diffs above)")
+    finally:
+        sys.stdout = saved_stdout
+        preserve_evidence(out, args.label, capture.getvalue())
 
 
 def leg_dump(out: Path, label: str) -> list[str]:
@@ -594,7 +729,7 @@ def main():
     )
     r.add_argument(
         "--touch-shape",
-        choices=["prepend", "append", "rename", "rename-edit", "delete"],
+        choices=["prepend", "append", "rename", "rename-edit", "delete", "mixed"],
         default="prepend",
         help="how --incremental edits a file. prepend (default) shifts every "
         "symbol below it, which is what ordinary editing does and what "
@@ -602,9 +737,22 @@ def main():
         "lines intact and is the control; rename moves each target to "
         "stem_renamed in place; rename-edit moves it AND appends one "
         "newline so no hash pair forms (unpaired deleted-plus-new); "
-        "delete removes it outright. The relocation shapes diff against a "
+        "delete removes it outright; mixed assigns rename, rename-edit, "
+        "and delete round-robin across the targets in ONE change set "
+        "(needs --incremental >= 3). The relocation shapes diff against a "
         "fresh index of the mutated tree; dropped and gained rows both "
         "fail the leg.",
+    )
+    r.add_argument(
+        "--scatter-exclude",
+        action="append",
+        metavar="NAME=PAT[,PAT...]",
+        help="per-corpus scatter exclusion patterns (regex, repeatable). "
+        "Under --runs N, rows matching any pattern are removed from the "
+        "union to form the post-exclusion count -- the reproducible "
+        "anchor for a scatter corpus. Scatter rows matching NO pattern "
+        "fail the run: undeclared nondeterminism is a finding, not "
+        "noise.",
     )
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="dropped/gained between two captured legs")

@@ -55,6 +55,7 @@ logs/
 cache/
 tmp/
 temp/
+__pycache__/
 
 # Environment files
 .env
