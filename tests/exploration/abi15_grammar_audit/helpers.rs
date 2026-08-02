@@ -96,6 +96,14 @@ pub fn load_grammar_nodes(grammar_json_path: &str) -> GrammarLoadResult {
 /// Run a full grammar analysis for a language.
 ///
 /// Generates AUDIT_REPORT.md, GRAMMAR_ANALYSIS.md, and node_discovery.txt.
+/// Artifact writes are on-demand only: every write carries a fresh
+/// timestamp, so running them as part of the ordinary suite dirties
+/// tracked files on every invocation. Regenerate explicitly with
+/// `contributing/scripts/abi-audit.sh` (sets CODANNA_ABI_AUDIT=1).
+pub fn artifacts_enabled() -> bool {
+    std::env::var("CODANNA_ABI_AUDIT").is_ok()
+}
+
 pub fn run_comprehensive_analysis<F>(
     config: &LanguageAuditConfig,
     ts_language: Language,
@@ -110,12 +118,16 @@ pub fn run_comprehensive_analysis<F>(
         name = config.language_name
     );
 
-    fs::create_dir_all(config.output_dir).unwrap_or_else(|e| {
-        panic!(
-            "Failed to create output directory {dir}: {e}",
-            dir = config.output_dir
-        )
-    });
+    if artifacts_enabled() {
+        fs::create_dir_all(config.output_dir).unwrap_or_else(|e| {
+            panic!(
+                "Failed to create output directory {dir}: {e}",
+                dir = config.output_dir
+            )
+        });
+    } else {
+        println!("(analysis only; CODANNA_ABI_AUDIT=1 regenerates the tracked artifacts)");
+    }
 
     let grammar_result = load_grammar_nodes(config.grammar_json_path);
 
@@ -130,7 +142,9 @@ pub fn run_comprehensive_analysis<F>(
         }
     };
 
-    if let Some(report) = report {
+    if let Some(report) = report
+        && artifacts_enabled()
+    {
         fs::write(
             format!("{dir}/AUDIT_REPORT.md", dir = config.output_dir),
             &report,
@@ -151,16 +165,18 @@ pub fn run_comprehensive_analysis<F>(
         &audit_data,
         grammar_result.warning.as_deref(),
     );
-    fs::write(
-        format!("{dir}/GRAMMAR_ANALYSIS.md", dir = config.output_dir),
-        &analysis,
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "Failed to write {name} grammar analysis: {e}",
-            name = config.language_name
+    if artifacts_enabled() {
+        fs::write(
+            format!("{dir}/GRAMMAR_ANALYSIS.md", dir = config.output_dir),
+            &analysis,
         )
-    });
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to write {name} grammar analysis: {e}",
+                name = config.language_name
+            )
+        });
+    }
 
     let mut parser = Parser::new();
     parser.set_language(&ts_language).unwrap();
@@ -188,16 +204,18 @@ pub fn run_comprehensive_analysis<F>(
         &found_in_file,
         node_categories,
     );
-    fs::write(
-        format!("{dir}/node_discovery.txt", dir = config.output_dir),
-        &discovery,
-    )
-    .unwrap_or_else(|e| {
-        panic!(
-            "Failed to write {name} node discovery: {e}",
-            name = config.language_name
+    if artifacts_enabled() {
+        fs::write(
+            format!("{dir}/node_discovery.txt", dir = config.output_dir),
+            &discovery,
         )
-    });
+        .unwrap_or_else(|e| {
+            panic!(
+                "Failed to write {name} node discovery: {e}",
+                name = config.language_name
+            )
+        });
+    }
 
     print_analysis_summary(
         config,
@@ -448,21 +466,24 @@ pub fn run_tree_structure_analysis(
             count = node_stats.len()
         ));
 
-        fs::write(
-            format!("{dir}/TREE_STRUCT.md", dir = config.output_dir),
-            output,
-        )
-        .unwrap_or_else(|e| {
-            panic!(
-                "Failed to write {name} tree structure: {e}",
-                name = config.language_name
+        if artifacts_enabled() {
+            fs::write(
+                format!("{dir}/TREE_STRUCT.md", dir = config.output_dir),
+                output,
             )
-        });
-
-        println!(
-            "{name} TREE_STRUCT.md generated",
-            name = config.language_name
-        );
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Failed to write {name} tree structure: {e}",
+                    name = config.language_name
+                )
+            });
+            println!(
+                "{name} TREE_STRUCT.md generated",
+                name = config.language_name
+            );
+        } else {
+            println!("(analysis only; CODANNA_ABI_AUDIT=1 writes TREE_STRUCT.md)");
+        }
     }
 }
 

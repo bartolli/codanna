@@ -21,7 +21,16 @@ fn get_codanna_binary() -> PathBuf {
         );
     }
 
-    // 2. For standalone tests, ensure debug binary exists
+    // 2. The cargo-provided path for this crate's bin target: exact,
+    //    honors CARGO_TARGET_DIR, and carries .exe on Windows.
+    if let Some(path) = option_env!("CARGO_BIN_EXE_codanna") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    // 3. For standalone tests, ensure debug binary exists
     // Use absolute path based on CARGO_MANIFEST_DIR to handle CI working directory issues
     let manifest_dir = env::var("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)

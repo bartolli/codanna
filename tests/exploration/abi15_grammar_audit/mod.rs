@@ -10,7 +10,13 @@
 //! - node_discovery.txt - grammar node mapping
 //! - GRAMMAR_ANALYSIS.md - grammar vs example vs parser analysis
 //!
-//! Run with: cargo test abi15_grammar_audit -- --nocapture
+//! Analysis runs in the ordinary suite; the tracked artifacts under
+//! contributing/parsers/ regenerate ON DEMAND only (every write
+//! carries a fresh timestamp and dirties the tree):
+//!
+//!   ./contributing/scripts/abi-audit.sh
+//!
+//! which sets CODANNA_ABI_AUDIT=1 for the run.
 
 extern crate tree_sitter_kotlin_codanna as tree_sitter_kotlin;
 

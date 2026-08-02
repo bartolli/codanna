@@ -67,6 +67,30 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  # Windows witness leg: the watcher's event-kind assumptions are
+  # platform-backend-specific (FSEvents vs inotify vs
+  # ReadDirectoryChangesW), and Windows has no local container gate.
+  # Non-blocking until its first sustained green, then promote by
+  # removing continue-on-error.
+  test-windows:
+    name: Full Test Suite (windows witness)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run tests
+        run: cargo test --verbose
+
   # Release build and size check -- only on version tags
   release-check:
     name: Release Build Check
