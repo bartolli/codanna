@@ -153,6 +153,13 @@ impl WatchHandler for CodeFileHandler {
         self.eligibility.read().await.roots.clone()
     }
 
+    fn covered_by_batch_sync(&self) -> bool {
+        // The batch incremental lane over a registered root replays this
+        // handler's reindex/remove actions from disk-vs-index truth, and
+        // is the only lane whose discovery pairs renames.
+        true
+    }
+
     async fn on_modify(&self, path: &Path) -> Result<WatchAction, WatchError> {
         let known = self.cached_paths.read().await.contains(path);
         if !known {

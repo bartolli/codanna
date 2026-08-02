@@ -17,6 +17,11 @@ Enforces the measurement protocol invariants that prose could not:
   - touch shape (--touch-shape, default prepend): the touch SHIFTS ranges, so
     line-sensitive identity paths are exercised. An append-only touch reported
     parity on three corpora while a prepend still dropped edges.
+  - rename shape (--touch-shape rename): renames the target files in place
+    (stem_renamed); discovery must pair them by content hash and relocate
+    inbound edges. The oracle is a FRESH index of the renamed tree, not the
+    pre-rename dump. Dropped rows fail the leg; gained rows are the accepted
+    stale-import over-retention rider, reported and never assumed zero.
   - binary identity: each leg records the commit its index was stamped with
     and two legs may not share one. `--version` does not separate builds
     between releases, so a pre/post pair over one binary otherwise diffs it
@@ -301,6 +306,10 @@ def incremental_leg(
             f"{out_dir.name}: no cross-file inbound edges in the fresh dump; "
             f"the incremental leg would prove nothing"
         )
+    if touch_shape == "rename":
+        return rename_leg(
+            binary, dump, corpus, out_dir, label, semantic_on, targets, ws, tantivy
+        )
     try:
         for path in targets:
             if touch_shape == "append":
@@ -355,6 +364,86 @@ def incremental_leg(
             f"   {out_dir / f'gain-{label}.fresh-incr.txt'}"
         )
     return not (dropped or gained)
+
+
+def rename_leg(binary, dump, corpus, out_dir, label, semantic_on, targets, ws, tantivy):
+    """Rename each target in place, re-index WITHOUT force, diff against a
+    fresh index of the RENAMED tree.
+
+    The oracle differs from the touch shapes: paths change, so the
+    pre-rename dump cannot be compared. Dropped rows (oracle has,
+    incremental lacks) are recall loss and fail the leg. Gained rows
+    (incremental keeps, oracle drops) are the accepted stale-import
+    over-retention rider (adr-rename-relocation-hash-pairing): reported,
+    never failed on, never assumed zero.
+    """
+    pairs = [
+        (path, path.with_name(path.stem + "_renamed" + path.suffix))
+        for path in targets
+    ]
+    try:
+        for old, new in pairs:
+            old.rename(new)
+        run([str(binary), "index"], cwd=ws)
+        incr = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
+
+        oracle_ws = out_dir / f"ws-{label}.incr-oracle"
+        if oracle_ws.exists():
+            raise SystemExit(
+                f"workspace {oracle_ws} already exists; legs never reuse"
+            )
+        oracle_ws.mkdir(parents=True)
+        run([str(binary), "init"], cwd=oracle_ws)
+        set_semantic(oracle_ws, semantic_on)
+        log = run([str(binary), "index", str(corpus)], cwd=oracle_ws)
+        log_text = (log.stdout or "") + (log.stderr or "")
+        verify_semantic_in_log(
+            log_text, semantic_on, f"{out_dir.name} {label}.incr rename-oracle"
+        )
+        oracle_tantivy = oracle_ws / ".codanna" / "index" / "tantivy"
+        oracle = sorted(run([str(dump), str(oracle_tantivy)]).stdout.splitlines())
+    finally:
+        # Plain filesystem renames, restored in place: git checkout cannot
+        # see them and would leave the corpus dirty for the next leg.
+        for old, new in pairs:
+            if new.exists() and not old.exists():
+                new.rename(old)
+
+    (out_dir / f"{label}.incr.edges").write_text(
+        "\n".join(incr) + ("\n" if incr else "")
+    )
+    (out_dir / f"{label}.rename-oracle.edges").write_text(
+        "\n".join(oracle) + ("\n" if oracle else "")
+    )
+    run(["rm", "-rf", str(ws)])
+    run(["rm", "-rf", str(oracle_ws)])
+
+    oracle_set, incr_set = set(oracle), set(incr)
+    dropped = sorted(oracle_set - incr_set)
+    gained = sorted(incr_set - oracle_set)
+    (out_dir / f"drop-{label}.oracle-incr.txt").write_text(
+        "\n".join(dropped) + ("\n" if dropped else "")
+    )
+    (out_dir / f"gain-{label}.oracle-incr.txt").write_text(
+        "\n".join(gained) + ("\n" if gained else "")
+    )
+    renamed = ", ".join(p.name for p in targets)
+    print(
+        f"INCREMENTAL {out_dir.name} {label} [rename]: renamed {len(targets)} "
+        f"({renamed}); oracle {len(oracle_set)} -> incremental {len(incr_set)}: "
+        f"dropped {len(dropped)}, over-retained {len(gained)}"
+    )
+    if gained:
+        print(
+            f"   over-retention rider (stale-import; accepted, recorded): "
+            f"{out_dir / f'gain-{label}.oracle-incr.txt'}"
+        )
+    if dropped:
+        print(
+            f"   LANE PARITY BROKEN - recall loss vs the rename oracle\n"
+            f"   {out_dir / f'drop-{label}.oracle-incr.txt'}"
+        )
+    return not dropped
 
 
 def cmd_run(args):
@@ -469,12 +558,14 @@ def main():
     )
     r.add_argument(
         "--touch-shape",
-        choices=["prepend", "append"],
+        choices=["prepend", "append", "rename"],
         default="prepend",
         help="how --incremental edits a file. prepend (default) shifts every "
         "symbol below it, which is what ordinary editing does and what "
         "exercises line-sensitive identity paths; append leaves all start "
-        "lines intact and is the control.",
+        "lines intact and is the control; rename moves each target to "
+        "stem_renamed in place and diffs against a fresh index of the "
+        "renamed tree (recall loss fails, over-retention is reported).",
     )
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="dropped/gained between two captured legs")

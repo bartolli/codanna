@@ -1095,22 +1095,30 @@ pub struct DiscoverResult {
     pub modified_files: Vec<PathBuf>,
     /// Files that exist in the index but not on disk.
     pub deleted_files: Vec<PathBuf>,
+    /// Relocated files as `(old_path, new_path)`: a deleted and a new path
+    /// whose exact content hash matched one-to-one. The old path's inbound
+    /// edges are captured and rebound against the new path instead of dying
+    /// with genuine-deletion semantics.
+    pub renamed_files: Vec<(PathBuf, PathBuf)>,
 }
 
 impl DiscoverResult {
     /// Total number of files that need processing.
     pub fn files_to_process(&self) -> usize {
-        self.new_files.len() + self.modified_files.len()
+        self.new_files.len() + self.modified_files.len() + self.renamed_files.len()
     }
 
     /// Total number of files that need cleanup.
     pub fn files_to_cleanup(&self) -> usize {
-        self.deleted_files.len() + self.modified_files.len()
+        self.deleted_files.len() + self.modified_files.len() + self.renamed_files.len()
     }
 
     /// Check if there's any work to do.
     pub fn is_empty(&self) -> bool {
-        self.new_files.is_empty() && self.modified_files.is_empty() && self.deleted_files.is_empty()
+        self.new_files.is_empty()
+            && self.modified_files.is_empty()
+            && self.deleted_files.is_empty()
+            && self.renamed_files.is_empty()
     }
 }
 

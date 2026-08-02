@@ -197,12 +197,53 @@ impl DiscoverStage {
             }
         }
 
+        // Step 4: pair deleted x new by exact content hash. A rename
+        // surfaces as deleted(old) + new(new); the stored hash of the old
+        // path against the computed hash of the new file is identity-grade
+        // evidence that the file moved, so its inbound edges relocate
+        // instead of dying with genuine-deletion semantics.
+        if !result.new_files.is_empty() && !result.deleted_files.is_empty() {
+            let mut deleted_hashed = Vec::new();
+            for path in &result.deleted_files {
+                let path_str = path.to_string_lossy();
+                if let Some((_file_id, hash, _mtime)) = index.get_file_info(&path_str)? {
+                    deleted_hashed.push((path.clone(), hash));
+                }
+            }
+            let mut new_hashed = Vec::new();
+            for path in &result.new_files {
+                match fs::read_to_string(path) {
+                    Ok(content) => new_hashed.push((path.clone(), calculate_hash(&content))),
+                    Err(e) => {
+                        // Unreadable now means unpairable now; the file is
+                        // read again at parse, where failure is surfaced.
+                        tracing::debug!(
+                            target: "pipeline",
+                            "rename pairing skipped {}: {e}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+            let pairs = pair_relocations(&deleted_hashed, &new_hashed);
+            if !pairs.is_empty() {
+                {
+                    let old_set: HashSet<&PathBuf> = pairs.iter().map(|(old, _)| old).collect();
+                    let new_set: HashSet<&PathBuf> = pairs.iter().map(|(_, new)| new).collect();
+                    result.deleted_files.retain(|p| !old_set.contains(p));
+                    result.new_files.retain(|p| !new_set.contains(p));
+                }
+                result.renamed_files = pairs;
+            }
+        }
+
         tracing::debug!(
             target: "pipeline",
-            "incremental result: new={}, modified={}, deleted={}",
+            "incremental result: new={}, modified={}, deleted={}, renamed={}",
             result.new_files.len(),
             result.modified_files.len(),
-            result.deleted_files.len()
+            result.deleted_files.len(),
+            result.renamed_files.len()
         );
 
         Ok(result)
@@ -294,6 +335,39 @@ impl DiscoverStage {
     }
 }
 
+/// Pair deleted x new files by exact content hash.
+///
+/// A pair forms only when a hash matches exactly one deleted and exactly one
+/// new path. Every other multiplicity -- zero, many-to-one, one-to-many -- is
+/// not identity evidence, so both sides keep genuine-deletion semantics.
+/// Multiplicity decides, never candidate order: iteration order cannot mint
+/// a pair.
+fn pair_relocations(
+    deleted: &[(PathBuf, String)],
+    new: &[(PathBuf, String)],
+) -> Vec<(PathBuf, PathBuf)> {
+    use std::collections::HashMap;
+
+    let mut deleted_by_hash: HashMap<&str, Vec<&PathBuf>> = HashMap::new();
+    for (path, hash) in deleted {
+        deleted_by_hash.entry(hash.as_str()).or_default().push(path);
+    }
+    let mut new_by_hash: HashMap<&str, Vec<&PathBuf>> = HashMap::new();
+    for (path, hash) in new {
+        new_by_hash.entry(hash.as_str()).or_default().push(path);
+    }
+
+    let mut pairs = Vec::new();
+    for (hash, olds) in &deleted_by_hash {
+        let news = new_by_hash.get(hash).map(Vec::as_slice).unwrap_or_default();
+        if let ([old], [new_path]) = (olds.as_slice(), news) {
+            pairs.push(((*old).clone(), (*new_path).clone()));
+        }
+    }
+    pairs.sort();
+    pairs
+}
+
 /// Get all supported file extensions from the language registry.
 fn get_supported_extensions() -> PipelineResult<HashSet<&'static str>> {
     let registry = get_registry();
@@ -378,6 +452,78 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    // Pinning locks for the relocation pairing gate: a pair needs a hash
+    // matching exactly one deleted and exactly one new path. Multiplicity
+    // decides; ambiguity keeps genuine-deletion semantics.
+    #[test]
+    fn pair_relocations_pairs_unique_hash_match() {
+        let pairs = pair_relocations(
+            &[(PathBuf::from("old/a.go"), "h1".to_string())],
+            &[(PathBuf::from("new/a.go"), "h1".to_string())],
+        );
+        assert_eq!(
+            pairs,
+            vec![(PathBuf::from("old/a.go"), PathBuf::from("new/a.go"))]
+        );
+    }
+
+    #[test]
+    fn pair_relocations_refuses_ambiguous_multiplicities() {
+        // Two deleted share the hash of one new: no pair.
+        let two_olds = pair_relocations(
+            &[
+                (PathBuf::from("a.go"), "h1".to_string()),
+                (PathBuf::from("b.go"), "h1".to_string()),
+            ],
+            &[(PathBuf::from("c.go"), "h1".to_string())],
+        );
+        assert!(two_olds.is_empty(), "many-to-one must not pair");
+
+        // One deleted matches two new: no pair.
+        let two_news = pair_relocations(
+            &[(PathBuf::from("a.go"), "h1".to_string())],
+            &[
+                (PathBuf::from("b.go"), "h1".to_string()),
+                (PathBuf::from("c.go"), "h1".to_string()),
+            ],
+        );
+        assert!(two_news.is_empty(), "one-to-many must not pair");
+
+        // Hash mismatch (rename plus edit): no pair.
+        let edited = pair_relocations(
+            &[(PathBuf::from("a.go"), "h1".to_string())],
+            &[(PathBuf::from("b.go"), "h2".to_string())],
+        );
+        assert!(edited.is_empty(), "a content edit must fail closed");
+    }
+
+    #[test]
+    fn pair_relocations_pairs_each_unique_hash_independently() {
+        // A directory rename decomposes per-file: unique hashes pair,
+        // the duplicate pair stays on deletion semantics.
+        let pairs = pair_relocations(
+            &[
+                (PathBuf::from("old/a.go"), "ha".to_string()),
+                (PathBuf::from("old/b.go"), "hb".to_string()),
+                (PathBuf::from("old/dup1.go"), "hd".to_string()),
+                (PathBuf::from("old/dup2.go"), "hd".to_string()),
+            ],
+            &[
+                (PathBuf::from("new/a.go"), "ha".to_string()),
+                (PathBuf::from("new/b.go"), "hb".to_string()),
+                (PathBuf::from("new/dup1.go"), "hd".to_string()),
+                (PathBuf::from("new/dup2.go"), "hd".to_string()),
+            ],
+        );
+        assert_eq!(
+            pairs,
+            vec![
+                (PathBuf::from("old/a.go"), PathBuf::from("new/a.go")),
+                (PathBuf::from("old/b.go"), PathBuf::from("new/b.go")),
+            ]
+        );
     }
 
     #[test]

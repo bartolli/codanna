@@ -1172,7 +1172,7 @@ impl IndexFacade {
         self.add_indexed_path(path);
 
         Ok(IndexingStats {
-            files_indexed: stats.new_files + stats.modified_files,
+            files_indexed: stats.new_files + stats.modified_files + stats.renamed_files,
             symbols_found: stats.index_stats.symbols_found,
             relationships_resolved: stats.phase2_stats.defines_resolved
                 + stats.phase2_stats.calls_resolved
@@ -1253,7 +1253,8 @@ impl IndexFacade {
 
         // Convert to IndexStats format using pipeline's actual timing
         let mut stats = IndexStats::default();
-        stats.files_indexed = pipeline_stats.new_files + pipeline_stats.modified_files;
+        stats.files_indexed =
+            pipeline_stats.new_files + pipeline_stats.modified_files + pipeline_stats.renamed_files;
         stats.symbols_found = pipeline_stats.index_stats.symbols_found;
         stats.files_removed = pipeline_stats.deleted_files;
         stats.symbols_removed = pipeline_stats.deleted_symbols;
@@ -1312,7 +1313,7 @@ impl IndexFacade {
                 progress,
                 file_count,
             )?;
-            stats.files_indexed += result.new_files + result.modified_files;
+            stats.files_indexed += result.new_files + result.modified_files + result.renamed_files;
             stats.symbols_found += result.index_stats.symbols_found;
         }
         stats.added_dirs = to_add.len();
@@ -3593,6 +3594,113 @@ mod tests {
 
     /// Names of symbols holding an inbound edge to the (single) symbol
     /// called `name`. Sorted so comparisons are order-independent.
+    // A pure rename is a relocation, not delete+create: the byte-identical
+    // replacement carries the same symbols, so edges owned by unchanged
+    // callers must survive, re-pointed at the new file's ids. Pairing
+    // evidence is the stored content hash; go makes the rename semantically
+    // neutral because package identity comes from the directory, not the
+    // file name.
+    #[test]
+    fn renaming_a_file_relocates_inbound_edges_from_unchanged_callers() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("callee.go"),
+            "package pkg\n\nfunc Helper() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("caller.go"),
+            "package pkg\n\nfunc Run() int {\n\treturn Helper()\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        let fresh = facade.relationship_count();
+        let inbound_before = inbound_edge_names(&facade, "Helper");
+        assert!(
+            !inbound_before.is_empty(),
+            "fixture must produce a caller of Helper before the rename"
+        );
+
+        std::fs::rename(src.join("callee.go"), src.join("callee_renamed.go")).unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert_eq!(
+            inbound_edge_names(&facade, "Helper"),
+            inbound_before,
+            "a pure rename must relocate inbound edges owned by the unchanged caller"
+        );
+        assert_eq!(
+            facade.relationship_count(),
+            fresh,
+            "a pure rename must not shed edges"
+        );
+    }
+
+    // Rename plus content edit is NOT identity evidence: the hash differs,
+    // no pair forms, and both sides keep genuine-deletion semantics. The
+    // inbound edges die (fail closed) rather than rebinding on weaker
+    // evidence -- the documented residual until an identity-grade channel
+    // for edited relocations exists.
+    #[test]
+    fn renaming_with_a_content_edit_falls_back_to_deletion_semantics() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("callee.go"),
+            "package pkg\n\nfunc Helper() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("caller.go"),
+            "package pkg\n\nfunc Run() int {\n\treturn Helper()\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        assert!(!inbound_edge_names(&facade, "Helper").is_empty());
+
+        std::fs::remove_file(src.join("callee.go")).unwrap();
+        std::fs::write(
+            src.join("callee_renamed.go"),
+            "package pkg\n\nfunc Helper() int {\n\treturn 2\n}\n",
+        )
+        .unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert!(
+            inbound_edge_names(&facade, "Helper").is_empty(),
+            "an edited relocation must fail closed to deletion semantics, not rebind"
+        );
+        // Fail closed means a recall gap, never a wrong edge: every
+        // surviving edge has live endpoints.
+        let helper = facade.find_symbols_by_name("Helper", None);
+        assert_eq!(helper.len(), 1);
+        for (from, to, _) in facade.get_relationships_for_symbol(helper[0].id).unwrap() {
+            assert!(facade.get_symbol(from).is_some());
+            assert!(facade.get_symbol(to).is_some());
+        }
+    }
+
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
         let targets = facade.find_symbols_by_name(name, None);
         assert_eq!(targets.len(), 1, "fixture expects exactly one `{name}`");

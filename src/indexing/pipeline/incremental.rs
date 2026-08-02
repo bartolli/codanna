@@ -361,7 +361,7 @@ impl Pipeline {
                     cache,
                     CleanupStats::default(),
                     0,
-                    (files_indexed, 0, 0),
+                    (files_indexed, 0, 0, 0),
                     Vec::new(),
                 )
             } else {
@@ -403,7 +403,7 @@ impl Pipeline {
                     cache,
                     CleanupStats::default(),
                     0,
-                    (files_indexed, 0, 0),
+                    (files_indexed, 0, 0, 0),
                     Vec::new(),
                 )
             }
@@ -419,6 +419,7 @@ impl Pipeline {
                     new_files: 0,
                     modified_files: 0,
                     deleted_files: 0,
+                    renamed_files: 0,
                     deleted_symbols: 0,
                     index_stats: IndexStats::new(),
                     cleanup_stats: CleanupStats::default(),
@@ -431,6 +432,7 @@ impl Pipeline {
                 .new_files
                 .iter()
                 .chain(discover_result.modified_files.iter())
+                .chain(discover_result.renamed_files.iter().map(|(_, new)| new))
                 .cloned()
                 .collect();
 
@@ -457,12 +459,25 @@ impl Pipeline {
                 cleanup_stats.symbols_removed += stats.symbols_removed;
                 deleted_symbols = stats.symbols_removed;
             }
+            // Relocation cleanup runs BEFORE the modified capture: edges
+            // sourced in renamed files must already be gone from the
+            // searcher when the modified files capture, or a dead from-id
+            // gets rebound.
+            if !discover_result.renamed_files.is_empty() {
+                let (stats, captured) = cleanup_stage.cleanup_files_for_relocation(
+                    &discover_result.renamed_files,
+                    &discover_result.modified_files,
+                )?;
+                cleanup_stats.files_cleaned += stats.files_cleaned;
+                cleanup_stats.symbols_removed += stats.symbols_removed;
+                captured_inbound.extend(captured);
+            }
             if !discover_result.modified_files.is_empty() {
                 let (stats, captured) =
                     cleanup_stage.cleanup_files_for_reindex(&discover_result.modified_files)?;
                 cleanup_stats.files_cleaned += stats.files_cleaned;
                 cleanup_stats.symbols_removed += stats.symbols_removed;
-                captured_inbound = captured;
+                captured_inbound.extend(captured);
             }
 
             // Create Phase 1 bar with actual files to index count
@@ -509,6 +524,7 @@ impl Pipeline {
                 discover_result.new_files.len(),
                 discover_result.modified_files.len(),
                 discover_result.deleted_files.len(),
+                discover_result.renamed_files.len(),
             );
             (
                 stats,
@@ -553,6 +569,7 @@ impl Pipeline {
             new_files: discover_counts.0,
             modified_files: discover_counts.1,
             deleted_files: discover_counts.2,
+            renamed_files: discover_counts.3,
             deleted_symbols,
             index_stats,
             cleanup_stats,
@@ -594,10 +611,11 @@ impl Pipeline {
 
         tracing::info!(
             target: "pipeline",
-            "Incremental discovery: {} new, {} modified, {} deleted",
+            "Incremental discovery: {} new, {} modified, {} deleted, {} renamed",
             discover_result.new_files.len(),
             discover_result.modified_files.len(),
-            discover_result.deleted_files.len()
+            discover_result.deleted_files.len(),
+            discover_result.renamed_files.len()
         );
 
         if discover_result.is_empty() {
@@ -605,6 +623,7 @@ impl Pipeline {
                 new_files: 0,
                 modified_files: 0,
                 deleted_files: 0,
+                renamed_files: 0,
                 deleted_symbols: 0,
                 index_stats: IndexStats::new(),
                 cleanup_stats: CleanupStats::default(),
@@ -613,11 +632,12 @@ impl Pipeline {
             });
         }
 
-        // Combine new + modified for indexing
+        // Combine new + modified + renamed-to paths for indexing
         let files_to_index: Vec<PathBuf> = discover_result
             .new_files
             .iter()
             .chain(discover_result.modified_files.iter())
+            .chain(discover_result.renamed_files.iter().map(|(_, new)| new))
             .cloned()
             .collect();
 
@@ -644,18 +664,32 @@ impl Pipeline {
             deleted_symbols = stats.symbols_removed;
         }
 
+        // Relocation cleanup runs BEFORE the modified capture: edges sourced
+        // in renamed files must already be gone from the searcher when the
+        // modified files capture, or a dead from-id gets rebound.
+        let mut captured_inbound = Vec::new();
+        if !discover_result.renamed_files.is_empty() {
+            let (stats, captured) = cleanup_stage.cleanup_files_for_relocation(
+                &discover_result.renamed_files,
+                &discover_result.modified_files,
+            )?;
+            cleanup_stats.files_cleaned += stats.files_cleaned;
+            cleanup_stats.symbols_removed += stats.symbols_removed;
+            cleanup_stats.embeddings_removed += stats.embeddings_removed;
+            captured_inbound.extend(captured);
+        }
+
         // Cleanup modified files (old data must be removed before re-indexing).
         // Capture the edges pointing into them first: deleting a file's rows
         // also deletes every edge targeting its symbols, and the re-index
         // re-derives only the file's OWN outgoing edges.
-        let mut captured_inbound = Vec::new();
         if !discover_result.modified_files.is_empty() {
             let (stats, captured) =
                 cleanup_stage.cleanup_files_for_reindex(&discover_result.modified_files)?;
             cleanup_stats.files_cleaned += stats.files_cleaned;
             cleanup_stats.symbols_removed += stats.symbols_removed;
             cleanup_stats.embeddings_removed += stats.embeddings_removed;
-            captured_inbound = captured;
+            captured_inbound.extend(captured);
         }
 
         // Run Phase 1 on the files to index
@@ -709,6 +743,7 @@ impl Pipeline {
             new_files: discover_result.new_files.len(),
             modified_files: discover_result.modified_files.len(),
             deleted_files: discover_result.deleted_files.len(),
+            renamed_files: discover_result.renamed_files.len(),
             deleted_symbols,
             index_stats,
             cleanup_stats,

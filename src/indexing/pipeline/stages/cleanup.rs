@@ -175,6 +175,47 @@ impl CleanupStage {
         self.cleanup_files_inner(files, true)
     }
 
+    /// Clean up the OLD paths of relocated (renamed) files, capturing the
+    /// edges that point into them with the target re-addressed to the NEW
+    /// path.
+    ///
+    /// Pairing evidence is an exact content hash (discovery), so the
+    /// replacement file's symbol layout is identical and the rebind
+    /// discriminators match exactly. `co_reindexed` names the other files
+    /// whose rows are also replaced this run: edges sourced there are
+    /// excluded from capture -- their from-ids die with the old rows, and
+    /// their own re-parse re-derives the edges.
+    pub fn cleanup_files_for_relocation(
+        &self,
+        pairs: &[(PathBuf, PathBuf)],
+        co_reindexed: &[PathBuf],
+    ) -> PipelineResult<(CleanupStats, Vec<CapturedInboundEdge>)> {
+        let mut in_flight: std::collections::HashSet<SymbolId> = std::collections::HashSet::new();
+        for (old, _) in pairs {
+            for symbol in self.symbols_of(old)? {
+                in_flight.insert(symbol.id);
+            }
+        }
+        for file in co_reindexed {
+            for symbol in self.symbols_of(file)? {
+                in_flight.insert(symbol.id);
+            }
+        }
+
+        let mut captured = Vec::new();
+        for (old, new) in pairs {
+            let mut edges = self.capture_inbound_edges(old, &in_flight)?;
+            for edge in &mut edges {
+                edge.target_file = new.clone();
+            }
+            captured.extend(edges);
+        }
+
+        let old_paths: Vec<PathBuf> = pairs.iter().map(|(old, _)| old.clone()).collect();
+        let (stats, _) = self.cleanup_files_inner(&old_paths, false)?;
+        Ok((stats, captured))
+    }
+
     fn cleanup_files_inner(
         &self,
         files: &[PathBuf],

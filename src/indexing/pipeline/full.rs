@@ -85,6 +85,7 @@ impl Pipeline {
             new_files: index_stats.files_indexed,
             modified_files: 0,
             deleted_files: 0,
+            renamed_files: 0,
             deleted_symbols: 0,
             index_stats,
             cleanup_stats: CleanupStats::default(),

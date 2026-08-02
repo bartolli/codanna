@@ -56,6 +56,14 @@ pub trait WatchHandler: Send + Sync {
         Vec::new()
     }
 
+    /// Whether a batch incremental sync over a watch root subsumes this
+    /// handler's per-file actions for paths under that root. Removal
+    /// waves batch-sync such roots so discovery can pair renames; other
+    /// handlers keep per-file semantics. Default: no.
+    fn covered_by_batch_sync(&self) -> bool {
+        false
+    }
+
     /// Handle a file modification event (called after debouncing).
     async fn on_modify(&self, path: &Path) -> Result<WatchAction, WatchError>;
 

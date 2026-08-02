@@ -49,6 +49,10 @@ pub struct UnifiedWatcher {
     /// handling and stays watched even when a root holds no indexed
     /// file directly.
     handler_roots: Vec<PathBuf>,
+    /// Roots whose owning handler is covered by the batch incremental
+    /// lane. Removal waves batch-sync these so the shared discovery can
+    /// pair renames (remove + create of identical content).
+    batch_sync_roots: Vec<PathBuf>,
 }
 
 impl UnifiedWatcher {
@@ -128,9 +132,35 @@ impl UnifiedWatcher {
 
                 // Process debounced changes
                 _ = &mut timeout => {
-                    let ready = self.debouncer.take_ready();
-                    for path in ready {
-                        self.process_modification(&path).await;
+                    if self.debouncer.has_pending_removals() {
+                        // A removal may be one side of a rename. Hold the
+                        // whole burst until every side is stable, then hand
+                        // remove + create to the shared batch lane in one
+                        // wave so discovery can pair them.
+                        if let Some((removed, modified)) = self.debouncer.take_settled_burst() {
+                            self.process_removal_wave(removed, modified).await;
+                        }
+                    } else {
+                        let ready = self.debouncer.take_ready();
+                        let (vanished, alive): (Vec<PathBuf>, Vec<PathBuf>) =
+                            ready.into_iter().partition(|path| !path.exists());
+                        if vanished.is_empty() {
+                            for path in alive {
+                                self.process_modification(&path).await;
+                            }
+                        } else {
+                            // rename-as-modify (macOS): vanished paths are
+                            // removal observations, and the survivors of the
+                            // same batch must ride the same wave -- indexing
+                            // a rename's create side per-file here would
+                            // leave discovery nothing to pair.
+                            for path in vanished {
+                                self.debouncer.record_removal(path);
+                            }
+                            for path in alive {
+                                self.debouncer.record(path);
+                            }
+                        }
                     }
                 }
 
@@ -200,9 +230,12 @@ impl UnifiedWatcher {
                     self.debouncer.record(path);
                 }
                 EventKind::Remove(_) => {
-                    // Handle deletions immediately
-                    self.debouncer.remove(&path);
-                    self.process_deletion(&path).await;
+                    // Deferred, not immediate: a rename arrives as
+                    // remove(old) + create(new), and only a batch holding
+                    // both sides lets the shared discovery pair them.
+                    // Genuine deletions pay one debounce window before
+                    // cleanup.
+                    self.debouncer.record_removal(path);
                 }
                 _ => {}
             }
@@ -214,8 +247,13 @@ impl UnifiedWatcher {
     /// holds no indexed file itself.
     async fn register_handler_roots(&mut self) {
         let mut roots = Vec::new();
+        let mut sync_roots = Vec::new();
         for handler in &self.handlers {
-            roots.extend(handler.watch_roots().await);
+            let handler_roots = handler.watch_roots().await;
+            if handler.covered_by_batch_sync() {
+                sync_roots.extend(handler_roots.iter().cloned());
+            }
+            roots.extend(handler_roots);
         }
         for root in &roots {
             if self.registry.add_watch_dir(root.clone()) {
@@ -225,6 +263,7 @@ impl UnifiedWatcher {
             }
         }
         self.handler_roots = roots;
+        self.batch_sync_roots = sync_roots;
     }
 
     /// A directory appeared under a registered root: watch every
@@ -267,9 +306,10 @@ impl UnifiedWatcher {
 
     /// Process a debounced file modification.
     async fn process_modification(&self, path: &Path) {
-        // Check if file still exists (handles rename-as-modify on macOS)
+        // Vanished since the drain: the removal lane owns it -- the
+        // caller recorded a removal observation, or the Remove event is
+        // in flight.
         if !path.exists() {
-            self.process_deletion(path).await;
             return;
         }
 
@@ -293,16 +333,93 @@ impl UnifiedWatcher {
         }
     }
 
-    /// Process a file deletion.
-    async fn process_deletion(&self, path: &Path) {
+    /// Process one settled burst that contains removal observations.
+    ///
+    /// Roots owned by a batch-sync-covered handler run the shared batch
+    /// incremental lane: its discovery re-derives new/modified/deleted
+    /// from disk-vs-index truth and pairs renames -- the one boundary
+    /// all incremental entry points share. Paths outside every synced
+    /// root keep per-file semantics.
+    async fn process_removal_wave(&mut self, removed: Vec<PathBuf>, modified: Vec<PathBuf>) {
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for path in removed.iter().chain(modified.iter()) {
+            if let Some(root) = self
+                .batch_sync_roots
+                .iter()
+                .find(|root| path.starts_with(root))
+            {
+                if !roots.contains(root) {
+                    roots.push(root.clone());
+                }
+            }
+        }
+
+        for root in &roots {
+            crate::log_event!("watcher", "batch sync", "{}", root.display());
+            let mut indexer = self.facade.write().await;
+            match indexer.index_directory(root, false) {
+                Ok(stats) => {
+                    crate::log_event!(
+                        "watcher",
+                        "batch synced",
+                        "{} indexed, {} removed",
+                        stats.files_indexed,
+                        stats.files_removed
+                    );
+                }
+                Err(e) if is_writer_lock_contention(&e) => {
+                    tracing::info!(
+                        "[watcher] batch sync skipped: another serve process holds the index writer; hot-reload converges"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("[watcher] batch sync failed: {e}");
+                }
+            }
+        }
+
+        if !roots.is_empty() {
+            // Handler caches and subscribers refresh through the same
+            // event hot-reload uses; the sync may have relocated paths.
+            self.broadcaster.send(FileChangeEvent::IndexReloaded);
+        }
+
+        // Per-file semantics for everything the batch sync does not
+        // subsume: paths outside every synced root, and handlers not
+        // covered by the batch lane even under one (document files can
+        // live inside a code root).
+        for path in &removed {
+            let covered = roots.iter().any(|root| path.starts_with(root));
+            self.process_wave_residual(path, covered, true).await;
+        }
+        for path in &modified {
+            let covered = roots.iter().any(|root| path.starts_with(root));
+            if !path.exists() {
+                continue;
+            }
+            self.process_wave_residual(path, covered, false).await;
+        }
+    }
+
+    /// Route one wave path through every handler the batch sync did not
+    /// subsume.
+    async fn process_wave_residual(&self, path: &Path, batch_covered: bool, is_removal: bool) {
         for handler in &self.handlers {
             if !handler.matches(path) {
                 continue;
             }
+            if batch_covered && handler.covered_by_batch_sync() {
+                continue;
+            }
 
-            crate::log_event!(handler.name(), "deleted", "{}", path.display());
+            let (verb, result) = if is_removal {
+                ("deleted", handler.on_delete(path).await)
+            } else {
+                ("modified", handler.on_modify(path).await)
+            };
+            crate::log_event!(handler.name(), verb, "{}", path.display());
 
-            match handler.on_delete(path).await {
+            match result {
                 Ok(action) => {
                     if let Err(e) = self.execute_action(action, handler.name()).await {
                         tracing::error!("[{}] action error: {e}", handler.name());
@@ -626,6 +743,7 @@ impl UnifiedWatcherBuilder {
             index_path,
             workspace_root,
             handler_roots: Vec::new(),
+            batch_sync_roots: Vec::new(),
         })
     }
 }
