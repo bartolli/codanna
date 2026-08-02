@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::sync::{RwLock, mpsc};
-use tokio::time::{Duration, sleep};
+use tokio::time::Duration;
 
 use crate::documents::DocumentStore;
 use crate::documents::config::ChunkingConfig;
@@ -112,11 +112,17 @@ impl UnifiedWatcher {
 
         crate::log_event!("watcher", "started");
 
-        loop {
-            // Periodic check for debounced events
-            let timeout = sleep(Duration::from_millis(100));
-            tokio::pin!(timeout);
+        // The drain fires on a fixed cadence, never deferred by event
+        // pressure: a per-iteration sleep resets on every received
+        // event, so any sustained stream with sub-interval arrivals
+        // starves the drain -- and with it every debounced reindex,
+        // removal wave, and notification -- for as long as the stream
+        // lasts. The debouncer's own per-path quiet windows decide
+        // what each tick actually drains.
+        let mut drain = tokio::time::interval(Duration::from_millis(100));
+        drain.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+        loop {
             tokio::select! {
                 // Handle incoming file events
                 Some(res) = self.event_rx.recv() => {
@@ -131,7 +137,7 @@ impl UnifiedWatcher {
                 }
 
                 // Process debounced changes
-                _ = &mut timeout => {
+                _ = drain.tick() => {
                     if self.debouncer.has_pending_removals() {
                         // A removal may be one side of a rename. Hold the
                         // whole burst until every side is stable, then hand
@@ -200,7 +206,18 @@ impl UnifiedWatcher {
 
     /// Handle an incoming file event.
     async fn handle_event(&mut self, event: Event) {
+        // Access events observe state; they never change it. inotify
+        // emits Access(Open) for every directory read -- including the
+        // watcher's OWN catch-up walks -- so routing them into the
+        // directory branch below livelocks: walk emits Open, Open
+        // triggers walk. FSEvents emits no Access events, which is why
+        // only Linux exhibits it. The file-level kind match already
+        // discards Access; state-bearing kinds are untouched.
+        if matches!(event.kind, EventKind::Access(_)) {
+            return;
+        }
         for path in event.paths {
+            crate::trace_event!("watcher", "event", "{:?} {}", event.kind, path.display());
             // A directory never matches a file handler (extension gate);
             // it is the watcher's own concern: extend the watch set and
             // catch up files that landed before the watch existed. Disk
@@ -793,7 +810,7 @@ mod tests {
     use super::*;
     use crate::config::Settings;
     use crate::watcher::handlers::CodeFileHandler;
-    use notify::event::{ModifyKind, RenameMode};
+    use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
     use std::path::Path;
 
     async fn watcher_over(dir: &Path, root: &Path) -> UnifiedWatcher {
@@ -874,6 +891,42 @@ mod tests {
         assert!(
             watcher.debouncer.has_pending(),
             "an existing directory's files must enter the catch-up debounce on any event kind"
+        );
+    }
+
+    // inotify emits Access(Open) for every directory read, including
+    // the catch-up walk's own opens; routing those into the directory
+    // branch livelocks (walk emits Open, Open triggers walk), which
+    // starves the debounce drain and silences every notification.
+    // Access observes state and never changes it: dropped before any
+    // routing. FSEvents emits no Access events, so only Linux
+    // exercises this.
+    #[tokio::test]
+    async fn access_events_route_nowhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/a.py"), "def a():\n    pass\n").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let mut watcher = watcher_over(dir.path(), &root).await;
+        watcher.handler_roots = vec![canonical_root.clone()];
+
+        watcher
+            .handle_event(Event {
+                kind: EventKind::Access(AccessKind::Open(AccessMode::Any)),
+                paths: vec![canonical_root.join("pkg")],
+                attrs: Default::default(),
+            })
+            .await;
+
+        assert!(
+            !watcher.debouncer.has_pending(),
+            "an Access event on a directory must not enter catch-up"
+        );
+        assert!(
+            !watcher.debouncer.has_pending_removals(),
+            "an Access event must not record a removal observation"
         );
     }
 
