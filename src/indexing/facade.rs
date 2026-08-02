@@ -1172,7 +1172,10 @@ impl IndexFacade {
         self.add_indexed_path(path);
 
         Ok(IndexingStats {
-            files_indexed: stats.new_files + stats.modified_files + stats.renamed_files,
+            files_indexed: stats.new_files
+                + stats.modified_files
+                + stats.renamed_files
+                + stats.invalidated_caller_files,
             symbols_found: stats.index_stats.symbols_found,
             relationships_resolved: stats.phase2_stats.defines_resolved
                 + stats.phase2_stats.calls_resolved
@@ -1253,8 +1256,10 @@ impl IndexFacade {
 
         // Convert to IndexStats format using pipeline's actual timing
         let mut stats = IndexStats::default();
-        stats.files_indexed =
-            pipeline_stats.new_files + pipeline_stats.modified_files + pipeline_stats.renamed_files;
+        stats.files_indexed = pipeline_stats.new_files
+            + pipeline_stats.modified_files
+            + pipeline_stats.renamed_files
+            + pipeline_stats.invalidated_caller_files;
         stats.symbols_found = pipeline_stats.index_stats.symbols_found;
         stats.files_removed = pipeline_stats.deleted_files;
         stats.symbols_removed = pipeline_stats.deleted_symbols;
@@ -1313,7 +1318,10 @@ impl IndexFacade {
                 progress,
                 file_count,
             )?;
-            stats.files_indexed += result.new_files + result.modified_files + result.renamed_files;
+            stats.files_indexed += result.new_files
+                + result.modified_files
+                + result.renamed_files
+                + result.invalidated_caller_files;
             stats.symbols_found += result.index_stats.symbols_found;
         }
         stats.added_dirs = to_add.len();
@@ -3647,13 +3655,14 @@ mod tests {
         );
     }
 
-    // Rename plus content edit is NOT identity evidence: the hash differs,
-    // no pair forms, and both sides keep genuine-deletion semantics. The
-    // inbound edges die (fail closed) rather than rebinding on weaker
-    // evidence -- the documented residual until an identity-grade channel
-    // for edited relocations exists.
+    // Rename plus content edit forms no exact-hash pair: it enters the
+    // run as an unpaired deleted-plus-new set. No rebind occurs -- the
+    // deleted target's callers re-enter the parse-and-resolve lane, and
+    // source evidence selects the destination. Go package identity is
+    // path-independent, so the unchanged caller's bare call resolves to
+    // the edited destination exactly as a fresh index does.
     #[test]
-    fn renaming_with_a_content_edit_falls_back_to_deletion_semantics() {
+    fn renaming_with_a_content_edit_restores_supported_caller_edges() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("pkg");
         std::fs::create_dir_all(&src).unwrap();
@@ -3677,7 +3686,7 @@ mod tests {
         let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
 
         facade.index_directory(&src, false).unwrap();
-        assert!(!inbound_edge_names(&facade, "Helper").is_empty());
+        assert_eq!(inbound_edge_names(&facade, "Helper"), vec!["Run:Calls"]);
 
         std::fs::remove_file(src.join("callee.go")).unwrap();
         std::fs::write(
@@ -3687,18 +3696,351 @@ mod tests {
         .unwrap();
         facade.index_directory(&src, false).unwrap();
 
-        assert!(
-            inbound_edge_names(&facade, "Helper").is_empty(),
-            "an edited relocation must fail closed to deletion semantics, not rebind"
+        assert_eq!(
+            inbound_edge_names(&facade, "Helper"),
+            vec!["Run:Calls"],
+            "an edited relocation must re-resolve the caller to the edited \
+             destination when source evidence supports it"
         );
-        // Fail closed means a recall gap, never a wrong edge: every
-        // surviving edge has live endpoints.
-        let helper = facade.find_symbols_by_name("Helper", None);
-        assert_eq!(helper.len(), 1);
-        for (from, to, _) in facade.get_relationships_for_symbol(helper[0].id).unwrap() {
-            assert!(facade.get_symbol(from).is_some());
-            assert!(facade.get_symbol(to).is_some());
-        }
+
+        let oracle_dir = tempfile::tempdir().unwrap();
+        let mut oracle_settings = Settings {
+            index_path: oracle_dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        oracle_settings.add_indexed_path(src.clone()).unwrap();
+        let mut oracle = IndexFacade::new(std::sync::Arc::new(oracle_settings)).unwrap();
+        oracle.index_directory(&src, false).unwrap();
+        assert_eq!(
+            facade.relationship_count(),
+            oracle.relationship_count(),
+            "incremental edge set must match the fresh oracle after an \
+             edited relocation"
+        );
+    }
+
+    // Genuine-deletion control: a change set with no new files keeps
+    // die-with-target semantics -- no caller invalidation fires, and
+    // the result still matches the fresh oracle because the caller's
+    // evidence has no surviving referent.
+    #[test]
+    fn genuine_deletion_kills_inbound_edges_and_matches_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("callee.go"),
+            "package pkg\n\nfunc Helper() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("caller.go"),
+            "package pkg\n\nfunc Run() int {\n\treturn Helper()\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        assert_eq!(inbound_edge_names(&facade, "Helper"), vec!["Run:Calls"]);
+
+        std::fs::remove_file(src.join("callee.go")).unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert!(
+            facade.find_symbols_by_name("Helper", None).is_empty(),
+            "a genuinely deleted target must not resurrect"
+        );
+
+        let oracle_dir = tempfile::tempdir().unwrap();
+        let mut oracle_settings = Settings {
+            index_path: oracle_dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        oracle_settings.add_indexed_path(src.clone()).unwrap();
+        let mut oracle = IndexFacade::new(std::sync::Arc::new(oracle_settings)).unwrap();
+        oracle.index_directory(&src, false).unwrap();
+        assert_eq!(
+            facade.relationship_count(),
+            oracle.relationship_count(),
+            "incremental edge set must match the fresh oracle after a \
+             genuine deletion"
+        );
+    }
+
+    // Unrelated delete-plus-new control: the deleted target's callers
+    // re-enter the run, but the unrelated new file is not a
+    // destination -- resolution finds no referent and the edge dies,
+    // matching the fresh oracle.
+    #[test]
+    fn unrelated_delete_plus_new_drops_edges_without_false_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("callee.go"),
+            "package pkg\n\nfunc Helper() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("caller.go"),
+            "package pkg\n\nfunc Run() int {\n\treturn Helper()\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        assert_eq!(inbound_edge_names(&facade, "Helper"), vec!["Run:Calls"]);
+
+        std::fs::remove_file(src.join("callee.go")).unwrap();
+        std::fs::write(
+            src.join("other.go"),
+            "package pkg\n\nfunc Other() int {\n\treturn 9\n}\n",
+        )
+        .unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert!(
+            facade.find_symbols_by_name("Helper", None).is_empty(),
+            "the deleted target must not resurrect"
+        );
+        let runs = facade.find_symbols_by_name("Run", None);
+        assert_eq!(runs.len(), 1);
+        assert!(
+            facade.get_called_functions(runs[0].id).is_empty(),
+            "the re-resolved caller must not bind to the unrelated new file"
+        );
+
+        let oracle_dir = tempfile::tempdir().unwrap();
+        let mut oracle_settings = Settings {
+            index_path: oracle_dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        oracle_settings.add_indexed_path(src.clone()).unwrap();
+        let mut oracle = IndexFacade::new(std::sync::Arc::new(oracle_settings)).unwrap();
+        oracle.index_directory(&src, false).unwrap();
+        assert_eq!(
+            facade.relationship_count(),
+            oracle.relationship_count(),
+            "incremental edge set must match the fresh oracle after an \
+             unrelated delete-plus-new batch"
+        );
+    }
+
+    // The drop side of edited relocation: a path-coupled import is dead
+    // evidence, and re-resolution must fail closed rather than select a
+    // destination -- no pairing, no fuzzy pick. Same decoy discipline as
+    // the pure-rename stale-import lock.
+    #[test]
+    fn edited_relocation_drops_stale_import_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let pkg = src.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("__init__.py"), "").unwrap();
+        std::fs::write(pkg.join("util.py"), "def helper():\n    pass\n").unwrap();
+        std::fs::write(pkg.join("decoy.py"), "def helper():\n    return 1\n").unwrap();
+        std::fs::write(
+            pkg.join("main.py"),
+            "from pkg.util import helper\n\n\ndef run():\n    return helper()\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let helper_callee_count = |facade: &IndexFacade| -> usize {
+            let runs = facade.find_symbols_by_name("run", None);
+            assert_eq!(runs.len(), 1, "fixture expects exactly one `run`");
+            facade
+                .get_called_functions(runs[0].id)
+                .iter()
+                .filter(|s| s.name.as_ref() == "helper")
+                .count()
+        };
+
+        facade.index_directory(&src, true).unwrap();
+        assert_eq!(helper_callee_count(&facade), 1);
+
+        std::fs::remove_file(pkg.join("util.py")).unwrap();
+        std::fs::write(pkg.join("util_renamed.py"), "def helper():\n    return 3\n").unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert_eq!(
+            helper_callee_count(&facade),
+            0,
+            "a dead import after an edited relocation must fail closed, \
+             not pick a destination"
+        );
+
+        let oracle_dir = tempfile::tempdir().unwrap();
+        let mut oracle_settings = Settings {
+            index_path: oracle_dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        oracle_settings.add_indexed_path(src.clone()).unwrap();
+        let mut oracle = IndexFacade::new(std::sync::Arc::new(oracle_settings)).unwrap();
+        oracle.index_directory(&src, true).unwrap();
+        assert_eq!(
+            facade.relationship_count(),
+            oracle.relationship_count(),
+            "incremental edge set must match the fresh oracle after an \
+             edited relocation with a stale import"
+        );
+    }
+
+    // Relocation changes the target's path identity; the persisted edge
+    // carries only resolved endpoints, so unchanged callers re-enter the
+    // parse-and-resolve lane and source evidence decides survival. The
+    // decoy makes the fail-closed arm deterministic: with the import
+    // dead, two same-named candidates and no evidence must drop the
+    // edge, exactly as a fresh index of the renamed tree does.
+    #[test]
+    fn renaming_a_file_drops_stale_import_edges_via_caller_reresolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let pkg = src.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("__init__.py"), "").unwrap();
+        std::fs::write(pkg.join("util.py"), "def helper():\n    pass\n").unwrap();
+        std::fs::write(pkg.join("decoy.py"), "def helper():\n    return 1\n").unwrap();
+        std::fs::write(
+            pkg.join("main.py"),
+            "from pkg.util import helper\n\n\ndef run():\n    return helper()\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let helper_callees = |facade: &IndexFacade| -> Vec<String> {
+            let runs = facade.find_symbols_by_name("run", None);
+            assert_eq!(runs.len(), 1, "fixture expects exactly one `run`");
+            facade
+                .get_called_functions(runs[0].id)
+                .iter()
+                .filter(|s| s.name.as_ref() == "helper")
+                .map(|s| facade.get_file_path(s.file_id).unwrap_or_default())
+                .collect()
+        };
+
+        facade.index_directory(&src, true).unwrap();
+        let before = helper_callees(&facade);
+        assert_eq!(
+            before.len(),
+            1,
+            "import-bound call must resolve pre-rename, got: {before:?}"
+        );
+        assert!(before[0].ends_with("util.py"), "got: {before:?}");
+
+        std::fs::rename(pkg.join("util.py"), pkg.join("util_renamed.py")).unwrap();
+        facade.index_directory(&src, false).unwrap();
+        let incremental = helper_callees(&facade);
+        let incremental_count = facade.relationship_count();
+
+        let oracle_dir = tempfile::tempdir().unwrap();
+        let mut oracle_settings = Settings {
+            index_path: oracle_dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        oracle_settings.add_indexed_path(src.clone()).unwrap();
+        let mut oracle = IndexFacade::new(std::sync::Arc::new(oracle_settings)).unwrap();
+        oracle.index_directory(&src, true).unwrap();
+
+        assert!(
+            helper_callees(&oracle).is_empty(),
+            "oracle premise: a fresh index must fail closed on the dead import"
+        );
+        assert!(
+            incremental.is_empty(),
+            "a relocation must re-resolve the caller; the stale-import edge \
+             drops, got: {incremental:?}"
+        );
+        assert_eq!(
+            incremental_count,
+            oracle.relationship_count(),
+            "incremental edge set must match the fresh oracle after relocation"
+        );
+    }
+
+    // A caller that is itself modified in the relocation's change set
+    // enters the run exactly once: discovery already carries it, so
+    // invalidation must not add it again. Double-entry would parse the
+    // file twice in one batch and duplicate its rows.
+    #[test]
+    fn relocation_with_a_co_modified_caller_indexes_the_caller_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("pkg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("callee.go"),
+            "package pkg\n\nfunc Helper() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+        let caller = "package pkg\n\nfunc Run() int {\n\treturn Helper()\n}\n";
+        std::fs::write(src.join("caller.go"), caller).unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, false).unwrap();
+        let fresh = facade.relationship_count();
+        assert_eq!(inbound_edge_names(&facade, "Helper"), vec!["Run:Calls"]);
+
+        std::fs::rename(src.join("callee.go"), src.join("callee_renamed.go")).unwrap();
+        std::fs::write(src.join("caller.go"), format!("// touched\n{caller}")).unwrap();
+        facade.index_directory(&src, false).unwrap();
+
+        assert_eq!(
+            inbound_edge_names(&facade, "Helper"),
+            vec!["Run:Calls"],
+            "the co-modified caller's edge must survive exactly once"
+        );
+        assert_eq!(
+            facade.relationship_count(),
+            fresh,
+            "one relocation plus one semantics-preserving edit must not \
+             change the edge count"
+        );
+        let runs = facade.find_symbols_by_name("Run", None);
+        assert_eq!(
+            runs.len(),
+            1,
+            "double-entry would duplicate the caller's rows"
+        );
     }
 
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {

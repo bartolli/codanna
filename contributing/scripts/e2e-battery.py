@@ -17,11 +17,14 @@ Enforces the measurement protocol invariants that prose could not:
   - touch shape (--touch-shape, default prepend): the touch SHIFTS ranges, so
     line-sensitive identity paths are exercised. An append-only touch reported
     parity on three corpora while a prepend still dropped edges.
-  - rename shape (--touch-shape rename): renames the target files in place
-    (stem_renamed); discovery must pair them by content hash and relocate
-    inbound edges. The oracle is a FRESH index of the renamed tree, not the
-    pre-rename dump. Dropped rows fail the leg; gained rows are the accepted
-    stale-import over-retention rider, reported and never assumed zero.
+  - relocation shapes (--touch-shape rename | rename-edit | delete):
+    rename moves the target files in place (stem_renamed, hash-paired at
+    discovery); rename-edit moves them AND appends one newline so no pair
+    forms (unpaired deleted-plus-new); delete removes them outright. In
+    every shape caller invalidation re-resolves the files owning inbound
+    edges. The oracle is a FRESH index of the mutated tree, not the
+    pre-mutation dump. Dropped rows AND gained rows both fail the leg:
+    recall loss and over-retention are both parity breaks.
   - binary identity: each leg records the commit its index was stamped with
     and two legs may not share one. `--version` does not separate builds
     between releases, so a pre/post pair over one binary otherwise diffs it
@@ -306,9 +309,18 @@ def incremental_leg(
             f"{out_dir.name}: no cross-file inbound edges in the fresh dump; "
             f"the incremental leg would prove nothing"
         )
-    if touch_shape == "rename":
-        return rename_leg(
-            binary, dump, corpus, out_dir, label, semantic_on, targets, ws, tantivy
+    if touch_shape in ("rename", "rename-edit", "delete"):
+        return relocation_leg(
+            binary,
+            dump,
+            corpus,
+            out_dir,
+            label,
+            semantic_on,
+            targets,
+            ws,
+            tantivy,
+            touch_shape,
         )
     try:
         for path in targets:
@@ -366,24 +378,40 @@ def incremental_leg(
     return not (dropped or gained)
 
 
-def rename_leg(binary, dump, corpus, out_dir, label, semantic_on, targets, ws, tantivy):
-    """Rename each target in place, re-index WITHOUT force, diff against a
-    fresh index of the RENAMED tree.
+def relocation_leg(
+    binary, dump, corpus, out_dir, label, semantic_on, targets, ws, tantivy, shape
+):
+    """Relocate or delete each target, re-index WITHOUT force, diff
+    against a fresh index of the mutated tree.
 
-    The oracle differs from the touch shapes: paths change, so the
-    pre-rename dump cannot be compared. Dropped rows (oracle has,
-    incremental lacks) are recall loss and fail the leg. Gained rows
-    (incremental keeps, oracle drops) are the accepted stale-import
-    over-retention rider (adr-rename-relocation-hash-pairing): reported,
-    never failed on, never assumed zero.
+    Shapes: `rename` moves each target to stem_renamed byte-identically
+    (discovery pairs by content hash); `rename-edit` moves it AND appends
+    one newline, so no pair forms and the change set is unpaired
+    deleted-plus-new; `delete` removes it outright. In every shape caller
+    invalidation re-resolves the files owning inbound edges
+    (adr-relocation-caller-invalidation), and the oracle is a FRESH index
+    of the mutated tree -- paths change, so the pre-mutation dump cannot
+    be compared. Dropped rows (recall loss) AND gained rows
+    (over-retention) both fail the leg.
     """
-    pairs = [
-        (path, path.with_name(path.stem + "_renamed" + path.suffix))
-        for path in targets
-    ]
+    mutations = []
+    for path in targets:
+        new = path.with_name(path.stem + "_renamed" + path.suffix)
+        if shape == "rename":
+            mutations.append((path, new, None))
+        elif shape == "rename-edit":
+            mutations.append((path, new, path.read_bytes()))
+        else:
+            mutations.append((path, None, path.read_bytes()))
     try:
-        for old, new in pairs:
-            old.rename(new)
+        for old, new, saved in mutations:
+            if shape == "rename":
+                old.rename(new)
+            elif shape == "rename-edit":
+                new.write_bytes(saved + b"\n")
+                old.unlink()
+            else:
+                old.unlink()
         run([str(binary), "index"], cwd=ws)
         incr = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
 
@@ -403,16 +431,23 @@ def rename_leg(binary, dump, corpus, out_dir, label, semantic_on, targets, ws, t
         oracle_tantivy = oracle_ws / ".codanna" / "index" / "tantivy"
         oracle = sorted(run([str(dump), str(oracle_tantivy)]).stdout.splitlines())
     finally:
-        # Plain filesystem renames, restored in place: git checkout cannot
-        # see them and would leave the corpus dirty for the next leg.
-        for old, new in pairs:
-            if new.exists() and not old.exists():
-                new.rename(old)
+        # Plain filesystem mutations, restored in place: git checkout
+        # cannot see renames and would leave the corpus dirty for the
+        # next leg.
+        for old, new, saved in mutations:
+            if shape == "rename":
+                if new.exists() and not old.exists():
+                    new.rename(old)
+            else:
+                if saved is not None and not old.exists():
+                    old.write_bytes(saved)
+                if new is not None and new.exists():
+                    new.unlink()
 
     (out_dir / f"{label}.incr.edges").write_text(
         "\n".join(incr) + ("\n" if incr else "")
     )
-    (out_dir / f"{label}.rename-oracle.edges").write_text(
+    (out_dir / f"{label}.{shape}-oracle.edges").write_text(
         "\n".join(oracle) + ("\n" if oracle else "")
     )
     run(["rm", "-rf", str(ws)])
@@ -427,23 +462,24 @@ def rename_leg(binary, dump, corpus, out_dir, label, semantic_on, targets, ws, t
     (out_dir / f"gain-{label}.oracle-incr.txt").write_text(
         "\n".join(gained) + ("\n" if gained else "")
     )
-    renamed = ", ".join(p.name for p in targets)
+    mutated = ", ".join(p.name for p in targets)
     print(
-        f"INCREMENTAL {out_dir.name} {label} [rename]: renamed {len(targets)} "
-        f"({renamed}); oracle {len(oracle_set)} -> incremental {len(incr_set)}: "
+        f"INCREMENTAL {out_dir.name} {label} [{shape}]: mutated {len(targets)} "
+        f"({mutated}); oracle {len(oracle_set)} -> incremental {len(incr_set)}: "
         f"dropped {len(dropped)}, over-retained {len(gained)}"
     )
     if gained:
         print(
-            f"   over-retention rider (stale-import; accepted, recorded): "
-            f"{out_dir / f'gain-{label}.oracle-incr.txt'}"
+            f"   LANE PARITY BROKEN - over-retention vs the {shape} oracle "
+            f"(caller invalidation must drop unsupported edges)\n"
+            f"   {out_dir / f'gain-{label}.oracle-incr.txt'}"
         )
     if dropped:
         print(
-            f"   LANE PARITY BROKEN - recall loss vs the rename oracle\n"
+            f"   LANE PARITY BROKEN - recall loss vs the {shape} oracle\n"
             f"   {out_dir / f'drop-{label}.oracle-incr.txt'}"
         )
-    return not dropped
+    return not dropped and not gained
 
 
 def cmd_run(args):
@@ -558,14 +594,17 @@ def main():
     )
     r.add_argument(
         "--touch-shape",
-        choices=["prepend", "append", "rename"],
+        choices=["prepend", "append", "rename", "rename-edit", "delete"],
         default="prepend",
         help="how --incremental edits a file. prepend (default) shifts every "
         "symbol below it, which is what ordinary editing does and what "
         "exercises line-sensitive identity paths; append leaves all start "
         "lines intact and is the control; rename moves each target to "
-        "stem_renamed in place and diffs against a fresh index of the "
-        "renamed tree (recall loss fails, over-retention is reported).",
+        "stem_renamed in place; rename-edit moves it AND appends one "
+        "newline so no hash pair forms (unpaired deleted-plus-new); "
+        "delete removes it outright. The relocation shapes diff against a "
+        "fresh index of the mutated tree; dropped and gained rows both "
+        "fail the leg.",
     )
     r.set_defaults(func=cmd_run)
     d = sub.add_parser("diff", help="dropped/gained between two captured legs")

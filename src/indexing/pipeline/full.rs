@@ -86,6 +86,7 @@ impl Pipeline {
             modified_files: 0,
             deleted_files: 0,
             renamed_files: 0,
+            invalidated_caller_files: 0,
             deleted_symbols: 0,
             index_stats,
             cleanup_stats: CleanupStats::default(),

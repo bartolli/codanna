@@ -2,9 +2,9 @@
 
 use super::stages::{CleanupStage, CollectStage, DiscoverStage, IndexStage, ReadStage};
 use super::{
-    CleanupStats, EmbedOptions, FileSource, IncrementalStats, ParseStage, Phase1Options,
-    Phase2Stats, Pipeline, PipelineError, PipelineResult, ProgressSink, SingleFileStats,
-    SymbolLookupCache, SyncStats, init_parser_cache,
+    CleanupStats, DiscoverResult, EmbedOptions, FileSource, IncrementalStats, ParseStage,
+    Phase1Options, Phase2Stats, Pipeline, PipelineError, PipelineResult, ProgressSink,
+    SingleFileStats, SymbolLookupCache, SyncStats, init_parser_cache,
 };
 use crate::FileId;
 use crate::indexing::IndexStats;
@@ -16,6 +16,61 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 impl Pipeline {
+    /// Add the unique caller files of this run's relocated and deleted
+    /// targets to the modified set, so their edges are re-derived by
+    /// parse and resolution rather than preserved by rebind or lost
+    /// with the target. Deleted targets invalidate unconditionally:
+    /// even without a replacement file, the fresh oracle can re-resolve
+    /// a caller's evidence to an alternative referent once the primary
+    /// is gone; caller resolution selects a destination only when
+    /// source evidence supports one. Runs BEFORE cleanup: collection
+    /// reads the inbound-edge rows cleanup deletes. Membership in the
+    /// modified set also excludes these files from relocation capture
+    /// and routes them through the reindex capture lane, which
+    /// preserves edges pointing INTO them -- invalidation is one hop,
+    /// not a reverse-dependency closure.
+    fn invalidate_target_callers(
+        index: &DocumentIndex,
+        discover: &mut DiscoverResult,
+    ) -> PipelineResult<usize> {
+        if discover.renamed_files.is_empty() && discover.deleted_files.is_empty() {
+            return Ok(0);
+        }
+        let mut in_run: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        in_run.extend(discover.new_files.iter().cloned());
+        in_run.extend(discover.modified_files.iter().cloned());
+        in_run.extend(discover.deleted_files.iter().cloned());
+        for (old, new) in &discover.renamed_files {
+            in_run.insert(old.clone());
+            in_run.insert(new.clone());
+        }
+        let mut target_paths: Vec<PathBuf> = discover
+            .renamed_files
+            .iter()
+            .map(|(old, _)| old.clone())
+            .collect();
+        target_paths.extend(discover.deleted_files.iter().cloned());
+        let callers = super::stages::cleanup::inbound_caller_files(index, &target_paths, &in_run)?;
+        let count = callers.len();
+        tracing::debug!(
+            target: "pipeline",
+            "caller invalidation: renamed={} deleted={} new={} modified={} targets={} -> invalidated={count}",
+            discover.renamed_files.len(),
+            discover.deleted_files.len(),
+            discover.new_files.len(),
+            discover.modified_files.len(),
+            target_paths.len(),
+        );
+        if count > 0 {
+            tracing::info!(
+                target: "pipeline",
+                "Relocation invalidated {count} caller file(s) for re-resolution"
+            );
+            discover.modified_files.extend(callers);
+        }
+        Ok(count)
+    }
+
     /// Index a single file (for watcher reindex events).
     ///
     /// [PIPELINE API] Optimized path for single-file re-indexing when a file changes.
@@ -361,7 +416,7 @@ impl Pipeline {
                     cache,
                     CleanupStats::default(),
                     0,
-                    (files_indexed, 0, 0, 0),
+                    (files_indexed, 0, 0, 0, 0),
                     Vec::new(),
                 )
             } else {
@@ -403,7 +458,7 @@ impl Pipeline {
                     cache,
                     CleanupStats::default(),
                     0,
-                    (files_indexed, 0, 0, 0),
+                    (files_indexed, 0, 0, 0, 0),
                     Vec::new(),
                 )
             }
@@ -412,7 +467,7 @@ impl Pipeline {
             let discover_stage = DiscoverStage::new(root, self.config.discover_threads)
                 .with_index(Arc::clone(&index))
                 .with_workspace_root(self.settings.workspace_root.clone());
-            let discover_result = discover_stage.run_incremental()?;
+            let mut discover_result = discover_stage.run_incremental()?;
 
             if discover_result.is_empty() {
                 return Ok(IncrementalStats {
@@ -420,6 +475,7 @@ impl Pipeline {
                     modified_files: 0,
                     deleted_files: 0,
                     renamed_files: 0,
+                    invalidated_caller_files: 0,
                     deleted_symbols: 0,
                     index_stats: IndexStats::new(),
                     cleanup_stats: CleanupStats::default(),
@@ -427,6 +483,10 @@ impl Pipeline {
                     elapsed: start.elapsed(),
                 });
             }
+
+            let modified_on_disk = discover_result.modified_files.len();
+            let invalidated_caller_files =
+                Self::invalidate_target_callers(&index, &mut discover_result)?;
 
             let files_to_index: Vec<PathBuf> = discover_result
                 .new_files
@@ -522,9 +582,10 @@ impl Pipeline {
 
             let counts = (
                 discover_result.new_files.len(),
-                discover_result.modified_files.len(),
+                modified_on_disk,
                 discover_result.deleted_files.len(),
                 discover_result.renamed_files.len(),
+                invalidated_caller_files,
             );
             (
                 stats,
@@ -570,6 +631,7 @@ impl Pipeline {
             modified_files: discover_counts.1,
             deleted_files: discover_counts.2,
             renamed_files: discover_counts.3,
+            invalidated_caller_files: discover_counts.4,
             deleted_symbols,
             index_stats,
             cleanup_stats,
@@ -607,7 +669,7 @@ impl Pipeline {
         let discover_stage = DiscoverStage::new(root, self.config.discover_threads)
             .with_index(Arc::clone(&index))
             .with_workspace_root(self.settings.workspace_root.clone());
-        let discover_result = discover_stage.run_incremental()?;
+        let mut discover_result = discover_stage.run_incremental()?;
 
         tracing::info!(
             target: "pipeline",
@@ -624,6 +686,7 @@ impl Pipeline {
                 modified_files: 0,
                 deleted_files: 0,
                 renamed_files: 0,
+                invalidated_caller_files: 0,
                 deleted_symbols: 0,
                 index_stats: IndexStats::new(),
                 cleanup_stats: CleanupStats::default(),
@@ -631,6 +694,10 @@ impl Pipeline {
                 elapsed: start.elapsed(),
             });
         }
+
+        let modified_on_disk = discover_result.modified_files.len();
+        let invalidated_caller_files =
+            Self::invalidate_target_callers(&index, &mut discover_result)?;
 
         // Combine new + modified + renamed-to paths for indexing
         let files_to_index: Vec<PathBuf> = discover_result
@@ -741,9 +808,10 @@ impl Pipeline {
 
         Ok(IncrementalStats {
             new_files: discover_result.new_files.len(),
-            modified_files: discover_result.modified_files.len(),
+            modified_files: modified_on_disk,
             deleted_files: discover_result.deleted_files.len(),
             renamed_files: discover_result.renamed_files.len(),
+            invalidated_caller_files,
             deleted_symbols,
             index_stats,
             cleanup_stats,
