@@ -31,6 +31,6 @@ exec docker run --rm \
     && mkdir -p /cargo/registry /tmp/target \
     && chown -R runner /cargo /tmp/target \
     && git clone -q /src /tmp/repo \
-    && chown -R runner /tmp/repo \
     && echo \"linux gate at: \$(git -C /tmp/repo log --oneline -1)\" \
+    && chown -R runner /tmp/repo \
     && su runner -c 'export CARGO_HOME=/cargo CARGO_TARGET_DIR=/tmp/target; cd /tmp/repo && cargo $ARGS'"
