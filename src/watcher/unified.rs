@@ -458,7 +458,7 @@ impl UnifiedWatcher {
         handler_name: &str,
     ) -> Result<(), WatchError> {
         match action {
-            WatchAction::ReindexCode { path } => {
+            WatchAction::ReindexCode { path, created } => {
                 let mut indexer = self.facade.write().await;
                 match indexer.index_file(&path) {
                     Ok(result) => {
@@ -477,9 +477,15 @@ impl UnifiedWatcher {
                                     }
                                 }
 
-                                // Notify
-                                self.broadcaster
-                                    .send(FileChangeEvent::FileReindexed { path: path.clone() });
+                                // A first-time file grew the resource list;
+                                // the lanes map FileCreated to list_changed
+                                // and FileReindexed to a URI-filtered update.
+                                let event = if created {
+                                    FileChangeEvent::FileCreated { path: path.clone() }
+                                } else {
+                                    FileChangeEvent::FileReindexed { path: path.clone() }
+                                };
+                                self.broadcaster.send(event);
                             }
                             IndexingResult::Cached(_) => {
                                 crate::debug_event!(handler_name, "unchanged (hash match)");

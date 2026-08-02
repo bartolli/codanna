@@ -9,8 +9,10 @@ use super::WatchError;
 /// Actions returned by handlers for the UnifiedWatcher to execute.
 #[derive(Debug, Clone)]
 pub enum WatchAction {
-    /// Re-index a code file.
-    ReindexCode { path: PathBuf },
+    /// Re-index a code file. `created` marks a first-time file (unknown
+    /// to the index at event time): the broadcast becomes `FileCreated`,
+    /// which the notification lanes map to `list_changed`.
+    ReindexCode { path: PathBuf, created: bool },
 
     /// Re-index a document file.
     ReindexDocument { path: PathBuf },

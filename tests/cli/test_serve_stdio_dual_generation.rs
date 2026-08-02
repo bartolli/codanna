@@ -559,6 +559,212 @@ fn serve_stdio_listen_delivers_tagged_change_notifications() {
     assert!(status.success(), "clean exit, got {status:?}");
 }
 
+/// A list-only subscriber is told when the resource list GROWS: a
+/// watched file created mid-session produces `list_changed`, while a
+/// modify of an existing file stays silent on that category.
+#[test]
+fn serve_stdio_listen_list_only_subscriber_hears_creates() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_watch(workspace.path());
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": stateless_meta() }
+        })
+    )
+    .expect("write session opener");
+    session.stdin.flush().expect("flush opener");
+    let opener = recv_json(&session.rx);
+    assert_eq!(opener["id"], 1, "opener response id\n{opener}");
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "subscriptions/listen",
+            "params": {
+                "_meta": stateless_meta(),
+                "notifications": { "resourcesListChanged": true }
+            }
+        })
+    )
+    .expect("write listen");
+    session.stdin.flush().expect("flush listen");
+    let ack = recv_json(&session.rx);
+    assert_eq!(
+        ack["method"], "notifications/subscriptions/acknowledged",
+        "listen is acknowledged\n{ack}"
+    );
+
+    create_and_await_list_changed(
+        &session.rx,
+        &workspace.path().join("src/beta.rs"),
+        "pub fn beta() -> i32 {\n    2\n}\n",
+    );
+
+    // A modify must not notify the list category (no over-notification).
+    let fixture = workspace.path().join("src/alpha.rs");
+    let mut content = std::fs::read_to_string(&fixture).expect("read fixture");
+    content.push_str("\npub fn epsilon() -> i32 {\n    5\n}\n");
+    std::fs::write(&fixture, content).expect("modify watched file");
+
+    let quiet = Instant::now() + Duration::from_secs(5);
+    while let Some(remaining) = quiet.checked_duration_since(Instant::now()) {
+        match session.rx.recv_timeout(remaining) {
+            Ok(line) => {
+                let msg: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if msg["method"] == "notifications/resources/list_changed" {
+                    panic!("a modify must not notify the list category\n{msg}");
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(status.success(), "clean exit, got {status:?}");
+}
+
+/// Create a watched file and wait for its `list_changed`. The watch on
+/// the parent dir may still be registering at session start under
+/// parallel-suite load; a write before it lands emits no event.
+/// Re-touching is safe in every interleaving: a processed create makes
+/// the retry a known-file modify, which the list category filters.
+fn create_and_await_list_changed(rx: &Receiver<String>, path: &Path, content: &str) {
+    for _ in 0..3 {
+        std::fs::write(path, content).expect("write watched file");
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+            match rx.recv_timeout(remaining) {
+                Ok(line) => {
+                    let msg: Value = match serde_json::from_str(&line) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    if msg["method"] == "notifications/resources/list_changed" {
+                        return;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    panic!("no list_changed for created file {}", path.display());
+}
+
+fn recv_list_changed(rx: &Receiver<String>, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("list_changed before timeout: {what}"));
+        let line = rx
+            .recv_timeout(remaining)
+            .unwrap_or_else(|_| panic!("server line before timeout: {what}"));
+        let msg: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if msg["method"] == "notifications/resources/list_changed" {
+            return;
+        }
+    }
+}
+
+fn assert_no_more_list_changed(rx: &Receiver<String>, what: &str) {
+    let quiet = Instant::now() + Duration::from_secs(5);
+    while let Some(remaining) = quiet.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(remaining) {
+            Ok(line) => {
+                let msg: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                if msg["method"] == "notifications/resources/list_changed" {
+                    panic!("duplicate list_changed: {what}\n{msg}");
+                }
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+/// One delete, one `list_changed` — including for a file created within
+/// the same watch session (the historical double-broadcast shape). The
+/// settled-burst wave collapses duplicate and double-routed remove
+/// observations into one batch sync and one broadcast.
+#[test]
+fn serve_stdio_listen_delete_notifies_list_exactly_once() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_watch(workspace.path());
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": { "_meta": stateless_meta() }
+        })
+    )
+    .expect("write session opener");
+    session.stdin.flush().expect("flush opener");
+    let opener = recv_json(&session.rx);
+    assert_eq!(opener["id"], 1, "opener response id\n{opener}");
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "subscriptions/listen",
+            "params": {
+                "_meta": stateless_meta(),
+                "notifications": { "resourcesListChanged": true }
+            }
+        })
+    )
+    .expect("write listen");
+    session.stdin.flush().expect("flush listen");
+    let ack = recv_json(&session.rx);
+    assert_eq!(
+        ack["method"], "notifications/subscriptions/acknowledged",
+        "listen is acknowledged\n{ack}"
+    );
+
+    // Create within the session; consume the create's own list_changed.
+    let beta = workspace.path().join("src/beta.rs");
+    create_and_await_list_changed(&session.rx, &beta, "pub fn beta() -> i32 {\n    2\n}\n");
+
+    // The historical double-broadcast shape: delete the session-created
+    // file. Exactly one list_changed.
+    std::fs::remove_file(&beta).expect("delete session-created file");
+    recv_list_changed(&session.rx, "delete of session-created beta.rs");
+    assert_no_more_list_changed(&session.rx, "delete of session-created beta.rs");
+
+    // Control: delete a pre-session file. Exactly one.
+    std::fs::remove_file(workspace.path().join("src/alpha.rs")).expect("delete pre-session file");
+    recv_list_changed(&session.rx, "delete of pre-session alpha.rs");
+    assert_no_more_list_changed(&session.rx, "delete of pre-session alpha.rs");
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(status.success(), "clean exit, got {status:?}");
+}
+
 /// A stateless session that never opts in via `subscriptions/listen`
 /// receives zero unsolicited notifications when watched files change.
 #[test]

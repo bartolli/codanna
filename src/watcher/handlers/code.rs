@@ -178,6 +178,7 @@ impl WatchHandler for CodeFileHandler {
         }
         Ok(WatchAction::ReindexCode {
             path: self.to_relative(path),
+            created: !known,
         })
     }
 
