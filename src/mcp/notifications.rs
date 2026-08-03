@@ -14,6 +14,17 @@ pub enum FileChangeEvent {
     IndexReloaded, // Entire index was reloaded from disk
 }
 
+/// The resource URI for a change-event path: an emitted relative path
+/// on the MCP wire, portable-form per the emission contract. Clients
+/// subscribe by URI and rmcp filters by exact membership — the URI
+/// must byte-match the subscription on every platform. Non-Normal
+/// path shapes fall back to display text.
+pub fn resource_uri(path: &std::path::Path) -> String {
+    let portable =
+        crate::parsing::paths::portable_join(path).unwrap_or_else(|| path.display().to_string());
+    format!("file://{portable}")
+}
+
 /// Manages notification broadcasting to multiple MCP server instances
 #[derive(Clone)]
 pub struct NotificationBroadcaster {
@@ -71,7 +82,10 @@ impl super::CodeIntelligenceServer {
                     if let Some(peer) = peer_guard.as_ref() {
                         match event {
                             FileChangeEvent::FileReindexed { path } => {
-                                let path_str = path.display().to_string();
+                                // Portable-form: the wire path and URI must
+                                // byte-match subscriptions on every platform
+                                let path_str = crate::parsing::paths::portable_join(&path)
+                                    .unwrap_or_else(|| path.display().to_string());
 
                                 // Send standard MCP resource updated notification (backwards compatible)
                                 let _ = peer
@@ -140,5 +154,20 @@ impl super::CodeIntelligenceServer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The notification URI is an emitted relative path on the MCP wire:
+    // portable-form on every platform. rmcp filters resource-updated
+    // notifications by exact URI membership, so a native-separator URI
+    // never matches the client's subscription.
+    #[test]
+    fn resource_uri_is_portable_form_on_every_platform() {
+        let path = std::path::Path::new("src").join("alpha.rs");
+        assert_eq!(resource_uri(&path), "file://src/alpha.rs");
     }
 }

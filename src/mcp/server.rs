@@ -205,7 +205,7 @@ impl ServerHandler for CodeIntelligenceServer {
                 _ = context.cancelled() => break,
                 event = events.recv() => match event {
                     Ok(crate::mcp::notifications::FileChangeEvent::FileReindexed { path }) => {
-                        sink.notify_resource_updated(format!("file://{}", path.display())).await
+                        sink.notify_resource_updated(crate::mcp::notifications::resource_uri(&path)).await
                     }
                     Ok(_) => sink.notify_resource_list_changed().await,
                     Err(RecvError::Lagged(_)) => continue,
