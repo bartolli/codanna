@@ -273,31 +273,24 @@ impl LanguageBehavior for SwiftBehavior {
     /// Swift doesn't have path aliases like TypeScript/JavaScript.
     /// Imports are module-level (e.g., `import Foundation`).
     ///
-    /// CRITICAL: Symbols from pipeline have `module_path: None`.
-    /// We compute module_path on-the-fly from `symbol.file_path` using rules.
+    /// Module identity comes from the cache symbols' `module_path`, derived
+    /// once at parse through the strip-base ladder. Re-deriving here from
+    /// `file_path` has no root to strip against and fails closed on
+    /// absolute stored paths (out-of-tree indexing).
     fn build_resolution_context_with_pipeline_cache(
         &self,
         file_id: FileId,
         imports: &[crate::parsing::Import],
         cache: &dyn crate::parsing::PipelineSymbolCache,
-        extensions: &[&str],
+        _extensions: &[&str],
     ) -> (
         Box<dyn crate::parsing::ResolutionScope>,
         Vec<crate::parsing::Import>,
     ) {
         use crate::parsing::ScopeLevel;
         use crate::parsing::resolution::{ImportBinding, ImportOrigin};
-        use std::path::PathBuf;
 
         let mut context = SwiftResolutionContext::new(file_id);
-
-        // Helper to compute module_path from file_path using rules
-        // Rules contain source roots; module_path_from_file extracts module name
-        let compute_module_path = |file_path: &str| -> Option<String> {
-            let path = PathBuf::from(file_path);
-            // project_root is unused by Swift's module_path_from_file (uses rules instead)
-            self.module_path_from_file(&path, &PathBuf::new(), extensions)
-        };
 
         // Build enhanced imports (Swift imports are already module-level, no transformation)
         let mut enhanced_imports = Vec::with_capacity(imports.len());
@@ -315,16 +308,14 @@ impl LanguageBehavior for SwiftBehavior {
                 is_type_only: import.is_type_only,
             });
 
-            // Look up candidates by module name and match computed module_path
+            // Look up candidates by module name and match module_path
             let mut resolved_symbol: Option<crate::SymbolId> = None;
             let candidates = cache.lookup_candidates(&local_name);
             for id in candidates {
                 if let Some(symbol) = cache.get(id) {
-                    // Compute module_path from file_path using rules
-                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
+                    if let Some(module) = symbol.module_path.as_deref() {
                         // Swift: import Foundation matches Foundation.* symbols
-                        if computed_module == import.path
-                            || computed_module.starts_with(&format!("{}.", import.path))
+                        if module == import.path || module.starts_with(&format!("{}.", import.path))
                         {
                             resolved_symbol = Some(id);
                             break;
@@ -356,14 +347,13 @@ impl LanguageBehavior for SwiftBehavior {
         // Populate context with enhanced imports
         context.populate_imports(&enhanced_imports);
 
-        // Add local symbols from this file with computed module_path
+        // Add local symbols from this file under their module identity
         for sym_id in cache.symbols_in_file(file_id) {
             if let Some(symbol) = cache.get(sym_id) {
                 if self.is_resolvable_symbol(&symbol) {
                     context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
-                    // Compute module_path from file_path using rules
-                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
-                        context.add_symbol(computed_module, symbol.id, ScopeLevel::Global);
+                    if let Some(module) = symbol.module_path.as_deref() {
+                        context.add_symbol(module.to_string(), symbol.id, ScopeLevel::Global);
                     }
                 }
             }

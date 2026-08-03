@@ -4042,6 +4042,74 @@ mod tests {
         );
     }
 
+    // Out-of-tree lock: the fixture root is an external tempdir, so stored
+    // file paths are ABSOLUTE -- the lane every in-tree suite misses. The
+    // shape is the three.js drop signature: a typed-receiver member call
+    // whose receiver type arrives through a parent-relative import from a
+    // file TWO levels deep. Normalizing `../math/Vector4.js` without the
+    // importing file's module identity yields `math.Vector4`, not
+    // `app.math.Vector4`, and the mirrored decoy tree makes every suffix
+    // rescue ambiguous -- only a builder that consumes the parse-derived
+    // module_path can bind the import. A fabricated-root re-derivation
+    // starves the binding and the member edge fails closed.
+    #[test]
+    fn js_out_of_tree_import_bound_receiver_member_call_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("lib");
+        std::fs::create_dir_all(src.join("app/sub")).unwrap();
+        std::fs::create_dir_all(src.join("app/math")).unwrap();
+        std::fs::create_dir_all(src.join("legacy/math")).unwrap();
+        std::fs::write(
+            src.join("app/math/Vector4.js"),
+            "export class Vector4 {\n  set(x, y, z, w) {\n    return this;\n  }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("legacy/math/Vector4.js"),
+            "export class Vector4 {\n  set(x, y, z, w) {\n    return null;\n  }\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("app/sub/main.js"),
+            "import { Vector4 } from '../math/Vector4.js';\n\n\
+             export function setup() {\n  const color = new Vector4();\n  return color.set(1, 2, 3, 4);\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        // force: the full lane resolves on the run-scoped cache, whose
+        // symbols carry the collect-stage ABSOLUTE paths -- the lane the
+        // battery witnesses. The non-force lane re-reads symbols through
+        // the decode boundary, which relativizes paths and masks the
+        // fabricated-root failure.
+        facade.index_directory(&src, true).unwrap();
+
+        let setup = facade
+            .find_symbols_by_name("setup", None)
+            .into_iter()
+            .next()
+            .expect("setup indexed");
+        let callees = facade.get_called_functions(setup.id);
+        let set_callees: Vec<_> = callees.iter().filter(|c| &*c.name == "set").collect();
+        assert_eq!(
+            set_callees.len(),
+            1,
+            "setup must resolve its import-anchored receiver member call: {callees:?}"
+        );
+        assert!(
+            set_callees[0].file_path.ends_with("app/math/Vector4.js"),
+            "the binding must anchor the receiver to the imported class, got {}",
+            set_callees[0].file_path
+        );
+    }
+
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
         let targets = facade.find_symbols_by_name(name, None);
         assert_eq!(targets.len(), 1, "fixture expects exactly one `{name}`");

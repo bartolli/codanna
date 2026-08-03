@@ -288,8 +288,10 @@ impl LanguageBehavior for JavaScriptBehavior {
     /// Uses jsconfig path aliases via JavaScriptProjectEnhancer.
     /// Returns (scope, enhanced_imports) where enhanced_imports have path aliases resolved.
     ///
-    /// CRITICAL: Symbols from pipeline have `module_path: None`.
-    /// We compute module_path on-the-fly from `symbol.file_path` using rules.
+    /// Module identity comes from the cache symbols' `module_path`, derived
+    /// once at parse through the strip-base ladder. Re-deriving here from
+    /// `file_path` has no root to strip against and fails closed on
+    /// absolute stored paths (out-of-tree indexing).
     fn build_resolution_context_with_pipeline_cache(
         &self,
         file_id: FileId,
@@ -302,24 +304,14 @@ impl LanguageBehavior for JavaScriptBehavior {
     ) {
         use crate::parsing::ScopeLevel;
         use crate::parsing::resolution::{ImportBinding, ImportOrigin, ProjectResolutionEnhancer};
-        use std::path::PathBuf;
 
         let mut context = JavaScriptResolutionContext::new(file_id);
 
-        // Helper to compute module_path from file_path using rules
-        // Rules contain jsconfig paths; module_path_from_file extracts canonical module path
-        let compute_module_path = |file_path: &str| -> Option<String> {
-            let path = PathBuf::from(file_path);
-            // project_root is unused by JavaScript's module_path_from_file (uses rules instead)
-            self.module_path_from_file(&path, &PathBuf::new(), extensions)
-        };
-
-        // Compute importing module from current file
         let importing_module = cache
             .symbols_in_file(file_id)
             .first()
             .and_then(|id| cache.get(*id))
-            .and_then(|sym| compute_module_path(&sym.file_path));
+            .and_then(|sym| sym.module_path.map(String::from));
 
         // Load project rules for path alias enhancement
         let maybe_enhancer = self
@@ -380,14 +372,13 @@ impl LanguageBehavior for JavaScriptBehavior {
             let mut suffix_matches: Vec<SymbolId> = Vec::new();
             for id in cache.lookup_candidates(&local_name) {
                 if let Some(symbol) = cache.get(id) {
-                    // Compute module_path from file_path using rules
-                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
-                        if computed_module == target_module {
+                    if let Some(module) = symbol.module_path.as_deref() {
+                        if module == target_module {
                             resolved_symbol = Some(id);
                             break;
                         }
                         if crate::indexing::pipeline::types::segment_suffix_match(
-                            &computed_module,
+                            module,
                             &target_module,
                         ) {
                             suffix_matches.push(id);
@@ -424,14 +415,13 @@ impl LanguageBehavior for JavaScriptBehavior {
         // Populate context with enhanced imports
         context.populate_imports(&enhanced_imports);
 
-        // Add local symbols from this file with computed module_path
+        // Add local symbols from this file under their module identity
         for sym_id in cache.symbols_in_file(file_id) {
             if let Some(symbol) = cache.get(sym_id) {
                 if self.is_resolvable_symbol(&symbol) {
                     context.add_symbol(symbol.name.to_string(), symbol.id, ScopeLevel::Module);
-                    // Compute module_path from file_path using rules
-                    if let Some(computed_module) = compute_module_path(&symbol.file_path) {
-                        context.add_symbol(computed_module, symbol.id, ScopeLevel::Module);
+                    if let Some(module) = symbol.module_path.as_deref() {
+                        context.add_symbol(module.to_string(), symbol.id, ScopeLevel::Module);
                     }
                 }
             }
