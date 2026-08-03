@@ -69,6 +69,66 @@ pub fn relative_segments(path: &Path, base: &Path) -> Option<Vec<String>> {
     Some(segments)
 }
 
+/// Portable-form rendering of a relative path: `Normal` components
+/// joined with `/` on every platform. `None` when the path is empty
+/// or carries non-`Normal` components (`./`, `..`, roots) — callers
+/// keep their stored fallback for those.
+pub fn portable_join(path: &Path) -> Option<String> {
+    let mut segments = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(seg) => segments.push(seg.to_string_lossy()),
+            _ => return None,
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    Some(segments.join("/"))
+}
+
+/// User-facing rendering of an ABSOLUTE path: the Windows verbatim
+/// prefix is stripped when the path is losslessly representable in
+/// legacy form (`\\?\C:\x` renders `C:\x`). Only
+/// `Prefix::VerbatimDisk` simplifies; every other prefix kind and
+/// every path dunce judges unrepresentable (length, reserved names,
+/// trailing dots/spaces, control characters) passes through
+/// unchanged. Internal comparison surfaces keep canonical paths;
+/// this applies only where a path is formatted for output.
+#[cfg(windows)]
+pub fn render_absolute_path(path: &Path) -> &Path {
+    use std::path::{Component, Prefix};
+    let Some(Component::Prefix(prefix)) = path.components().next() else {
+        return path;
+    };
+    if !matches!(prefix.kind(), Prefix::VerbatimDisk(_)) {
+        return path;
+    }
+    // dunce 1.0.5's reserved-name table lists the ASCII DOS device
+    // names but not the superscript aliases; preserve those verbatim.
+    let has_superscript_device = path.components().any(|component| {
+        if let Component::Normal(seg) = component {
+            let seg = seg.to_string_lossy();
+            let stem = seg.split('.').next().unwrap_or(&seg).to_lowercase();
+            (stem.starts_with("com") || stem.starts_with("lpt"))
+                && matches!(&stem[3..], "\u{b9}" | "\u{b2}" | "\u{b3}")
+        } else {
+            false
+        }
+    });
+    if has_superscript_device {
+        return path;
+    }
+    dunce::simplified(path)
+}
+
+/// Non-Windows: verbatim prefixes do not exist, and a filename
+/// literally spelled `\\?\...` is legal — identity by construction.
+#[cfg(not(windows))]
+pub fn render_absolute_path(path: &Path) -> &Path {
+    path
+}
+
 /// Strip file extension from a path string.
 ///
 /// Extensions from the registry do NOT include the dot (e.g., "rs", "py").
@@ -157,6 +217,31 @@ mod tests {
         let result = strip_source_root(path, source_roots);
 
         assert_eq!(result, path);
+    }
+
+    #[test]
+    fn render_absolute_path_is_identity_off_windows() {
+        // A unix filename literally spelled like a verbatim prefix is
+        // legal and must never be rewritten.
+        let path = Path::new(r"/tmp/\\?\literal/x.rs");
+        assert_eq!(render_absolute_path(path), path);
+        let plain = Path::new("/tmp/x.rs");
+        assert_eq!(render_absolute_path(plain), plain);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn render_absolute_path_simplifies_verbatim_disk_only() {
+        assert_eq!(
+            render_absolute_path(Path::new(r"\\?\C:\Users\x")),
+            Path::new(r"C:\Users\x")
+        );
+        // Non-VerbatimDisk prefixes pass through.
+        let unc = Path::new(r"\\?\UNC\server\share\x");
+        assert_eq!(render_absolute_path(unc), unc);
+        // Superscript DOS device aliases stay verbatim.
+        let dev = Path::new("\\\\?\\C:\\x\\com\u{b9}.txt");
+        assert_eq!(render_absolute_path(dev), dev);
     }
 
     #[test]

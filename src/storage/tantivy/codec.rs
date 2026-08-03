@@ -711,6 +711,18 @@ mod tests {
         assert_eq!(roundtrip_file_path(&settings, "src/lib.rs"), "src/lib.rs");
     }
 
+    // Relative-stored paths carry the portable contract too: a natively
+    // separated relative path decodes to `/`-joined form on every platform.
+    #[test]
+    fn relative_stored_path_emits_portable_separators() {
+        let settings = crate::config::Settings::default();
+        let stored = std::path::PathBuf::from_iter(["src", "lib.rs"]);
+        assert_eq!(
+            roundtrip_file_path(&settings, &stored.to_string_lossy()),
+            "src/lib.rs"
+        );
+    }
+
     #[test]
     fn absolute_stored_path_outside_bases_passes_through() {
         let root = TempDir::new().unwrap();

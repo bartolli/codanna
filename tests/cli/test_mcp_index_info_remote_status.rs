@@ -229,8 +229,8 @@ fn mcp_get_index_info_reports_remote_semantic_status_and_model() {
     assert_eq!(indexed_paths.len(), 1);
     let first_path = indexed_paths[0].as_str().expect("path should be a string");
     assert!(
-        first_path == "src" || first_path.ends_with("/src"),
-        "indexed path should be 'src' or end with '/src', got: {first_path}"
+        std::path::Path::new(first_path).ends_with("src"),
+        "indexed path should be 'src' or end in a 'src' component, got: {first_path}"
     );
 
     let (info_code, info_stdout, info_stderr) =

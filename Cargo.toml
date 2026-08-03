@@ -156,3 +156,6 @@ harness = false
 [[bench]]
 name = "kotlin_parser_bench"
 harness = false
+
+[target."cfg(windows)".dependencies]
+dunce = "1.0.5"

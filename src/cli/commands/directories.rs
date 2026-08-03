@@ -115,7 +115,10 @@ pub fn run_add_dir(path: PathBuf, cli_config: Option<&Path>) {
             }
             println!("\nCurrent indexed paths:");
             for indexed_path in &settings.indexing.indexed_paths {
-                println!("  - {}", indexed_path.display());
+                println!(
+                    "  - {}",
+                    crate::parsing::paths::render_absolute_path(indexed_path).display()
+                );
             }
         }
         Err(e) => {
@@ -150,7 +153,10 @@ pub fn run_remove_dir(path: PathBuf, cli_config: Option<&Path>) {
             } else {
                 println!("\nRemaining indexed paths:");
                 for indexed_path in &settings.indexing.indexed_paths {
-                    println!("  - {}", indexed_path.display());
+                    println!(
+                        "  - {}",
+                        crate::parsing::paths::render_absolute_path(indexed_path).display()
+                    );
                 }
             }
         }
@@ -169,7 +175,10 @@ pub fn run_list_dirs(config: &Settings) {
         println!("\nTo add directories: codanna add-dir <path>");
     } else {
         for path in &config.indexing.indexed_paths {
-            println!("  - {}", path.display());
+            println!(
+                "  - {}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
         }
     }
 }
