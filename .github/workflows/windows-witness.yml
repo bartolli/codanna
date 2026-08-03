@@ -1,0 +1,43 @@
+# Windows witness leg: the watcher's event-kind assumptions are
+# platform-backend-specific (FSEvents vs inotify vs
+# ReadDirectoryChangesW), and Windows has no local container gate.
+# WITNESS, not gate: failures surface as warning annotations and the
+# job stays green -- red is reserved for gates. Promote to a gate by
+# removing the `|| echo` fallback once Windows is sustained-green,
+# then re-include in full-test.yml as a `uses:` job (workflow_call).
+name: Windows Witness
+on:
+  # Iteration loop during the Windows arc
+  workflow_dispatch:
+
+  # Sustained-green record accumulates without a dispatch
+  schedule:
+    - cron: '0 0 * * *'  # Midnight UTC daily
+
+  # Chain include for gate promotion
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-windows:
+    name: windows witness
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Run tests (witness)
+        shell: bash
+        run: |
+          cargo test --verbose || echo "::warning title=Windows witness::test failures on Windows (witness leg, non-blocking) -- see this job's log; tracked in the wiki's Windows stories"

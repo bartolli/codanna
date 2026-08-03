@@ -671,9 +671,16 @@ enabled = false
         let gone = temp_dir.path().join("no-such-dir");
 
         let config_path = temp_dir.path().join("settings.toml");
+        // Serialize instead of hand-formatting: a raw Windows path in a TOML
+        // basic string parses `\U` as a unicode escape and errors the load.
+        let mut table = toml::value::Table::new();
+        table.insert(
+            "workspace_root".into(),
+            toml::Value::String(gone.display().to_string()),
+        );
         fs::write(
             &config_path,
-            format!("workspace_root = \"{}\"\n", gone.display()),
+            toml::to_string(&toml::Value::Table(table)).unwrap(),
         )
         .unwrap();
 

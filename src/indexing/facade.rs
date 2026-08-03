@@ -2404,7 +2404,8 @@ mod tests {
             );
             let path = facade.get_file_path(callees[0].file_id).unwrap_or_default();
             assert!(
-                callees[0].name.as_ref() == "helper" && path.ends_with("z/Base.java"),
+                callees[0].name.as_ref() == "helper"
+                    && std::path::Path::new(&path).ends_with("z/Base.java"),
                 "must resolve to the inherited parent's member, not the decoy \
                  (force={force}), got: {picked:?}"
             );
@@ -3404,16 +3405,13 @@ mod tests {
         let facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
 
         let canonical_root = root.canonicalize().unwrap();
-        let names = |scope: &std::path::Path| -> Vec<String> {
-            let mut v: Vec<String> = facade
+        // Compare PathBufs, not display strings: component-wise equality is
+        // separator-agnostic where a `/`-joined string compare is not.
+        let names = |scope: &std::path::Path| -> Vec<std::path::PathBuf> {
+            let mut v: Vec<std::path::PathBuf> = facade
                 .discoverable_files(scope)
                 .into_iter()
-                .map(|p| {
-                    p.strip_prefix(&canonical_root)
-                        .unwrap()
-                        .to_string_lossy()
-                        .into_owned()
-                })
+                .map(|p| p.strip_prefix(&canonical_root).unwrap().to_path_buf())
                 .collect();
             v.sort();
             v
@@ -3421,23 +3419,26 @@ mod tests {
 
         assert_eq!(
             names(&root),
-            vec!["pkg/a.py", "pkg/newmod/e.py"],
+            vec![
+                std::path::PathBuf::from("pkg/a.py"),
+                std::path::PathBuf::from("pkg/newmod/e.py")
+            ],
             "root scope: ignore chains, dot-files, and extensions filter"
         );
         assert_eq!(
             names(&pkg.join("newmod")),
-            vec!["pkg/newmod/e.py"],
+            vec![std::path::PathBuf::from("pkg/newmod/e.py")],
             "subtree scope restricts to the subtree"
         );
         assert_eq!(
             names(&pkg.join("generated")),
-            Vec::<String>::new(),
+            Vec::<std::path::PathBuf>::new(),
             "a scope inside an ignored directory is empty because the \
              chain anchors at the registered root"
         );
         assert_eq!(
             names(&dir.path().join("outside")),
-            Vec::<String>::new(),
+            Vec::<std::path::PathBuf>::new(),
             "a scope outside every registered root is empty"
         );
     }
@@ -3465,20 +3466,18 @@ mod tests {
         let facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
         let canonical_root = root.canonicalize().unwrap();
 
-        let mut dirs: Vec<String> = facade
+        let mut dirs: Vec<std::path::PathBuf> = facade
             .discoverable_dirs(&root.join("newmod"))
             .into_iter()
-            .map(|p| {
-                p.strip_prefix(&canonical_root)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            })
+            .map(|p| p.strip_prefix(&canonical_root).unwrap().to_path_buf())
             .collect();
         dirs.sort();
         assert_eq!(
             dirs,
-            vec!["newmod", "newmod/empty_sub"],
+            vec![
+                std::path::PathBuf::from("newmod"),
+                std::path::PathBuf::from("newmod/empty_sub")
+            ],
             "empty dirs watched, ignored subtree pruned by the root-anchored chain"
         );
     }

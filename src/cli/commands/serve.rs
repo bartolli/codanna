@@ -562,10 +562,23 @@ mod serve_lock_tests {
         let dir = TempDir::new().unwrap();
         let lock_path = dir.path().join("serve.lock");
 
-        // PID 0 never refers to a normal process on Unix; sysinfo also reports
-        // it as absent. Use it as a synthetic stale entry.
-        std::fs::write(&lock_path, "0").unwrap();
-        assert!(!pid_is_alive(0), "PID 0 must read as dead for this test");
+        // A reaped child is dead on every platform. PID 0 is not: it reads
+        // alive on Windows (System Idle Process).
+        #[cfg(unix)]
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "exit"])
+            .spawn()
+            .unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+
+        std::fs::write(&lock_path, dead_pid.to_string()).unwrap();
+        assert!(
+            !pid_is_alive(dead_pid),
+            "reaped child must read as dead for this test"
+        );
 
         let guard = ServeLockGuard::acquire(dir.path()).expect("stale lock should be reclaimed");
         let contents = std::fs::read_to_string(&lock_path).unwrap();

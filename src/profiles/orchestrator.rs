@@ -240,7 +240,9 @@ fn current_timestamp() -> String {
     format!("{years:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
-#[cfg(test)]
+// The module's one test forces the save failure via unix permission bits;
+// on Windows the module would compile to an unused import.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -248,7 +250,6 @@ mod tests {
     // persisted lockfile and surface the error instead of swallowing the
     // rollback outcome.
     #[test]
-    #[cfg(unix)]
     fn profiles_config_save_failure_rolls_back_lockfile() {
         use std::os::unix::fs::PermissionsExt;
 
