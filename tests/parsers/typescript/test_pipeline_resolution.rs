@@ -16,6 +16,35 @@ use codanna::{Symbol, SymbolKind, Visibility};
 use std::path::Path;
 use std::sync::Arc;
 
+/// Serialize the resolver-rules fixture instead of hand-formatting it:
+/// a native Windows path interpolated into a JSON string parses as
+/// invalid escape sequences and the load fails.
+fn resolution_rules_json(tsconfig: &Path, mapping_root: &Path) -> String {
+    let tsconfig_str = tsconfig.to_string_lossy().to_string();
+    let mut hashes = serde_json::Map::new();
+    hashes.insert(tsconfig_str.clone(), serde_json::json!("test"));
+    let mut mappings = serde_json::Map::new();
+    mappings.insert(
+        format!("{}/**/*.ts", mapping_root.display()),
+        serde_json::json!(tsconfig_str),
+    );
+    let mut rules = serde_json::Map::new();
+    rules.insert(
+        tsconfig_str,
+        serde_json::json!({
+            "baseUrl": ".",
+            "paths": {"@components/*": ["src/components/*"]}
+        }),
+    );
+    serde_json::to_string_pretty(&serde_json::json!({
+        "version": "1.0",
+        "hashes": hashes,
+        "mappings": mappings,
+        "rules": rules,
+    }))
+    .expect("serialize resolution rules")
+}
+
 /// Test that PipelineSymbolCache multi-tier resolution works for local symbols.
 #[test]
 fn test_pipeline_cache_local_resolution() {
@@ -285,27 +314,7 @@ fn test_behavior_pipeline_cache_isolated() {
     fs::write(src_dir.join("Button.ts"), button_source).expect("Failed to write Button.ts");
 
     // Create resolution rules (what TypeScriptProvider would persist)
-    let tsconfig_path = temp_path
-        .join("tsconfig.json")
-        .to_string_lossy()
-        .to_string();
-    let resolution_rules = format!(
-        r#"{{
-        "version": "1.0",
-        "hashes": {{"{}": "test"}},
-        "mappings": {{"{}/**/*.ts": "{}"}},
-        "rules": {{
-            "{}": {{
-                "baseUrl": ".",
-                "paths": {{"@components/*": ["src/components/*"]}}
-            }}
-        }}
-    }}"#,
-        tsconfig_path,
-        temp_path.display(),
-        tsconfig_path,
-        tsconfig_path
-    );
+    let resolution_rules = resolution_rules_json(&temp_path.join("tsconfig.json"), temp_path);
     fs::write(
         codanna_dir.join("typescript_resolution.json"),
         resolution_rules,
@@ -415,21 +424,7 @@ fn test_module_path_from_file_out_of_tree_absolute_mappings() {
 
     // What TypeScriptProvider persists for an absolute config_files entry:
     // absolute mapping globs keyed to the absolute tsconfig path.
-    let tsconfig_str = tsconfig_path.to_string_lossy();
-    let repo_str = repo.path().to_string_lossy();
-    let rules = format!(
-        r#"{{
-        "version": "1.0",
-        "hashes": {{"{tsconfig_str}": "test"}},
-        "mappings": {{"{repo_str}/**/*.ts": "{tsconfig_str}"}},
-        "rules": {{
-            "{tsconfig_str}": {{
-                "baseUrl": ".",
-                "paths": {{"@components/*": ["src/components/*"]}}
-            }}
-        }}
-    }}"#
-    );
+    let rules = resolution_rules_json(&tsconfig_path, repo.path());
     fs::write(resolvers_dir.join("typescript_resolution.json"), rules).expect("write rules");
 
     let original_dir = env::current_dir().expect("cwd");

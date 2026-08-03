@@ -235,20 +235,27 @@ pub trait LanguageBehavior: Send + Sync {
         // Step 1: Get relative path from workspace root
         let relative_path = file_path.strip_prefix(workspace_root).ok()?;
 
-        // Step 2: Strip source root directories (OS-agnostic)
+        // Step 2: Strip source root directories (component-wise)
         let path_without_src = strip_source_root(relative_path, self.source_roots());
 
-        // Step 3: Strip extension using passed extensions list
-        let path_str = path_without_src.to_str()?;
-        let path_without_ext = strip_extension(path_str, extensions);
-
-        // Step 4: Split into components using OS path separator
-        let components: Vec<&str> = path_without_ext
-            .split(std::path::MAIN_SEPARATOR)
-            .filter(|s| !s.is_empty())
-            .collect();
+        // Steps 3-4: segments via the OS path parser, extension
+        // stripped from the stem. Splitting path TEXT on a separator
+        // literal leaves foreign separators inside a segment.
+        let mut segments: Vec<String> = Vec::new();
+        for component in path_without_src.components() {
+            match component {
+                std::path::Component::Normal(seg) => {
+                    segments.push(seg.to_string_lossy().into_owned())
+                }
+                _ => return None,
+            }
+        }
+        if let Some(last) = segments.pop() {
+            segments.push(strip_extension(&last, extensions).to_string());
+        }
 
         // Step 5: Format using language-specific rules
+        let components: Vec<&str> = segments.iter().map(String::as_str).collect();
         self.format_path_as_module(&components)
     }
 

@@ -192,14 +192,23 @@ impl LanguageBehavior for GdscriptBehavior {
         extensions: &[&str],
     ) -> Option<String> {
         let relative = file_path.strip_prefix(project_root).ok()?;
-        let path = relative.to_string_lossy().replace('\\', "/");
 
-        // Strip file extension using the provided extensions list
-        let path_without_ext = strip_extension(&path, extensions);
+        let mut segments: Vec<String> = Vec::new();
+        for component in relative.components() {
+            match component {
+                std::path::Component::Normal(seg) => {
+                    segments.push(seg.to_string_lossy().into_owned())
+                }
+                std::path::Component::CurDir => {}
+                _ => return None,
+            }
+        }
+        if let Some(last) = segments.pop() {
+            segments.push(strip_extension(&last, extensions).to_string());
+        }
 
-        let normalized = path_without_ext.trim_start_matches('/');
-
-        Some(format!("res://{normalized}"))
+        // res:// resource paths are '/'-joined on every platform
+        Some(format!("res://{}", segments.join("/")))
     }
 
     fn get_language(&self) -> Language {
@@ -326,5 +335,25 @@ impl LanguageBehavior for GdscriptBehavior {
 
         // Public symbols are visible
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // res:// derivation must segment on path components, not path
+    // text: resource paths are '/'-joined on every platform.
+    #[test]
+    fn module_segmentation_is_separator_agnostic() {
+        let behavior = GdscriptBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(&root.join("scripts").join("player.gd"), root, &["gd"]),
+            Some("res://scripts/player".to_string()),
+            "resource-path segmentation is component-wise on every platform"
+        );
     }
 }

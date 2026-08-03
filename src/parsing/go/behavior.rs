@@ -168,25 +168,19 @@ impl LanguageBehavior for GoBehavior {
                                     let canon_root =
                                         root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-                                    if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
-                                        // Get directory path (Go packages are directories)
-                                        let relative_str = relative.to_str()?;
-                                        let path_without_ext =
-                                            strip_extension(relative_str, extensions);
-                                        let dir_path = if let Some(parent) =
-                                            Path::new(path_without_ext).parent()
-                                        {
-                                            parent.to_str().unwrap_or("")
-                                        } else {
-                                            ""
-                                        };
-
-                                        // Combine baseUrl with relative directory
-                                        if dir_path.is_empty() {
+                                    if let Some(mut segments) =
+                                        crate::parsing::paths::relative_segments(
+                                            &canon_file,
+                                            &canon_root,
+                                        )
+                                    {
+                                        // Go packages are directories: the
+                                        // stem never contributes
+                                        segments.pop();
+                                        if segments.is_empty() {
                                             return Some(base_url.clone());
-                                        } else {
-                                            return Some(format!("{base_url}/{dir_path}"));
                                         }
+                                        return Some(format!("{base_url}/{}", segments.join("/")));
                                     }
                                 }
                             }
@@ -203,14 +197,31 @@ impl LanguageBehavior for GoBehavior {
             return cached_result;
         }
 
-        // Fallback: directory-based path (original behavior)
-        let relative_path = file_path
+        // Fallback: directory-based package (original behavior)
+        let stripped = file_path
             .strip_prefix(project_root)
             .ok()
-            .or_else(|| file_path.strip_prefix("./").ok())
-            .unwrap_or(file_path);
+            .or_else(|| file_path.strip_prefix("./").ok());
 
-        let path = relative_path.to_str()?;
+        if let Some(relative_path) = stripped {
+            let mut segments = Vec::new();
+            for component in relative_path.components() {
+                match component {
+                    std::path::Component::Normal(seg) => segments.push(seg.to_string_lossy()),
+                    _ => return None,
+                }
+            }
+            // Go packages are directories: the stem never contributes
+            segments.pop();
+            if segments.is_empty() {
+                return Some(".".to_string());
+            }
+            return Some(segments.join("/"));
+        }
+
+        // Out-of-tree without provider rules: unrooted files carry no
+        // meaningful package; legacy text emission preserved.
+        let path = file_path.to_str()?;
         let path_clean = path.trim_start_matches("./");
         let module_path = strip_extension(path_clean, extensions);
 
@@ -497,6 +508,26 @@ mod tests {
     use crate::Visibility;
     use crate::parsing::registry::LanguageId;
     use std::path::Path;
+
+    // Package derivation must segment on path components, not path
+    // text: native separators otherwise survive into the package path.
+    #[test]
+    fn fallback_package_segmentation_is_separator_agnostic() {
+        let behavior = GoBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(&root.join("pkg").join("util.go"), root, &["go"]),
+            Some("pkg".to_string()),
+            "package is the '/'-joined directory on every platform"
+        );
+        assert_eq!(
+            behavior.module_path_from_file(&root.join("main.go"), root, &["go"]),
+            Some(".".to_string()),
+            "root files land in the '.' package on every platform"
+        );
+    }
 
     #[test]
     fn test_module_separator() {

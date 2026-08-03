@@ -528,6 +528,26 @@ impl LanguageBehavior for RustBehavior {
 mod tests {
     use super::*;
 
+    // Pins the trait-default derivation rust inherits: segmentation is
+    // component-wise, so foreign separators in path text never survive
+    // into a module path (the `crate::widget/paint` class).
+    #[test]
+    fn default_module_segmentation_is_separator_agnostic() {
+        let behavior = RustBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root.join("src").join("widget").join("paint.rs"),
+                root,
+                &["rs"]
+            ),
+            Some("crate::widget::paint".to_string()),
+            "trait-default segmentation is component-wise on every platform"
+        );
+    }
+
     #[test]
     fn test_format_module_path() {
         let behavior = RustBehavior::new();

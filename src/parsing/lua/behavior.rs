@@ -77,13 +77,22 @@ impl LanguageBehavior for LuaBehavior {
             file_path
         };
 
-        let path = relative_path.to_str()?;
-        let path_clean = path.trim_start_matches("./");
-        let module_path = strip_extension(path_clean, extensions);
+        let mut segments: Vec<String> = Vec::new();
+        for component in relative_path.components() {
+            match component {
+                std::path::Component::Normal(seg) => {
+                    segments.push(seg.to_string_lossy().into_owned())
+                }
+                std::path::Component::CurDir => {}
+                _ => return None,
+            }
+        }
+        if let Some(last) = segments.pop() {
+            segments.push(strip_extension(&last, extensions).to_string());
+        }
 
-        // Convert path separators to dots (Lua module convention)
-        let module_path = module_path.replace(['/', '\\'], ".");
-
+        // Join with dots (Lua module convention)
+        let module_path = segments.join(".");
         if module_path.is_empty() {
             Some(".".to_string())
         } else {
@@ -251,6 +260,25 @@ mod tests {
     use super::*;
     use crate::Visibility;
     use tempfile::TempDir;
+
+    // Module derivation must segment on path components, not path
+    // text: native separators otherwise survive into the module path.
+    #[test]
+    fn fallback_module_segmentation_is_separator_agnostic() {
+        let behavior = LuaBehavior::new();
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root.join("a").join("b").join("core.lua"),
+                root,
+                &["lua"]
+            ),
+            Some("a.b.core".to_string()),
+            "fallback segmentation is component-wise on every platform"
+        );
+    }
 
     #[test]
     fn test_module_separator() {

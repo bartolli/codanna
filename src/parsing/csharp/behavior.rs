@@ -184,27 +184,20 @@ impl LanguageBehavior for CSharpBehavior {
                                     let canon_root =
                                         root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-                                    if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
-                                        // Get directory path (C# namespaces follow folder structure)
-                                        let relative_str = relative.to_str()?;
-                                        let path_without_ext =
-                                            strip_extension(relative_str, extensions);
-                                        let dir_path = if let Some(parent) =
-                                            Path::new(path_without_ext).parent()
-                                        {
-                                            parent.to_str().unwrap_or("")
-                                        } else {
-                                            ""
-                                        };
-
-                                        // Combine baseUrl with relative directory (dots for C#)
-                                        if dir_path.is_empty() {
+                                    if let Some(mut segments) =
+                                        crate::parsing::paths::relative_segments(
+                                            &canon_file,
+                                            &canon_root,
+                                        )
+                                    {
+                                        // C# namespaces follow folder
+                                        // structure: the stem never
+                                        // contributes
+                                        segments.pop();
+                                        if segments.is_empty() {
                                             return Some(base_url.clone());
-                                        } else {
-                                            let namespace_suffix =
-                                                dir_path.replace(['/', '\\'], ".");
-                                            return Some(format!("{base_url}.{namespace_suffix}"));
                                         }
+                                        return Some(format!("{base_url}.{}", segments.join(".")));
                                     }
                                 }
                             }
@@ -221,14 +214,37 @@ impl LanguageBehavior for CSharpBehavior {
             return cached_result;
         }
 
-        // Fallback: directory-based path (original behavior)
-        let relative_path = file_path
+        // Fallback: directory-based namespace (original behavior)
+        let stripped = file_path
             .strip_prefix(project_root)
             .ok()
-            .or_else(|| file_path.strip_prefix("./").ok())
-            .unwrap_or(file_path);
+            .or_else(|| file_path.strip_prefix("./").ok());
 
-        let path = relative_path.to_str()?;
+        if let Some(relative_path) = stripped {
+            let mut segments: Vec<String> = Vec::new();
+            for component in relative_path.components() {
+                match component {
+                    std::path::Component::Normal(seg) => {
+                        segments.push(seg.to_string_lossy().into_owned())
+                    }
+                    std::path::Component::CurDir => {}
+                    _ => return None,
+                }
+            }
+            for root_name in ["src", "lib"] {
+                while segments.len() > 1 && segments[0] == root_name {
+                    segments.remove(0);
+                }
+            }
+            if let Some(last) = segments.pop() {
+                segments.push(strip_extension(&last, extensions).to_string());
+            }
+            return Some(segments.join("."));
+        }
+
+        // Out-of-tree without provider rules: unrooted files carry no
+        // meaningful namespace; legacy text emission preserved.
+        let path = file_path.to_str()?;
         let path_without_prefix = path
             .trim_start_matches("./")
             .trim_start_matches("src/")
@@ -356,5 +372,29 @@ impl LanguageBehavior for CSharpBehavior {
         // Exact match or symbol is in a sub-namespace of the import
         import_path == symbol_module_path
             || symbol_module_path.starts_with(&format!("{import_path}."))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Namespace derivation must segment on path components, not path
+    // text: native separators otherwise survive into the namespace.
+    #[test]
+    fn fallback_namespace_segmentation_is_separator_agnostic() {
+        let behavior = CSharpBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root.join("src").join("Models").join("User.cs"),
+                root,
+                &["cs"]
+            ),
+            Some("Models.User".to_string()),
+            "fallback segmentation is component-wise on every platform"
+        );
     }
 }
