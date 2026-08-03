@@ -7,7 +7,11 @@
 #
 # Committed tree only (clones from the repo): commit before gating.
 # Cargo caches persist in named volumes; the first run compiles cold,
-# later runs are incremental.
+# later runs are incremental. The target volume grows without bound
+# (debug artifacts accumulate per run) and can exhaust the container
+# VM's disk -- when disk-pressured:
+#   docker volume rm codanna-linux-target
+# (next run recompiles cold; the registry volume stays small).
 #
 # Runs as a NON-ROOT user inside the container: permission-based
 # fault-injection tests are inert for root (root writes through a
