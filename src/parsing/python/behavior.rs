@@ -779,6 +779,31 @@ impl LanguageBehavior for PythonBehavior {
 mod tests {
     use super::*;
 
+    // Fallback module derivation must segment on path components, not
+    // the '/' literal: native separators otherwise survive into the
+    // module path (`pkg\util`), and import bindings starve against it.
+    // The path is built by join so its text carries the platform's
+    // native separators; the files never exist, which routes
+    // derivation onto the convention fallback.
+    #[test]
+    fn fallback_module_segmentation_is_separator_agnostic() {
+        let behavior = PythonBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let pkg = root.join("pkg");
+
+        assert_eq!(
+            behavior.module_path_from_file(&pkg.join("util.py"), root, &["py"]),
+            Some("pkg.util".to_string()),
+            "fallback segmentation is component-wise on every platform"
+        );
+        assert_eq!(
+            behavior.module_path_from_file(&pkg.join("__init__.py"), root, &["py"]),
+            Some("pkg".to_string()),
+            "__init__ collapses to its package on every platform"
+        );
+    }
+
     #[test]
     fn test_format_module_path() {
         let behavior = PythonBehavior::new();

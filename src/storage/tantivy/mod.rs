@@ -176,7 +176,14 @@ impl DocumentIndex {
                 if rel.as_os_str().is_empty() {
                     continue;
                 }
-                return Some(rel.to_string_lossy().into_owned());
+                // Emission contract: relative paths are portable-form (`/`)
+                // on every platform; stored bytes stay native.
+                let portable = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                return Some(portable);
             }
         }
         None
