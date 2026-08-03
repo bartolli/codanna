@@ -76,13 +76,13 @@ pub fn portable_target() -> i32 {
 fn write_settings(workspace: &Path, indexed_path: &Path) {
     let codanna_dir = workspace.join(".codanna");
     std::fs::create_dir_all(&codanna_dir).expect("create .codanna");
-    let indexed = indexed_path.to_str().expect("path is valid UTF-8");
+    let indexed = crate::common::toml_path_literal(indexed_path);
     let settings = format!(
         r#"
 index_path = ".codanna/index"
 
 [indexing]
-indexed_paths = ["{indexed}"]
+indexed_paths = [{indexed}]
 
 [semantic_search]
 enabled = false

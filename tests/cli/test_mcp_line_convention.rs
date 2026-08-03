@@ -99,12 +99,12 @@ fn setup(workspace: &Path) {
 index_path = ".codanna/index"
 
 [indexing]
-indexed_paths = ["{}"]
+indexed_paths = [{}]
 
 [semantic_search]
 enabled = false
 "#,
-        src_abs.to_str().expect("utf-8 path")
+        crate::common::toml_path_literal(&src_abs)
     );
     std::fs::write(codanna_dir.join("settings.toml"), settings).expect("write settings");
 

@@ -205,14 +205,14 @@ fn write_settings(workspace: &Path) {
         .join("src")
         .canonicalize()
         .expect("src dir should exist and be resolvable");
-    let src_path = src_abs.to_str().expect("src path should be valid UTF-8");
+    let src_path = crate::common::toml_path_literal(&src_abs);
 
     let settings = format!(
         r#"
 index_path = ".codanna/index"
 
 [indexing]
-indexed_paths = ["{src_path}"]
+indexed_paths = [{src_path}]
 
 [semantic_search]
 enabled = false
