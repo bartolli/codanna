@@ -17,12 +17,13 @@ If an earlier version processed a rename or deletion, relationships already lost
 - Files referencing a renamed, edited-and-renamed, or deleted target are re-analyzed in the same incremental run. A relationship survives only where the referencing file's imports and calls still support it: a rename plus content edit recovers the relationships its callers' evidence supports, and a stale import that still names the old path no longer retains its relationship.
 - `serve --watch` settles removal waves through the shared incremental lane. Directory events route by disk truth, so a directory rename reported as modify events with no per-file events still converges; genuine directory deletion still removes the subtree.
 - Watched file creation emits `notifications/resources/list_changed`; modification of a known file remains a URI-filtered `notifications/resources/updated`. Deleting a watched file emits one list-change notification, including when the file was created during the same watch session.
+- `serve --watch` no longer livelocks on Linux. inotify reports an open event for every directory read, including the watcher's own catch-up walks, so each walk triggered the next; the storm also starved the debounced-change drain, silencing reindexing and notifications. Access-class events are now ignored (they observe state, never change it), and the drain runs on a fixed cadence that sustained event streams cannot defer. The test suite now runs on Linux ahead of every release.
 
 ### Known Limitations
 
 - A symbol moved between two files that are both edited in one change set can lose its callers' relationships until those callers are next re-indexed; under-report only, heals on edit or `codanna index --force`.
 - Re-indexing after a rename or deletion re-analyzes every file that referenced the target; incremental latency scales with the number of referencing files.
-- Directory-rename, removal-wave, and list-change notification witnesses cover macOS/FSEvents; Linux/inotify remains unwitnessed.
+- On Windows, path handling degrades symbol resolution: some relationships that resolve on Linux and macOS are under-reported. Windows now runs in the test pipeline as a non-blocking witness; fixes are tracked for a later release.
 - A delete followed by recreation inside one debounce-and-refresh window can omit the recreation's second list-change notification.
 
 ## [0.13.0] - 2026-08-01
