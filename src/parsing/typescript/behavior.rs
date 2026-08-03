@@ -221,18 +221,17 @@ impl LanguageBehavior for TypeScriptBehavior {
         let tsconfig_dir = project_root.join(config_path.parent()?);
         tracing::debug!("[typescript] module_path_from_file tsconfig_dir={tsconfig_dir:?}");
 
-        // Compute path relative to the tsconfig's directory
-        let relative_path = file_path.strip_prefix(&tsconfig_dir).ok()?;
-        let path = relative_path.to_str()?;
+        // Compute segments relative to the tsconfig's directory
+        let mut segments = crate::parsing::paths::relative_segments(file_path, &tsconfig_dir)?;
+        let last = segments.pop()?;
+        let stem = strip_extension(&last, extensions);
+        segments.push(stem.to_string());
 
-        // Remove file extensions using the provided extensions list
-        let path_without_ext = strip_extension(path.trim_start_matches("./"), extensions);
-
-        // Handle /index suffix (directory imports)
-        let module_path = path_without_ext.trim_end_matches("/index");
-
-        // Replace path separators with module separators
-        let result = module_path.replace('/', ".");
+        // index collapses to its directory (directory imports)
+        while segments.len() > 1 && segments.last().is_some_and(|s| s == "index") {
+            segments.pop();
+        }
+        let result = segments.join(".");
 
         tracing::debug!(
             "[typescript] module_path_from_file file_path={file_path:?} -> module_path={result}"

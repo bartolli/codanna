@@ -49,6 +49,26 @@ pub fn strip_source_root_owned(path: &Path, source_roots: &[&str]) -> PathBuf {
     strip_source_root(path, source_roots).to_path_buf()
 }
 
+/// Relative path segments of `path` below `base`, split by the OS
+/// path parser.
+///
+/// The language-agnostic half of module derivation: behaviors apply
+/// their conventions (join separator, package-file collapse,
+/// source-root names) over these segments and never over path text.
+/// Returns `None` when `path` is not below `base` or escapes it;
+/// `Some(vec![])` when `path` equals `base`.
+pub fn relative_segments(path: &Path, base: &Path) -> Option<Vec<String>> {
+    let rel = path.strip_prefix(base).ok()?;
+    let mut segments = Vec::new();
+    for component in rel.components() {
+        match component {
+            std::path::Component::Normal(seg) => segments.push(seg.to_string_lossy().into_owned()),
+            _ => return None,
+        }
+    }
+    Some(segments)
+}
+
 /// Strip file extension from a path string.
 ///
 /// Extensions from the registry do NOT include the dot (e.g., "rs", "py").
@@ -137,6 +157,46 @@ mod tests {
         let result = strip_source_root(path, source_roots);
 
         assert_eq!(result, path);
+    }
+
+    #[test]
+    fn test_relative_segments_below_base() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+        let path = base.join("pkg").join("util.py");
+
+        assert_eq!(
+            relative_segments(&path, base),
+            Some(vec!["pkg".to_string(), "util.py".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_relative_segments_outside_base_is_none() {
+        let temp_dir = TempDir::new().unwrap();
+        let other = TempDir::new().unwrap();
+
+        assert_eq!(
+            relative_segments(&other.path().join("x.rs"), temp_dir.path()),
+            None
+        );
+    }
+
+    #[test]
+    fn test_relative_segments_at_base_is_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+
+        assert_eq!(relative_segments(base, base), Some(vec![]));
+    }
+
+    #[test]
+    fn test_relative_segments_traversal_is_none() {
+        let temp_dir = TempDir::new().unwrap();
+        let base = temp_dir.path();
+        let path = base.join("..").join("x.rs");
+
+        assert_eq!(relative_segments(&path, base), None);
     }
 
     #[test]

@@ -168,17 +168,21 @@ impl LanguageBehavior for JavaScriptBehavior {
                         "[javascript] module_path_from_file jsconfig_dir={jsconfig_dir:?}"
                     );
 
-                    // Compute path relative to the jsconfig's directory
-                    if let Ok(relative_path) = file_path.strip_prefix(&jsconfig_dir) {
-                        if let Some(path) = relative_path.to_str() {
-                            // Strip extension using the provided extensions list
-                            let path_without_ext =
-                                strip_extension(path.trim_start_matches("./"), extensions);
+                    // Compute segments relative to the jsconfig's directory
+                    if let Some(mut segments) =
+                        crate::parsing::paths::relative_segments(file_path, &jsconfig_dir)
+                    {
+                        if let Some(last) = segments.pop() {
+                            let stem = strip_extension(&last, extensions);
+                            segments.push(stem.to_string());
 
-                            // Handle /index suffix (directory imports)
-                            let module_path = path_without_ext.trim_end_matches("/index");
-
-                            let result = module_path.replace('/', ".");
+                            // index collapses to its directory (directory imports)
+                            while segments.len() > 1
+                                && segments.last().is_some_and(|s| s == "index")
+                            {
+                                segments.pop();
+                            }
+                            let result = segments.join(".");
 
                             tracing::debug!(
                                 "[javascript] module_path_from_file file_path={file_path:?} -> module_path={result}"
@@ -191,18 +195,17 @@ impl LanguageBehavior for JavaScriptBehavior {
             }
         }
 
-        // Fallback: simple path-based module resolution
-        let relative_path = file_path.strip_prefix(project_root).ok()?;
-        let path = relative_path.to_str()?;
+        // Fallback: simple segment-based module resolution
+        let mut segments = crate::parsing::paths::relative_segments(file_path, project_root)?;
+        let last = segments.pop()?;
+        let stem = strip_extension(&last, extensions);
+        segments.push(stem.to_string());
 
-        // Strip extension using the provided extensions list
-        let path_without_ext = strip_extension(path.trim_start_matches("./"), extensions);
-
-        // Handle /index suffix (directory imports)
-        let module_path = path_without_ext.trim_end_matches("/index");
-
-        // Replace path separators with module separators
-        let result = module_path.replace('/', ".");
+        // index collapses to its directory (directory imports)
+        while segments.len() > 1 && segments.last().is_some_and(|s| s == "index") {
+            segments.pop();
+        }
+        let result = segments.join(".");
 
         tracing::debug!(
             "[javascript] module_path_from_file file_path={file_path:?} -> module_path={result}"
@@ -552,5 +555,35 @@ impl LanguageBehavior for JavaScriptBehavior {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Fallback module derivation must segment on path components, not
+    // the '/' literal: native separators otherwise survive into the
+    // module path and import bindings starve against it.
+    #[test]
+    fn fallback_module_segmentation_is_separator_agnostic() {
+        let behavior = JavaScriptBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(&root.join("components").join("App.js"), root, &["js"]),
+            Some("components.App".to_string()),
+            "fallback segmentation is component-wise on every platform"
+        );
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root.join("components").join("index.js"),
+                root,
+                &["js"]
+            ),
+            Some("components".to_string()),
+            "index collapses to its directory on every platform"
+        );
     }
 }

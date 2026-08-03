@@ -3,7 +3,6 @@
 use crate::parsing::LanguageBehavior;
 use crate::parsing::ResolutionScope;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
-use crate::parsing::paths::strip_extension;
 use crate::parsing::{Import, InheritanceResolver};
 use crate::symbol::ScopeContext;
 use crate::types::compact_string;
@@ -211,7 +210,7 @@ impl LanguageBehavior for KotlinBehavior {
         &self,
         file_path: &Path,
         project_root: &Path,
-        extensions: &[&str],
+        _extensions: &[&str],
     ) -> Option<String> {
         use crate::project_resolver::persist::ResolutionPersistence;
         use std::cell::RefCell;
@@ -273,28 +272,27 @@ impl LanguageBehavior for KotlinBehavior {
 
         // Fallback: convention-based prefix stripping, also package-grained
         // (stem dropped) so the package matcher holds in both modes.
-        let relative = file_path.strip_prefix(project_root).ok()?;
-        let path = relative.to_string_lossy().replace('\\', "/");
+        let mut segments = crate::parsing::paths::relative_segments(file_path, project_root)?;
 
-        // Strip file extension using the provided extensions list
-        let path_without_ext = strip_extension(&path, extensions);
+        // Package-grained: the file stem never contributes; files directly
+        // under the source root land in the default package (empty path).
+        segments.pop();
 
-        // Strip common Kotlin source directories
-        let path_stripped = path_without_ext
-            .trim_start_matches("src/main/kotlin/")
-            .trim_start_matches("src/main/java/")
-            .trim_start_matches("src/test/kotlin/")
-            .trim_start_matches("src/test/java/")
-            .trim_start_matches("src/");
+        // Strip common Kotlin source-root segment runs
+        for prefix in [
+            ["src", "main", "kotlin"].as_slice(),
+            ["src", "main", "java"].as_slice(),
+            ["src", "test", "kotlin"].as_slice(),
+            ["src", "test", "java"].as_slice(),
+            ["src"].as_slice(),
+        ] {
+            while segments.len() >= prefix.len() && segments.iter().zip(prefix).all(|(s, p)| s == p)
+            {
+                segments.drain(..prefix.len());
+            }
+        }
 
-        // Drop the file stem; files directly under the source root land
-        // in the default package (empty module path).
-        let package = match path_stripped.rsplit_once('/') {
-            Some((dirs, _stem)) => dirs.replace('/', "."),
-            None => String::new(),
-        };
-
-        Some(package)
+        Some(segments.join("."))
     }
 
     fn get_language(&self) -> Language {
@@ -413,6 +411,32 @@ impl LanguageBehavior for KotlinBehavior {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Package derivation must segment on path components, not the '/'
+    // literal: native separators otherwise survive into the package.
+    #[test]
+    fn fallback_package_segmentation_is_separator_agnostic() {
+        let behavior = KotlinBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root
+                    .join("src")
+                    .join("main")
+                    .join("kotlin")
+                    .join("com")
+                    .join("example")
+                    .join("User.kt"),
+                root,
+                &["kt"]
+            ),
+            Some("com.example".to_string()),
+            "fallback segmentation is component-wise and package-grained \
+             on every platform"
+        );
+    }
 
     #[test]
     fn test_parse_visibility() {

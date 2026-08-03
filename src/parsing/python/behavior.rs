@@ -335,86 +335,88 @@ impl LanguageBehavior for PythonBehavior {
         }
 
         // Try cached resolution first
-        let cached_result = RULES_CACHE.with(|cache| {
-            let mut cache_ref = cache.borrow_mut();
+        let cached_result =
+            RULES_CACHE.with(|cache| {
+                let mut cache_ref = cache.borrow_mut();
 
-            // Check if cache needs reload (>1 second old or empty)
-            let needs_reload = cache_ref
-                .as_ref()
-                .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
-                .unwrap_or(true);
+                // Check if cache needs reload (>1 second old or empty)
+                let needs_reload = cache_ref
+                    .as_ref()
+                    .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
+                    .unwrap_or(true);
 
-            // Load from disk if needed
-            if needs_reload {
-                let persistence =
-                    ResolutionPersistence::new(std::path::Path::new(crate::init::local_dir_name()));
-                if let Ok(index) = persistence.load("python") {
-                    *cache_ref = Some((Instant::now(), index));
-                } else {
-                    *cache_ref = None;
+                // Load from disk if needed
+                if needs_reload {
+                    let persistence = ResolutionPersistence::new(std::path::Path::new(
+                        crate::init::local_dir_name(),
+                    ));
+                    if let Ok(index) = persistence.load("python") {
+                        *cache_ref = Some((Instant::now(), index));
+                    } else {
+                        *cache_ref = None;
+                    }
                 }
-            }
 
-            // Get module path from cached rules
-            // Returns: (module_path, fallback_project_dir)
-            if let Some((_, ref index)) = *cache_ref {
-                // Canonicalize file path for matching
-                if let Ok(canon_file) = file_path.canonicalize() {
-                    // Find config that applies to this file
-                    if let Some(config_path) = index.get_config_for_file(&canon_file) {
-                        // Get project directory (parent of config file) for fallback
-                        let project_dir = config_path.parent().map(|p| p.to_path_buf());
+                // Get module path from cached rules
+                // Returns: (module_path, fallback_project_dir)
+                if let Some((_, ref index)) = *cache_ref {
+                    // Canonicalize file path for matching
+                    if let Ok(canon_file) = file_path.canonicalize() {
+                        // Find config that applies to this file
+                        if let Some(config_path) = index.get_config_for_file(&canon_file) {
+                            // Get project directory (parent of config file) for fallback
+                            let project_dir = config_path.parent().map(|p| p.to_path_buf());
 
-                        if let Some(rules) = index.rules.get(config_path) {
-                            // Sort source roots by length (longest first) for proper prefix matching
-                            let mut roots: Vec<_> = rules.paths.keys().collect();
-                            roots.sort_by_key(|k| std::cmp::Reverse(k.len()));
+                            if let Some(rules) = index.rules.get(config_path) {
+                                // Sort source roots by length (longest first) for proper prefix matching
+                                let mut roots: Vec<_> = rules.paths.keys().collect();
+                                roots.sort_by_key(|k| std::cmp::Reverse(k.len()));
 
-                            // Extract module from file path using source roots
-                            for root_path in roots {
-                                let root = std::path::Path::new(root_path);
-                                let canon_root =
-                                    root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+                                // Extract module from file path using source roots
+                                for root_path in roots {
+                                    let root = std::path::Path::new(root_path);
+                                    let canon_root =
+                                        root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-                                if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
-                                    // Convert to module path
-                                    let Some(path_str) = relative.to_str() else {
-                                        continue;
-                                    };
-                                    let path_without_ext = strip_extension(path_str, extensions);
+                                    if let Some(mut segments) =
+                                        crate::parsing::paths::relative_segments(
+                                            &canon_file,
+                                            &canon_root,
+                                        )
+                                    {
+                                        // __init__ represents its package: the
+                                        // stem contributes no segment.
+                                        let module_path = match segments.pop() {
+                                            Some(last) => {
+                                                let stem = strip_extension(&last, extensions);
+                                                if stem != "__init__" {
+                                                    segments.push(stem.to_string());
+                                                }
+                                                segments.join(".")
+                                            }
+                                            None => String::new(),
+                                        };
 
-                                    // Handle __init__.py - it represents the package itself
-                                    let module_path = if path_without_ext.ends_with("/__init__") {
-                                        path_without_ext
-                                            .strip_suffix("/__init__")
-                                            .unwrap_or(path_without_ext)
-                                    } else {
-                                        path_without_ext
-                                    };
-
-                                    // Convert path separators to dots
-                                    let module_path = module_path.replace(['/', '\\'], ".");
-
-                                    // Handle special cases
-                                    if module_path.is_empty() || module_path == "__init__" {
-                                        return (None, project_dir);
-                                    } else if module_path == "__main__" || module_path == "main" {
-                                        return (Some("__main__".to_string()), None);
-                                    } else {
-                                        return (Some(module_path), None);
+                                        if module_path.is_empty() {
+                                            return (None, project_dir);
+                                        } else if module_path == "__main__" || module_path == "main"
+                                        {
+                                            return (Some("__main__".to_string()), None);
+                                        } else {
+                                            return (Some(module_path), None);
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        // Config matched but no source root matched - return project dir for fallback
-                        return (None, project_dir);
+                            // Config matched but no source root matched - return project dir for fallback
+                            return (None, project_dir);
+                        }
                     }
                 }
-            }
 
-            (None, None)
-        });
+                (None, None)
+            });
 
         // Return cached result if found
         if let (Some(module_path), _) = &cached_result {
@@ -424,36 +426,24 @@ impl LanguageBehavior for PythonBehavior {
         // Use project directory from config if available, otherwise workspace root
         let fallback_root = cached_result.1.as_deref().unwrap_or(project_root);
 
-        // Fallback: convention-based path stripping
-        let relative_path = file_path.strip_prefix(fallback_root).ok()?;
-        let path_str = relative_path.to_str()?;
+        // Fallback: convention-based segment stripping
+        let mut segments = crate::parsing::paths::relative_segments(file_path, fallback_root)?;
 
-        // Remove common Python source directories if present
-        let path_without_src = path_str
-            .strip_prefix("src/")
-            .or_else(|| path_str.strip_prefix("lib/"))
-            .or_else(|| path_str.strip_prefix("app/"))
-            .or_else(|| path_str.strip_prefix("python/"))
-            .unwrap_or(path_str);
+        // Remove a common Python source-root segment if present
+        if segments.len() > 1 && matches!(segments[0].as_str(), "src" | "lib" | "app" | "python") {
+            segments.remove(0);
+        }
 
-        // Remove extension using passed extensions from settings.toml
-        let path_without_ext = strip_extension(path_without_src, extensions);
-
-        // Handle __init__.py - it represents the package itself
-        let module_path = if path_without_ext.ends_with("/__init__") {
-            path_without_ext
-                .strip_suffix("/__init__")
-                .unwrap_or(path_without_ext)
-                .to_string()
-        } else {
-            path_without_ext.to_string()
-        };
-
-        // Convert path separators to Python module separators
-        let module_path = module_path.replace('/', ".");
+        // __init__ represents its package: the stem contributes no segment
+        let last = segments.pop()?;
+        let stem = strip_extension(&last, extensions);
+        if stem != "__init__" {
+            segments.push(stem.to_string());
+        }
+        let module_path = segments.join(".");
 
         // Handle special cases
-        if module_path.is_empty() || module_path == "__init__" {
+        if module_path.is_empty() {
             None
         } else if module_path == "__main__" || module_path == "main" {
             Some("__main__".to_string())

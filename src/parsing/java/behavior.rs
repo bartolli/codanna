@@ -313,27 +313,21 @@ impl LanguageBehavior for JavaBehavior {
                     // Canonicalize root path if it exists (runtime resolution)
                     let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-                    if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
-                        // Convert path to package: com/example/Foo.java → com.example
-                        // Use parent() to get directory (strips file name including extension)
-                        let package_path = relative
-                            .parent()?
-                            .to_string_lossy()
-                            .replace(['/', '\\'], ".");
-
-                        return Some(package_path);
+                    if let Some(mut segments) =
+                        crate::parsing::paths::relative_segments(&canon_file, &canon_root)
+                    {
+                        // Package-grained: com/example/Foo.java -> com.example
+                        segments.pop()?;
+                        return Some(segments.join("."));
                     }
                 }
             }
 
             // Fallback: use project_root-based resolution
-            let relative = file_path.strip_prefix(project_root).ok()?;
-            let package_path = relative
-                .parent()?
-                .to_string_lossy()
-                .replace(['/', '\\'], ".");
-
-            Some(package_path)
+            let mut segments = crate::parsing::paths::relative_segments(file_path, project_root)?;
+            // Package-grained: the file stem never contributes
+            segments.pop()?;
+            Some(segments.join("."))
         })
     }
 

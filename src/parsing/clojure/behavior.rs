@@ -116,25 +116,25 @@ impl LanguageBehavior for ClojureBehavior {
         _extensions: &[&str],
     ) -> Option<String> {
         // Convert src/my/namespace/core.clj -> my.namespace.core
-        let relative = file_path.strip_prefix(project_root).ok()?;
+        let mut segments = crate::parsing::paths::relative_segments(file_path, project_root)?;
 
-        // Remove src/ prefix if present
-        let path_str = relative.to_string_lossy();
-        let without_src = path_str
-            .strip_prefix("src/")
-            .or_else(|| path_str.strip_prefix("src\\"))
-            .unwrap_or(&path_str);
+        // Remove a src source-root segment if present
+        if segments.len() > 1 && segments[0] == "src" {
+            segments.remove(0);
+        }
 
-        // Remove extension and convert path separators to dots
-        let without_ext = without_src
+        // Remove extension from the stem
+        let last = segments.pop()?;
+        let stem = last
             .strip_suffix(".clj")
-            .or_else(|| without_src.strip_suffix(".cljc"))
-            .or_else(|| without_src.strip_suffix(".cljs"))
-            .or_else(|| without_src.strip_suffix(".edn"))
-            .unwrap_or(without_src);
+            .or_else(|| last.strip_suffix(".cljc"))
+            .or_else(|| last.strip_suffix(".cljs"))
+            .or_else(|| last.strip_suffix(".edn"))
+            .unwrap_or(&last);
+        segments.push(stem.to_string());
 
-        // Convert slashes to dots, underscores to hyphens (Clojure convention)
-        let module_path = without_ext.replace(['/', '\\'], ".").replace('_', "-");
+        // Join with dots, underscores to hyphens (Clojure convention)
+        let module_path = segments.join(".").replace('_', "-");
 
         if module_path.is_empty() {
             None
@@ -230,6 +230,29 @@ impl LanguageBehavior for ClojureBehavior {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Module derivation must segment on path components, not the '/'
+    // literal: native separators otherwise survive into the namespace.
+    #[test]
+    fn fallback_module_segmentation_is_separator_agnostic() {
+        let behavior = ClojureBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root
+                    .join("src")
+                    .join("my")
+                    .join("name_space")
+                    .join("core.clj"),
+                root,
+                &[]
+            ),
+            Some("my.name-space.core".to_string()),
+            "fallback segmentation is component-wise on every platform"
+        );
+    }
 
     #[test]
     fn test_format_module_path() {

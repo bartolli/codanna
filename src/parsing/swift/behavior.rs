@@ -148,79 +148,83 @@ impl LanguageBehavior for SwiftBehavior {
         }
 
         // Try cached resolution first
-        let cached_result = RULES_CACHE.with(|cache| {
-            let mut cache_ref = cache.borrow_mut();
+        let cached_result =
+            RULES_CACHE.with(|cache| {
+                let mut cache_ref = cache.borrow_mut();
 
-            // Check if cache needs reload (>1 second old or empty)
-            let needs_reload = cache_ref
-                .as_ref()
-                .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
-                .unwrap_or(true);
+                // Check if cache needs reload (>1 second old or empty)
+                let needs_reload = cache_ref
+                    .as_ref()
+                    .map(|(ts, _)| ts.elapsed() >= Duration::from_secs(1))
+                    .unwrap_or(true);
 
-            // Load from disk if needed
-            if needs_reload {
-                let persistence =
-                    ResolutionPersistence::new(std::path::Path::new(crate::init::local_dir_name()));
-                if let Ok(index) = persistence.load("swift") {
-                    *cache_ref = Some((Instant::now(), index));
-                } else {
-                    *cache_ref = None;
+                // Load from disk if needed
+                if needs_reload {
+                    let persistence = ResolutionPersistence::new(std::path::Path::new(
+                        crate::init::local_dir_name(),
+                    ));
+                    if let Ok(index) = persistence.load("swift") {
+                        *cache_ref = Some((Instant::now(), index));
+                    } else {
+                        *cache_ref = None;
+                    }
                 }
-            }
 
-            // Get module path from cached rules
-            if let Some((_, ref index)) = *cache_ref {
-                // Canonicalize file path for matching
-                if let Ok(canon_file) = file_path.canonicalize() {
-                    // Find config that applies to this file
-                    if let Some(config_path) = index.get_config_for_file(&canon_file) {
-                        if let Some(rules) = index.rules.get(config_path) {
-                            // Extract module from file path using source roots
-                            for root_path in rules.paths.keys() {
-                                let root = std::path::Path::new(root_path);
-                                let canon_root =
-                                    root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+                // Get module path from cached rules
+                if let Some((_, ref index)) = *cache_ref {
+                    // Canonicalize file path for matching
+                    if let Ok(canon_file) = file_path.canonicalize() {
+                        // Find config that applies to this file
+                        if let Some(config_path) = index.get_config_for_file(&canon_file) {
+                            if let Some(rules) = index.rules.get(config_path) {
+                                // Extract module from file path using source roots
+                                for root_path in rules.paths.keys() {
+                                    let root = std::path::Path::new(root_path);
+                                    let canon_root =
+                                        root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
-                                if let Ok(relative) = canon_file.strip_prefix(&canon_root) {
-                                    // Convert path to module: MyModule/Types/User.swift -> MyModule.Types
-                                    if let Some(parent) = relative.parent() {
-                                        let module_path =
-                                            parent.to_string_lossy().replace(['/', '\\'], ".");
-                                        return Some(module_path);
+                                    if let Some(mut segments) =
+                                        crate::parsing::paths::relative_segments(
+                                            &canon_file,
+                                            &canon_root,
+                                        )
+                                    {
+                                        // Package-grained: MyModule/Types/User.swift -> MyModule.Types
+                                        if segments.pop().is_some() {
+                                            return Some(segments.join("."));
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            None
-        });
+                None
+            });
 
         // Return cached result if found
         if cached_result.is_some() {
             return cached_result;
         }
 
-        // Fallback: convention-based path stripping
-        let relative = file_path.strip_prefix(project_root).ok()?;
-        let path = relative.to_string_lossy().replace('\\', "/");
+        // Fallback: convention-based segment stripping
+        let mut segments = crate::parsing::paths::relative_segments(file_path, project_root)?;
 
-        // Strip file extension using the provided extensions list
-        let path_without_ext = strip_extension(&path, extensions);
+        // Strip file extension from the stem
+        if let Some(last) = segments.pop() {
+            let stem = strip_extension(&last, extensions);
+            segments.push(stem.to_string());
+        }
 
-        // Strip common Swift source directories
-        let path_stripped = path_without_ext
-            .trim_start_matches("Sources/")
-            .trim_start_matches("Source/")
-            .trim_start_matches("src/")
-            .trim_start_matches("Tests/");
+        // Strip common Swift source-root segments
+        for root_name in ["Sources", "Source", "src", "Tests"] {
+            while segments.len() > 1 && segments[0] == root_name {
+                segments.remove(0);
+            }
+        }
 
-        // Convert path separators to dots
-        let module_path = path_stripped.replace('/', ".");
-
-        Some(module_path)
+        Some(segments.join("."))
     }
 
     fn get_language(&self) -> Language {
@@ -450,6 +454,25 @@ impl LanguageBehavior for SwiftBehavior {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Module derivation must segment on path components, not the '/'
+    // literal: native separators otherwise survive into the module path.
+    #[test]
+    fn fallback_module_segmentation_is_separator_agnostic() {
+        let behavior = SwiftBehavior::new();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        assert_eq!(
+            behavior.module_path_from_file(
+                &root.join("Sources").join("MyModule").join("User.swift"),
+                root,
+                &["swift"]
+            ),
+            Some("MyModule.User".to_string()),
+            "fallback segmentation is component-wise on every platform"
+        );
+    }
 
     #[test]
     fn test_parse_visibility_fallback() {
