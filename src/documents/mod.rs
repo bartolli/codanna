@@ -37,7 +37,7 @@ pub fn load_from_settings(settings: &Settings) -> Option<Arc<RwLock<DocumentStor
 
     let doc_path = settings.index_path.join("documents");
     if !doc_path.exists() {
-        tracing::debug!(target: "documents", "document index not found at {}", doc_path.display());
+        tracing::debug!(target: "documents", "document index not found at {}", crate::parsing::paths::render_absolute_path(&doc_path).display());
         return None;
     }
 
@@ -67,6 +67,6 @@ pub fn load_from_settings(settings: &Settings) -> Option<Arc<RwLock<DocumentStor
         }
     };
 
-    tracing::info!(target: "documents", "loaded document store from {}", doc_path.display());
+    tracing::info!(target: "documents", "loaded document store from {}", crate::parsing::paths::render_absolute_path(&doc_path).display());
     Some(Arc::new(RwLock::new(store_with_emb)))
 }

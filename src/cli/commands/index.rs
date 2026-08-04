@@ -78,7 +78,7 @@ pub fn run(
                         SkipReason::CoveredBy(parent) => println!(
                             "{}: Included in indexed directory {}",
                             skipped.path.display(),
-                            parent.display()
+                            crate::parsing::paths::render_absolute_path(parent).display()
                         ),
                         // Registration state, not index state: the path is
                         // already in indexed_paths. Saying "already indexed"
@@ -147,7 +147,10 @@ pub fn run(
         } else if path.is_dir() {
             total_indexed += index_directory(indexer, path, progress, dry_run, force, max_files);
         } else {
-            eprintln!("Error: Path does not exist: {}", path.display());
+            eprintln!(
+                "Error: Path does not exist: {}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
             std::process::exit(1);
         }
     }
@@ -181,13 +184,13 @@ fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) -> 
             if result.is_cached() {
                 println!(
                     "Successfully loaded from cache: {} [{}]",
-                    path.display(),
+                    crate::parsing::paths::render_absolute_path(path).display(),
                     language_name
                 );
             } else {
                 println!(
                     "Successfully indexed: {} [{}]",
-                    path.display(),
+                    crate::parsing::paths::render_absolute_path(path).display(),
                     language_name
                 );
             }
@@ -224,7 +227,10 @@ fn index_single_file(indexer: &mut IndexFacade, path: &PathBuf, force: bool) -> 
             was_indexed
         }
         Err(e) => {
-            eprintln!("Error indexing file {}: {e}", path.display());
+            eprintln!(
+                "Error indexing file {}: {e}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
 
             let suggestions = e.recovery_suggestions();
             if !suggestions.is_empty() {
@@ -255,7 +261,7 @@ fn index_directory(
     if let Some(max) = max_files {
         eprintln!(
             "Indexing directory: {} (limited to {} files)",
-            path.display(),
+            crate::parsing::paths::render_absolute_path(path).display(),
             max
         );
     }
@@ -275,12 +281,18 @@ fn index_directory(
             }
             // Print message only when no work happened (pipeline trace handles the rest)
             if stats.files_indexed == 0 && stats.files_removed == 0 {
-                eprintln!("Index up to date: {}", path.display());
+                eprintln!(
+                    "Index up to date: {}",
+                    crate::parsing::paths::render_absolute_path(path).display()
+                );
             }
             stats.files_indexed
         }
         Err(e) => {
-            eprintln!("Error indexing directory {}: {e}", path.display());
+            eprintln!(
+                "Error indexing directory {}: {e}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
 
             let suggestions = e.recovery_suggestions();
             if !suggestions.is_empty() {
@@ -304,7 +316,10 @@ fn save_index(indexer: &mut IndexFacade, persistence: &IndexPersistence, config:
     );
     match persistence.save_facade(indexer) {
         Ok(_) => {
-            println!("Index saved to: {}", config.index_path.display());
+            println!(
+                "Index saved to: {}",
+                crate::parsing::paths::render_absolute_path(&config.index_path).display()
+            );
         }
         Err(e) => {
             eprintln!("Error: Could not save index: {e}");

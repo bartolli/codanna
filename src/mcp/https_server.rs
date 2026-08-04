@@ -131,7 +131,7 @@ pub async fn serve_https(config: crate::Settings, watch: bool, bind: String) -> 
                     "watcher",
                     "started",
                     "debounce: {debounce_ms}ms, config: {}",
-                    settings_path.display()
+                    crate::parsing::paths::render_absolute_path(&settings_path).display()
                 );
             }
             Err(e) => {
@@ -582,7 +582,10 @@ async fn get_or_create_certificate(bind: &str) -> anyhow::Result<(Vec<u8>, Vec<u
     eprintln!();
     eprintln!("🔐 Certificate Details:");
     eprintln!("   - Type: Self-Signed TLS Certificate");
-    eprintln!("   - Location: {}", cert_path.display());
+    eprintln!(
+        "   - Location: {}",
+        crate::parsing::paths::render_absolute_path(&cert_path).display()
+    );
     eprintln!("   - Fingerprint: {fingerprint_hex}");
     eprintln!("   - Valid for: {}", subject_alt_names.join(", "));
     eprintln!();
@@ -591,11 +594,14 @@ async fn get_or_create_certificate(bind: &str) -> anyhow::Result<(Vec<u8>, Vec<u
     eprintln!("   Option 1: Command line (requires sudo):");
     eprintln!(
         "   sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain {}",
-        cert_path.display()
+        crate::parsing::paths::render_absolute_path(&cert_path).display()
     );
     eprintln!();
     eprintln!("   Option 2: GUI (recommended):");
-    eprintln!("   1. Open Finder and navigate to: {}", cert_dir.display());
+    eprintln!(
+        "   1. Open Finder and navigate to: {}",
+        crate::parsing::paths::render_absolute_path(&cert_dir).display()
+    );
     eprintln!("   2. Double-click 'server.pem'");
     eprintln!("   3. Add to 'System' keychain");
     eprintln!("   4. Set to 'Always Trust' for SSL");

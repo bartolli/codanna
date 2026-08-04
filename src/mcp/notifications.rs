@@ -20,8 +20,11 @@ pub enum FileChangeEvent {
 /// must byte-match the subscription on every platform. Non-Normal
 /// path shapes fall back to display text.
 pub fn resource_uri(path: &std::path::Path) -> String {
-    let portable =
-        crate::parsing::paths::portable_join(path).unwrap_or_else(|| path.display().to_string());
+    let portable = crate::parsing::paths::portable_join(path).unwrap_or_else(|| {
+        crate::parsing::paths::render_absolute_path(path)
+            .display()
+            .to_string()
+    });
     format!("file://{portable}")
 }
 
@@ -85,7 +88,11 @@ impl super::CodeIntelligenceServer {
                                 // Portable-form: the wire path and URI must
                                 // byte-match subscriptions on every platform
                                 let path_str = crate::parsing::paths::portable_join(&path)
-                                    .unwrap_or_else(|| path.display().to_string());
+                                    .unwrap_or_else(|| {
+                                        crate::parsing::paths::render_absolute_path(&path)
+                                            .display()
+                                            .to_string()
+                                    });
 
                                 // Send standard MCP resource updated notification (backwards compatible)
                                 let _ = peer
@@ -122,7 +129,7 @@ impl super::CodeIntelligenceServer {
                                     "mcp-notify",
                                     "sent",
                                     "FileCreated {}",
-                                    path.display()
+                                    crate::parsing::paths::render_absolute_path(&path).display()
                                 );
                             }
                             FileChangeEvent::FileDeleted { path } => {
@@ -132,7 +139,7 @@ impl super::CodeIntelligenceServer {
                                     "mcp-notify",
                                     "sent",
                                     "FileDeleted {}",
-                                    path.display()
+                                    crate::parsing::paths::render_absolute_path(&path).display()
                                 );
                             }
                             FileChangeEvent::IndexReloaded => {

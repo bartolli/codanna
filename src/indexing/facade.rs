@@ -1218,7 +1218,10 @@ impl IndexFacade {
             println!("Would index {total_files} files:");
             for (i, file_path) in files.iter().enumerate() {
                 if i < 5 {
-                    println!("  {}", file_path.display());
+                    println!(
+                        "  {}",
+                        crate::parsing::paths::render_absolute_path(file_path).display()
+                    );
                 } else if i == 5 && total_files > 5 {
                     println!("  ... and {} more files", total_files - 5);
                     break;
@@ -1298,7 +1301,10 @@ impl IndexFacade {
         for path in &to_add {
             // Visual separator and directory label (stderr syncs with progress bars)
             eprintln!();
-            eprintln!("Indexing directory: {}", path.display());
+            eprintln!(
+                "Indexing directory: {}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
 
             // Count files first for accurate progress bar
             let file_count = if progress {

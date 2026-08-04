@@ -1167,13 +1167,13 @@ pub struct Phase1Options {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
-    #[error("Failed to read file {path}: {source}")]
+    #[error("Failed to read file {}: {source}", crate::parsing::paths::render_absolute_path(.path).display())]
     FileRead {
         path: PathBuf,
         source: std::io::Error,
     },
 
-    #[error("Failed to parse file {path}: {reason}")]
+    #[error("Failed to parse file {}: {reason}", crate::parsing::paths::render_absolute_path(.path).display())]
     Parse { path: PathBuf, reason: String },
 
     /// Parser could not be constructed for a language (configuration
@@ -1185,7 +1185,7 @@ pub enum PipelineError {
         reason: String,
     },
 
-    #[error("Unsupported file type: {path}")]
+    #[error("Unsupported file type: {}", crate::parsing::paths::render_absolute_path(.path).display())]
     UnsupportedFileType { path: PathBuf },
 
     #[error("Channel send error: {0}")]

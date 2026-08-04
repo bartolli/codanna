@@ -92,7 +92,7 @@ impl IndexPersistence {
                 } => {
                     tracing::info!(
                         "[persistence] loaded facade from Tantivy index: {} ({} documents)",
-                        path.display(),
+                        crate::parsing::paths::render_absolute_path(path).display(),
                         doc_count
                     );
                 }
@@ -110,7 +110,7 @@ impl IndexPersistence {
             let semantic_path = self.semantic_path();
             tracing::debug!(
                 "[persistence] semantic path computed as: {}",
-                semantic_path.display()
+                crate::parsing::paths::render_absolute_path(&semantic_path).display()
             );
             match facade.load_semantic_search(&semantic_path) {
                 Ok(true) => {

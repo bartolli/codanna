@@ -38,7 +38,7 @@ impl Settings {
                 return Err(format!(
                     "Path already indexed: {} (covered by {})",
                     path.display(),
-                    existing.display()
+                    crate::parsing::paths::render_absolute_path(existing).display()
                 ));
             }
 

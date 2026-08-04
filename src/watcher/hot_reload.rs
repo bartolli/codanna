@@ -111,7 +111,12 @@ impl HotReloadWatcher {
             return Ok(());
         }
 
-        crate::log_event!("hot-reload", "reloading", "{}", self.index_path.display());
+        crate::log_event!(
+            "hot-reload",
+            "reloading",
+            "{}",
+            crate::parsing::paths::render_absolute_path(&self.index_path).display()
+        );
 
         // Load the new index as a facade
         match self.persistence.load_facade(self.settings.clone()) {
@@ -159,7 +164,7 @@ impl HotReloadWatcher {
                             "hot-reload",
                             "semantic metadata missing",
                             "{}",
-                            semantic_path.display()
+                            crate::parsing::paths::render_absolute_path(&semantic_path).display()
                         );
                     }
                 }

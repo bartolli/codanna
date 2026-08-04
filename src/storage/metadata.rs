@@ -157,7 +157,7 @@ impl IndexMetadata {
             } => {
                 eprintln!(
                     "Loaded from Tantivy index: {} ({} documents)",
-                    path.display(),
+                    crate::parsing::paths::render_absolute_path(path).display(),
                     doc_count
                 );
             }

@@ -94,7 +94,8 @@ impl CodeIntelligenceServer {
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Symbol count: {}\n- Semantic files exist: {}\n- Has semantic search: {}\n- Working dir: {}",
-                indexer.settings().index_path.display(),
+                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
+                    .display(),
                 symbol_count,
                 metadata_exists && vectors_exist,
                 indexer.has_semantic_search(),
@@ -203,7 +204,7 @@ impl CodeIntelligenceServer {
             tracing::debug!(
                 target: "mcp",
                 "semantic search not available - index_path: {}, has_semantic: {}",
-                indexer.settings().index_path.display(),
+                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path).display(),
                 indexer.has_semantic_search()
             );
             // Check if semantic files exist
@@ -213,9 +214,10 @@ impl CodeIntelligenceServer {
 
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Semantic search is not enabled. The index needs to be rebuilt with semantic search enabled.\n\nDEBUG INFO:\n- Index path: {}\n- Has semantic search: {}\n- Semantic path: {}\n- Metadata exists: {}\n- Vectors exist: {}",
-                indexer.settings().index_path.display(),
+                crate::parsing::paths::render_absolute_path(&indexer.settings().index_path)
+                    .display(),
                 indexer.has_semantic_search(),
-                semantic_path.display(),
+                crate::parsing::paths::render_absolute_path(&semantic_path).display(),
                 metadata_exists,
                 vectors_exist
             ))]));
@@ -877,7 +879,7 @@ impl CodeIntelligenceServer {
                     output.push_str(&format!(
                         "{}. {} (score: {:.3})\n",
                         i + 1,
-                        result.source_path.display(),
+                        crate::parsing::paths::render_absolute_path(&result.source_path).display(),
                         result.similarity
                     ));
 

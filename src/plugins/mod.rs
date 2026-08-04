@@ -120,7 +120,10 @@ pub fn add_plugin(
         if force {
             println!("  Force mode: would overwrite conflicts");
         }
-        println!("  Target workspace: {}", paths.root.display());
+        println!(
+            "  Target workspace: {}",
+            crate::parsing::paths::render_absolute_path(&paths.root).display()
+        );
         print_dry_run_summary(&plan);
         return Ok(());
     }
@@ -139,7 +142,7 @@ pub fn add_plugin(
 
     println!(
         "Plugin '{plugin_name}' installed into {} (commit {})",
-        paths.root.display(),
+        crate::parsing::paths::render_absolute_path(&paths.root).display(),
         entry.commit
     );
     Ok(())
@@ -160,7 +163,10 @@ pub fn remove_plugin(
         if force {
             println!("  Force mode: would ignore dependencies");
         }
-        println!("  Target workspace: {}", paths.root.display());
+        println!(
+            "  Target workspace: {}",
+            crate::parsing::paths::render_absolute_path(&paths.root).display()
+        );
         return Ok(());
     }
 
@@ -182,7 +188,7 @@ pub fn remove_plugin(
 
     println!(
         "Removed plugin '{plugin_name}' from {}",
-        paths.root.display()
+        crate::parsing::paths::render_absolute_path(&paths.root).display()
     );
     Ok(())
 }
@@ -219,7 +225,10 @@ pub fn update_plugin(
                     println!(
                         "DRY RUN: Would update plugin '{plugin_name}' (already at commit {commit})"
                     );
-                    println!("  Target workspace: {}", paths.root.display());
+                    println!(
+                        "  Target workspace: {}",
+                        crate::parsing::paths::render_absolute_path(&paths.root).display()
+                    );
                     return Ok(());
                 }
 
@@ -256,7 +265,10 @@ pub fn update_plugin(
         if force {
             println!("  Force mode: would overwrite local changes");
         }
-        println!("  Target workspace: {}", paths.root.display());
+        println!(
+            "  Target workspace: {}",
+            crate::parsing::paths::render_absolute_path(&paths.root).display()
+        );
         print_dry_run_summary(&plan);
         return Ok(());
     }
@@ -292,7 +304,7 @@ pub fn update_plugin(
 
     println!(
         "Plugin '{plugin_name}' updated in {} ({} -> {})",
-        paths.root.display(),
+        crate::parsing::paths::render_absolute_path(&paths.root).display(),
         existing.commit,
         entry.commit
     );
@@ -310,17 +322,23 @@ pub fn list_plugins(settings: &Settings, verbose: bool, json: bool) -> Result<()
 
     if json {
         let payload = serde_json::json!({
-            "workspace": paths.root,
+            "workspace": crate::parsing::paths::render_absolute_path(&paths.root),
             "plugins": entries,
         });
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else if entries.is_empty() {
-        println!("No plugins installed in workspace {}", paths.root.display());
+        println!(
+            "No plugins installed in workspace {}",
+            crate::parsing::paths::render_absolute_path(&paths.root).display()
+        );
         if verbose {
             println!("\nUse 'codanna plugin add <marketplace> <plugin>' to install a plugin");
         }
     } else {
-        println!("Plugins in workspace {}:", paths.root.display());
+        println!(
+            "Plugins in workspace {}:",
+            crate::parsing::paths::render_absolute_path(&paths.root).display()
+        );
         for entry in entries {
             println!(
                 "  - {} @ {} (commit {})",
@@ -370,7 +388,7 @@ pub fn verify_plugin(
     if verbose {
         println!(
             "Verifying plugin '{plugin_name}' in workspace {}...",
-            paths.root.display()
+            crate::parsing::paths::render_absolute_path(&paths.root).display()
         );
         println!("  Stored integrity: {}", entry.integrity);
     }
@@ -389,7 +407,10 @@ pub fn verify_all_plugins(settings: &Settings, verbose: bool) -> Result<(), Plug
 
     if lockfile.plugins.is_empty() {
         if verbose {
-            println!("No plugins installed in workspace {}", paths.root.display());
+            println!(
+                "No plugins installed in workspace {}",
+                crate::parsing::paths::render_absolute_path(&paths.root).display()
+            );
         }
         return Ok(());
     }

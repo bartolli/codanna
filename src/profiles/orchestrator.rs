@@ -100,7 +100,7 @@ pub fn install_profile(
         return Err(ProfileError::InvalidManifest {
             reason: format!(
                 "Profile '{profile_name}' not found at {}",
-                manifest_path.display()
+                crate::parsing::paths::render_absolute_path(&manifest_path).display()
             ),
         });
     }

@@ -159,7 +159,7 @@ pub async fn serve_http(config: crate::Settings, watch: bool, bind: String) -> a
                     "watcher",
                     "started",
                     "debounce: {debounce_ms}ms, config: {}",
-                    settings_path.display()
+                    crate::parsing::paths::render_absolute_path(&settings_path).display()
                 );
             }
             Err(e) => {

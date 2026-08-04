@@ -300,8 +300,8 @@ fn copy_directory_contents(
         let relative = entry_path.strip_prefix(source_dir).map_err(|_| {
             ProfileError::IoError(std::io::Error::other(format!(
                 "walkdir entry '{}' is outside source '{}'",
-                entry_path.display(),
-                source_dir.display()
+                crate::parsing::paths::render_absolute_path(entry_path).display(),
+                crate::parsing::paths::render_absolute_path(source_dir).display()
             )))
         })?;
 

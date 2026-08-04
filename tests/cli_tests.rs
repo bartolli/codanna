@@ -27,6 +27,9 @@ mod test_file_path_portable;
 #[path = "cli/test_index_seed_ownership.rs"]
 mod test_index_seed_ownership;
 
+#[path = "cli/test_index_force_invalid_path.rs"]
+mod test_index_force_invalid_path;
+
 #[path = "cli/test_serve_stdio_dual_generation.rs"]
 mod test_serve_stdio_dual_generation;
 

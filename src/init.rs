@@ -76,17 +76,29 @@ pub fn init_global_dirs() -> Result<(), std::io::Error> {
     // Check and create global directory
     if !global.exists() {
         std::fs::create_dir(&global)?;
-        println!("Created global directory: {}", global.display());
+        println!(
+            "Created global directory: {}",
+            crate::parsing::paths::render_absolute_path(&global).display()
+        );
     } else {
-        println!("Using existing global directory: {}", global.display());
+        println!(
+            "Using existing global directory: {}",
+            crate::parsing::paths::render_absolute_path(&global).display()
+        );
     }
 
     // Check and create models directory
     if !models.exists() {
         std::fs::create_dir(&models)?;
-        println!("Created models directory: {}", models.display());
+        println!(
+            "Created models directory: {}",
+            crate::parsing::paths::render_absolute_path(&models).display()
+        );
     } else {
-        println!("Using existing models directory: {}", models.display());
+        println!(
+            "Using existing models directory: {}",
+            crate::parsing::paths::render_absolute_path(&models).display()
+        );
     }
 
     // Initialize profile infrastructure
@@ -111,7 +123,10 @@ pub fn init_profile_infrastructure() -> Result<(), std::io::Error> {
             serde_json::to_string_pretty(&empty_registry).map_err(std::io::Error::other)?;
 
         std::fs::write(&providers_file, content)?;
-        println!("Created provider registry: {}", providers_file.display());
+        println!(
+            "Created provider registry: {}",
+            crate::parsing::paths::render_absolute_path(&providers_file).display()
+        );
     }
 
     Ok(())
@@ -135,8 +150,8 @@ pub fn create_fastembed_symlink() -> Result<(), std::io::Error> {
                 if model_dir.exists() && model_dir.is_dir() {
                     println!(
                         "Symlink already exists: {} -> {} (model verified)",
-                        local_cache.display(),
-                        global_models.display()
+                        crate::parsing::paths::render_absolute_path(&local_cache).display(),
+                        crate::parsing::paths::render_absolute_path(&global_models).display()
                     );
                     return Ok(());
                 } else {
@@ -154,7 +169,7 @@ pub fn create_fastembed_symlink() -> Result<(), std::io::Error> {
             // Real directory exists, don't delete user data
             eprintln!(
                 "Warning: {} exists and is not a symlink",
-                local_cache.display()
+                crate::parsing::paths::render_absolute_path(&local_cache).display()
             );
             eprintln!("         Models will be downloaded locally");
             return Ok(());
@@ -167,8 +182,8 @@ pub fn create_fastembed_symlink() -> Result<(), std::io::Error> {
         std::os::unix::fs::symlink(&global_models, &local_cache)?;
         println!(
             "Created symlink: {} -> {}",
-            local_cache.display(),
-            global_models.display()
+            crate::parsing::paths::render_absolute_path(&local_cache).display(),
+            crate::parsing::paths::render_absolute_path(&global_models).display()
         );
     }
 
@@ -178,8 +193,8 @@ pub fn create_fastembed_symlink() -> Result<(), std::io::Error> {
         std::os::windows::fs::symlink_dir(&global_models, &local_cache)?;
         println!(
             "Created symlink: {} -> {}",
-            local_cache.display(),
-            global_models.display()
+            crate::parsing::paths::render_absolute_path(&local_cache).display(),
+            crate::parsing::paths::render_absolute_path(&global_models).display()
         );
     }
 
@@ -288,7 +303,7 @@ impl ProjectRegistry {
         serde_json::from_str(&content).map_err(|e| {
             IndexError::General(format!(
                 "Failed to parse project registry: {e}\nSuggestion: Back up and delete {}",
-                path.display()
+                crate::parsing::paths::render_absolute_path(&path).display()
             ))
         })
     }

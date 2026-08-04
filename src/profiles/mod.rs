@@ -635,7 +635,10 @@ pub fn install_profile_from_registry(profile_ref: &str, force: bool) -> ProfileR
 
     if !profile_dir.exists() {
         return Err(error::ProfileError::InvalidManifest {
-            reason: format!("Profile directory not found: {}", profile_dir.display()),
+            reason: format!(
+                "Profile directory not found: {}",
+                crate::parsing::paths::render_absolute_path(&profile_dir).display()
+            ),
         });
     }
 

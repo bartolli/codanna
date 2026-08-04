@@ -11,20 +11,20 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum IndexError {
     /// File system errors
-    #[error("Failed to read file '{path}': {source}")]
+    #[error("Failed to read file '{}': {source}", crate::parsing::paths::render_absolute_path(.path).display())]
     FileRead {
         path: PathBuf,
         source: std::io::Error,
     },
 
-    #[error("Failed to write file '{path}': {source}")]
+    #[error("Failed to write file '{}': {source}", crate::parsing::paths::render_absolute_path(.path).display())]
     FileWrite {
         path: PathBuf,
         source: std::io::Error,
     },
 
     /// Parsing errors
-    #[error("Failed to parse {language} file '{path}': {reason}")]
+    #[error("Failed to parse {language} file '{}': {reason}", crate::parsing::paths::render_absolute_path(.path).display())]
     ParseError {
         path: PathBuf,
         language: String,
@@ -32,18 +32,19 @@ pub enum IndexError {
     },
 
     #[error(
-        "Unsupported file type '{extension}' for file '{path}'. Supported types: .rs, .go, .py, .js, .ts, .java"
+        "Unsupported file type '{extension}' for file '{}'. Supported types: .rs, .go, .py, .js, .ts, .java",
+        crate::parsing::paths::render_absolute_path(.path).display()
     )]
     UnsupportedFileType { path: PathBuf, extension: String },
 
     /// Storage errors
-    #[error("Failed to persist index to '{path}': {source}")]
+    #[error("Failed to persist index to '{}': {source}", crate::parsing::paths::render_absolute_path(.path).display())]
     PersistenceError {
         path: PathBuf,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    #[error("Failed to load index from '{path}': {source}")]
+    #[error("Failed to load index from '{}': {source}", crate::parsing::paths::render_absolute_path(.path).display())]
     LoadError {
         path: PathBuf,
         source: Box<dyn std::error::Error + Send + Sync>,
@@ -273,7 +274,11 @@ where
 
     fn with_path(self, path: &std::path::Path) -> Result<T, IndexError> {
         self.map_err(|e| {
-            IndexError::General(format!("Error processing '{}': {}", path.display(), e))
+            IndexError::General(format!(
+                "Error processing '{}': {}",
+                crate::parsing::paths::render_absolute_path(path).display(),
+                e
+            ))
         })
     }
 }

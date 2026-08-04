@@ -31,7 +31,8 @@ pub enum PluginError {
     GitOperationFailed { operation: String },
 
     #[error(
-        "File conflict: {path} already exists and belongs to plugin '{owner}'\nSuggestion: Use --force to overwrite or remove the conflicting plugin first"
+        "File conflict: {} already exists and belongs to plugin '{owner}'\nSuggestion: Use --force to overwrite or remove the conflicting plugin first",
+        crate::parsing::paths::render_absolute_path(.path).display()
     )]
     FileConflict { path: PathBuf, owner: String },
 
@@ -50,7 +51,8 @@ pub enum PluginError {
     LockfileCorrupted,
 
     #[error(
-        "Permission denied accessing {path}\nSuggestion: Check file permissions and ensure codanna has write access"
+        "Permission denied accessing {}\nSuggestion: Check file permissions and ensure codanna has write access",
+        crate::parsing::paths::render_absolute_path(.path).display()
     )]
     PermissionDenied { path: PathBuf },
 

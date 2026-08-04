@@ -37,7 +37,7 @@ impl Sha256Hash {
 #[derive(Debug, thiserror::Error)]
 pub enum ResolutionError {
     /// Error reading/writing cache files on disk
-    #[error("cache io error at '{path}': {source}")]
+    #[error("cache io error at '{}': {source}", crate::parsing::paths::render_absolute_path(.path).display())]
     CacheIo {
         path: PathBuf,
         #[source]
@@ -47,7 +47,7 @@ pub enum ResolutionError {
     #[error("invalid cache: {details}")]
     InvalidCache { details: String },
     /// I/O error with path context
-    #[error("I/O error at '{path}': {cause}")]
+    #[error("I/O error at '{}': {cause}", crate::parsing::paths::render_absolute_path(.path).display())]
     IoError { path: PathBuf, cause: String },
     /// Parse error for configuration files
     #[error("Parse error: {message}")]

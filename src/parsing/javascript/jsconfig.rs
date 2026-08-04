@@ -94,7 +94,7 @@ pub fn resolve_extends_chain(
     if visited.contains(&canonical_path) {
         return Err(ResolutionError::invalid_cache(format!(
             "Circular extends chain detected: {}\nSuggestion: Remove circular references in jsconfig extends",
-            canonical_path.display()
+            crate::parsing::paths::render_absolute_path(&canonical_path).display()
         )));
     }
 
@@ -112,7 +112,7 @@ pub fn resolve_extends_chain(
                 .ok_or_else(|| {
                     ResolutionError::invalid_cache(format!(
                         "Cannot resolve parent directory for: {}",
-                        canonical_path.display()
+                        crate::parsing::paths::render_absolute_path(&canonical_path).display()
                     ))
                 })?
                 .join(extends_path)

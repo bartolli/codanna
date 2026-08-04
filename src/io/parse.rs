@@ -115,12 +115,14 @@ impl ParseOutput {
     /// Create a new parse output handler
     pub fn new(output_path: Option<PathBuf>) -> Result<Self, ParseError> {
         let writer: Box<dyn Write> = if let Some(path) = output_path {
-            Box::new(
-                std::fs::File::create(&path).map_err(|e| ParseError::OutputCreateError {
-                    path: path.display().to_string(),
+            Box::new(std::fs::File::create(&path).map_err(|e| {
+                ParseError::OutputCreateError {
+                    path: crate::parsing::paths::render_absolute_path(&path)
+                        .display()
+                        .to_string(),
                     source: e,
-                })?,
-            )
+                }
+            })?)
         } else {
             Box::new(io::stdout())
         };
@@ -224,7 +226,9 @@ pub fn execute_parse(
     // Check if file exists
     if !file_path.exists() {
         return Err(ParseError::FileNotFound {
-            path: file_path.display().to_string(),
+            path: crate::parsing::paths::render_absolute_path(file_path)
+                .display()
+                .to_string(),
         });
     }
 
@@ -242,7 +246,9 @@ pub fn execute_parse(
     // Read file content with lossy UTF-8 conversion
     // This handles files with invalid UTF-8 sequences by replacing them with �
     let bytes = std::fs::read(file_path).map_err(|e| ParseError::FileReadError {
-        path: file_path.display().to_string(),
+        path: crate::parsing::paths::render_absolute_path(file_path)
+            .display()
+            .to_string(),
         source: e,
     })?;
     let code = String::from_utf8_lossy(&bytes).into_owned();

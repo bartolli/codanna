@@ -193,11 +193,19 @@ impl UnifiedWatcher {
             .watch(&watch_path, RecursiveMode::NonRecursive)
         {
             Ok(_) => {
-                crate::debug_event!("watcher", "watching", "{}", watch_path.display());
+                crate::debug_event!(
+                    "watcher",
+                    "watching",
+                    "{}",
+                    crate::parsing::paths::render_absolute_path(&watch_path).display()
+                );
                 Ok(())
             }
             Err(e) => {
-                tracing::warn!("[watcher] failed to watch {}: {e}", watch_path.display());
+                tracing::warn!(
+                    "[watcher] failed to watch {}: {e}",
+                    crate::parsing::paths::render_absolute_path(&watch_path).display()
+                );
                 // Continue - don't fail completely
                 Ok(())
             }
@@ -217,7 +225,13 @@ impl UnifiedWatcher {
             return;
         }
         for path in event.paths {
-            crate::trace_event!("watcher", "event", "{:?} {}", event.kind, path.display());
+            crate::trace_event!(
+                "watcher",
+                "event",
+                "{:?} {}",
+                event.kind,
+                crate::parsing::paths::render_absolute_path(&path).display()
+            );
             // A directory never matches a file handler (extension gate);
             // it is the watcher's own concern: extend the watch set and
             // catch up files that landed before the watch existed. Disk
@@ -253,7 +267,7 @@ impl UnifiedWatcher {
                     "unmatched",
                     "{:?} {}",
                     event.kind,
-                    path.display()
+                    crate::parsing::paths::render_absolute_path(&path).display()
                 );
                 continue;
             }
@@ -331,7 +345,7 @@ impl UnifiedWatcher {
                 "watcher",
                 "created dir",
                 "{} ({} files to catch up)",
-                path.display(),
+                crate::parsing::paths::render_absolute_path(path).display(),
                 files.len()
             );
         }
@@ -354,7 +368,12 @@ impl UnifiedWatcher {
                 continue;
             }
 
-            crate::log_event!(handler.name(), "modified", "{}", path.display());
+            crate::log_event!(
+                handler.name(),
+                "modified",
+                "{}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
 
             match handler.on_modify(path).await {
                 Ok(action) => {
@@ -391,7 +410,12 @@ impl UnifiedWatcher {
         }
 
         for root in &roots {
-            crate::log_event!("watcher", "batch sync", "{}", root.display());
+            crate::log_event!(
+                "watcher",
+                "batch sync",
+                "{}",
+                crate::parsing::paths::render_absolute_path(root).display()
+            );
             let mut indexer = self.facade.write().await;
             match indexer.index_directory(root, false) {
                 Ok(stats) => {
@@ -453,7 +477,12 @@ impl UnifiedWatcher {
             } else {
                 ("modified", handler.on_modify(path).await)
             };
-            crate::log_event!(handler.name(), verb, "{}", path.display());
+            crate::log_event!(
+                handler.name(),
+                verb,
+                "{}",
+                crate::parsing::paths::render_absolute_path(path).display()
+            );
 
             match result {
                 Ok(action) => {
@@ -579,12 +608,20 @@ impl UnifiedWatcher {
                 if !added.is_empty() {
                     crate::log_event!("config", "adding directories", "{}", added.len());
                     for path in &added {
-                        tracing::info!("  + {}", path.display());
+                        tracing::info!(
+                            "  + {}",
+                            crate::parsing::paths::render_absolute_path(path).display()
+                        );
                     }
 
                     let mut indexer = self.facade.write().await;
                     for path in &added {
-                        crate::log_event!("config", "indexing", "{}", path.display());
+                        crate::log_event!(
+                            "config",
+                            "indexing",
+                            "{}",
+                            crate::parsing::paths::render_absolute_path(path).display()
+                        );
                         match indexer.index_directory(path, false) {
                             Ok(stats) => {
                                 tracing::info!(
@@ -603,7 +640,10 @@ impl UnifiedWatcher {
                 if !removed.is_empty() {
                     crate::log_event!("config", "removed directories", "{}", removed.len());
                     for path in &removed {
-                        tracing::info!("  - {}", path.display());
+                        tracing::info!(
+                            "  - {}",
+                            crate::parsing::paths::render_absolute_path(path).display()
+                        );
                     }
                     tracing::info!("Run 'codanna clean' to remove symbols from these directories");
                 }
