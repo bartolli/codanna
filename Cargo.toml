@@ -1,6 +1,6 @@
 [package]
 name = "codanna"
-version = "0.13.1"
+version = "0.13.2"
 authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Local code intelligence MCP server and CLI for AI coding agents"

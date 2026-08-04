@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.2] - 2026-08-04
+
+Windows path-handling and resolution-correctness patch release. Module identity, stored-path emission, notification URIs, and rendered paths now use one path-component contract on every platform, closing the 0.13.1 known limitation "on Windows, path handling degrades symbol resolution": the Windows test suite runs the same ten targets as Linux and macOS with zero failures. Two resolver fixes restore relationships that earlier binaries never recorded. Index format, emission semantics, and settings are unchanged; no automatic rebuild.
+
+The resolver fixes apply when files are indexed: an index built by an earlier binary under-reports the affected relationships until the referencing files are re-indexed. `codanna index --force` heals the whole index at once.
+
+### Fixed
+
+- Indexing a project from outside its directory resolves the same relationships as indexing from inside it. Module identity now comes from the parse; it was previously re-derived against the invoking directory, which silently unbound cross-file imports for out-of-tree runs.
+- Relative imports between files with dots in their stems (bundled or generated artifacts such as `three.core.js`) resolve by file identity. These imports previously never bound: the dot was indistinguishable from a module separator in the text-based derivation.
+- Module paths derive from path components on every platform. On Windows, the previous text-based derivation produced module identities that matched nothing, which starved import resolution.
+- Relative file paths in tool results, CLI output, and resource-update notifications carry `/` separators on every platform; notification URIs byte-match subscription URIs on Windows.
+- Absolute paths in CLI output, MCP diagnostics, logs, and error messages render without the Windows verbatim prefix (`\\?\C:\...` renders as `C:\...`). Stored index data is unchanged.
+- `codanna index --force` validates its rebuild sources before clearing the index. A nonexistent path argument, or a configuration whose indexed paths no longer exist, refuses with exit 1 and leaves the index untouched; both cases previously cleared the index and rebuilt nothing.
+
+### Known Limitations
+
+- A symbol moved between two files that are both edited in one change set can lose its callers' relationships until those callers are next re-indexed; under-report only, heals on edit or `codanna index --force`.
+- In large bundled-JavaScript codebases, a rename wave can drop a small number of relationships that a fresh re-index restores; under-report only.
+- Windows testing covers in-tree indexing (the project indexed from its own directory); out-of-tree indexing on Windows is untested.
+
 ## [0.13.1] - 2026-08-02
 
 Incremental-refactor and watcher-notification patch release. Renames, renames combined with edits, and deletions now converge the incremental index to the same relationship set as a fresh index: files that reference a moved or deleted target are re-analyzed in the same run, so each relationship follows the current source evidence. Applies across batch indexing, `serve --watch`, and `mcp <TOOL> --watch`. Resource subscribers receive list-change notifications when watched files are created and one list-change notification when they are deleted. Index format, emission semantics, and settings are unchanged; no automatic rebuild.
