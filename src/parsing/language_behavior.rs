@@ -428,6 +428,59 @@ pub trait LanguageBehavior: Send + Sync {
         }
     }
 
+    /// Resolve a relative import specifier to a candidate symbol by FILE
+    /// identity.
+    ///
+    /// The language-agnostic arm for `./x` / `../y` specifiers: the
+    /// specifier resolves against the importing file's directory in the
+    /// path domain (`paths::resolve_relative_specifier`), and candidates
+    /// match on their stored file path, with extension and index-file
+    /// completion from the language's configured extensions. Module
+    /// strings cannot represent this navigation — a stem dot is
+    /// indistinguishable from a module separator — so the mechanism
+    /// never leaves the path domain. Exactly-one discipline: multiple
+    /// same-name matches across the accepted paths fail closed.
+    ///
+    /// Returns `None` for non-relative specifiers; callers fall through
+    /// to their module-domain arms.
+    fn resolve_relative_import(
+        &self,
+        cache: &dyn PipelineSymbolCache,
+        local_name: &str,
+        specifier: &str,
+        importing_file: &str,
+        extensions: &[&str],
+    ) -> Option<SymbolId> {
+        let expected = crate::parsing::paths::resolve_relative_specifier(
+            Path::new(importing_file),
+            specifier,
+        )?;
+
+        let mut accepted: Vec<PathBuf> = vec![expected.clone()];
+        if let Some(name) = expected.file_name().and_then(|n| n.to_str()) {
+            for ext in extensions {
+                accepted.push(expected.with_file_name(format!("{name}.{ext}")));
+            }
+        }
+        for ext in extensions {
+            accepted.push(expected.join(format!("index.{ext}")));
+        }
+
+        let mut matched: Vec<SymbolId> = Vec::new();
+        for id in cache.lookup_candidates(local_name) {
+            if let Some(sym) = cache.get(id) {
+                let candidate = Path::new(&*sym.file_path);
+                if accepted.iter().any(|p| candidate == p.as_path()) {
+                    matched.push(id);
+                }
+            }
+        }
+        match matched.as_slice() {
+            [id] => Some(*id),
+            _ => None,
+        }
+    }
+
     /// Build resolution context for parallel pipeline (no Tantivy access).
     ///
     /// This method is used by the parallel indexing pipeline where all symbol

@@ -307,11 +307,14 @@ impl LanguageBehavior for JavaScriptBehavior {
 
         let mut context = JavaScriptResolutionContext::new(file_id);
 
-        let importing_module = cache
+        let importing_symbol = cache
             .symbols_in_file(file_id)
             .first()
-            .and_then(|id| cache.get(*id))
-            .and_then(|sym| sym.module_path.map(String::from));
+            .and_then(|id| cache.get(*id));
+        let importing_file = importing_symbol
+            .as_ref()
+            .map(|sym| sym.file_path.to_string());
+        let importing_module = importing_symbol.and_then(|sym| sym.module_path.map(String::from));
 
         // Load project rules for path alias enhancement
         let maybe_enhancer = self
@@ -333,8 +336,22 @@ impl LanguageBehavior for JavaScriptBehavior {
                     .to_string()
             });
 
+            // Path-domain arm first: relative specifiers resolve by file
+            // identity (trait default). Module-string normalization cannot
+            // represent the navigation when stems contain dots.
+            let file_resolved = importing_file.as_deref().and_then(|f| {
+                self.resolve_relative_import(cache, &local_name, &import.path, f, extensions)
+            });
+            let file_resolved_module = file_resolved
+                .and_then(|id| cache.get(id))
+                .and_then(|s| s.module_path.map(String::from));
+
             // Enhance import path if we have jsconfig rules
-            let target_module = if let Some(ref enhancer) = maybe_enhancer {
+            let target_module = if let Some(module) = file_resolved_module {
+                // The resolved file's parse-derived module is the truth the
+                // string normalization approximates.
+                module
+            } else if let Some(ref enhancer) = maybe_enhancer {
                 if let Some(enhanced_path) = enhancer.enhance_import_path(&import.path, file_id) {
                     // Jsconfig alias - convert enhanced path to module format
                     enhanced_path.trim_start_matches("./").replace('/', ".")
@@ -368,27 +385,29 @@ impl LanguageBehavior for JavaScriptBehavior {
             // suffix matches bind only an exactly-one survivor (candidate
             // order is file-processing order, not identity; raw ends_with
             // also admitted mid-segment captures).
-            let mut resolved_symbol: Option<SymbolId> = None;
+            let mut resolved_symbol: Option<SymbolId> = file_resolved;
             let mut suffix_matches: Vec<SymbolId> = Vec::new();
-            for id in cache.lookup_candidates(&local_name) {
-                if let Some(symbol) = cache.get(id) {
-                    if let Some(module) = symbol.module_path.as_deref() {
-                        if module == target_module {
-                            resolved_symbol = Some(id);
-                            break;
-                        }
-                        if crate::indexing::pipeline::types::segment_suffix_match(
-                            module,
-                            &target_module,
-                        ) {
-                            suffix_matches.push(id);
+            if resolved_symbol.is_none() {
+                for id in cache.lookup_candidates(&local_name) {
+                    if let Some(symbol) = cache.get(id) {
+                        if let Some(module) = symbol.module_path.as_deref() {
+                            if module == target_module {
+                                resolved_symbol = Some(id);
+                                break;
+                            }
+                            if crate::indexing::pipeline::types::segment_suffix_match(
+                                module,
+                                &target_module,
+                            ) {
+                                suffix_matches.push(id);
+                            }
                         }
                     }
                 }
-            }
-            if resolved_symbol.is_none() {
-                if let [id] = suffix_matches.as_slice() {
-                    resolved_symbol = Some(*id);
+                if resolved_symbol.is_none() {
+                    if let [id] = suffix_matches.as_slice() {
+                        resolved_symbol = Some(*id);
+                    }
                 }
             }
 

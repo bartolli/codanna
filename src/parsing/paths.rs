@@ -49,6 +49,33 @@ pub fn strip_source_root_owned(path: &Path, source_roots: &[&str]) -> PathBuf {
     strip_source_root(path, source_roots).to_path_buf()
 }
 
+/// Resolve a relative import specifier (`./x`, `../y/z`) against the
+/// importing file's directory, in the path domain.
+///
+/// Module strings cannot represent this navigation: a dot in a file
+/// stem (`app.web`) is indistinguishable from a module separator, so
+/// string-domain normalization of relative specifiers derives paths
+/// that exist nowhere. Returns `None` for non-relative specifiers and
+/// for `..` underflow past the importing path's stored root — callers
+/// keep their module-domain arms for those.
+pub fn resolve_relative_specifier(importing_file: &Path, specifier: &str) -> Option<PathBuf> {
+    if !specifier.starts_with("./") && !specifier.starts_with("../") {
+        return None;
+    }
+    let mut resolved: Vec<std::path::Component> = importing_file.parent()?.components().collect();
+    for segment in specifier.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => match resolved.pop() {
+                Some(std::path::Component::Normal(_)) => {}
+                _ => return None,
+            },
+            name => resolved.push(std::path::Component::Normal(name.as_ref())),
+        }
+    }
+    Some(resolved.iter().map(|c| c.as_os_str()).collect())
+}
+
 /// Relative path segments of `path` below `base`, split by the OS
 /// path parser.
 ///
@@ -323,5 +350,49 @@ mod tests {
         // Correct order: longer extensions first
         let extensions = &["d.ts", "ts"];
         assert_eq!(strip_extension("types.d.ts", extensions), "types");
+    }
+
+    #[test]
+    fn resolve_relative_specifier_sibling_with_dotted_stems() {
+        // The stem dots that break string-domain normalization are inert
+        // in the path domain.
+        assert_eq!(
+            resolve_relative_specifier(Path::new("build/app.web.js"), "./app.core.js"),
+            Some(PathBuf::from("build/app.core.js"))
+        );
+        assert_eq!(
+            resolve_relative_specifier(Path::new("/abs/build/three.webgpu.js"), "./three.core.js"),
+            Some(PathBuf::from("/abs/build/three.core.js"))
+        );
+    }
+
+    #[test]
+    fn resolve_relative_specifier_parent_navigation() {
+        assert_eq!(
+            resolve_relative_specifier(Path::new("src/app/sub/main.js"), "../math/Vector4.js"),
+            Some(PathBuf::from("src/app/math/Vector4.js"))
+        );
+        assert_eq!(
+            resolve_relative_specifier(Path::new("a/b.js"), ".././c/./d.js"),
+            Some(PathBuf::from("c/d.js"))
+        );
+    }
+
+    #[test]
+    fn resolve_relative_specifier_fails_closed() {
+        // Non-relative specifiers keep their module-domain arms.
+        assert_eq!(
+            resolve_relative_specifier(Path::new("a/b.js"), "three/tsl"),
+            None
+        );
+        // Underflow past the stored root is unanswerable.
+        assert_eq!(
+            resolve_relative_specifier(Path::new("b.js"), "../c.js"),
+            None
+        );
+        assert_eq!(
+            resolve_relative_specifier(Path::new("/b.js"), "../c.js"),
+            None
+        );
     }
 }

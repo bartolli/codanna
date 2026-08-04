@@ -4110,6 +4110,113 @@ mod tests {
         );
     }
 
+    // Dotted-stem lock: module strings cannot distinguish a stem dot
+    // (`app.web`) from a path separator, so string-domain normalization
+    // of `./app.core.js` against module `build.app.web` yields a module
+    // that matches no candidate and the import binding starves. The twin
+    // file makes the ladder's exactly-one rescue ambiguous, so only a
+    // path-domain resolution of the relative specifier can bind. force:
+    // the full lane resolves on the run-scoped cache (see the
+    // out-of-tree lock above).
+    #[test]
+    fn js_relative_import_between_dotted_stem_files_binds() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("lib");
+        std::fs::create_dir_all(src.join("build")).unwrap();
+        std::fs::write(
+            src.join("build/app.core.js"),
+            "export function warn(msg) {\n  return msg;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("build/app.cjs"),
+            "function warn(msg) {\n  return msg;\n}\nmodule.exports = { warn };\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("build/app.web.js"),
+            "import { warn } from './app.core.js';\n\nexport function generate() {\n  return warn(1);\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, true).unwrap();
+
+        let generate = facade
+            .find_symbols_by_name("generate", None)
+            .into_iter()
+            .next()
+            .expect("generate indexed");
+        let callees = facade.get_called_functions(generate.id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "generate must bind its relative import despite the twin: {callees:?}"
+        );
+        assert!(
+            callees[0].file_path.ends_with("app.core.js"),
+            "the binding must pick the imported file, got {}",
+            callees[0].file_path
+        );
+    }
+
+    // TypeScript twin of the dotted-stem lock.
+    #[test]
+    fn ts_relative_import_between_dotted_stem_files_binds() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("lib");
+        std::fs::create_dir_all(src.join("build")).unwrap();
+        std::fs::write(
+            src.join("build/app.core.ts"),
+            "export function warn(msg: string): string {\n  return msg;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("build/app.legacy.ts"),
+            "export function warn(msg: string): string {\n  return msg + '!';\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("build/app.web.ts"),
+            "import { warn } from './app.core';\n\nexport function generate(): string {\n  return warn('x');\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, true).unwrap();
+
+        let generate = facade
+            .find_symbols_by_name("generate", None)
+            .into_iter()
+            .next()
+            .expect("generate indexed");
+        let callees = facade.get_called_functions(generate.id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "generate must bind its relative import despite the twin: {callees:?}"
+        );
+        assert!(
+            callees[0].file_path.ends_with("app.core.ts"),
+            "the binding must pick the imported file, got {}",
+            callees[0].file_path
+        );
+    }
+
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
         let targets = facade.find_symbols_by_name(name, None);
         assert_eq!(targets.len(), 1, "fixture expects exactly one `{name}`");
