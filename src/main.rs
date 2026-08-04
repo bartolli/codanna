@@ -414,17 +414,30 @@ async fn main() {
     let index_preexisted = persistence.exists();
 
     // The force and emission-heal lanes clear the persisted index during
-    // facade creation, before CLI paths reach validation downstream; a
-    // mistyped path would destroy the index and rebuild nothing.
-    // Existence is checked here, ahead of any destructive clear.
+    // facade creation, before the rebuild sources are validated; a
+    // mistyped CLI path — or a configured root set with no surviving
+    // entry on the bare lane — would destroy the index and rebuild
+    // nothing. Existence is checked here, ahead of any destructive clear.
     if let Commands::Index { paths, force, .. } = &cli.command {
-        if (*force || emission_heal) && !paths.is_empty() {
-            let mut missing = false;
-            for path in paths.iter().filter(|p| !p.exists()) {
-                missing = true;
-                eprintln!("Error: Path does not exist: {}", path.display());
-            }
-            if missing {
+        if *force || emission_heal {
+            if !paths.is_empty() {
+                let mut missing = false;
+                for path in paths.iter().filter(|p| !p.exists()) {
+                    missing = true;
+                    eprintln!("Error: Path does not exist: {}", path.display());
+                }
+                if missing {
+                    std::process::exit(1);
+                }
+            } else if index_preexisted && !config.indexing.indexed_paths.iter().any(|p| p.exists())
+            {
+                for path in &config.indexing.indexed_paths {
+                    eprintln!(
+                        "Error: Configured path does not exist: {}",
+                        codanna::parsing::paths::render_absolute_path(path).display()
+                    );
+                }
+                eprintln!("Error: --force would clear the index with nothing to rebuild");
                 std::process::exit(1);
             }
         }

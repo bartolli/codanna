@@ -156,6 +156,77 @@ fn force_with_missing_path_refuses_before_clearing_index() {
 }
 
 #[test]
+fn force_bare_with_no_existing_roots_refuses_before_clearing_index() {
+    let temp = TempDir::new().expect("temp workspace");
+    let workspace = temp.path();
+    write_fixture(workspace);
+    write_settings(workspace);
+
+    let (exit, stdout, stderr) = run_cli(workspace, &["index", "src"]);
+    assert_eq!(
+        exit, 0,
+        "seed must succeed\nstdout:{stdout}\nstderr:{stderr}"
+    );
+
+    let meta = workspace.join(".codanna/index/index.meta");
+    assert!(meta.exists(), "seed must persist index.meta");
+    let meta_before = std::fs::read(&meta).expect("read index.meta");
+    let entries_before = index_dir_entries(workspace);
+
+    std::fs::remove_dir_all(workspace.join("src")).expect("remove registered root");
+
+    let (exit, stdout, stderr) = run_cli(workspace, &["index", "--force"]);
+    assert_ne!(
+        exit, 0,
+        "bare force with no existing configured root must fail\nstdout:{stdout}\nstderr:{stderr}"
+    );
+    assert!(
+        stderr.contains("Configured path does not exist"),
+        "refusal must name the missing configured root:\nstderr:{stderr}"
+    );
+    assert!(
+        stderr.contains("nothing to rebuild"),
+        "refusal must state the reason:\nstderr:{stderr}"
+    );
+
+    let meta_after = std::fs::read(&meta).expect("read index.meta");
+    assert_eq!(
+        meta_before, meta_after,
+        "index.meta must be byte-identical after the refused bare-force run"
+    );
+    assert_eq!(
+        entries_before,
+        index_dir_entries(workspace),
+        "index directory contents must be untouched after the refused bare-force run"
+    );
+}
+
+#[test]
+fn force_bare_with_existing_root_still_rebuilds() {
+    let temp = TempDir::new().expect("temp workspace");
+    let workspace = temp.path();
+    write_fixture(workspace);
+    write_settings(workspace);
+
+    let (exit, stdout, stderr) = run_cli(workspace, &["index", "src"]);
+    assert_eq!(
+        exit, 0,
+        "seed must succeed\nstdout:{stdout}\nstderr:{stderr}"
+    );
+
+    let (exit, stdout, stderr) = run_cli(workspace, &["index", "--force"]);
+    assert_eq!(
+        exit, 0,
+        "bare force with an existing configured root must rebuild\nstdout:{stdout}\nstderr:{stderr}"
+    );
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("Index saved to"),
+        "bare force rebuild must index and save:\nstdout:{stdout}\nstderr:{stderr}"
+    );
+}
+
+#[test]
 fn force_with_existing_path_still_rebuilds() {
     let temp = TempDir::new().expect("temp workspace");
     let workspace = temp.path();
