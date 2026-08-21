@@ -473,4 +473,35 @@ mod tests {
             "staged delete must be discarded by rollback"
         );
     }
+
+    #[test]
+    fn test_commit_batch_awaits_merges_segments_bounded() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+
+        // Default LogMergePolicy merges a level once it holds 8 segments
+        // (levels ~1.68x wide in doc count, 10k-doc floor), so after every
+        // awaited commit the small level holds at most 7 and each outgrown
+        // merge product sits alone in its own level: 48k docs bound the
+        // total below 12. Without the wait every commit's segments survive
+        // (observed 72 here). Segments are sized so a merge cannot finish
+        // inside the reader-reload window by accident.
+        let rel = crate::Relationship::new(crate::RelationKind::Calls);
+        for round in 0..24u32 {
+            index.start_batch().unwrap();
+            for i in 0..2000u32 {
+                let from = SymbolId::new(round * 10_000 + i + 1).unwrap();
+                let to = SymbolId::new(round * 10_000 + i + 2).unwrap();
+                index.store_relationship(from, to, &rel).unwrap();
+            }
+            index.commit_batch().unwrap();
+        }
+
+        let segments = index.index.searchable_segment_ids().unwrap().len();
+        assert!(
+            segments < 12,
+            "24 commits left {segments} segments; merges scheduled by commit were not awaited"
+        );
+    }
 }
