@@ -141,6 +141,11 @@ impl DocumentIndex {
                 }
             }
 
+            // Block until this commit's merges finish. Dropping the writer here
+            // instead (the previous behaviour) kills the merge threads commit
+            // just spawned, so every commit's segment survives forever.
+            writer.wait_merging_threads()?;
+
             // Reload the reader to see new documents
             self.reader.reload()?;
 
