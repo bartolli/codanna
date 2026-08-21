@@ -149,3 +149,78 @@ fn dump_refuses_stale_index_before_writing_any_line() {
         "heal command\n{stderr}"
     );
 }
+
+#[test]
+fn dump_filters_edges_by_relation_and_symbols_by_kind() {
+    let workspace = seed_workspace();
+
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["dump", "--edges", "--relation", "calls"],
+    );
+    assert_eq!(
+        code, 0,
+        "dump --edges --relation calls\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let lines = parse_lines(&stdout);
+    let results: Vec<&Value> = lines.iter().filter(|l| l["type"] == "result").collect();
+    assert!(!results.is_empty(), "caller -> callee is a Calls row");
+    assert!(
+        results
+            .iter()
+            .all(|l| l["meta"]["entity_type"] == "relationship"),
+        "no symbol rows under --edges"
+    );
+    assert!(
+        results.iter().all(|l| l["data"]["relation"] == "Calls"),
+        "only Calls under --relation calls"
+    );
+    let last = lines.last().unwrap();
+    assert_eq!(last["type"], "summary");
+    assert_eq!(last["data"]["symbols"], 0);
+    assert_eq!(last["data"]["relationships"], results.len());
+
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["dump", "--symbols", "--kind", "function"],
+    );
+    assert_eq!(
+        code, 0,
+        "dump --symbols --kind function\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let lines = parse_lines(&stdout);
+    let results: Vec<&Value> = lines.iter().filter(|l| l["type"] == "result").collect();
+    assert_eq!(results.len(), 2, "callee and caller are the Function rows");
+    assert!(results.iter().all(|l| l["meta"]["entity_type"] == "symbol"));
+    assert!(results.iter().all(|l| l["data"]["kind"] == "Function"));
+}
+
+#[test]
+fn dump_rejects_unknown_filter_values_and_conflicting_row_flags_before_any_line() {
+    let workspace = seed_workspace();
+
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["dump", "--relation", "bogus"]);
+    assert_eq!(
+        code, 2,
+        "unknown relation kind is a usage error\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "no stream lines on a usage error:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("calls") && stderr.contains("extends"),
+        "error lists the accepted kinds:\n{stderr}"
+    );
+
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["dump", "--kind", "widget"]);
+    assert_eq!(
+        code, 2,
+        "unknown symbol kind is a usage error\nstderr:\n{stderr}"
+    );
+    assert!(stdout.is_empty());
+
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["dump", "--symbols", "--edges"]);
+    assert_eq!(code, 2, "--symbols and --edges conflict\nstderr:\n{stderr}");
+    assert!(stdout.is_empty());
+}

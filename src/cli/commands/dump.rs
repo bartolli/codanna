@@ -3,12 +3,12 @@
 use std::io::{self, BufWriter, Write};
 
 use crate::config::Settings;
-use crate::dump::{DumpError, DumpStamp, write_dump};
+use crate::dump::{DumpError, DumpFilter, DumpStamp, write_dump};
 use crate::indexing::facade::IndexFacade;
 use crate::io::ExitCode;
 use crate::storage::IndexMetadata;
 
-pub fn run(indexer: &IndexFacade, config: &Settings) -> ExitCode {
+pub fn run(indexer: &IndexFacade, config: &Settings, filter: &DumpFilter) -> ExitCode {
     let stamp = IndexMetadata::load(&config.index_path)
         .ok()
         .map(|meta| DumpStamp {
@@ -19,7 +19,7 @@ pub fn run(indexer: &IndexFacade, config: &Settings) -> ExitCode {
 
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
-    let result = write_dump(indexer, stamp, &mut out).and_then(|summary| {
+    let result = write_dump(indexer, stamp, filter, &mut out).and_then(|summary| {
         out.flush()?;
         Ok(summary)
     });

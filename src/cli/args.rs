@@ -191,9 +191,25 @@ pub enum Commands {
     #[command(
         about = "Dump all symbols and relationships as JSON Lines",
         long_about = "Stream the whole index: a begin envelope, one result envelope per symbol, one per relationship, and a terminal summary envelope. Every line is the standard JSON envelope; ordering is unspecified.",
-        after_help = "Examples:\n  codanna dump > graph.jsonl\n  codanna dump | jq -c 'select(.type==\"result\") | .data'\n  codanna dump | jq -c 'select(.meta.entity_type==\"relationship\") | .data'"
+        after_help = "Examples:\n  codanna dump > graph.jsonl\n  codanna dump | jq -c 'select(.type==\"result\") | .data'\n  codanna dump --edges --relation calls\n  codanna dump --symbols --kind method"
     )]
-    Dump,
+    Dump {
+        /// Emit symbol rows only
+        #[arg(long, conflicts_with = "edges")]
+        symbols: bool,
+
+        /// Emit relationship rows only
+        #[arg(long)]
+        edges: bool,
+
+        /// Relationship kind to keep (calls, defines, uses, implements, extends)
+        #[arg(long, value_name = "KIND", value_parser = crate::dump::parse_relation_kind)]
+        relation: Option<crate::relationship::RelationKind>,
+
+        /// Symbol kind to keep for symbol rows (function, method, struct, ...)
+        #[arg(long, value_name = "KIND", value_parser = crate::dump::parse_symbol_kind)]
+        kind: Option<crate::SymbolKind>,
+    },
 
     /// Show current configuration settings
     #[command(about = "Display active settings from .codanna/settings.toml")]

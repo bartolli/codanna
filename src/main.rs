@@ -868,10 +868,25 @@ async fn main() {
             std::process::exit(exit_code as i32);
         }
 
-        Commands::Dump => {
+        Commands::Dump {
+            symbols,
+            edges,
+            relation,
+            kind,
+        } => {
+            let filter = codanna::dump::DumpFilter {
+                rows: match (symbols, edges) {
+                    (true, _) => codanna::dump::Rows::Symbols,
+                    (_, true) => codanna::dump::Rows::Relationships,
+                    _ => codanna::dump::Rows::All,
+                },
+                relation,
+                kind,
+            };
             let exit_code = codanna::cli::commands::dump::run(
                 indexer.as_ref().expect("dump requires indexer"),
                 &config,
+                &filter,
             );
             std::process::exit(exit_code as i32);
         }

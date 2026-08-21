@@ -30,6 +30,57 @@ pub struct DumpSummary {
     pub builder_commit: Option<String>,
 }
 
+/// Which result rows a dump emits. `begin` and `summary` are always emitted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Rows {
+    #[default]
+    All,
+    Symbols,
+    Relationships,
+}
+
+/// Emission filter. The identity map is always built from the full symbol
+/// scan; filters gate which rows are written.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DumpFilter {
+    pub rows: Rows,
+    /// Emit only relationship rows of this kind.
+    pub relation: Option<RelationKind>,
+    /// Emit only symbol rows of this kind; relationship rows are unaffected.
+    pub kind: Option<SymbolKind>,
+}
+
+/// Relation kinds persisted by the indexer, i.e. the values `--relation`
+/// accepts (case-insensitive); directional twins are never stored.
+pub const PERSISTED_RELATION_KINDS: [(&str, RelationKind); 5] = [
+    ("calls", RelationKind::Calls),
+    ("defines", RelationKind::Defines),
+    ("uses", RelationKind::Uses),
+    ("implements", RelationKind::Implements),
+    ("extends", RelationKind::Extends),
+];
+
+/// Parse a `--relation` value. Unknown names list the accepted set.
+pub fn parse_relation_kind(text: &str) -> Result<RelationKind, String> {
+    let lower = text.to_lowercase();
+    PERSISTED_RELATION_KINDS
+        .iter()
+        .find(|(name, _)| *name == lower)
+        .map(|(_, kind)| *kind)
+        .ok_or_else(|| {
+            let accepted: Vec<&str> = PERSISTED_RELATION_KINDS.iter().map(|(n, _)| *n).collect();
+            format!(
+                "unknown relation kind '{text}'; accepted: {}",
+                accepted.join(", ")
+            )
+        })
+}
+
+/// Parse a `--kind` value through the shared `SymbolKind` vocabulary.
+pub fn parse_symbol_kind(text: &str) -> Result<SymbolKind, String> {
+    text.parse::<SymbolKind>().map_err(|e| e.to_string())
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DumpError {
     #[error("index read failed: {0}")]
@@ -100,6 +151,7 @@ fn write_line<W: Write, T: Serialize>(
 pub fn write_dump<W: Write>(
     facade: &IndexFacade,
     stamp: DumpStamp,
+    filter: &DumpFilter,
     mut out: W,
 ) -> Result<DumpSummary, DumpError> {
     let begin: Envelope<()> = Envelope::begin("dump").with_entity_type(EntityType::Graph);
@@ -112,12 +164,17 @@ pub fn write_dump<W: Write>(
     };
     let mut identities: HashMap<u32, Identity> = HashMap::new();
 
+    let emit_symbols = filter.rows != Rows::Relationships;
+    let emit_relationships = filter.rows != Rows::Symbols;
+
     facade.for_each_symbol(|symbol: Symbol| -> Result<(), DumpError> {
-        let item = Envelope::success(&symbol)
-            .with_entity_type(EntityType::Symbol)
-            .with_message("");
-        write_line(&mut out, &item)?;
-        summary.symbols += 1;
+        if emit_symbols && filter.kind.is_none_or(|kind| kind == symbol.kind) {
+            let item = Envelope::success(&symbol)
+                .with_entity_type(EntityType::Symbol)
+                .with_message("");
+            write_line(&mut out, &item)?;
+            summary.symbols += 1;
+        }
         let identity = Identity {
             name: Box::from(&*symbol.name),
             kind: symbol.kind,
@@ -130,33 +187,41 @@ pub fn write_dump<W: Write>(
         Ok(())
     })?;
 
-    facade.for_each_relationship(|from, to, relationship| -> Result<(), DumpError> {
-        let (Some(from_identity), Some(to_identity)) =
-            (identities.get(&from.value()), identities.get(&to.value()))
-        else {
-            summary.orphan_edges_dropped += 1;
-            return Ok(());
-        };
-        let metadata = relationship.metadata.as_ref().map(|m| EdgeMetadata {
-            line: m.line.map(|l| l + 1),
-            column: m.column,
-            receiver: m.receiver.as_deref(),
-            static_call: m.static_call,
-            context: m.context.as_deref(),
-        });
-        let item = RelationshipItem {
-            relation: relationship.kind,
-            from: endpoint(from.value(), from_identity),
-            to: endpoint(to.value(), to_identity),
-            metadata,
-        };
-        let envelope = Envelope::success(item)
-            .with_entity_type(EntityType::Relationship)
-            .with_message("");
-        write_line(&mut out, &envelope)?;
-        summary.relationships += 1;
-        Ok(())
-    })?;
+    if emit_relationships {
+        facade.for_each_relationship(|from, to, relationship| -> Result<(), DumpError> {
+            if filter
+                .relation
+                .is_some_and(|kind| kind != relationship.kind)
+            {
+                return Ok(());
+            }
+            let (Some(from_identity), Some(to_identity)) =
+                (identities.get(&from.value()), identities.get(&to.value()))
+            else {
+                summary.orphan_edges_dropped += 1;
+                return Ok(());
+            };
+            let metadata = relationship.metadata.as_ref().map(|m| EdgeMetadata {
+                line: m.line.map(|l| l + 1),
+                column: m.column,
+                receiver: m.receiver.as_deref(),
+                static_call: m.static_call,
+                context: m.context.as_deref(),
+            });
+            let item = RelationshipItem {
+                relation: relationship.kind,
+                from: endpoint(from.value(), from_identity),
+                to: endpoint(to.value(), to_identity),
+                metadata,
+            };
+            let envelope = Envelope::success(item)
+                .with_entity_type(EntityType::Relationship)
+                .with_message("");
+            write_line(&mut out, &envelope)?;
+            summary.relationships += 1;
+            Ok(())
+        })?;
+    }
 
     let count = summary.symbols + summary.relationships;
     let end = Envelope::summary(&summary)
@@ -209,7 +274,13 @@ mod tests {
         );
 
         let mut out = Vec::new();
-        let summary = write_dump(&facade, DumpStamp::default(), &mut out).unwrap();
+        let summary = write_dump(
+            &facade,
+            DumpStamp::default(),
+            &DumpFilter::default(),
+            &mut out,
+        )
+        .unwrap();
         let lines = parse_lines(&out);
 
         let first = lines.first().expect("begin line");
@@ -250,7 +321,13 @@ mod tests {
             "fn callee() {}\n\nfn other() {}\n\nfn caller() {\n    callee();\n    other();\n}\n",
         );
         let mut out = Vec::new();
-        write_dump(&facade, DumpStamp::default(), &mut out).unwrap();
+        write_dump(
+            &facade,
+            DumpStamp::default(),
+            &DumpFilter::default(),
+            &mut out,
+        )
+        .unwrap();
         let lines = parse_lines(&out);
 
         let mut calls_by_from: HashMap<u32, HashSet<(u32, Option<u32>)>> = HashMap::new();
@@ -360,7 +437,13 @@ mod tests {
         assert_eq!(facade.relationship_count(), 2, "both rows persisted");
 
         let mut out = Vec::new();
-        let summary = write_dump(&facade, DumpStamp::default(), &mut out).unwrap();
+        let summary = write_dump(
+            &facade,
+            DumpStamp::default(),
+            &DumpFilter::default(),
+            &mut out,
+        )
+        .unwrap();
         let lines = parse_lines(&out);
 
         let edges: Vec<&Envelope<serde_json::Value>> = lines
@@ -375,5 +458,166 @@ mod tests {
         let last = lines.last().unwrap().data.as_ref().unwrap();
         assert_eq!(last["orphan_edges_dropped"], 1);
         assert_eq!(last["duplicate_symbol_ids"], 1);
+    }
+    /// Struct + method + free fn: Defines (Widget -> render) and Calls
+    /// (render -> helper) in one file.
+    fn widget_fixture() -> (tempfile::TempDir, IndexFacade) {
+        indexed_fixture(
+            "pub struct Widget;\n\nimpl Widget {\n    pub fn render(&self) {\n        helper();\n    }\n}\n\nfn helper() {}\n",
+        )
+    }
+
+    fn count(lines: &[Envelope<serde_json::Value>], t: EntityType) -> usize {
+        lines
+            .iter()
+            .filter(|e| e.message_type == MessageType::Result && e.meta.entity_type == Some(t))
+            .count()
+    }
+
+    #[test]
+    fn symbols_only_filter_emits_no_relationship_rows() {
+        let (_dir, facade) = widget_fixture();
+        assert!(
+            facade.relationship_count() >= 2,
+            "fixture carries Defines + Calls"
+        );
+
+        let filter = DumpFilter {
+            rows: Rows::Symbols,
+            ..DumpFilter::default()
+        };
+        let mut out = Vec::new();
+        let summary = write_dump(&facade, DumpStamp::default(), &filter, &mut out).unwrap();
+        let lines = parse_lines(&out);
+
+        assert_eq!(lines.first().unwrap().message_type, MessageType::Begin);
+        assert_eq!(lines.last().unwrap().message_type, MessageType::Summary);
+        assert_eq!(count(&lines, EntityType::Symbol), facade.symbol_count());
+        assert_eq!(count(&lines, EntityType::Relationship), 0);
+        assert_eq!(summary.symbols, facade.symbol_count());
+        assert_eq!(summary.relationships, 0);
+        assert_eq!(lines.last().unwrap().meta.count, Some(summary.symbols));
+    }
+    #[test]
+    fn relationships_only_filter_keeps_endpoint_identity() {
+        let (_dir, facade) = widget_fixture();
+        let filter = DumpFilter {
+            rows: Rows::Relationships,
+            ..DumpFilter::default()
+        };
+        let mut out = Vec::new();
+        let summary = write_dump(&facade, DumpStamp::default(), &filter, &mut out).unwrap();
+        let lines = parse_lines(&out);
+
+        assert_eq!(count(&lines, EntityType::Symbol), 0);
+        assert_eq!(
+            count(&lines, EntityType::Relationship),
+            facade.relationship_count()
+        );
+        assert_eq!(summary.symbols, 0);
+        assert_eq!(summary.relationships, facade.relationship_count());
+        assert_eq!(
+            summary.orphan_edges_dropped, 0,
+            "identity map still built from the full symbol scan"
+        );
+        for line in lines
+            .iter()
+            .filter(|e| e.meta.entity_type == Some(EntityType::Relationship))
+        {
+            let data = line.data.as_ref().unwrap();
+            for end in ["from", "to"] {
+                assert!(
+                    data[end]["name"].is_string(),
+                    "{end} carries identity: {data}"
+                );
+                assert!(data[end]["file_path"].is_string());
+                assert!(data[end]["line"].is_u64());
+            }
+        }
+    }
+    #[test]
+    fn relation_filter_keeps_only_that_kind_and_leaves_symbol_rows_alone() {
+        use crate::relationship::RelationKind;
+        let (_dir, facade) = widget_fixture();
+
+        let mut all = Vec::new();
+        write_dump(
+            &facade,
+            DumpStamp::default(),
+            &DumpFilter::default(),
+            &mut all,
+        )
+        .unwrap();
+        let all = parse_lines(&all);
+        let relations = |lines: &[Envelope<serde_json::Value>], kind: &str| {
+            lines
+                .iter()
+                .filter(|e| e.meta.entity_type == Some(EntityType::Relationship))
+                .filter(|e| e.data.as_ref().unwrap()["relation"] == kind)
+                .count()
+        };
+        let calls_total = relations(&all, "Calls");
+        assert!(
+            calls_total >= 1 && relations(&all, "Defines") >= 1,
+            "fixture carries both kinds"
+        );
+
+        let filter = DumpFilter {
+            relation: Some(RelationKind::Calls),
+            ..DumpFilter::default()
+        };
+        let mut out = Vec::new();
+        let summary = write_dump(&facade, DumpStamp::default(), &filter, &mut out).unwrap();
+        let lines = parse_lines(&out);
+
+        assert_eq!(relations(&lines, "Calls"), calls_total);
+        assert_eq!(relations(&lines, "Defines"), 0);
+        assert_eq!(count(&lines, EntityType::Relationship), calls_total);
+        assert_eq!(summary.relationships, calls_total);
+        assert_eq!(
+            count(&lines, EntityType::Symbol),
+            facade.symbol_count(),
+            "symbol rows unaffected"
+        );
+    }
+    #[test]
+    fn kind_filter_gates_symbol_rows_only() {
+        use crate::SymbolKind;
+        let (_dir, facade) = widget_fixture();
+        let functions = facade
+            .get_all_symbols()
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Function)
+            .count();
+        assert!(
+            functions >= 1 && functions < facade.symbol_count(),
+            "fixture mixes kinds"
+        );
+
+        let filter = DumpFilter {
+            kind: Some(SymbolKind::Function),
+            ..DumpFilter::default()
+        };
+        let mut out = Vec::new();
+        let summary = write_dump(&facade, DumpStamp::default(), &filter, &mut out).unwrap();
+        let lines = parse_lines(&out);
+
+        assert_eq!(count(&lines, EntityType::Symbol), functions);
+        assert!(
+            lines
+                .iter()
+                .filter(|e| e.meta.entity_type == Some(EntityType::Symbol))
+                .all(|e| e.data.as_ref().unwrap()["kind"] == "Function")
+        );
+        assert_eq!(summary.symbols, functions);
+        assert_eq!(
+            count(&lines, EntityType::Relationship),
+            facade.relationship_count(),
+            "relationship rows unaffected by --kind"
+        );
+        assert_eq!(
+            summary.orphan_edges_dropped, 0,
+            "identity map still covers every kind"
+        );
     }
 }
