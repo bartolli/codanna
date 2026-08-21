@@ -306,10 +306,16 @@ impl DiscoverStage {
             return Ok(true);
         };
 
-        // Fast path: check mtime first (stat only, no file read)
+        // Fast path: check mtime first (stat only, no file read). Mtimes are
+        // second-granular, so a rewrite inside the indexed second keeps the
+        // stored value; only an mtime older than the current second proves
+        // the file unchanged.
         let current_mtime = crate::indexing::file_info::get_file_mtime(path).unwrap_or(0);
-        if stored_mtime > 0 && current_mtime == stored_mtime {
-            // mtime unchanged = file unchanged
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if stored_mtime > 0 && current_mtime == stored_mtime && current_mtime < now_secs {
             return Ok(false);
         }
 
@@ -537,5 +543,96 @@ mod tests {
         assert!(extensions.contains("py"), "Should support .py");
         assert!(extensions.contains("ts"), "Should support .ts");
         assert!(extensions.contains("go"), "Should support .go");
+    }
+
+    fn pin_mtime(path: &Path, secs: u64) {
+        let file = fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    fn register_file(index: &DocumentIndex, path: &Path, content: &str, mtime: u64) {
+        index.start_batch().unwrap();
+        index
+            .store_file_registration(&crate::indexing::pipeline::FileRegistration {
+                path: path.to_path_buf(),
+                file_id: crate::FileId::new(1).unwrap(),
+                content_hash: calculate_hash(content),
+                language_id: crate::parsing::LanguageId::new("rust"),
+                timestamp: 0,
+                mtime,
+            })
+            .unwrap();
+        index.commit_batch().unwrap();
+    }
+
+    fn now_secs() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[test]
+    fn run_incremental_reindexes_a_same_second_rewrite() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = Arc::new(DocumentIndex::new(root.join("index"), &settings).unwrap());
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("a.rs");
+
+        // Two seconds ahead: "not older than the current second" holds for
+        // the whole test even if the wall clock crosses a boundary.
+        let hot = now_secs() + 2;
+        fs::write(&file, "fn a() {}\n").unwrap();
+        pin_mtime(&file, hot);
+        register_file(&index, &file, "fn a() {}\n", hot);
+
+        fs::write(&file, "fn a() {}\nfn b() {}\n").unwrap();
+        pin_mtime(&file, hot);
+
+        let result = DiscoverStage::new(&src, 1)
+            .with_index(Arc::clone(&index))
+            .run_incremental()
+            .unwrap();
+        assert!(
+            result.modified_files.contains(&file),
+            "a rewrite in the indexed second must reach the hash compare; got {:?}",
+            result.modified_files
+        );
+    }
+
+    #[test]
+    fn run_incremental_keeps_stat_only_skip_for_old_equal_mtime() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = Arc::new(DocumentIndex::new(root.join("index"), &settings).unwrap());
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("a.rs");
+
+        let old = now_secs() - 100;
+        fs::write(&file, "fn a() {}\n").unwrap();
+        pin_mtime(&file, old);
+        register_file(&index, &file, "fn a() {}\n", old);
+
+        // Content differs on disk but the mtime still reads as the indexed
+        // value from a past second: the stat-only path must skip it, so a
+        // hash compare would be the only way to notice this rewrite.
+        fs::write(&file, "fn a() {}\nfn b() {}\n").unwrap();
+        pin_mtime(&file, old);
+
+        let result = DiscoverStage::new(&src, 1)
+            .with_index(Arc::clone(&index))
+            .run_incremental()
+            .unwrap();
+        assert!(
+            result.modified_files.is_empty(),
+            "an old equal mtime must be skipped without a content read; got {:?}",
+            result.modified_files
+        );
     }
 }
