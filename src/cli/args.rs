@@ -99,7 +99,7 @@ fn create_custom_help() -> String {
 #[derive(Parser)]
 #[command(
     name = "codanna",
-    version = env!("CARGO_PKG_VERSION"),
+    version = env!("CODANNA_VERSION_STRING"),
     about = "Code intelligence system",
     long_about = "Index code and query relationships, symbols, and dependencies.",
     next_line_help = true,

@@ -38,3 +38,6 @@ mod test_serve_http_sessionless;
 
 #[path = "cli/test_mcp_test_client_generation.rs"]
 mod test_mcp_test_client_generation;
+
+#[path = "cli/test_version_stamp.rs"]
+mod test_version_stamp;
