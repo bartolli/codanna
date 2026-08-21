@@ -196,7 +196,7 @@ impl CodeIntelligenceClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::model::CallToolResult;
+    use rmcp::model::{CallToolResult, ResultType};
 
     #[test]
     fn absent_result_type_is_complete() {
@@ -220,9 +220,19 @@ mod tests {
     }
 
     #[test]
+    fn noncomplete_result_type_is_refused_at_parse() {
+        let err = serde_json::from_str::<CallToolResult>(r#"{"resultType":"task","content":[]}"#)
+            .expect_err("a non-complete wire result never becomes renderable output");
+        assert!(
+            err.to_string().contains("resultType"),
+            "parse refusal names the contract field: {err}"
+        );
+    }
+
+    #[test]
     fn noncomplete_result_type_is_refused_by_name() {
-        let task: CallToolResult = serde_json::from_str(r#"{"resultType":"task","content":[]}"#)
-            .expect("task wire shape deserializes");
+        let mut task = CallToolResult::success(vec![]);
+        task.result_type = Some(ResultType::TASK);
         let err = CodeIntelligenceClient::print_tool_output(&task)
             .expect_err("a task result is not renderable tool output");
         assert!(

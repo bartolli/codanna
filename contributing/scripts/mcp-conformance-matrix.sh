@@ -11,6 +11,10 @@
 #
 # Usage: ./contributing/scripts/mcp-conformance-matrix.sh
 #   CODANNA_BIN=<path> overrides the binary under test.
+#   CODANNA_LEGACY_BIN=<path> a < 0.13.0 server for the probe-death cell
+#     (no default; the cell SKIPs without it).
+#   CODANNA_PREVIOUS_BIN=<path> a >= 0.13.0 server for the previous-release
+#     cells (default: /opt/homebrew/bin/codanna).
 
 set -u
 
@@ -472,45 +476,87 @@ else
 fi
 http_stop
 
-# --- C4: probe death against a shipped legacy binary -------------------
-# mcp-test is Discover-only (the legacy fallback's population was
-# empty: shipped codanna <= 0.12.0 dies on the pre-handshake probe).
-# Contract: the death is DIAGNOSED — mcp-test fails and names the
-# probe death. Skipped when no legacy binary is present.
+# --- C4: cross-generation mcp-test cells ------------------------------
+# mcp-test is Discover-only (no legacy initialize fallback). Two server
+# generations exist on the shipped line:
+#   single-generation (< 0.13.0, rmcp 2.x) dies on the pre-handshake
+#     server/discover probe. Contract: the death is DIAGNOSED -- mcp-test
+#     exits 1 naming the probe.
+#   dual-generation (>= 0.13.0) answers the probe. Contract: the binary
+#     under test completes against the previous release, and the previous
+#     release's mcp-test completes against the binary under test.
+# Each cell is keyed to its fixture's generation and SKIPs with a named
+# reason otherwise. CODANNA_LEGACY_BIN has no default: brew autobump
+# moves /opt/homebrew/bin/codanna with every release, so it is the
+# previous release, never a legacy server.
 
-OLD_BIN=${CODANNA_LEGACY_BIN:-/opt/homebrew/bin/codanna}
-if [ -x "$OLD_BIN" ]; then
-    WS_C4="$ROOT/c4"
-    mkdir -p "$WS_C4/src" "$WS_C4/.codanna"
-    cat > "$WS_C4/src/probe.rs" <<'FIXTURE'
-pub fn fallback_probe_target() -> i32 {
-    1
-}
-FIXTURE
-    cat > "$WS_C4/.codanna/settings.toml" <<SETTINGS
-index_path = ".codanna/index"
-
-[indexing]
-indexed_paths = ["$WS_C4/src"]
-
-[semantic_search]
-enabled = false
-SETTINGS
-    if (cd "$WS_C4" && "$OLD_BIN" index src --no-progress > /dev/null 2>&1); then
-        C4="$ROOT/c4-probe-death.out"
-        (cd "$WS_C4" && timeout 30 "$BIN" mcp-test --server-binary "$OLD_BIN" > "$C4" 2>&1)
-        C4_RC=$?
-        OLD_VERSION=$("$OLD_BIN" --version 2>/dev/null)
-        if [ "$C4_RC" -eq 1 ] && grep -q "pre-handshake server/discover probe" "$C4"; then
-            pass "probe death diagnosed against $OLD_VERSION"
-        else
-            fail "probe death diagnosis" "expected exit 1 naming the probe death against $OLD_VERSION, got $C4_RC (see $C4)"
-        fi
+server_generation() {
+    local ver maj min
+    ver=$("$1" --version 2>/dev/null | awk '{print $2}')
+    maj=${ver%%.*}
+    min=${ver#*.}
+    min=${min%%.*}
+    if [ "${maj:-0}" -gt 0 ] 2>/dev/null || [ "${min:-0}" -ge 13 ] 2>/dev/null; then
+        echo dual
     else
-        echo "SKIP  probe-death diagnosis: legacy binary failed to seed a workspace"
+        echo single
+    fi
+}
+
+seed_with() {
+    local bin=$1 ws=$2
+    seed_workspace "$ws"
+    (cd "$ws" && "$bin" index src --no-progress > /dev/null 2>&1)
+}
+
+negotiated_version() {
+    grep -A1 'protocol_version' "$1" | tail -1 | tr -d ' ",'
+}
+
+LEGACY_BIN=${CODANNA_LEGACY_BIN:-}
+if [ -z "$LEGACY_BIN" ] || [ ! -x "$LEGACY_BIN" ]; then
+    echo "SKIP  probe-death diagnosis: set CODANNA_LEGACY_BIN to a < 0.13.0 binary"
+elif [ "$(server_generation "$LEGACY_BIN")" != single ]; then
+    echo "SKIP  probe-death diagnosis: $("$LEGACY_BIN" --version) is dual-generation (answers the probe); set CODANNA_LEGACY_BIN to a < 0.13.0 binary"
+elif seed_with "$LEGACY_BIN" "$ROOT/c4-legacy"; then
+    LEGACY_VERSION=$("$LEGACY_BIN" --version 2>/dev/null)
+    C4L="$ROOT/c4-probe-death.out"
+    (cd "$ROOT/c4-legacy" && timeout 30 "$BIN" mcp-test --server-binary "$LEGACY_BIN" > "$C4L" 2>&1)
+    C4L_RC=$?
+    if [ "$C4L_RC" -eq 1 ] && grep -q "pre-handshake server/discover probe" "$C4L"; then
+        pass "probe death diagnosed against $LEGACY_VERSION"
+    else
+        fail "probe death diagnosis" "expected exit 1 naming the probe death against $LEGACY_VERSION, got $C4L_RC (see $C4L)"
     fi
 else
-    echo "SKIP  probe-death diagnosis: no legacy binary at $OLD_BIN (set CODANNA_LEGACY_BIN)"
+    echo "SKIP  probe-death diagnosis: $LEGACY_BIN failed to seed a workspace"
+fi
+
+PREV_BIN=${CODANNA_PREVIOUS_BIN:-/opt/homebrew/bin/codanna}
+if [ ! -x "$PREV_BIN" ]; then
+    echo "SKIP  previous-release cells: no binary at $PREV_BIN (set CODANNA_PREVIOUS_BIN)"
+elif [ "$(server_generation "$PREV_BIN")" != dual ]; then
+    echo "SKIP  previous-release cells: $("$PREV_BIN" --version) is single-generation; point CODANNA_LEGACY_BIN at it instead"
+elif seed_with "$PREV_BIN" "$ROOT/c4-prev"; then
+    PREV_VERSION=$("$PREV_BIN" --version 2>/dev/null)
+    C4P="$ROOT/c4-prev-server.out"
+    (cd "$ROOT/c4-prev" && timeout 30 "$BIN" mcp-test --server-binary "$PREV_BIN" > "$C4P" 2>&1)
+    C4P_RC=$?
+    if [ "$C4P_RC" -eq 0 ] && grep -q '^Result:' "$C4P" && grep -q 'protocol_version' "$C4P"; then
+        pass "mcp-test completes against $PREV_VERSION server (negotiated $(negotiated_version "$C4P"))"
+    else
+        fail "previous-release server" "expected exit 0 with tool output against $PREV_VERSION, got $C4P_RC (see $C4P)"
+    fi
+    C4Q="$ROOT/c4-prev-client.out"
+    (cd "$ROOT/c4-prev" && timeout 30 "$PREV_BIN" mcp-test --server-binary "$BIN" > "$C4Q" 2>&1)
+    C4Q_RC=$?
+    if [ "$C4Q_RC" -eq 0 ] && grep -q '^Result:' "$C4Q" && grep -q 'protocol_version' "$C4Q"; then
+        pass "$PREV_VERSION mcp-test completes against the binary under test (negotiated $(negotiated_version "$C4Q"))"
+    else
+        fail "previous-release client" "expected exit 0 with tool output from $PREV_VERSION mcp-test, got $C4Q_RC (see $C4Q)"
+    fi
+else
+    echo "SKIP  previous-release cells: $PREV_BIN failed to seed a workspace"
 fi
 
 # --- summary -----------------------------------------------------------
