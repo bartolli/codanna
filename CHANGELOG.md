@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.3] - 2026-08-21
+
+Index-maintenance patch release. Segment merges that Tantivy schedules on each commit now complete before the index writer is released; previously the writer closed first and cancelled them, so every commit left one more segment behind and a long-running `serve --watch` grew without bound in segments, open files, disk, and memory. Batch incremental indexing also closes a one-second change-detection gap. Index format, emission semantics, and settings are unchanged; no rebuild is required.
+
+An index built by an earlier version compacts on its first commit after upgrading: one merge of the accumulated segments. On a long-served large index that single commit can take seconds, during which queries wait; no `codanna index --force` is needed.
+
+### Fixed
+
+- Committing a batch waits for the merges the commit scheduled, then reloads the reader over the merged segments. The segment count under repeated commits stays within the merge policy's level width instead of growing by one per commit; every index compacts, including full builds. Contributed by @aniravi24 (#120).
+- Batch incremental indexing (`codanna index` over registered roots, watcher batch sync) detects a file rewritten within the same second as its indexed version. The modification-time fast path applies only to files whose modification time is older than the current second; per-file watcher events were unaffected.
+
+### Changed
+
+- `codanna --version` and `-V` append the build commit: `codanna 0.13.3 (e7dbb76)`, with a `-dirty` suffix when built from a modified tree. Binaries built without a `.git` directory (brew source builds, crates.io installs) print the bare version.
+- Dependencies: clap 4.6.6, ignore 0.4.33, rmcp 3.1.4, tree-sitter 0.26.12, thiserror 2.0.20, rcgen 0.14.9, async-trait 0.1.92, testcontainers 0.28.0.
+
 ## [0.13.2] - 2026-08-04
 
 Windows path-handling and resolution-correctness patch release. Module identity, stored-path emission, notification URIs, and rendered paths now use one path-component contract on every platform, closing the 0.13.1 known limitation "on Windows, path handling degrades symbol resolution": the Windows test suite runs the same ten targets as Linux and macOS with zero failures. Two resolver fixes restore relationships that earlier binaries never recorded. Index format, emission semantics, and settings are unchanged; no automatic rebuild.
