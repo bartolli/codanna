@@ -80,6 +80,8 @@ pub enum EntityType {
     Document,
     Callers,
     Calls,
+    Relationship,
+    Graph,
 }
 
 /// Unified JSON output envelope.
@@ -221,6 +223,36 @@ impl<T> Envelope<T> {
             message: message.into(),
             hint: None,
             data: None,
+            error: None,
+            meta: Meta::default(),
+        }
+    }
+
+    /// Stream start marker: opens a JSON Lines stream of `result` envelopes.
+    pub fn begin(message: impl Into<String>) -> Self {
+        Self {
+            message_type: MessageType::Begin,
+            status: Status::Success,
+            code: ResultCode::Ok,
+            exit_code: 0,
+            message: message.into(),
+            hint: None,
+            data: None,
+            error: None,
+            meta: Meta::default(),
+        }
+    }
+
+    /// Stream end: the summary payload; its `exit_code` is the stream's outcome.
+    pub fn summary(data: T) -> Self {
+        Self {
+            message_type: MessageType::Summary,
+            status: Status::Success,
+            code: ResultCode::Ok,
+            exit_code: 0,
+            message: "stream complete".to_string(),
+            hint: None,
+            data: Some(data),
             error: None,
             meta: Meta::default(),
         }
@@ -551,5 +583,24 @@ mod tests {
             value["data"],
             serde_json::json!({"symbol": {"kind": "Struct"}})
         );
+    }
+    #[test]
+    fn begin_and_summary_are_stream_markers() {
+        let begin: Envelope<()> = Envelope::begin("dump").with_entity_type(EntityType::Graph);
+        let json = begin.to_json_compact().unwrap();
+        assert!(json.starts_with("{\"type\":\"begin\""), "{json}");
+        assert!(json.contains("\"data\":null"));
+        assert!(json.contains("\"entity_type\":\"graph\""));
+
+        let summary = Envelope::summary(serde_json::json!({"symbols": 2}))
+            .with_entity_type(EntityType::Graph)
+            .with_count(3);
+        let json = summary.to_json_compact().unwrap();
+        assert!(json.starts_with("{\"type\":\"summary\""), "{json}");
+        assert!(json.contains("\"exit_code\":0"));
+        assert!(json.contains("\"count\":3"));
+        let back: Envelope<serde_json::Value> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.message_type, MessageType::Summary);
+        assert_eq!(back.meta.entity_type, Some(EntityType::Graph));
     }
 }

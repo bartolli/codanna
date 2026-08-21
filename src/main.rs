@@ -868,6 +868,14 @@ async fn main() {
             std::process::exit(exit_code as i32);
         }
 
+        Commands::Dump => {
+            let exit_code = codanna::cli::commands::dump::run(
+                indexer.as_ref().expect("dump requires indexer"),
+                &config,
+            );
+            std::process::exit(exit_code as i32);
+        }
+
         Commands::Mcp {
             tool,
             positional,

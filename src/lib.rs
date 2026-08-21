@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod display;
 pub mod documents;
+pub mod dump;
 pub mod error;
 pub mod git;
 pub mod indexing;

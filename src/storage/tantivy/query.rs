@@ -3,12 +3,31 @@ use crate::{FileId, RelationKind, Relationship, SymbolId, SymbolKind};
 use std::path::PathBuf;
 use tantivy::{
     TantivyDocument as Document, Term,
-    collector::{Count, TopDocs},
+    collector::{Count, DocSetCollector, TopDocs},
     query::{BooleanQuery, FuzzyTermQuery, Occur, Query, QueryParser, TermQuery},
     schema::{IndexRecordOption, Value},
 };
 
 use super::{DocumentIndex, SearchResult};
+
+/// Stored `relation_kind` text is the `Debug` name of [`RelationKind`].
+fn relation_kind_from_stored(kind: &str) -> Option<RelationKind> {
+    Some(match kind {
+        "Calls" => RelationKind::Calls,
+        "CalledBy" => RelationKind::CalledBy,
+        "Extends" => RelationKind::Extends,
+        "ExtendedBy" => RelationKind::ExtendedBy,
+        "Implements" => RelationKind::Implements,
+        "ImplementedBy" => RelationKind::ImplementedBy,
+        "Uses" => RelationKind::Uses,
+        "UsedBy" => RelationKind::UsedBy,
+        "Defines" => RelationKind::Defines,
+        "DefinedIn" => RelationKind::DefinedIn,
+        "References" => RelationKind::References,
+        "ReferencedBy" => RelationKind::ReferencedBy,
+        _ => return None,
+    })
+}
 
 impl DocumentIndex {
     /// Search returning every match: count-first, then an exact-limit drain.
@@ -483,6 +502,79 @@ impl DocumentIndex {
         Ok(symbols)
     }
 
+    /// Visit every symbol row once. Bulk read for dump surfaces; no
+    /// ordering guarantee.
+    pub fn for_each_symbol<E: From<StorageError>>(
+        &self,
+        mut visit: impl FnMut(crate::Symbol) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "symbol"),
+            IndexRecordOption::Basic,
+        );
+        let addresses = searcher
+            .search(&query, &DocSetCollector)
+            .map_err(StorageError::from)?;
+        for address in addresses {
+            let doc = searcher
+                .doc::<Document>(address)
+                .map_err(StorageError::from)?;
+            visit(self.document_to_symbol(&doc)?)?;
+        }
+        Ok(())
+    }
+
+    /// Visit every relationship row once as `(from, to, relationship)` with
+    /// its persisted metadata. Rows with an unknown stored kind are skipped.
+    /// No ordering guarantee.
+    pub fn for_each_relationship<E: From<StorageError>>(
+        &self,
+        mut visit: impl FnMut(SymbolId, SymbolId, Relationship) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "relationship"),
+            IndexRecordOption::Basic,
+        );
+        let addresses = searcher
+            .search(&query, &DocSetCollector)
+            .map_err(StorageError::from)?;
+        for address in addresses {
+            let doc = searcher
+                .doc::<Document>(address)
+                .map_err(StorageError::from)?;
+            let endpoint = |field: tantivy::schema::Field, name: &str| {
+                doc.get_first(field)
+                    .and_then(|v| v.as_u64())
+                    .and_then(|id| SymbolId::new(id as u32))
+                    .ok_or_else(|| StorageError::InvalidFieldValue {
+                        field: name.to_string(),
+                        reason: "not a valid u32".to_string(),
+                    })
+            };
+            let from_id = endpoint(self.schema.from_symbol_id, "from_symbol_id")?;
+            let to_id = endpoint(self.schema.to_symbol_id, "to_symbol_id")?;
+            let Some(kind) = doc
+                .get_first(self.schema.relation_kind)
+                .and_then(|v| v.as_str())
+                .and_then(relation_kind_from_stored)
+            else {
+                continue;
+            };
+            let weight = doc
+                .get_first(self.schema.relation_weight)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+            let mut relationship = Relationship::new(kind).with_weight(weight);
+            if let Some(metadata) = self.metadata_for_relationship_doc(&doc) {
+                relationship = relationship.with_metadata(metadata);
+            }
+            visit(from_id, to_id, relationship)?;
+        }
+        Ok(())
+    }
+
     /// Get all symbols (use with caution on large indexes)
     pub fn get_all_symbols(&self, limit: usize) -> StorageResult<Vec<crate::Symbol>> {
         let searcher = self.reader.searcher();
@@ -941,77 +1033,11 @@ impl DocumentIndex {
     pub(crate) fn query_relationships(
         &self,
     ) -> StorageResult<Vec<(SymbolId, SymbolId, crate::Relationship)>> {
-        let searcher = self.reader.searcher();
-        let query = TermQuery::new(
-            Term::from_field_text(self.schema.doc_type, "relationship"),
-            IndexRecordOption::Basic,
-        );
-
-        // Use a collector that retrieves all documents
-        let collector = TopDocs::with_limit(1_000_000).order_by_score(); // Adjust limit as needed
-        let top_docs = searcher.search(&query, &collector)?;
-
         let mut relationships = Vec::new();
-        for (_score, doc_address) in top_docs {
-            let doc: Document = searcher.doc(doc_address)?;
-
-            let from_id = doc
-                .get_first(self.schema.from_symbol_id)
-                .and_then(|v| v.as_u64())
-                .and_then(|id| SymbolId::new(id as u32))
-                .ok_or(StorageError::InvalidFieldValue {
-                    field: "from_symbol_id".to_string(),
-                    reason: "not a valid u32".to_string(),
-                })?;
-
-            let to_id = doc
-                .get_first(self.schema.to_symbol_id)
-                .and_then(|v| v.as_u64())
-                .and_then(|id| SymbolId::new(id as u32))
-                .ok_or(StorageError::InvalidFieldValue {
-                    field: "to_symbol_id".to_string(),
-                    reason: "not a valid u32".to_string(),
-                })?;
-
-            let kind_str = doc
-                .get_first(self.schema.relation_kind)
-                .and_then(|v| v.as_str())
-                .ok_or(StorageError::InvalidFieldValue {
-                    field: "relation_kind".to_string(),
-                    reason: "missing from document".to_string(),
-                })?;
-
-            let weight = doc
-                .get_first(self.schema.relation_weight)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1.0) as f32;
-
-            // Parse RelationKind from string
-            let kind = match kind_str {
-                "Calls" => RelationKind::Calls,
-                "CalledBy" => RelationKind::CalledBy,
-                "Extends" => RelationKind::Extends,
-                "ExtendedBy" => RelationKind::ExtendedBy,
-                "Implements" => RelationKind::Implements,
-                "ImplementedBy" => RelationKind::ImplementedBy,
-                "Uses" => RelationKind::Uses,
-                "UsedBy" => RelationKind::UsedBy,
-                "Defines" => RelationKind::Defines,
-                "DefinedIn" => RelationKind::DefinedIn,
-                "References" => RelationKind::References,
-                "ReferencedBy" => RelationKind::ReferencedBy,
-                _ => continue, // Skip unknown relation kinds
-            };
-
-            let mut relationship = Relationship::new(kind).with_weight(weight);
-
-            if let Some(metadata) = self.metadata_for_relationship_doc(&doc) {
-                relationship = relationship.with_metadata(metadata);
-            }
-
-            relationships.push((from_id, to_id, relationship));
-        }
-
+        self.for_each_relationship::<StorageError>(|from, to, rel| {
+            relationships.push((from, to, rel));
+            Ok(())
+        })?;
         Ok(relationships)
     }
 

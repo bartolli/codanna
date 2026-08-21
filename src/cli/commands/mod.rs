@@ -6,6 +6,7 @@
 pub mod benchmark;
 pub mod directories;
 pub mod documents;
+pub mod dump;
 pub mod index;
 pub mod init;
 pub mod mcp;

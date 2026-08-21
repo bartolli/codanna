@@ -448,6 +448,23 @@ impl IndexFacade {
             })
     }
 
+    /// Visit every symbol row once (bulk read; ordering unspecified).
+    pub fn for_each_symbol<E: From<crate::storage::StorageError>>(
+        &self,
+        visit: impl FnMut(Symbol) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.document_index.for_each_symbol(visit)
+    }
+
+    /// Visit every relationship row once as `(from, to, relationship)`
+    /// (bulk read; ordering unspecified).
+    pub fn for_each_relationship<E: From<crate::storage::StorageError>>(
+        &self,
+        visit: impl FnMut(SymbolId, SymbolId, crate::relationship::Relationship) -> Result<(), E>,
+    ) -> Result<(), E> {
+        self.document_index.for_each_relationship(visit)
+    }
+
     /// Get symbols by file ID.
     ///
     /// Returns empty vec on error for SimpleIndexer API compatibility.

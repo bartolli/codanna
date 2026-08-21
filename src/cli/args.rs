@@ -187,6 +187,14 @@ pub enum Commands {
         query: RetrieveQuery,
     },
 
+    /// Dump the resolved graph as JSON Lines
+    #[command(
+        about = "Dump all symbols and relationships as JSON Lines",
+        long_about = "Stream the whole index: a begin envelope, one result envelope per symbol, one per relationship, and a terminal summary envelope. Every line is the standard JSON envelope; ordering is unspecified.",
+        after_help = "Examples:\n  codanna dump > graph.jsonl\n  codanna dump | jq -c 'select(.type==\"result\") | .data'\n  codanna dump | jq -c 'select(.meta.entity_type==\"relationship\") | .data'"
+    )]
+    Dump,
+
     /// Show current configuration settings
     #[command(about = "Display active settings from .codanna/settings.toml")]
     Config,

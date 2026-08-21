@@ -1,27 +1,34 @@
 //! Scratch audit tool: dump every relationship in a codanna Tantivy index
 //! as TSV with stable symbol identities (name@file:line/kind), for
-//! edge-set diffing between index runs. Not part of the product surface.
+//! edge-set diffing between index runs. Not part of the product surface;
+//! reads through the same `DocumentIndex` scan as `codanna dump`.
 //!
 //! Usage: dump_edges <path-to-.codanna/index/tantivy> [--symbols|--dups]
 
 use std::collections::HashMap;
-use std::path::Path;
 
-use tantivy::collector::DocSetCollector;
-use tantivy::query::TermQuery;
-use tantivy::schema::{IndexRecordOption, Term, Value};
-use tantivy::{Index, TantivyDocument};
+use codanna::Symbol;
+use codanna::config::Settings;
+use codanna::storage::{DocumentIndex, StorageError};
 
-fn text_field(doc: &TantivyDocument, field: tantivy::schema::Field) -> Option<String> {
-    doc.get_first(field)
-        .and_then(|v| v.as_str().map(str::to_owned))
+/// (name, file_path, line, kind, module_path) -- stored line (0-indexed).
+type SymbolIdentity = (String, String, u64, String, String);
+
+fn identity(symbol: &Symbol) -> SymbolIdentity {
+    (
+        symbol.name.to_string(),
+        symbol.file_path.to_string(),
+        u64::from(symbol.range.start_line),
+        format!("{:?}", symbol.kind),
+        symbol
+            .module_path
+            .as_deref()
+            .unwrap_or_default()
+            .to_string(),
+    )
 }
 
-fn u64_field(doc: &TantivyDocument, field: tantivy::schema::Field) -> Option<u64> {
-    doc.get_first(field).and_then(|v| v.as_u64())
-}
-
-fn main() -> tantivy::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let index_dir = args
         .next()
@@ -30,59 +37,24 @@ fn main() -> tantivy::Result<()> {
     let dump_symbols = mode.as_deref() == Some("--symbols");
     let dump_dups = mode.as_deref() == Some("--dups");
 
-    let index = Index::open_in_dir(Path::new(&index_dir))?;
-    let schema = index.schema();
-    let reader = index.reader()?;
-    let searcher = reader.searcher();
-
-    let f = |name: &str| {
-        schema
-            .get_field(name)
-            .unwrap_or_else(|_| panic!("schema missing field {name}"))
-    };
-    let doc_type = f("doc_type");
-    let symbol_id = f("symbol_id");
-    let name = f("name");
-    let file_path = f("file_path");
-    let line_number = f("line_number");
-    let kind = f("kind");
-    let module_path = f("module_path");
-    let from_symbol_id = f("from_symbol_id");
-    let to_symbol_id = f("to_symbol_id");
-    let relation_kind = f("relation_kind");
-    let relation_line = f("relation_line");
-    let relation_receiver = f("relation_receiver");
-    let relation_static_call = f("relation_static_call");
+    let settings = Settings::default();
+    let index = DocumentIndex::new(&index_dir, &settings)?;
 
     // Pass 1: symbol_id -> identity
-    let sym_query = TermQuery::new(
-        Term::from_field_text(doc_type, "symbol"),
-        IndexRecordOption::Basic,
-    );
-    type SymbolIdentity = (String, String, u64, String, String);
-    let sym_docs = searcher.search(&sym_query, &DocSetCollector)?;
     let mut symbols: HashMap<u64, SymbolIdentity> = HashMap::new();
     let mut all_rows: HashMap<u64, Vec<SymbolIdentity>> = HashMap::new();
     let mut dup_ids = 0usize;
-    for addr in sym_docs {
-        let doc: TantivyDocument = searcher.doc(addr)?;
-        let Some(id) = u64_field(&doc, symbol_id) else {
-            continue;
-        };
-        let ident = (
-            text_field(&doc, name).unwrap_or_default(),
-            text_field(&doc, file_path).unwrap_or_default(),
-            u64_field(&doc, line_number).unwrap_or(0),
-            text_field(&doc, kind).unwrap_or_default(),
-            text_field(&doc, module_path).unwrap_or_default(),
-        );
+    index.for_each_symbol::<StorageError>(|symbol| {
+        let id = u64::from(symbol.id.value());
+        let ident = identity(&symbol);
         if dump_dups {
             all_rows.entry(id).or_default().push(ident.clone());
         }
         if symbols.insert(id, ident).is_some() {
             dup_ids += 1;
         }
-    }
+        Ok(())
+    })?;
     eprintln!("symbols: {} (duplicate ids: {dup_ids})", symbols.len());
 
     if dump_dups {
@@ -118,42 +90,37 @@ fn main() -> tantivy::Result<()> {
     }
 
     // Pass 2: relationships
-    let rel_query = TermQuery::new(
-        Term::from_field_text(doc_type, "relationship"),
-        IndexRecordOption::Basic,
-    );
-    let rel_docs = searcher.search(&rel_query, &DocSetCollector)?;
     let mut rows: Vec<String> = Vec::new();
     let mut orphans = 0usize;
-    for addr in rel_docs {
-        let doc: TantivyDocument = searcher.doc(addr)?;
-        let rk = text_field(&doc, relation_kind).unwrap_or_default();
-        let from = u64_field(&doc, from_symbol_id);
-        let to = u64_field(&doc, to_symbol_id);
-        let line = u64_field(&doc, relation_line)
+    index.for_each_relationship::<StorageError>(|from, to, rel| {
+        let rk = format!("{:?}", rel.kind);
+        let meta = rel.metadata.as_ref();
+        let line = meta
+            .and_then(|m| m.line)
             .map(|l| l.to_string())
             .unwrap_or_default();
-        let recv = text_field(&doc, relation_receiver).unwrap_or_default();
-        let is_static = u64_field(&doc, relation_static_call)
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-        let fmt = |id: Option<u64>| -> String {
-            match id.and_then(|i| symbols.get(&i)) {
+        let recv = meta.and_then(|m| m.receiver.as_deref()).unwrap_or_default();
+        let is_static = if meta.is_some_and(|m| m.static_call) {
+            "1"
+        } else {
+            ""
+        };
+        let fmt = |id: u64| -> String {
+            match symbols.get(&id) {
                 Some((n, fp, ln, k, _)) => format!("{n}@{fp}:{ln}/{k}"),
-                None => {
-                    format!("<orphan:{id:?}>")
-                }
+                None => format!("<orphan:Some({id})>"),
             }
         };
-        let from_s = fmt(from);
-        let to_s = fmt(to);
+        let from_s = fmt(u64::from(from.value()));
+        let to_s = fmt(u64::from(to.value()));
         if from_s.starts_with("<orphan") || to_s.starts_with("<orphan") {
             orphans += 1;
         }
         rows.push(format!(
             "{rk}\t{from_s}\t{to_s}\t{line}\t{recv}\t{is_static}"
         ));
-    }
+        Ok(())
+    })?;
     eprintln!(
         "relationships: {} (orphan endpoints: {orphans})",
         rows.len()
