@@ -36,13 +36,19 @@ Enforces the measurement protocol invariants that prose could not:
     against itself and reports a confident empty result.
 
 Usage:
-  e2e-battery.py run  --binary PATH --label NAME --dump PATH \
+  e2e-battery.py run  --binary PATH --label NAME [--dump PATH] \
                       --corpus NAME=FIXTURE_PATH@PIN [...] \
                       --out DIR [--runs N] [--semantic on|off] [--incremental N]
   e2e-battery.py diff --out DIR --corpus NAME --old LABEL --new LABEL
 
 Pins are REQUIRED per corpus (numbers rot; the caller states them).
 No cargo invocations here: binaries are built by the caller.
+
+Edge rows are always in dump_edges TSV form (relation, name@/abs/file:line/kind
+endpoints with stored absolute paths and 0-indexed lines, call line, receiver,
+static flag). The default producer is the release binary's `dump --edges` run
+in the leg workspace; `--dump PATH` keeps the dump_edges example for bare
+tantivy dirs and pre-`dump` binaries. Both yield byte-identical rows.
 """
 
 import argparse
@@ -282,6 +288,47 @@ def verify_semantic_in_log(log_text, want_enabled, context):
         )
 
 
+def dump_rows(binary, dump, ws, corpus):
+    """Edge rows of the workspace's index in dump_edges TSV form.
+
+    `dump` set: the example binary on the tantivy dir (legacy producer).
+    Otherwise `codanna dump --edges` in the workspace, each relationship
+    envelope rendered back to the TSV row: endpoint paths re-absolutized
+    against the corpus root (the verb renders them relative to it), every
+    line column back to the stored 0-indexed value, static flag as `1`/``.
+    """
+    tantivy = ws / ".codanna" / "index" / "tantivy"
+    if not tantivy.is_dir():
+        raise SystemExit(f"{ws.name}: no tantivy dir after index")
+    if dump is not None:
+        return run([str(dump), str(tantivy)]).stdout.splitlines()
+    out = run([str(binary), "dump", "--edges"], cwd=ws).stdout
+
+    def endpoint(e):
+        path = Path(e["file_path"])
+        if not path.is_absolute():
+            path = corpus / path
+        return f"{e['name']}@{path}:{e['line'] - 1}/{e['kind']}"
+
+    rows = []
+    for raw in out.splitlines():
+        if not raw:
+            continue
+        env = json.loads(raw)
+        if env.get("type") != "result":
+            continue
+        d = env["data"]
+        meta = d.get("metadata") or {}
+        line = "" if meta.get("line") is None else str(meta["line"] - 1)
+        receiver = meta.get("receiver") or ""
+        static = "1" if meta.get("static_call") else ""
+        rows.append(
+            f"{d['relation']}\t{endpoint(d['from'])}\t{endpoint(d['to'])}"
+            f"\t{line}\t{receiver}\t{static}"
+        )
+    return rows
+
+
 def leg(binary, dump, corpus, out_dir, label, suffix, semantic_on):
     ws = out_dir / f"ws-{label}{suffix}"
     if ws.exists():
@@ -293,10 +340,7 @@ def leg(binary, dump, corpus, out_dir, label, suffix, semantic_on):
     log_text = (log.stdout or "") + (log.stderr or "")
     (out_dir / f"index-{label}{suffix}.log").write_text(log_text)
     verify_semantic_in_log(log_text, semantic_on, f"{out_dir.name} {label}{suffix}")
-    tantivy = ws / ".codanna" / "index" / "tantivy"
-    if not tantivy.is_dir():
-        raise SystemExit(f"{out_dir.name} {label}{suffix}: no tantivy dir after index")
-    edges = run([str(dump), str(tantivy)]).stdout.splitlines()
+    edges = dump_rows(binary, dump, ws, corpus)
     edge_file = out_dir / f"{label}{suffix}.edges"
     edge_file.write_text("\n".join(sorted(edges)) + ("\n" if edges else ""))
     record_leg_binary(out_dir, f"{label}{suffix}", builder_commit(ws))
@@ -374,10 +418,7 @@ def incremental_leg(
     log = run([str(binary), "index", str(corpus)], cwd=ws)
     log_text = (log.stdout or "") + (log.stderr or "")
     verify_semantic_in_log(log_text, semantic_on, f"{out_dir.name} {label}.incr fresh")
-    tantivy = ws / ".codanna" / "index" / "tantivy"
-    if not tantivy.is_dir():
-        raise SystemExit(f"{out_dir.name} {label}.incr: no tantivy dir after index")
-    fresh = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
+    fresh = sorted(dump_rows(binary, dump, ws, corpus))
     fresh_file = out_dir / f"{label}.fresh.edges"
     fresh_file.write_text("\n".join(fresh) + ("\n" if fresh else ""))
     record_leg_binary(out_dir, label, builder_commit(ws))
@@ -398,7 +439,6 @@ def incremental_leg(
             semantic_on,
             targets,
             ws,
-            tantivy,
             touch_shape,
         )
     try:
@@ -417,7 +457,7 @@ def incremental_leg(
         # Bare `index` drives the incremental lane over the registered
         # indexed paths -- the same entry point as production.
         run([str(binary), "index"], cwd=ws)
-        incr = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
+        incr = sorted(dump_rows(binary, dump, ws, corpus))
     finally:
         # The corpus dir is reused by later legs, and ensure_corpus rejects a
         # dirty tree. Restoring here keeps the touch invisible to the protocol.
@@ -458,7 +498,7 @@ def incremental_leg(
 
 
 def relocation_leg(
-    binary, dump, corpus, out_dir, label, semantic_on, targets, ws, tantivy, shape
+    binary, dump, corpus, out_dir, label, semantic_on, targets, ws, shape
 ):
     """Relocate or delete each target, re-index WITHOUT force, diff
     against a fresh index of the mutated tree.
@@ -504,7 +544,7 @@ def relocation_leg(
             else:
                 old.unlink()
         run([str(binary), "index"], cwd=ws)
-        incr = sorted(run([str(dump), str(tantivy)]).stdout.splitlines())
+        incr = sorted(dump_rows(binary, dump, ws, corpus))
 
         oracle_ws = out_dir / f"ws-{label}.incr-oracle"
         if oracle_ws.exists():
@@ -519,8 +559,7 @@ def relocation_leg(
         verify_semantic_in_log(
             log_text, semantic_on, f"{out_dir.name} {label}.incr rename-oracle"
         )
-        oracle_tantivy = oracle_ws / ".codanna" / "index" / "tantivy"
-        oracle = sorted(run([str(dump), str(oracle_tantivy)]).stdout.splitlines())
+        oracle = sorted(dump_rows(binary, dump, oracle_ws, corpus))
     finally:
         # Plain filesystem mutations, restored in place: git checkout
         # cannot see renames and would leave the corpus dirty for the
@@ -579,9 +618,9 @@ def relocation_leg(
 def cmd_run(args):
     out = Path(args.out).resolve()
     binary = Path(args.binary).resolve()
-    dump = Path(args.dump).resolve()
+    dump = Path(args.dump).resolve() if args.dump else None
     for p, what in [(binary, "--binary"), (dump, "--dump")]:
-        if not p.is_file():
+        if p is not None and not p.is_file():
             raise SystemExit(f"{what} {p} is not a file")
     semantic_on = args.semantic == "on"
     if args.incremental and args.runs != 1:
@@ -709,7 +748,11 @@ def main():
     r = sub.add_parser("run", help="index corpora and capture sorted edge dumps")
     r.add_argument("--binary", required=True, help="release codanna binary")
     r.add_argument("--label", required=True, help="leg label (pre/mid/post/...)")
-    r.add_argument("--dump", required=True, help="dump_edges example binary")
+    r.add_argument(
+        "--dump",
+        help="dump_edges example binary; default: the release binary's own "
+        "`dump --edges` in each leg workspace, rendered to the same TSV rows",
+    )
     r.add_argument(
         "--corpus",
         action="append",
