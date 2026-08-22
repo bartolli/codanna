@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "codanna",
+  "owner": {
+    "name": "Angel Bartolli"
+  },
+  "plugins": [
+    {
+      "name": "codanna-toolset",
+      "source": "./agents/plugins/claude/codanna-toolset",
+      "description": "Codanna toolset for Claude Code: x-ray (semantic search + relationship traversal with 3D neighbourhood, radial tree and edge-bundle views) and graph (the whole index as a module disc with hubs at the centre, timeline and heatmap). Needs the codanna CLI.",
+      "version": "0.11.2",
+      "author": {
+        "name": "Angel Bartolli"
+      },
+      "category": "development",
+      "strict": false
+    }
+  ],
+  "description": "Claude Code plugins for codanna, the code-intelligence CLI and MCP server: x-ray and graph views over a codanna index."
+}

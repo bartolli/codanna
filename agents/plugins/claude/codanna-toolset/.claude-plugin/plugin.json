@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "codanna-toolset",
+  "version": "0.11.2",
+  "description": "Codanna toolset for Claude Code: x-ray (semantic search + relationship traversal with 3D neighbourhood, radial tree and edge-bundle views) and graph (the whole index as a module disc with hubs at the centre, timeline and heatmap). Needs the codanna CLI.",
+  "author": {
+    "name": "Angel Bartolli"
+  },
+  "license": "MIT",
+  "keywords": [
+    "code indexing",
+    "semantic search"
+  ]
+}
