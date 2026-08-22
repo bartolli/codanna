@@ -65,7 +65,7 @@ prefix; a symbol with no `module_path` falls back to its file path segments.
 - Wedge angle = module share of the drawn symbols; a wedge reaching the rim with few rings is sparse, many tight rings is dense
 - Centre of a wedge = its hubs (highest degree over the chosen relations); the rim = leaves
 - Hover: the blue web is the symbol's edges; the detail panel (click) shows the highlighted signature, its `file:start-end`, and the connected symbols grouped by relation and direction (Calls / Called by, Uses / Used by, Implements..., `xN` = several call sites)
-- Camera: drag to pan, wheel or pinch to zoom toward the pointer, the `+` / `-` / `fit` cluster bottom-left (Fit recentres the whole disc)
+- Camera: drag to pan, wheel or pinch to zoom toward the pointer, the `+` / `-` / `fit` cluster bottom-right (Fit recentres the whole disc)
 - Legend eye hides a module and the rest regrow into a full circle; legend label pushes the module out and rings it -- highlight and visibility are separate axes
 - Heatmap day hover/click rings every symbol whose file entered git that day; `mark today` marks files touched today (mtime)
 - 51% of the default-kind symbols on a typical index have no Calls edge (constants, type aliases, trait items): they are the `(unlinked)` group. Narrow `--kinds`, widen `--relation`, or `--unlinked drop` -- see the table above
