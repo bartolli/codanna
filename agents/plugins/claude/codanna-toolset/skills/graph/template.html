@@ -2781,13 +2781,15 @@
   // The focus web, drawn once more ABOVE the dim notes. Sigma paints every edge on
   // its bottom layer and every node above that, so the edges lit by a hover or a
   // click ran under the notes they crossed and each dim disc cut a grey gap out of a
-  // blue line. The hovers canvas sits above the nodes layer and below hoverNodes,
-  // which re-draws every `highlighted` note -- so stroking the focus edges here, and
-  // marking the focus set highlighted in nodeStyle, stacks dim notes < web < lit
-  // notes with nothing else changed. Geometry is the curve program's own: control
-  // point = chord midpoint + curvature x the chord normal; thickness =
-  // max(minEdgeThickness, scaleSize(size)); colour = the edge reducer's. Alpha follows
-  // the hover ramp so the web arrives with the dim instead of popping in over it.
+  // blue line. The hovers canvas sits above the nodes layer, so stroking the focus
+  // edges here and then re-drawing the focus neighbours' discs over them stacks dim
+  // notes < web < lit notes -- on this one canvas, and BELOW the label pill that
+  // drawHover paints next. (Marking the neighbours `highlighted` instead lifts them
+  // onto hoverNodes, which is above the pill too: measured, the lit discs ate the
+  // focus note's name.) Geometry is the curve program's own: control point = chord
+  // midpoint + curvature x the chord normal; thickness = max(minEdgeThickness,
+  // scaleSize(size)); colour = the edge reducer's. Alpha follows the hover ramp so the
+  // web arrives with the dim instead of popping in over it.
   function drawFocusWeb(ctx, data, settings) {
     var f = state.hovered || state.selected;
     if (!f || data.key !== f || state.query) return;
@@ -2818,6 +2820,18 @@
       ctx.strokeStyle = ed.color;
       ctx.stroke();
     });
+    });
+    // The lit neighbours, once more on top of the web. Plain discs only: a halo-typed
+    // note keeps its ring, and stays under the web rather than being flattened here.
+    Object.keys(set).forEach(function (n) {
+      if (n === f) return;
+      var nd = renderer.getNodeDisplayData(n);
+      if (!nd || nd.hidden || nd.type === "halo") return;
+      var p = renderer.graphToViewport(graph.getNodeAttributes(n));
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, renderer.scaleSize(nd.size), 0, 2 * Math.PI);
+      ctx.fillStyle = nd.color;
+      ctx.fill();
     });
     ctx.restore();
   }
@@ -2898,9 +2912,7 @@
           r.color = mixHex(r.color || nodeColor(id), THEME.dim, ht);
           r.label = ""; r.zIndex = 0; return r;
         }
-        // The neighbours go `highlighted` so hoverNodes re-draws them above the focus
-        // web (see drawFocusWeb); the focus note itself keeps the label timing below.
-        if (focus) { r.zIndex = 2; if (id !== focusNode) r.highlighted = true; }
+        if (focus) r.zIndex = 2;
 
         if (id === focusNode) {
           r.size = (r.size || a.size) * (1 + HOVER_GROW * ht);

@@ -15,7 +15,7 @@ re-apply the hunks below (each is tagged `codanna:` in the file, so
 | PNG name | `codanna-graph.png` |
 | camera | `enableCameraPanning: true`, the centre lock reduced to angle-only, `#zoomctl` (+ / - / fit) wired to `animatedZoom` / `animatedUnzoom` / `fit()` -- upstream pins the camera to the disc centre by design; a 10k-symbol disc needs its rim reachable |
 | palette seam | `injectedPalette()` in `readTheme` + `THEME.slots.length` in `buildColors`: `window.VAULT_PALETTE = {dark, light}` from the CLI replaces the ten documented slots when the index has more groups (`lib/palette.mjs`, golden-angle OKLCH hues at the documented median L/C) |
-| focus web | `drawFocusWeb` + the focus set going `highlighted` -- lit edges drawn above dim discs. Also applied upstream (not a codanna-specific change). |
+| focus web | `drawFocusWeb`: the lit edges stroked once more on the hovers canvas, then the focus neighbours' discs re-drawn over them, under the label pill -- dim discs < web < lit discs < pill. (Not by marking the neighbours `highlighted`: that lifts them above the pill too.) Also offered upstream (not a codanna-specific change). |
 
 Data contract the template reads (`window.VAULT_DATA`): `nodes[{id,label,folder,dirs,sub,type,tags,created,touched,words,deg}]`,
 `edges[{s,t,w}]`, `stats{nodes,edges,orphans,unresolved,files,templatesExcluded,ghostsIncluded}`, `vault`, `generated`,
