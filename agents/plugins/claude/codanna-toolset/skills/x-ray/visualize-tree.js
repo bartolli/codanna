@@ -9,6 +9,7 @@
  * Usage:
  *   node visualize-tree.js [--root <module prefix>] [--depth N] [--kinds a,b,c]
  *                          [--from graph.jsonl] [--binary PATH] [--no-open] [--light]
+ *                          [--radial] (radial poster view; default is the collapsible tree)
  *   --root   keep symbols under this module prefix (e.g. crate::indexing or
  *            examples.python); default: whole index
  *   --depth  collapse nodes deeper than N into their ancestor with a count
@@ -21,6 +22,8 @@
 const path = require('path');
 const { readDump } = require('./graph/dump');
 const { generateTreeHTML } = require('./graph/tree-render');
+const { generateCollapseHTML } = require('./graph/collapse-render');
+const { buildDetails, sidsInTree } = require('./graph/details');
 const { buildHierarchy, DEFAULT_KINDS } = require('./graph/hierarchy');
 const { saveArtifact, openFile } = require('./graph/publish');
 
@@ -37,6 +40,7 @@ function parseArgs() {
     else if (a === '--binary') o.binary = args[++i];
     else if (a === '--no-open') o.open = false;
     else if (a === '--light') o.theme = 'light';
+    else if (a === '--radial') o.view = 'radial';
     else { console.error(`unknown argument ${a}`); process.exit(1); }
   }
   return o;
@@ -53,7 +57,12 @@ if (leaves === 0) { console.error('nothing under that root / kinds'); process.ex
 
 const title = `${hierarchy.name} - Code tree`;
 const subtitle = `${graph.summary.symbols} symbols in the index` + (opts.root ? `, root ${opts.root}` : '') + (Number.isFinite(opts.depth) ? `, depth ${opts.depth}` : '');
-const html = generateTreeHTML(hierarchy, { title, subtitle, workingDir, leaves, legendKinds: [...opts.kinds], theme: opts.theme });
+// Default: the collapsible left-to-right tree (drill-down, labels at rest);
+// --radial keeps the all-at-once radial poster.
+const details = buildDetails(graph, sidsInTree(hierarchy));
+const html = opts.view === 'radial'
+  ? generateTreeHTML(hierarchy, { title, subtitle, workingDir, leaves, legendKinds: [...opts.kinds], theme: opts.theme, details })
+  : generateCollapseHTML(hierarchy, { title, subtitle, workingDir, legendKinds: [...opts.kinds], theme: opts.theme, details });
 const safeName = (opts.root || 'index').replace(/[^a-zA-Z0-9_-]/g, '_');
 const artifactFile = saveArtifact(html, `tree-${safeName}`, workingDir);
 console.log(`\nTree saved to: ${artifactFile}`);

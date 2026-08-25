@@ -2677,8 +2677,12 @@
   // How far the hover treatment should be applied for this frame. A CLICK selection has
   // no tween and must not be animated by whatever the pointer is doing, so it is always
   // fully applied; only a hover ramps.
+  // codanna: pinned at 1 while the hovered note IS the selected one. Selection already
+  // holds the focus treatment at full; letting the tween drive it ramped the node's
+  // size, the web's alpha and the dim toward zero on leave and snapped them back when
+  // the tween released state.hovered -- a flick on every mouse-out of the active note.
   function hoverAmount() {
-    return state.hovered ? hoverT : 1;
+    return state.hovered && state.hovered !== state.selected ? hoverT : 1;
   }
 
   function hoverTo(aim) {
@@ -4348,7 +4352,7 @@
       (c.group ? "group: " + esc(c.group) + " &middot; " : "") +
       (c.root ? "scope: " + esc(c.root) + " &middot; " : "") +
       (c.symbolsTotal ? "index: " + c.symbolsTotal + " symbols, " + c.relationshipsTotal + " relationships<br>" : "") +
-      (c.dates === "git" ? "dates: first commit of each file &middot; " : "dates: none &middot; ") +
+      (c.dates === "blame" ? "dates: per-symbol via git blame &middot; " : c.dates === "git" ? "dates: first commit of each file &middot; " : "dates: none &middot; ") +
       (c.palette ? "colours: " + esc(c.palette) + " &middot; " : "") +
       (c.unlinked === "drop" ? "unlinked: dropped at build &middot; " : "") +
       "Generated " + esc(DATA.generated);

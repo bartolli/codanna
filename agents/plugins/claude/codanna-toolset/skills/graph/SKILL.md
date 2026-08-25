@@ -10,7 +10,8 @@ One HTML file, no server: the codanna index rendered as a pie chart of symbols. 
 top-level module owns a wedge sized by its share; inside a wedge symbols fill rings from
 the centre outwards, best-connected first, so hubs sit near the middle and leaves on the
 rim. Unlinked symbols form their own inner group. Above the disc a heatmap shows symbols
-added per day (file first-commit date from git). Hover or click a symbol to see its edge
+added per day (each symbol dated by the oldest surviving line of its span, via git
+blame). Hover or click a symbol to see its edge
 web and the connected symbols; the legend hides (eye) or highlights (label) modules and
 submodules; the timeline replays the codebase growing oldest-first.
 
@@ -29,9 +30,9 @@ node ${CLAUDE_SKILL_DIR}/graph.mjs --kinds function,method,struct,trait --dates 
 - `--root PREFIX` scopes to a module prefix (`crate::` is dropped, `.`/`::`/`/` all separate segments); applies to the module segments whatever the wedge axis
 - `--kinds` defaults to Function, Method, Struct, Class, Trait, Enum, Interface, TypeAlias, Constant, Macro
 - `--relation` defaults to `calls`; any of calls, uses, implements, extends, defines, comma-separated
-- `--dates git|none` -- git first-commit date per file drives the timeline and heatmap; `none` leaves both empty
+- `--dates blame|git|none` -- `blame` (default) dates every symbol by the oldest surviving line of its span (`git blame -M` over the working tree; per-file JSON cache at `.codanna/visualizations/dates-cache.json` keyed by content hash, so warm runs spawn no blame -- delete the file to reset); `git` uses the file's first-commit day (cheap, but a refactor reads as mass birth); `none` leaves the timeline and heatmap empty
 - `--unlinked include|drop` -- `drop` removes symbols with no edge over the chosen relations at build time (smaller file, smaller disc); in the page, the legend eye on `(unlinked)` hides the same set with the cascade animation
-- `--palette auto|fixed|generated` -- the template has ten documented hue slots and falls back to greys past them; `auto` (default) generates a palette sized to the group count in the same colour family when there are more than ten groups, `fixed` keeps the upstream ten, `generated` forces one
+- `--palette auto|fixed|generated` -- the template has ten documented hue slots and falls back to greys past them; `auto` (default) generates a palette sized to the group count in the same colour family when there are more than ten groups, `fixed` keeps the token ten, `generated` forces one
 - `--name NAME` sets the title (default: project directory name); `--light` builds the light theme
 
 ## Scoping and filters: what to apply when
@@ -51,7 +52,7 @@ above 4,000). Measured on the codanna self index (14,003 symbols):
 | Polyglot repo / monorepo, languages first | `--group language/module` | 15 language wedges on self, modules as tints |
 | Public surface vs internals per module | `--group module/visibility` | tints = public / private / crate... |
 | Census by symbol kind | `--group kind/module` | wedges = kinds; every call crosses the disc, read the counts |
-| Grey/white wedges (more than ten top-level groups) | default `--palette auto`; `--palette fixed` to compare with the upstream ten | 31 groups get 31 hues, golden-angle spaced so neighbours differ |
+| Grey/white wedges (more than ten top-level groups) | default `--palette auto`; `--palette fixed` to compare with the token ten | 31 groups get 31 hues, golden-angle spaced so neighbours differ |
 | Heatmap/timeline empty or misleading (shallow clone, vendored code) | `--dates none` | both panels blank, disc unchanged |
 | Re-render without re-reading the index | `--from graph.jsonl` (from `codanna dump > graph.jsonl`) | same data, no dump run |
 
@@ -73,11 +74,16 @@ prefix; a symbol with no `module_path` falls back to its file path segments.
 ## Pick by question
 
 - "what is the shape of this codebase / module family" -> this skill
-- "what depends on this one symbol" -> the x-ray skill's `visualize-dump.js` (focus neighbourhood)
-- "how is the module tree organised" -> x-ray `visualize-tree.js`; "which modules call which" -> x-ray `visualize-bundle.js`
+- "what depends on this one symbol / what breaks" -> the sibling x-ray skill's
+  `visualize-dump.js` (2D layered call DAG by default; `--3d` for the force view):
+  `node ${CLAUDE_SKILL_DIR}/../x-ray/visualize-dump.js <name> [depth]`
+- "how is one module organised" -> x-ray `visualize-tree.js` (collapsible tree;
+  `--radial` for the poster); "which modules call which" -> x-ray
+  `visualize-bundle.js --depth N`
+- The x-ray pages share this skill's design tokens and the light/dark toggle
 
 ## Files
 
-`graph.mjs` (CLI), `lib/dump.mjs` (dump reader), `lib/adapter.mjs` (dump -> disc data), `lib/dates.mjs` (git dates, mtime), `lib/palette.mjs` (generated wedge colours),
+`graph.mjs` (CLI), `lib/dump.mjs` (dump reader), `lib/adapter.mjs` (dump -> disc data), `lib/dates.mjs` (blame line dates + cache, first-commit fallback, mtime), `lib/tokens.mjs` (design tokens: role colours, categorical slots, generated wedge colours),
 `template.html` + `vendor/` (the vault-graph renderer, MIT -- see `UPSTREAM.md` for the pin and the tagged hunks),
 `assets/logo-mask.svg` (the mark in the hub, painted with the wedge colours).

@@ -3,7 +3,7 @@
 // arcs between leaves. Pure d3/SVG, self-contained, pan/zoom, dark theme.
 const fs = require('fs');
 const path = require('path');
-const { THEMES, KIND_COLORS } = require('./tree-render');
+const { themeStyle, themeScript, detailScript, kindVars } = require('./theme');
 
 const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 
@@ -11,16 +11,11 @@ const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
  * hierarchy: flare-shaped tree whose nodes carry `key` (and leaves `kind`, `file`, `line`, `count`).
  * edges: [{ source: leafKey, target: leafKey, count }] between LEAF keys.
  */
-function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir = '', leaves = 0, relation = 'Calls', legendKinds = [], theme = 'dark' } = {}) {
+function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir = '', leaves = 0, relation = 'Calls', legendKinds = [], theme = 'dark', details = {} } = {}) {
   const d3src = fs.readFileSync(D3, 'utf8');
-  const T = THEMES[theme] || THEMES.dark;
   const radius = Math.max(520, Math.round(leaves * 11 / (2 * Math.PI)));
   const width = 2 * radius;
-  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${KIND_COLORS[k] || '#999'}"></span>${k}</span>`).join('');
-  const colorIn = theme === 'dark' ? '#4cc2ff' : '#0044ff';
-  const colorOut = theme === 'dark' ? '#ff6b6b' : '#e00000';
-  const colorNone = theme === 'dark' ? 'rgba(138,148,166,0.28)' : 'rgba(160,160,160,0.45)';
-  const blend = theme === 'dark' ? 'screen' : 'multiply';
+  const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
   const inLabel = relation === 'Calls' ? 'callers (incoming)' : 'incoming';
   const outLabel = relation === 'Calls' ? 'callees (outgoing)' : 'outgoing';
   const rel = relation.toLowerCase();
@@ -29,41 +24,40 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
 <head>
   <meta charset="utf-8">
   <title>${title}</title>
+  ${themeStyle()}
   <style>
-    html, body { margin: 0; height: 100%; background: ${T.bg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: ${T.text}; }
+    html, body { margin: 0; height: 100%; }
     #chart { position: absolute; inset: 0; overflow: hidden; }
     #chart svg { width: 100%; height: 100%; cursor: grab; }
-    #info { position: absolute; top: 10px; left: 10px; background: ${T.panelBg}; border: 1px solid ${T.panelBorder}; border-radius: 8px; padding: 12px 14px; font-size: 13px; max-width: 400px; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
-    #info h3 { margin: 0 0 8px; font-size: 14px; }
-    #info .stat { margin: 3px 0; color: ${T.muted}; }
-    #info .legend { margin-top: 8px; line-height: 1.8; }
-    #info .legend-item { display: inline-block; margin-right: 10px; white-space: nowrap; }
-    #info .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-    #info .swatch { display: inline-block; width: 18px; height: 3px; margin-right: 4px; vertical-align: middle; }
-    #info button { margin-top: 8px; padding: 4px 10px; background: ${T.button}; color: ${T.buttonText}; border: 1px solid ${T.panelBorder}; border-radius: 4px; cursor: pointer; font-size: 12px; }
-    #hint { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); font-size: 11px; color: ${T.hint}; }
     text { cursor: pointer; }
   </style>
 </head>
 <body>
   <div id="chart"></div>
+  ${themeScript(theme)}
+  ${detailScript()}
+  <div id="detail"></div>
   <div id="info">
     <h3>${title}</h3>
     ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
     <div class="stat" id="stats"></div>
-    <div class="legend"><span class="legend-item"><span class="swatch" style="background:${colorIn}"></span>${inLabel}</span><span class="legend-item"><span class="swatch" style="background:${colorOut}"></span>${outLabel}</span></div>
+    <div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>${inLabel}</span><span class="legend-item"><span class="swatch" style="background:var(--g9)"></span>${outLabel}</span></div>
     <div class="legend">${legend}</div>
     <button id="reset-btn">Reset zoom</button>
   </div>
-  <div id="hint">Scroll: zoom, Drag: pan, Hover a name: its ${rel} in and out</div>
+  <div id="hint">Scroll: zoom, Drag: pan. Hover a name: its ${rel} in and out. Click: details</div>
   <script>${d3src}</script>
   <script>
     const data = ${JSON.stringify(hierarchy)};
     const edgeList = ${JSON.stringify(edges)};
-    const kindColors = ${JSON.stringify(KIND_COLORS)};
-    const theme = ${JSON.stringify(T)};
-    const colorin = ${JSON.stringify(colorIn)}, colorout = ${JSON.stringify(colorOut)}, colornone = ${JSON.stringify(colorNone)};
-    const blend = ${JSON.stringify(blend)};
+    const KVAR = ${JSON.stringify(kindVars)};
+    const DETAILS = ${JSON.stringify(details)};
+    const workingDir = ${JSON.stringify(workingDir)};
+    // Incoming rides the accent, outgoing the red slot; the resting arc colour
+    // mixes a neutral into transparency so both themes derive it from tokens.
+    const colorin = 'var(--accent)', colorout = 'var(--g9)';
+    const colornone = 'color-mix(in srgb, var(--n1) 30%, transparent)';
+    const blend = () => document.documentElement.getAttribute('data-theme') === 'light' ? 'multiply' : 'screen';
     const relLabel = ${JSON.stringify(rel)};
     const width = ${width};
     const radius = width / 2;
@@ -85,14 +79,17 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
     }
     const line = d3.lineRadial().curve(d3.curveBundle.beta(0.85)).radius(d => d.y).angle(d => d.x);
     const id = (node) => (node.parent ? id(node.parent) + '.' : '') + node.data.name;
-    const textColor = d => kindColors[d.data.kind] ? theme.text : theme.muted;
+    const textColor = d => KVAR[d.data.kind] ? 'var(--text-1)' : 'var(--text-3)';
     const sum = (pairs) => pairs.reduce((n, p) => n + p.count, 0);
     const NL = String.fromCharCode(10);
 
+    // 1:1 viewBox: screen-pixel zoom math stays exact (a content-sized
+    // viewBox letterboxes and sends programmatic pans off the canvas).
+    const vw = window.innerWidth, vh = window.innerHeight;
     const svg = d3.create('svg')
-        .attr('viewBox', [-width / 2, -width / 2, width, width])
-        .attr('font-family', 'sans-serif')
-        .attr('font-size', 10);
+        .attr('viewBox', [0, 0, vw, vh])
+        .attr('font-size', 10)
+        .style('font-family', 'var(--font-ui)');
     const wrapper = svg.append('g');
 
     const node = wrapper.append('g')
@@ -105,11 +102,12 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
         .attr('x', d => d.x < Math.PI ? 6 : -6)
         .attr('text-anchor', d => d.x < Math.PI ? 'start' : 'end')
         .attr('transform', d => d.x >= Math.PI ? 'rotate(180)' : null)
-        .attr('fill', textColor)
+        .style('fill', textColor)
         .text(d => d.data.count ? d.data.name + ' (' + d.data.count + ')' : d.data.name)
         .each(function(d) { d.text = this; })
         .on('mouseover', overed)
         .on('mouseout', outed)
+        .on('click', (ev, d) => showDetail(d))
         .call(text => text.append('title').text(d => id(d)
           + (d.data.kind ? NL + d.data.kind + (d.data.file ? '  ' + d.data.file + ':' + d.data.line : '') : '')
           + NL + sum(d.outgoing) + ' outgoing, ' + sum(d.incoming) + ' incoming'));
@@ -121,15 +119,15 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
       .join('circle')
         .attr('transform', d => 'rotate(' + (d.x * 180 / Math.PI - 90) + ') translate(' + d.y + ',0)')
         .attr('r', 2.2)
-        .attr('fill', d => kindColors[d.data.kind] || '#999');
+        .style('fill', d => KVAR[d.data.kind] || 'var(--n3)');
 
     const link = wrapper.append('g')
-        .attr('stroke', colornone)
+        .style('stroke', colornone)
         .attr('fill', 'none')
       .selectAll()
       .data(root.leaves().flatMap(leaf => leaf.outgoing))
       .join('path')
-        .style('mix-blend-mode', blend)
+        .style('mix-blend-mode', blend())
         .attr('stroke-width', d => Math.min(4, 0.6 + Math.log2(d.count)))
         .attr('d', ([i, o]) => line(i.path(o)))
         .each(function(d) { d.path = this; });
@@ -137,24 +135,54 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
     function overed(event, d) {
       link.style('mix-blend-mode', null);
       d3.select(this).attr('font-weight', 'bold');
-      d3.selectAll(d.incoming.map(d => d.path)).attr('stroke', colorin).raise();
-      d3.selectAll(d.incoming.map(([d]) => d.text)).attr('fill', colorin).attr('font-weight', 'bold');
-      d3.selectAll(d.outgoing.map(d => d.path)).attr('stroke', colorout).raise();
-      d3.selectAll(d.outgoing.map(([, d]) => d.text)).attr('fill', colorout).attr('font-weight', 'bold');
+      d3.selectAll(d.incoming.map(d => d.path)).style('stroke', colorin).raise();
+      d3.selectAll(d.incoming.map(([d]) => d.text)).style('fill', colorin).attr('font-weight', 'bold');
+      d3.selectAll(d.outgoing.map(d => d.path)).style('stroke', colorout).raise();
+      d3.selectAll(d.outgoing.map(([, d]) => d.text)).style('fill', colorout).attr('font-weight', 'bold');
     }
     function outed(event, d) {
-      link.style('mix-blend-mode', blend);
+      link.style('mix-blend-mode', blend());
       d3.select(this).attr('font-weight', null);
-      d3.selectAll(d.incoming.map(d => d.path)).attr('stroke', null);
-      d3.selectAll(d.incoming.map(([d]) => d.text)).attr('fill', textColor).attr('font-weight', null);
-      d3.selectAll(d.outgoing.map(d => d.path)).attr('stroke', null);
-      d3.selectAll(d.outgoing.map(([, d]) => d.text)).attr('fill', textColor).attr('font-weight', null);
+      d3.selectAll(d.incoming.map(d => d.path)).style('stroke', null);
+      d3.selectAll(d.incoming.map(([d]) => d.text)).style('fill', textColor).attr('font-weight', null);
+      d3.selectAll(d.outgoing.map(d => d.path)).style('stroke', null);
+      d3.selectAll(d.outgoing.map(([, d]) => d.text)).style('fill', textColor).attr('font-weight', null);
+    }
+    // Blend mode is the one colour decision CSS vars cannot carry.
+    document.addEventListener('themechange', () => link.style('mix-blend-mode', blend()));
+
+    // The shared panel; go-buttons pan to the related leaf on the rim.
+    const bySid = new Map(root.leaves().filter(d => d.data.sid != null).map(d => [d.data.sid, d]));
+    const cartesian = (d) => { const a = d.x - Math.PI / 2; return [d.y * Math.cos(a), d.y * Math.sin(a)]; };
+    function showDetail(d) {
+      const det = d.data.sid != null ? DETAILS[d.data.sid] : null;
+      const spec = {
+        name: d.data.name, dotted: id(d), kind: d.data.kind,
+        visibility: det && det.vis, language: det && det.lang,
+        edges: det ? det.edges : undefined,
+        lines: det ? det.endLine - det.line + 1 : undefined,
+        path: d.data.file ? d.data.file + ':' + (det ? det.line + '-' + det.endLine : d.data.line) : '',
+        signature: det && det.sig, rels: det ? Object.assign({}, det.rels) : {},
+        href: d.data.file && workingDir ? 'file://' + workingDir + '/' + d.data.file : '',
+      };
+      if (d.data.count) spec.rels['Collapsed inside'] = [{ name: d.data.count + ' symbols', k: 1 }];
+      window.__detail.show(spec, (ref) => {
+        const t = bySid.get(+ref);
+        if (!t) return;
+        const k = d3.zoomTransform(svg.node()).k;
+        const [cx, cy] = cartesian(t);
+        svg.transition().duration(400).call(zoom.transform,
+          d3.zoomIdentity.translate(vw / 2 - k * cx, vh / 2 - k * cy).scale(k));
+        showDetail(t);
+      });
     }
 
     const zoom = d3.zoom().scaleExtent([0.05, 12]).on('zoom', (e) => wrapper.attr('transform', e.transform));
-    svg.call(zoom);
+    const fit = Math.min(vw, vh) / (width + 80);
+    const home = d3.zoomIdentity.translate(vw / 2, vh / 2).scale(fit);
     document.getElementById('chart').appendChild(svg.node());
-    document.getElementById('reset-btn').addEventListener('click', () => svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity));
+    svg.call(zoom).call(zoom.transform, home);
+    document.getElementById('reset-btn').addEventListener('click', () => svg.transition().duration(500).call(zoom.transform, home));
     document.getElementById('stats').textContent = 'Leaves: ' + root.leaves().length + '  Arcs: ' + drawn + '  (' + edgeList.reduce((n, e) => n + e.count, 0) + ' ' + relLabel + ' edges)';
   </script>
 </body>

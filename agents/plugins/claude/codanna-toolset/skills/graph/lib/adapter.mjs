@@ -5,7 +5,7 @@
 // first module segment, dirs = the remaining segments plus the containing type, deg =
 // degree over the chosen relationship kinds.
 import path from "node:path";
-import { firstCommitDates, touchedDay, absolute, localDay } from "./dates.mjs";
+import { firstCommitDates, blameDates, touchedDay, absolute, localDay } from "./dates.mjs";
 
 export const CONTAINERS = new Set(["Struct", "Class", "Trait", "Enum", "Interface"]);
 export const DEFAULT_KINDS = ["Function", "Method", "Struct", "Class", "Trait", "Enum", "Interface", "TypeAlias", "Constant", "Macro"];
@@ -41,7 +41,7 @@ export function normalizePrefix(prefix) {
   return segs;
 }
 
-export function buildData(dump, opts) {
+export async function buildData(dump, opts) {
   const { symbols, relationships, summary } = dump;
   const kinds = new Set(opts.kinds);
   const relations = new Set([...opts.relations].map((r) => r.toLowerCase()));
@@ -55,7 +55,7 @@ export function buildData(dump, opts) {
     if (r.relation === "Defines" && CONTAINERS.has(r.fromKind)) containerOf.set(r.to, r.from);
   }
 
-  const dates = opts.dates === "git" ? firstCommitDates(opts.workingDir) : null;
+  const spans = [];   // per node: file + 0-based line span, dated after the loop
   const index = new Map();   // symbol id -> node index
   const nodes = [];
   const files = new Set();
@@ -82,6 +82,7 @@ export function buildData(dump, opts) {
     const file = sym.file;
     files.add(file);
     index.set(sym.id, nodes.length);
+    spans.push({ file, s: sym.line, e: sym.endLine || sym.line });
     nodes.push({
       id: `${file}:${sym.line}-${sym.endLine || sym.line}`,
       label: sym.name,
@@ -90,11 +91,40 @@ export function buildData(dump, opts) {
       sub: dirs[0] || "",
       type: sym.kind,
       tags: [sym.kind, sym.visibility, sym.language].filter(Boolean).map((t) => String(t).toLowerCase()),
-      created: dates ? (dates.get(file) || "") : "",
+      created: "",
       touched: touchedDay(absolute(opts.workingDir, file)),
       words: Math.max(1, (sym.endLine || sym.line) - sym.line + 1),
       sig: sym.signature || "",
     });
+  }
+
+  // Dates, after the loop so the file set is known. `blame` dates each symbol by the
+  // oldest surviving line of its span -- `start_line` is 0-based, so it indexes the
+  // per-line day array directly. A blame that cannot run (no git) falls back to the
+  // file's first-commit day; that failing too leaves the panels empty.
+  let datesMode = "none";
+  if (opts.dates === "blame" || opts.dates === "git") {
+    const lineDays = opts.dates === "blame"
+      ? await blameDates(opts.workingDir, [...files], opts.dateCachePath)
+      : null;
+    if (lineDays) {
+      datesMode = "blame";
+      nodes.forEach((n, i) => {
+        const d = lineDays.get(spans[i].file);
+        if (!d) return;
+        let min = "";
+        for (let l = spans[i].s; l <= spans[i].e && l < d.length; l++) {
+          if (d[l] && (!min || d[l] < min)) min = d[l];
+        }
+        n.created = min;
+      });
+    } else {
+      const fileDays = firstCommitDates(opts.workingDir);
+      if (fileDays) {
+        datesMode = "git";
+        nodes.forEach((n, i) => { n.created = fileDays.get(spans[i].file) || ""; });
+      }
+    }
   }
 
   // One undirected pair per edge, plus a relation/direction histogram the detail panel
@@ -145,7 +175,7 @@ export function buildData(dump, opts) {
       kinds: [...kinds],
       root: opts.root || "",
       group: `${group.wedge}/${group.tint}`,
-      dates: dates ? "git" : "none",
+      dates: datesMode,
       unlinked: opts.unlinked === "drop" ? "drop" : "include",
       symbolsTotal: summary.symbols,
       relationshipsTotal: summary.relationships,

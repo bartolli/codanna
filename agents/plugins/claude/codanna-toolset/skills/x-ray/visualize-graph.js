@@ -271,6 +271,7 @@ function buildGraph(rootSymbol, depth) {
 // Main
 const { symbol, depth } = parseArgs();
 const open = !process.argv.includes('--no-open');
+const theme = process.argv.includes('--light') ? 'light' : 'dark';
 console.log(`Building relationship graph for: ${symbol} (depth: ${depth})`);
 
 const graphData = buildGraph(symbol, depth);
@@ -282,7 +283,7 @@ if (graphData.nodes.length === 0) {
 }
 
 const safeName = symbol.replace(/[^a-zA-Z0-9_-]/g, '_');
-const html = generateHTML(graphData);
+const html = generateHTML(graphData, { theme: theme });
 const artifactFile = saveArtifact(html, safeName, workingDir);
 console.log(`\nVisualization saved to: ${artifactFile}`);
 serveAndOpen(html, __dirname, { open });

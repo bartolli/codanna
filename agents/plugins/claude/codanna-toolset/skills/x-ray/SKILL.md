@@ -79,38 +79,58 @@ Do not transition to ACT inside this skill.
 
 EXPLORE-legal: derives a read-only view, does not modify source.
 
-When TRAVERSE reveals dense, multi-directional RELATIONSHIPS, generate an interactive 3D graph:
+When TRAVERSE reveals dense, multi-directional RELATIONSHIPS, visualize. All
+pages share the design tokens with the sibling `graph` skill: dark by default,
+light/dark toggle top-right, `--light` opens light.
 
 ```bash
 # codanna >= 0.14 (has `codanna dump`): one index read, then the neighborhood in memory
-node ${CLAUDE_SKILL_DIR}/visualize-dump.js <symbol_id:ID | name> [depth] [--self-contained]
-# older binaries: one `retrieve describe` per node
+node ${CLAUDE_SKILL_DIR}/visualize-dump.js <symbol_id:ID | name> [depth]
+# older binaries: one `retrieve describe` per node (3D force view only)
 node ${CLAUDE_SKILL_DIR}/visualize-graph.js <symbol_id:ID> [depth]
 ```
 
-- Default depth: 2; both scripts emit the same graph shape and template
-- Output: HTML file at `.codanna/visualizations/graph-{name}-{timestamp}.html` -- tell user to open in browser;
-  `--self-contained` inlines the vendored libs so the file opens from anywhere (2.3 MB)
-- `visualize-dump.js` carries `visibility` and line ranges for every node and is deterministic
-  for a given index (adjacency sorted by symbol id before the per-level caps); `--from graph.jsonl`
-  reuses a saved `codanna dump`, `--binary PATH` picks the binary, `--no-open` skips the browser
-- Nodes color-coded by symbol kind; edges labeled by relationship type
+- Default view: a 2D layered call DAG -- callers above, callees below, labels at
+  rest, deterministic; hover a name to light incoming (accent) / outgoing (red)
+  edges; dashed edges are cycle edges; click a node to open its file
+- `--3d` keeps the 3D force view (the 5-second gestalt of a tangled
+  neighbourhood; `--layout force|td|lr|radialout` implies it); `--all` renders
+  the whole index and is always 3D (`--bake` / `--no-bake` control the
+  server-side pinned layout, on by default above 2000 nodes)
+- Flags: depth default 2 (positional), `--cap N` per-level cap (default 5, 0 =
+  none), `--from graph.jsonl` reuses a saved dump, `--binary PATH`, `--no-open`,
+  `--relation calls|defines|uses|implements|extends` filters `--all`,
+  `--self-contained` inlines the 3D vendor libs (the DAG page always is)
+- Output: `.codanna/visualizations/graph-{name}-{timestamp}.html`
 
-Two more views from the same dump (pure d3/SVG, self-contained, dark theme, `--light` for white):
+Structure and flow over the same dump:
 
 ```bash
-# structure: radial tidy tree, module -> container -> member
-node ${CLAUDE_SKILL_DIR}/visualize-tree.js [--root crate::indexing] [--depth 3] [--kinds Function,Method,...]
+# structure: collapsible left-to-right tree (drill-down); --radial for the all-at-once poster
+node ${CLAUDE_SKILL_DIR}/visualize-tree.js [--root crate::indexing] [--depth N] [--kinds Function,Method,...] [--radial]
 # dependencies on the structure: hierarchical edge bundling (Calls by default)
-node ${CLAUDE_SKILL_DIR}/visualize-bundle.js [--root crate::indexing] [--depth 3] [--relation calls|uses|implements|extends]
+node ${CLAUDE_SKILL_DIR}/visualize-bundle.js [--root crate::indexing] [--depth N] [--relation calls|uses|implements|extends]
 ```
 
-- Pick by question: "what depends on this symbol" -> `visualize-dump.js` (focus neighborhood, Force or Top-down/Left-right/Radial DAG);
-  "how is the codebase organized" -> `visualize-tree.js`; "which modules call which" -> `visualize-bundle.js --depth N`
-  (edges aggregate to the collapsed leaves, arc width ~ log count; hover a name: callers blue, callees red)
-- `--depth` collapses deeper levels into counted labels; `--root` scopes to a module prefix (edges crossing the root are dropped and counted)
-- Symbols without a module path hang off their file path; Field/Variable/Parameter are out by default (`--kinds` to include)
-- Shared pieces: `graph/dump.js` (dump reader), `graph/hierarchy.js` (tree builder + symbol-to-leaf map), `graph/tree-render.js`, `graph/bundle-render.js`
+- Pick by question: "what depends on this symbol / what breaks if I change it"
+  -> `visualize-dump.js` (call DAG); "how is this module organized" ->
+  `visualize-tree.js` (expand/collapse like a file explorer); "which modules
+  call which" -> `visualize-bundle.js --depth N` (arcs aggregate to collapsed
+  leaves, width ~ log count; hover: callers blue, callees red)
+- Every 2D view opens the same detail panel on click (signature, kind chips,
+  file:span, relation groups with go-navigation where the view supports it);
+  opening the source is the explicit Open-file action inside the panel, never
+  the click itself -- file:// opens in the browser, not the editor
+- "what is the shape of the WHOLE codebase -- module shares, hubs, history" ->
+  the sibling `graph` skill (`node ${CLAUDE_SKILL_DIR}/../graph/graph.mjs`):
+  the disc is the map these neighbourhood views zoom into
+- `--depth` collapses deeper levels into counted labels; `--root` scopes to a
+  module prefix (edges crossing the root are dropped and counted); symbols
+  without a module path hang off their file path; Field/Variable/Parameter out
+  by default (`--kinds` to include)
+- Shared pieces: `graph/dump.js` (dump reader), `graph/hierarchy.js` (tree
+  builder + symbol-to-leaf map), the renderers under `graph/`, and
+  `graph/theme.js` + `graph/tokens.mjs` (design tokens; node >= 22.12)
 
 ### Suggest when
 - RESULT has 3+ RELATIONSHIPS in multiple directions

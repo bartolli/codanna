@@ -9,7 +9,8 @@
  *
  * Usage:
  *   node visualize-dump.js <symbol_id:ID | name> [depth] [--cap N] [--from graph.jsonl]
- *                          [--binary PATH] [--self-contained] [--no-open]
+ *                          [--binary PATH] [--self-contained] [--no-open] [--light]
+ *                          [--3d] (3D force view; default is the 2D layered DAG)
  *   node visualize-dump.js --all [--relation KIND] [...]
  *   depth default 2. --cap N caps neighbors per relation kind beyond the root
  *   (default 5, 0 = uncapped). --all skips the focus walk and renders the whole
@@ -28,8 +29,9 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { generateHTML, inlineVendor } = require('./graph/render');
+const { generateDAGHTML } = require('./graph/dag-render');
 const { readDump } = require('./graph/dump');
-const { saveArtifact, serveAndOpen } = require('./graph/publish');
+const { saveArtifact, serveAndOpen, openFile } = require('./graph/publish');
 
 const workingDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
@@ -43,10 +45,12 @@ function parseArgs() {
     else if (a === '--binary') flags.binary = args[++i];
     else if (a === '--self-contained') flags.selfContained = true;
     else if (a === '--no-open') flags.open = false;
+    else if (a === '--light') flags.theme = 'light';
     else if (a === '--cap') flags.cap = parseInt(args[++i], 10);
     else if (a === '--all') flags.all = true;
     else if (a === '--relation') flags.relation = args[++i];
-    else if (a === '--layout') flags.layout = args[++i];
+    else if (a === '--layout') { flags.layout = args[++i]; flags.threeD = true; }
+    else if (a === '--3d') flags.threeD = true;
     else if (a === '--bake') flags.bake = true;
     else if (a === '--no-bake') flags.bake = false;
     else positional.push(a);
@@ -205,8 +209,23 @@ if (opts.bake === true || (opts.bake === null && large)) {
   const ms = bakeLayout(graphData);
   console.log(`Baked 2D layout in ${ms} ms (300 ticks); the page renders pinned positions`);
 }
-let html = generateHTML(graphData, { layout: opts.layout });
-if (opts.selfContained) html = inlineVendor(html);
+// Default neighbourhood view: the 2D layered DAG -- direction and labels at
+// rest. The 3D force view stays behind --3d (or an explicit --layout) and is
+// always the shape of --all (thousands of nodes want WebGL, not SVG).
+const use3d = opts.all || opts.threeD;
+let html;
+if (use3d) {
+  html = generateHTML(graphData, { layout: opts.layout, theme: opts.theme || 'dark' });
+  if (opts.selfContained) html = inlineVendor(html);
+} else {
+  const rootNode = graphData.nodes.find(n => n.level === 0);
+  html = generateDAGHTML(graphData, {
+    title: (rootNode ? rootNode.name : opts.symbol) + ' - Call DAG',
+    subtitle: `depth ${opts.depth}` + (opts.cap ? `, cap ${opts.cap}` : ''),
+    workingDir, theme: opts.theme || 'dark',
+  });
+}
 const artifactFile = saveArtifact(html, safeName, workingDir);
 console.log(`\nVisualization saved to: ${artifactFile}`);
-serveAndOpen(html, __dirname, { open: opts.open });
+if (use3d) serveAndOpen(html, __dirname, { open: opts.open });
+else if (opts.open) openFile(artifactFile);

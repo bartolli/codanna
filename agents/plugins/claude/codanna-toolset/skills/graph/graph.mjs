@@ -6,7 +6,7 @@
  *
  * Usage: node graph.mjs [--group module|language|kind[/module|kind|visibility]]
  *                       [--root PREFIX] [--kinds a,b] [--relation calls,uses]
- *                       [--dates git|none] [--from graph.jsonl] [--binary PATH]
+ *                       [--dates blame|git|none] [--from graph.jsonl] [--binary PATH]
  *                       [--unlinked include|drop] [--palette auto|fixed|generated]
  *                       [--out FILE] [--name NAME] [--light] [--no-open]
  */
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { readDump } from "./lib/dump.mjs";
 import { buildData, parseGroup, DEFAULT_KINDS, RELATIONS } from "./lib/adapter.mjs";
-import { documentedSlots, generatePalette } from "./lib/palette.mjs";
+import { tokens, cssBlock, generatePalette } from "./lib/tokens.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -34,8 +34,8 @@ const relations = opt("relation") ? csv(opt("relation")).map((r) => r.toLowerCas
 for (const r of relations) {
   if (!RELATIONS.includes(r)) { console.error(`unknown relation '${r}'; one of ${RELATIONS.join(", ")}`); process.exit(2); }
 }
-const dates = opt("dates", "git");
-if (dates !== "git" && dates !== "none") { console.error("--dates takes git|none"); process.exit(2); }
+const dates = opt("dates", "blame");
+if (!["blame", "git", "none"].includes(dates)) { console.error("--dates takes blame|git|none"); process.exit(2); }
 const unlinked = opt("unlinked", "include");
 if (unlinked !== "include" && unlinked !== "drop") { console.error("--unlinked takes include|drop"); process.exit(2); }
 let group;
@@ -46,7 +46,8 @@ if (!["auto", "fixed", "generated"].includes(palette)) { console.error("--palett
 let dump;
 try { dump = readDump({ from: opt("from"), binary: opt("binary", "codanna"), workingDir }); }
 catch (e) { console.error(e.message); process.exit(1); }
-const data = buildData(dump, { kinds, relations, root: opt("root"), dates, unlinked, group, workingDir, name: opt("name") });
+const data = await buildData(dump, { kinds, relations, root: opt("root"), dates, unlinked, group, workingDir, name: opt("name"),
+  dateCachePath: join(workingDir, ".codanna", "visualizations", "dates-cache.json") });
 
 const LIB_NOTICE = `<!--
   Rendered by the codanna graph skill through the vault-graph template
@@ -74,13 +75,18 @@ let html = readFileSync(join(HERE, "template.html"), "utf8");
 // (--palette fixed keeps the upstream ten; generated forces one even for few groups).
 const groups = new Set(data.nodes.filter((n) => n.deg > 0).map((n) => n.folder));
 if (data.stats.orphans && unlinked !== "drop") groups.add("(unlinked)");
-const slots = documentedSlots(html);
+const slots = { light: tokens("light").slots, dark: tokens("dark").slots };
 const wantGenerated = palette === "generated" || (palette === "auto" && groups.size > 10);
 const generated = wantGenerated
   ? { dark: generatePalette(groups.size, slots.dark), light: generatePalette(groups.size, slots.light) }
   : null;
 data.codanna.palette = generated ? `generated (${groups.size} groups)` : "documented slots";
 
+// Token overrides ship as a style block AFTER the template's own styles (via the
+// DATA marker at the end of the page -- the ASSETS marker precedes them and would
+// lose the cascade), mirroring its two theme selectors; the template file itself
+// stays at the upstream pin.
+const themeCss = `<style>\n${cssBlock("light", ":root")}\n${cssBlock("dark", ':root:not([data-theme=\"light\"])')}\n</style>`;
 const assets = `<script>window.VAULT_LOGO_MASK=${JSON.stringify(mask)};</script>` +
   (generated ? `\n<script>window.VAULT_PALETTE=${JSON.stringify(generated)};</script>` : "");
 
@@ -88,7 +94,7 @@ if (flag("light")) html = html.replace('<html lang="en" data-theme="dark">', '<h
 html = html
   .replace("<!--LIBS-->", () => libs)
   .replace("<!--ASSETS-->", () => assets)
-  .replace("<!--DATA-->", () => `<script>window.VAULT_DATA=${JSON.stringify(data)};</script>`);
+  .replace("<!--DATA-->", () => `${themeCss}\n<script>window.VAULT_DATA=${JSON.stringify(data)};</script>`);
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const OUT = opt("out") ? resolve(process.cwd(), opt("out")) : join(workingDir, ".codanna", "visualizations", `graph-disc-${stamp}.html`);
