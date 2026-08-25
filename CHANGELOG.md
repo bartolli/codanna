@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-08-25
+
+Adds `codanna dump` for bulk graph export and fixes silent cross-root edge loss in multi-root workspaces. Index format and emission semantics are unchanged (v3); single-root indexes need no rebuild.
+
+### Added
+
+- `codanna dump` streams the whole index as JSON Lines in the envelope's streaming mode: a `begin` envelope, one `result` envelope per symbol and per relationship, and a terminal `summary` envelope with totals and index provenance (emission version, builder commit). Row ordering is unspecified. Design discussion in #119.
+- `codanna dump` filters: `--symbols` / `--edges` select row types; `--relation <kind>` keeps one relationship kind (`calls`, `defines`, `uses`, `implements`, `extends`); `--kind <kind>` keeps one symbol kind. Unknown values are rejected before any line is written (exit `2`); a stale index refuses with exit `7`.
+- Claude Code plugin marketplace served from the repository: `/plugin marketplace add bartolli/codanna` installs `codanna-toolset@codanna` (codebase graph and x-ray skills built on `codanna dump`).
+
+### Fixed
+
+- Multi-root workspaces (more than one `codanna add-dir` root) silently dropped cross-root call edges: resolution ran once per root against only that root's symbols, so edges such as `tests/` into `src/` survived only under one registration order and were lost on `codanna index --force`, on reversed `add-dir` order, and when a newly added directory was indexed by the startup sync or a running server. Resolution now runs once after every root has been walked, seeded from the persisted index, on every lane: `codanna index`, `codanna index --force`, startup config sync, watcher batch sync, and the MCP reindex tool. Reported with an eight-configuration repro by @mmeyer (#121).
+
+### Changed
+
+- The crates.io package excludes `agents/` and `.claude-plugin/` (Claude Code marketplace payloads; not part of the library or binary).
+
+Multi-root indexes built by earlier versions under-report cross-root edges until one `codanna index --force` with this version.
+
 ## [0.13.3] - 2026-08-21
 
 Index-maintenance patch release. Segment merges that Tantivy schedules on each commit now complete before the index writer is released; previously the writer closed first and cancelled them, so every commit left one more segment behind and a long-running `serve --watch` grew without bound in segments, open files, disk, and memory. Batch incremental indexing also closes a one-second change-detection gap. Index format, emission semantics, and settings are unchanged; no rebuild is required.
