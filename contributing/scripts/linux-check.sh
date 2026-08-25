@@ -13,6 +13,16 @@
 #   docker volume rm codanna-linux-target
 # (next run recompiles cold; the registry volume stays small).
 #
+# Parallel linking of the test binaries can exhaust the container
+# VM's MEMORY: ld dies with signal 9 ("collect2: fatal error: ld
+# terminated with signal 9 [Killed]") and cargo reports "could not
+# compile codanna (test ...)" for whichever binary lost. The victim
+# varies per run. Remedy: cap parallel jobs
+#   ./contributing/scripts/linux-check.sh test --all-features -j 2
+# or raise the Docker VM memory allocation. Do NOT clear the target
+# volume for this failure mode -- the warm cache reduces link
+# pressure on the re-run.
+#
 # Runs as a NON-ROOT user inside the container: permission-based
 # fault-injection tests are inert for root (root writes through a
 # 0o444 file, so forced-save-failure tests fail), and CI runners are
