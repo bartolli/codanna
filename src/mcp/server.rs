@@ -303,9 +303,12 @@ impl CodeIntelligenceServer {
 
         let mut indexer = self.facade.write().await;
 
+        // Resolution defers across the per-root loops so cross-root
+        // imports bind regardless of iteration order.
         let (reindexed, symbols) = if let Some(paths) = paths {
             // Reindex specific paths
             let mut total_reindexed = 0;
+            let mut pending = crate::indexing::pipeline::PendingResolution::default();
             for path in &paths {
                 let path = std::path::Path::new(path);
                 if path.is_file() {
@@ -317,7 +320,7 @@ impl CodeIntelligenceServer {
                         }
                     }
                 } else if path.is_dir() {
-                    match indexer.index_directory(path, false) {
+                    match indexer.index_directory_deferred(path, false, &mut pending) {
                         Ok(stats) => total_reindexed += stats.files_indexed,
                         Err(e) => {
                             tracing::warn!("Failed to reindex {}: {e}", path.display());
@@ -325,21 +328,28 @@ impl CodeIntelligenceServer {
                     }
                 }
             }
+            if let Err(e) = indexer.resolve_deferred(pending) {
+                tracing::warn!("Reindex resolution failed: {e}");
+            }
             (total_reindexed, indexer.symbol_count())
         } else {
             // Full reindex using indexed_paths from settings
             let indexed_paths = indexer.settings().indexing.indexed_paths.clone();
             let mut total_reindexed = 0;
+            let mut pending = crate::indexing::pipeline::PendingResolution::default();
 
             for path in &indexed_paths {
                 if path.is_dir() {
-                    match indexer.index_directory(path, false) {
+                    match indexer.index_directory_deferred(path, false, &mut pending) {
                         Ok(stats) => total_reindexed += stats.files_indexed,
                         Err(e) => {
                             tracing::warn!("Failed to reindex {}: {e}", path.display());
                         }
                     }
                 }
+            }
+            if let Err(e) = indexer.resolve_deferred(pending) {
+                tracing::warn!("Reindex resolution failed: {e}");
             }
             (total_reindexed, indexer.symbol_count())
         };

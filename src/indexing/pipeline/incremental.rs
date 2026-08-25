@@ -2,9 +2,10 @@
 
 use super::stages::{CleanupStage, CollectStage, DiscoverStage, IndexStage, ReadStage};
 use super::{
-    CleanupStats, DiscoverResult, EmbedOptions, FileSource, IncrementalStats, ParseStage,
-    Phase1Options, Phase2Stats, Pipeline, PipelineError, PipelineResult, ProgressSink,
-    SingleFileStats, SymbolLookupCache, SyncStats, init_parser_cache,
+    CleanupStats, DiscoverResult, EmbedOptions, FileBarriers, FileBindings, FileSource,
+    IncrementalStats, ParseStage, Phase1Options, Phase2Stats, Pipeline, PipelineError,
+    PipelineResult, ProgressSink, SingleFileStats, SymbolLookupCache, SyncStats,
+    UnresolvedRelationship, init_parser_cache,
 };
 use crate::FileId;
 use crate::indexing::IndexStats;
@@ -14,6 +15,24 @@ use crate::storage::DocumentIndex;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+/// Phase 1 outputs accumulated across sequential root walks so Phase 2
+/// runs once over the union. Per-root resolution loses cross-root edges:
+/// a root's imports can only bind after every root's symbols are
+/// committed, so the candidate table must be seeded from the persisted
+/// index after the last walk.
+#[derive(Default)]
+pub struct PendingResolution {
+    unresolved: Vec<UnresolvedRelationship>,
+    variable_bindings: FileBindings,
+    this_barriers: FileBarriers,
+    captured_inbound: Vec<super::stages::cleanup::CapturedInboundEdge>,
+    /// True once any deferred run reached its indexing tail; an
+    /// all-cached sequence never ran cleanup or Phase 1, so resolution
+    /// and embedding persistence are skipped entirely (matches the
+    /// pre-deferral early-return).
+    ran: bool,
+}
 
 impl Pipeline {
     /// Add the unique caller files of this run's relocated and deleted
@@ -338,13 +357,41 @@ impl Pipeline {
         show_progress: bool,
         total_files: usize,
     ) -> PipelineResult<IncrementalStats> {
+        let mut pending = PendingResolution::default();
+        let mut stats = self.index_incremental_deferred(
+            root,
+            Arc::clone(&index),
+            semantic.clone(),
+            embedding_pool,
+            force,
+            show_progress,
+            total_files,
+            &mut pending,
+        )?;
+        stats.phase2_stats = self.resolve_pending(pending, index, semantic, show_progress)?;
+        Ok(stats)
+    }
+
+    /// Run discovery, cleanup, and Phase 1 for one root, deferring
+    /// resolution: outputs accumulate into `pending` for a later
+    /// `resolve_pending` call. Multi-root flows call this per root so
+    /// Phase 2 sees every root's symbols; `phase2_stats` in the returned
+    /// stats is empty by construction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn index_incremental_deferred(
+        &self,
+        root: &Path,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        embedding_pool: Option<Arc<crate::semantic::EmbeddingBackend>>,
+        force: bool,
+        show_progress: bool,
+        total_files: usize,
+        pending: &mut PendingResolution,
+    ) -> PipelineResult<IncrementalStats> {
         use crate::io::status_line::{
             ProgressBar, ProgressBarOptions, ProgressBarStyle, StatusLine,
         };
-
-        if !show_progress {
-            return self.index_incremental(root, index, semantic, embedding_pool, force);
-        }
 
         let start = Instant::now();
         let semantic_path = self.settings.index_path.join("semantic");
@@ -360,7 +407,6 @@ impl Pipeline {
             unresolved,
             variable_bindings,
             this_barriers,
-            symbol_cache,
             cleanup_stats,
             deleted_symbols,
             discover_counts,
@@ -372,21 +418,27 @@ impl Pipeline {
             if has_embedding {
                 // Dual progress: EMBED and INDEX running in parallel
                 // Estimate embedding candidates = total_files (actual will vary based on symbols per file)
-                let dual_bar = Arc::new(DualProgressBar::new(
-                    "EMBED",
-                    total_files as u64, // Estimated embedding candidates
-                    "embedded",
-                    "INDEX",
-                    total_files as u64,
-                    "files",
-                ));
-                let dual_status = StatusLine::new(Arc::clone(&dual_bar));
+                let dual_bar = show_progress.then(|| {
+                    Arc::new(DualProgressBar::new(
+                        "EMBED",
+                        total_files as u64, // Estimated embedding candidates
+                        "embedded",
+                        "INDEX",
+                        total_files as u64,
+                        "files",
+                    ))
+                });
+                let dual_status = dual_bar
+                    .as_ref()
+                    .map(|bar| StatusLine::new(Arc::clone(bar)));
 
-                let (stats, unresolved, bindings, barriers, cache, metrics) = self.run_phase1(
+                let (stats, unresolved, bindings, barriers, _cache, metrics) = self.run_phase1(
                     FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
                     Phase1Options {
-                        progress: ProgressSink::Dual(dual_bar.clone()),
+                        progress: dual_bar
+                            .clone()
+                            .map_or(ProgressSink::Silent, ProgressSink::Dual),
                         embed: Some(EmbedOptions {
                             pool: embedding_pool
                                 .clone()
@@ -405,7 +457,9 @@ impl Pipeline {
                 if let Some(m) = metrics {
                     m.log();
                 }
-                eprintln!("{dual_bar}");
+                if let Some(bar) = dual_bar {
+                    eprintln!("{bar}");
+                }
 
                 let files_indexed = stats.files_indexed;
                 (
@@ -413,7 +467,6 @@ impl Pipeline {
                     unresolved,
                     bindings,
                     barriers,
-                    cache,
                     CleanupStats::default(),
                     0,
                     (files_indexed, 0, 0, 0, 0),
@@ -421,23 +474,29 @@ impl Pipeline {
                 )
             } else {
                 // Single progress bar (no embedding or no semantic)
-                let phase1_bar = Arc::new(ProgressBar::with_4_labels(
-                    total_files as u64,
-                    "files",
-                    "indexed",
-                    "failed",
-                    "embedded",
-                    bar_options,
-                ));
-                let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
+                let phase1_bar = show_progress.then(|| {
+                    Arc::new(ProgressBar::with_4_labels(
+                        total_files as u64,
+                        "files",
+                        "indexed",
+                        "failed",
+                        "embedded",
+                        bar_options,
+                    ))
+                });
+                let phase1_status = phase1_bar
+                    .as_ref()
+                    .map(|bar| StatusLine::new(Arc::clone(bar)));
 
                 // has_embedding is false here, so semantic and pool are never
                 // both present: the embed stage cannot run in this arm.
-                let (stats, unresolved, bindings, barriers, cache, metrics) = self.run_phase1(
+                let (stats, unresolved, bindings, barriers, _cache, metrics) = self.run_phase1(
                     FileSource::Walk(root.to_path_buf()),
                     Arc::clone(&index),
                     Phase1Options {
-                        progress: ProgressSink::Bar(phase1_bar.clone()),
+                        progress: phase1_bar
+                            .clone()
+                            .map_or(ProgressSink::Silent, ProgressSink::Bar),
                         embed: None,
                     },
                 )?;
@@ -447,7 +506,9 @@ impl Pipeline {
                 if let Some(m) = metrics {
                     m.log();
                 }
-                eprintln!("{phase1_bar}");
+                if let Some(bar) = phase1_bar {
+                    eprintln!("{bar}");
+                }
 
                 let files_indexed = stats.files_indexed;
                 (
@@ -455,7 +516,6 @@ impl Pipeline {
                     unresolved,
                     bindings,
                     barriers,
-                    cache,
                     CleanupStats::default(),
                     0,
                     (files_indexed, 0, 0, 0, 0),
@@ -542,15 +602,19 @@ impl Pipeline {
 
             // Create Phase 1 bar with actual files to index count
             // Labels: files, indexed, failed, embedded (for embedding visibility)
-            let phase1_bar = Arc::new(ProgressBar::with_4_labels(
-                files_to_index.len() as u64,
-                "files",
-                "indexed",
-                "failed",
-                "embedded",
-                bar_options,
-            ));
-            let phase1_status = StatusLine::new(Arc::clone(&phase1_bar));
+            let phase1_bar = show_progress.then(|| {
+                Arc::new(ProgressBar::with_4_labels(
+                    files_to_index.len() as u64,
+                    "files",
+                    "indexed",
+                    "failed",
+                    "embedded",
+                    bar_options,
+                ))
+            });
+            let phase1_status = phase1_bar
+                .as_ref()
+                .map(|bar| StatusLine::new(Arc::clone(bar)));
 
             let embed = match (&semantic, &embedding_pool) {
                 (Some(sem), Some(pool)) => Some(EmbedOptions {
@@ -563,7 +627,9 @@ impl Pipeline {
                 FileSource::List(files_to_index),
                 Arc::clone(&index),
                 Phase1Options {
-                    progress: ProgressSink::Bar(phase1_bar.clone()),
+                    progress: phase1_bar
+                        .clone()
+                        .map_or(ProgressSink::Silent, ProgressSink::Bar),
                     embed,
                 },
             )?;
@@ -573,12 +639,9 @@ impl Pipeline {
             if let Some(m) = metrics {
                 m.log();
             }
-            eprintln!("{phase1_bar}");
-
-            // Seed Phase 2 from the persisted index: the run-scoped cache
-            // holds only this run's files, hiding unchanged files' symbols
-            // and re-export aliases from resolution.
-            let cache = SymbolLookupCache::from_index(&index)?;
+            if let Some(bar) = phase1_bar {
+                eprintln!("{bar}");
+            }
 
             let counts = (
                 discover_result.new_files.len(),
@@ -592,7 +655,6 @@ impl Pipeline {
                 unresolved,
                 bindings,
                 barriers,
-                cache,
                 cleanup_stats,
                 deleted_symbols,
                 counts,
@@ -600,31 +662,12 @@ impl Pipeline {
             )
         };
 
-        // Run Phase 2 with separate progress bar
-        let symbol_cache = Arc::new(symbol_cache);
-        let phase2_stats = self.run_phase2_maybe_bar(
-            unresolved,
-            variable_bindings,
-            this_barriers,
-            symbol_cache,
-            Arc::clone(&index),
-            true,
-        )?;
-
-        // Phase 2 has stored the changed files' own edges; the replacements
-        // are committed and findable, so the edges captured from unchanged
-        // files can be re-pointed at them.
-        if !captured_inbound.is_empty() {
-            let rebind_stage = if let Some(ref sem) = semantic {
-                CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
-            } else {
-                CleanupStage::new(Arc::clone(&index), &semantic_path)
-            };
-            rebind_stage.rebind_inbound_edges(&captured_inbound)?;
-        }
-
-        // Save embeddings
-        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
+        // Resolution is deferred: accumulate this root's Phase 1 outputs.
+        pending.unresolved.extend(unresolved);
+        pending.variable_bindings.extend(variable_bindings);
+        pending.this_barriers.extend(this_barriers);
+        pending.captured_inbound.extend(captured_inbound);
+        pending.ran = true;
 
         Ok(IncrementalStats {
             new_files: discover_counts.0,
@@ -635,9 +678,55 @@ impl Pipeline {
             deleted_symbols,
             index_stats,
             cleanup_stats,
-            phase2_stats,
+            phase2_stats: Phase2Stats::default(),
             elapsed: start.elapsed(),
         })
+    }
+
+    /// Resolve everything accumulated by deferred runs: seed the
+    /// candidate table from the persisted index (run-scoped caches hold
+    /// only their own walk's files, hiding other roots' and unchanged
+    /// files' symbols and re-export aliases), run Phase 2 once, re-point
+    /// captured inbound edges at the committed replacements, persist
+    /// embeddings. A `pending` from all-cached runs is a no-op.
+    pub fn resolve_pending(
+        &self,
+        pending: PendingResolution,
+        index: Arc<DocumentIndex>,
+        semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
+        show_progress: bool,
+    ) -> PipelineResult<Phase2Stats> {
+        if !pending.ran {
+            return Ok(Phase2Stats::default());
+        }
+        let semantic_path = self.settings.index_path.join("semantic");
+
+        let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
+        let phase2_stats = self.run_phase2_maybe_bar(
+            pending.unresolved,
+            pending.variable_bindings,
+            pending.this_barriers,
+            symbol_cache,
+            Arc::clone(&index),
+            show_progress,
+        )?;
+
+        // Phase 2 has stored the changed files' own edges; the replacements
+        // are committed and findable, so the edges captured from unchanged
+        // files can be re-pointed at them.
+        if !pending.captured_inbound.is_empty() {
+            let rebind_stage = if let Some(ref sem) = semantic {
+                CleanupStage::new(Arc::clone(&index), &semantic_path).with_semantic(Arc::clone(sem))
+            } else {
+                CleanupStage::new(Arc::clone(&index), &semantic_path)
+            };
+            rebind_stage.rebind_inbound_edges(&pending.captured_inbound)?;
+        }
+
+        // Save embeddings
+        self.persist_embeddings(semantic.as_ref(), &semantic_path)?;
+
+        Ok(phase2_stats)
     }
 
     /// Index a directory with optional progress bar.

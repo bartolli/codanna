@@ -409,6 +409,10 @@ impl UnifiedWatcher {
             }
         }
 
+        // Resolution defers across the covered roots so a burst whose
+        // importing and imported files land in different roots binds
+        // its cross-root edges regardless of loop order.
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
         for root in &roots {
             crate::log_event!(
                 "watcher",
@@ -417,7 +421,7 @@ impl UnifiedWatcher {
                 crate::parsing::paths::render_absolute_path(root).display()
             );
             let mut indexer = self.facade.write().await;
-            match indexer.index_directory(root, false) {
+            match indexer.index_directory_deferred(root, false, &mut pending) {
                 Ok(stats) => {
                     crate::log_event!(
                         "watcher",
@@ -434,6 +438,20 @@ impl UnifiedWatcher {
                 }
                 Err(e) => {
                     tracing::error!("[watcher] batch sync failed: {e}");
+                }
+            }
+        }
+        {
+            let mut indexer = self.facade.write().await;
+            match indexer.resolve_deferred(pending) {
+                Ok(()) => {}
+                Err(e) if is_writer_lock_contention(&e) => {
+                    tracing::info!(
+                        "[watcher] batch sync resolution skipped: another serve process holds the index writer; hot-reload converges"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("[watcher] batch sync resolution failed: {e}");
                 }
             }
         }
@@ -615,6 +633,9 @@ impl UnifiedWatcher {
                     }
 
                     let mut indexer = self.facade.write().await;
+                    // Resolution defers across the added dirs so one new
+                    // root's imports into another bind regardless of order.
+                    let mut pending = crate::indexing::pipeline::PendingResolution::default();
                     for path in &added {
                         crate::log_event!(
                             "config",
@@ -622,7 +643,7 @@ impl UnifiedWatcher {
                             "{}",
                             crate::parsing::paths::render_absolute_path(path).display()
                         );
-                        match indexer.index_directory(path, false) {
+                        match indexer.index_directory_deferred(path, false, &mut pending) {
                             Ok(stats) => {
                                 tracing::info!(
                                     "  indexed {} files, {} symbols",
@@ -634,6 +655,9 @@ impl UnifiedWatcher {
                                 tracing::error!("  failed: {e}");
                             }
                         }
+                    }
+                    if let Err(e) = indexer.resolve_deferred(pending) {
+                        tracing::error!("  resolution failed: {e}");
                     }
                 }
 

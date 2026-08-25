@@ -52,23 +52,25 @@ impl Pipeline {
             }),
             _ => None,
         };
-        let (index_stats, unresolved, bindings, barriers, symbol_cache, metrics) = self
-            .run_phase1(
-                FileSource::Walk(root.to_path_buf()),
-                Arc::clone(&index),
-                Phase1Options {
-                    progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
-                    embed,
-                },
-            )?;
+        let (index_stats, unresolved, bindings, barriers, _run_cache, metrics) = self.run_phase1(
+            FileSource::Walk(root.to_path_buf()),
+            Arc::clone(&index),
+            Phase1Options {
+                progress: progress.map_or(ProgressSink::Silent, ProgressSink::Bar),
+                embed,
+            },
+        )?;
 
         // Log pipeline metrics (no StatusLine in this path, safe to log immediately)
         if let Some(m) = metrics {
             m.log();
         }
 
-        // Run Phase 2 resolution with progress if Phase 1 had progress
-        let symbol_cache = Arc::new(symbol_cache);
+        // Run Phase 2 resolution with progress if Phase 1 had progress.
+        // Seed from the persisted index: the run-scoped cache holds only
+        // this walk's files, hiding other registered roots' symbols from
+        // resolution.
+        let symbol_cache = Arc::new(super::SymbolLookupCache::from_index(&index)?);
         let phase2_stats = self.run_phase2_maybe_bar(
             unresolved,
             bindings,

@@ -1202,6 +1202,65 @@ impl IndexFacade {
         })
     }
 
+    /// `index_directory` with resolution deferred into `pending`.
+    ///
+    /// For per-root loops that must keep warn-and-continue semantics
+    /// (serve batch sync, watcher config handler, MCP reindex): call
+    /// this per root, then `resolve_deferred` once so cross-root
+    /// imports bind regardless of loop order. `relationships_resolved`
+    /// in the returned stats is 0 by construction.
+    pub fn index_directory_deferred(
+        &mut self,
+        path: &Path,
+        force: bool,
+        pending: &mut crate::indexing::pipeline::PendingResolution,
+    ) -> FacadeResult<IndexingStats> {
+        let path = &Self::canonical_or_raw(path);
+        if self.has_semantic_search() {
+            if let Err(e) = self.ensure_embedding_pool() {
+                tracing::warn!("Failed to initialize embedding pool: {e}");
+            }
+        }
+        let stats = self.pipeline.index_incremental_deferred(
+            path,
+            Arc::clone(&self.document_index),
+            self.semantic_search.clone(),
+            self.embedding_pool.clone(),
+            force,
+            false,
+            0,
+            pending,
+        )?;
+
+        // Update tracked paths
+        self.add_indexed_path(path);
+
+        Ok(IndexingStats {
+            files_indexed: stats.new_files
+                + stats.modified_files
+                + stats.renamed_files
+                + stats.invalidated_caller_files,
+            symbols_found: stats.index_stats.symbols_found,
+            relationships_resolved: 0,
+            files_removed: stats.deleted_files,
+            symbols_removed: stats.deleted_symbols,
+        })
+    }
+
+    /// Resolve everything accumulated by `index_directory_deferred` calls.
+    pub fn resolve_deferred(
+        &mut self,
+        pending: crate::indexing::pipeline::PendingResolution,
+    ) -> FacadeResult<()> {
+        self.pipeline.resolve_pending(
+            pending,
+            Arc::clone(&self.document_index),
+            self.semantic_search.clone(),
+            false,
+        )?;
+        Ok(())
+    }
+
     /// Index a directory with advanced options.
     ///
     /// Provides options for progress reporting, dry-run mode, force re-indexing,
@@ -1214,78 +1273,113 @@ impl IndexFacade {
         force: bool,
         max_files: Option<usize>,
     ) -> crate::IndexResult<crate::indexing::progress::IndexStats> {
+        let dirs = [dir.as_ref().to_path_buf()];
+        let mut stats =
+            self.index_directories_with_options(&dirs, progress, dry_run, force, max_files)?;
+        Ok(stats.pop().unwrap_or_default())
+    }
+
+    /// Index multiple directories as one run: Phase 1 walks each root in
+    /// order, resolution runs once after the last root so cross-root
+    /// imports bind regardless of registration order. Returns per-root
+    /// stats aligned with `dirs`.
+    pub fn index_directories_with_options(
+        &mut self,
+        dirs: &[PathBuf],
+        progress: bool,
+        dry_run: bool,
+        force: bool,
+        max_files: Option<usize>,
+    ) -> crate::IndexResult<Vec<crate::indexing::progress::IndexStats>> {
         use crate::indexing::FileWalker;
+        use crate::indexing::pipeline::PendingResolution;
         use crate::indexing::progress::IndexStats;
 
-        let dir = &Self::canonical_or_raw(dir.as_ref());
-        let walker = FileWalker::new(Arc::clone(&self.settings));
-        let files: Vec<_> = walker.walk(dir).collect();
+        let mut pending = PendingResolution::default();
+        let mut all_stats = Vec::with_capacity(dirs.len());
 
-        // Apply max_files limit if specified
-        let files = if let Some(max) = max_files {
-            files.into_iter().take(max).collect()
-        } else {
-            files
-        };
+        for dir in dirs {
+            let dir = &Self::canonical_or_raw(dir);
+            let walker = FileWalker::new(Arc::clone(&self.settings));
+            let files: Vec<_> = walker.walk(dir).collect();
 
-        let total_files = files.len();
+            // Apply max_files limit if specified
+            let files = if let Some(max) = max_files {
+                files.into_iter().take(max).collect()
+            } else {
+                files
+            };
 
-        // Handle dry-run mode
-        if dry_run {
-            println!("Would index {total_files} files:");
-            for (i, file_path) in files.iter().enumerate() {
-                if i < 5 {
-                    println!(
-                        "  {}",
-                        crate::parsing::paths::render_absolute_path(file_path).display()
-                    );
-                } else if i == 5 && total_files > 5 {
-                    println!("  ... and {} more files", total_files - 5);
-                    break;
+            let total_files = files.len();
+
+            // Handle dry-run mode
+            if dry_run {
+                println!("Would index {total_files} files:");
+                for (i, file_path) in files.iter().enumerate() {
+                    if i < 5 {
+                        println!(
+                            "  {}",
+                            crate::parsing::paths::render_absolute_path(file_path).display()
+                        );
+                    } else if i == 5 && total_files > 5 {
+                        println!("  ... and {} more files", total_files - 5);
+                        break;
+                    }
+                }
+
+                let mut stats = IndexStats::new();
+                stats.files_indexed = total_files;
+                all_stats.push(stats);
+                continue;
+            }
+
+            // Auto-force mode for empty indexes (clean index behaves like --force)
+            let force = force || self.document_count().unwrap_or(0) == 0;
+
+            if self.has_semantic_search() {
+                if let Err(e) = self.ensure_embedding_pool() {
+                    tracing::warn!("Failed to initialize embedding pool: {e}");
                 }
             }
 
-            let mut stats = IndexStats::new();
-            stats.files_indexed = total_files;
-            return Ok(stats);
+            // Phase 1 only; resolution is deferred until every root walked
+            let pipeline_stats = self.pipeline.index_incremental_deferred(
+                dir,
+                Arc::clone(&self.document_index),
+                self.semantic_search.clone(),
+                self.embedding_pool.clone(),
+                force,
+                progress && total_files > 0,
+                total_files,
+                &mut pending,
+            )?;
+
+            // Update tracked paths
+            self.add_indexed_path(dir);
+
+            // Convert to IndexStats format using pipeline's actual timing
+            let mut stats = IndexStats::default();
+            stats.files_indexed = pipeline_stats.new_files
+                + pipeline_stats.modified_files
+                + pipeline_stats.renamed_files
+                + pipeline_stats.invalidated_caller_files;
+            stats.symbols_found = pipeline_stats.index_stats.symbols_found;
+            stats.files_removed = pipeline_stats.deleted_files;
+            stats.symbols_removed = pipeline_stats.deleted_symbols;
+            stats.elapsed = pipeline_stats.elapsed;
+            all_stats.push(stats);
         }
 
-        // Auto-force mode for empty indexes (clean index behaves like --force)
-        let force = force || self.document_count().unwrap_or(0) == 0;
-
-        if self.has_semantic_search() {
-            if let Err(e) = self.ensure_embedding_pool() {
-                tracing::warn!("Failed to initialize embedding pool: {e}");
-            }
+        if !dry_run {
+            self.pipeline.resolve_pending(
+                pending,
+                Arc::clone(&self.document_index),
+                self.semantic_search.clone(),
+                progress,
+            )?;
         }
 
-        // Use Pipeline for indexing with progress flag
-        // The pipeline manages progress bars internally for clean sequential display
-        let pipeline_stats = self.pipeline.index_incremental_with_progress_flag(
-            dir,
-            Arc::clone(&self.document_index),
-            self.semantic_search.clone(),
-            self.embedding_pool.clone(),
-            force,
-            progress && total_files > 0,
-            total_files,
-        )?;
-
-        // Update tracked paths
-        self.add_indexed_path(dir);
-
-        // Convert to IndexStats format using pipeline's actual timing
-        let mut stats = IndexStats::default();
-        stats.files_indexed = pipeline_stats.new_files
-            + pipeline_stats.modified_files
-            + pipeline_stats.renamed_files
-            + pipeline_stats.invalidated_caller_files;
-        stats.symbols_found = pipeline_stats.index_stats.symbols_found;
-        stats.files_removed = pipeline_stats.deleted_files;
-        stats.symbols_removed = pipeline_stats.deleted_symbols;
-        stats.elapsed = pipeline_stats.elapsed;
-
-        Ok(stats)
+        Ok(all_stats)
     }
 
     /// Sync with configuration (compare stored vs config paths).
@@ -1313,8 +1407,11 @@ impl IndexFacade {
             }
         }
 
-        // Index new directories with progress if enabled
-        // Use force=true since these are new directories being indexed for the first time
+        // Index new directories with progress if enabled.
+        // Use force=true since these are new directories being indexed for
+        // the first time; resolution is deferred until every new root has
+        // walked so cross-root imports bind regardless of add order.
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
         for path in &to_add {
             // Visual separator and directory label (stderr syncs with progress bars)
             eprintln!();
@@ -1332,7 +1429,7 @@ impl IndexFacade {
                 0
             };
 
-            let result = self.pipeline.index_incremental_with_progress_flag(
+            let result = self.pipeline.index_incremental_deferred(
                 path,
                 Arc::clone(&self.document_index),
                 self.semantic_search.clone(),
@@ -1340,6 +1437,7 @@ impl IndexFacade {
                 true, // force: new directories should be fully indexed
                 progress,
                 file_count,
+                &mut pending,
             )?;
             stats.files_indexed += result.new_files
                 + result.modified_files
@@ -1347,6 +1445,12 @@ impl IndexFacade {
                 + result.invalidated_caller_files;
             stats.symbols_found += result.index_stats.symbols_found;
         }
+        self.pipeline.resolve_pending(
+            pending,
+            Arc::clone(&self.document_index),
+            self.semantic_search.clone(),
+            progress,
+        )?;
         stats.added_dirs = to_add.len();
 
         // Remove files from removed directories
@@ -4258,5 +4362,209 @@ mod tests {
             .collect();
         callers.sort();
         callers
+    }
+
+    // Cross-root resolution locks: a tests-root import binding into a
+    // src-root symbol must produce its Calls edge in every walk order
+    // and lane. Per-root resolution with a run-scoped candidate table
+    // lost the edge under force and under reversed registration order,
+    // and the sync lane (new dir added to an existing index) lost it
+    // always.
+    fn write_two_root_python_fixture(root: &Path) -> (PathBuf, PathBuf) {
+        let src = root.join("src");
+        let tests = root.join("tests");
+        std::fs::create_dir_all(src.join("pkg")).unwrap();
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::write(src.join("pkg/__init__.py"), "").unwrap();
+        std::fs::write(
+            src.join("pkg/mod.py"),
+            "def target_function():\n    return 42\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tests.join("test_mod.py"),
+            "from pkg.mod import target_function\n\ndef test_target_function():\n    assert target_function() == 42\n",
+        )
+        .unwrap();
+        (src, tests)
+    }
+
+    fn two_root_facade(index_root: &Path, src: &Path, tests: &Path) -> IndexFacade {
+        let mut settings = Settings {
+            index_path: index_root.join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.to_path_buf()).unwrap();
+        settings.add_indexed_path(tests.to_path_buf()).unwrap();
+        IndexFacade::new(std::sync::Arc::new(settings)).unwrap()
+    }
+
+    fn assert_cross_root_edge(facade: &IndexFacade, label: &str) {
+        let callers = facade.find_symbols_by_name("test_target_function", None);
+        assert_eq!(callers.len(), 1, "one test symbol expected ({label})");
+        let callees = facade.get_called_functions(callers[0].id);
+        let picked: Vec<String> = callees
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}@{}",
+                    s.name,
+                    facade.get_file_path(s.file_id).unwrap_or_default()
+                )
+            })
+            .collect();
+        assert_eq!(
+            callees.len(),
+            1,
+            "cross-root call must resolve ({label}), got: {picked:?}"
+        );
+        let path = facade.get_file_path(callees[0].file_id).unwrap_or_default();
+        assert!(
+            callees[0].name.as_ref() == "target_function"
+                && std::path::Path::new(&path).ends_with("pkg/mod.py"),
+            "edge must land on the src-root symbol ({label}), got: {picked:?}"
+        );
+    }
+
+    #[test]
+    fn multi_root_force_lane_resolves_cross_root_import_in_either_order() {
+        for reversed in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (src, tests) = write_two_root_python_fixture(dir.path());
+            let mut facade = two_root_facade(dir.path(), &src, &tests);
+            let dirs = if reversed {
+                [tests.clone(), src.clone()]
+            } else {
+                [src.clone(), tests.clone()]
+            };
+            facade
+                .index_directories_with_options(&dirs, false, false, true, None)
+                .unwrap();
+            assert_cross_root_edge(&facade, &format!("force, reversed={reversed}"));
+        }
+    }
+
+    #[test]
+    fn multi_root_incremental_lane_resolves_cross_root_import_in_either_order() {
+        for reversed in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (src, tests) = write_two_root_python_fixture(dir.path());
+            let mut facade = two_root_facade(dir.path(), &src, &tests);
+            let dirs = if reversed {
+                [tests.clone(), src.clone()]
+            } else {
+                [src.clone(), tests.clone()]
+            };
+            facade
+                .index_directories_with_options(&dirs, false, false, false, None)
+                .unwrap();
+            assert_cross_root_edge(&facade, &format!("incremental, reversed={reversed}"));
+        }
+    }
+
+    #[test]
+    fn sync_added_root_resolves_cross_root_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, tests) = write_two_root_python_fixture(dir.path());
+        let src = src.canonicalize().unwrap();
+        let tests = tests.canonicalize().unwrap();
+        let mut facade = two_root_facade(dir.path(), &src, &tests);
+
+        // First session: only src registered and indexed.
+        facade.index_directory(&src, false).unwrap();
+
+        // Second session: tests added to config; sync indexes the new
+        // root through its force lane.
+        facade
+            .sync_with_config(
+                Some(vec![src.clone()]),
+                &[src.clone(), tests.clone()],
+                false,
+            )
+            .unwrap();
+        assert_cross_root_edge(&facade, "sync-added root");
+    }
+
+    // Serve-lane shape: a settled burst creates the importing and the
+    // imported file in DIFFERENT roots, and the batch sync loops the
+    // covered roots through per-root incremental runs — importing root
+    // first (the order that lost the edge when each run resolved
+    // against itself).
+
+    #[test]
+    fn deferred_directory_sync_resolves_cross_root_new_file_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        let tests = dir.path().join("tests");
+        std::fs::create_dir_all(src.join("pkg")).unwrap();
+        std::fs::create_dir_all(&tests).unwrap();
+        std::fs::write(src.join("pkg/__init__.py"), "").unwrap();
+        let mut facade = two_root_facade(dir.path(), &src, &tests);
+        facade
+            .index_directories_with_options(
+                &[src.clone(), tests.clone()],
+                false,
+                false,
+                false,
+                None,
+            )
+            .unwrap();
+
+        // The burst: both endpoint files appear at once.
+        std::fs::write(
+            src.join("pkg/mod.py"),
+            "def target_function():\n    return 42\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tests.join("test_mod.py"),
+            "from pkg.mod import target_function\n\ndef test_target_function():\n    assert target_function() == 42\n",
+        )
+        .unwrap();
+
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        facade
+            .index_directory_deferred(&tests, false, &mut pending)
+            .unwrap();
+        facade
+            .index_directory_deferred(&src, false, &mut pending)
+            .unwrap();
+        facade.resolve_deferred(pending).unwrap();
+        assert_cross_root_edge(&facade, "deferred burst sync, tests root first");
+    }
+
+    // Modification lane under deferral: both endpoint files content-edit
+    // in one multi-root run, so cleanup captures the tests-root inbound
+    // edge, root B's cleanup runs between root A's Phase 1 and the
+    // single Phase 2, and the rebind re-points after resolution. The
+    // edge must survive exactly once.
+    #[test]
+    fn multi_root_incremental_edit_preserves_cross_root_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, tests) = write_two_root_python_fixture(dir.path());
+        let mut facade = two_root_facade(dir.path(), &src, &tests);
+        let dirs = [src.clone(), tests.clone()];
+        facade
+            .index_directories_with_options(&dirs, false, false, false, None)
+            .unwrap();
+        assert_cross_root_edge(&facade, "pre-edit");
+
+        // Prepend into the imported file (shifts ranges), append into
+        // the importer; both roots carry a modified file in one run.
+        std::fs::write(
+            src.join("pkg/mod.py"),
+            "# shifted\ndef target_function():\n    return 42\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tests.join("test_mod.py"),
+            "from pkg.mod import target_function\n\ndef test_target_function():\n    assert target_function() == 42\n# touched\n",
+        )
+        .unwrap();
+        facade
+            .index_directories_with_options(&dirs, false, false, false, None)
+            .unwrap();
+        assert_cross_root_edge(&facade, "post-edit");
     }
 }

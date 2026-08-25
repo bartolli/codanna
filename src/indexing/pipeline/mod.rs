@@ -40,6 +40,7 @@ pub mod types;
 mod workers;
 
 pub use config::PipelineConfig;
+pub use incremental::PendingResolution;
 pub use metrics::{PipelineMetrics, StageMetrics, StageTracker};
 pub use stages::cleanup::{CleanupStage, CleanupStats};
 pub use stages::context::{ContextStage, ContextStats};
