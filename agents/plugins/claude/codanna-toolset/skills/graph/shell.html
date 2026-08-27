@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codanna Graph</title> <!-- codanna: vocabulary -->
+<!--ASSETS-->
+<style>
+/* THE STANDALONE'S OWN CHROME, and the only CSS here that is not page.css.
+ *
+ * page.css is scoped entirely under `.vault-graph` so it can be dropped into somebody
+ * else's document without styling it. That leaves the document itself unstyled -- and the
+ * container asks for `height: 100%`, which against an auto-height body resolves to zero and
+ * draws nothing at all. In a plugin the host has already sized the view; here nobody has,
+ * so the shell does it.
+ *
+ * No custom properties are used: they live on `.vault-graph` now, so they do not exist out
+ * here. The container paints the full viewport anyway, so nothing shows through.
+ */
+html, body { height: 100%; margin: 0; }
+</style>
+<style>
+<!--CSS-->
+</style>
+</head>
+<body>
+<!--MARKUP-->
+
+<!--LIBS-->
+<!--DATA-->
+
+<script>
+<!--SCRIPT-->
+</script>
+
+<script>
+/* THE STANDALONE'S BOOTSTRAP.
+ *
+ * page.js exports a function now instead of running itself, so somebody has to call it.
+ * Here that is this block; in the plugin it is main.js.
+ *
+ * The dependencies are read off `window` HERE, at the one place that knows they are UMD
+ * globals -- this page loaded them as <script> tags. Inside a plugin they are bundled
+ * module imports and never touch `window` at all, which is exactly why page.js takes them
+ * as arguments rather than reaching for them.
+ *
+ * A classic script, not type="module", deliberately: a module served from file:// is
+ * blocked by CORS, and being openable straight off a disk is the whole point of this file.
+ * The assembler strips page.js's `export` line for the same reason.
+ */
+/* THE STANDALONE'S SETTINGS STORE, and the only persistence in this file.
+ *
+ * localStorage, because this page is one file opened off a disk: there is no server to
+ * ask and no plugin data folder to write into. The KEY IS SCOPED BY VAULT NAME -- a
+ * graph built from a different vault is the same file:// origin as far as the browser is
+ * concerned, so without that the two would overwrite each other's colours.
+ *
+ * Every access is wrapped. localStorage THROWS rather than returning null in real
+ * configurations -- site data blocked, or a file:// page in some builds -- and a
+ * settings store is not worth taking the page down for. The cost of the catch is that
+ * colours stop outliving the tab, which is the right way for this to fail.
+ */
+var SETTINGS_KEY = "vault-graph:settings:" +
+  ((window.VAULT_DATA && window.VAULT_DATA.vault) || "default");
+
+function loadSettings() {
+  try {
+    var raw = window.localStorage.getItem(SETTINGS_KEY);
+    var v = raw ? JSON.parse(raw) : null;
+    return v && typeof v === "object" ? v : {};
+  } catch (e) { return {}; }
+}
+
+function saveSettings(patch) {
+  try {
+    var next = loadSettings();
+    for (var k in patch) {
+      if (Object.prototype.hasOwnProperty.call(patch, k)) next[k] = patch[k];
+    }
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  } catch (e) { /* no store, or full: the colours just do not outlive the tab */ }
+}
+
+mountVaultGraph(
+  document.getElementById("vg-app"),
+  window.VAULT_DATA,
+  {
+    Graph: window.graphology.Graph || window.graphology,
+    Sigma: (window.Sigma && window.Sigma.Sigma) || window.Sigma,
+    rendering: (window.Sigma && window.Sigma.rendering) || {},
+    logoMask: window.VAULT_LOGO_MASK || "",
+    // The gear is the standalone's only settings surface, so it is turned on here. The
+    // plugin leaves it off and uses Obsidian's own settings tab for the same rows.
+    settingsUI: true,
+    folderColors: loadSettings().folderColors,
+    onFolderColors: function (map) { saveSettings({ folderColors: map }); },
+    subfolderColors: loadSettings().subfolderColors,
+    onSubfolderColors: function (map) { saveSettings({ subfolderColors: map }); },
+    folderShown: loadSettings().folderShown,
+    onFolderShown: function (map) { saveSettings({ folderShown: map }); },
+    // Drag-to-pan, remembered. Undefined on a first visit, which page.js reads as ON --
+    // only an explicit false turns it off, so a stored setting is the only way to start
+    // locked and a cleared store goes back to the default rather than to "off".
+    panEnabled: loadSettings().panEnabled,
+    onPanEnabled: function (v) { saveSettings({ panEnabled: v }); },
+    // Compact date axis, remembered the same way -- undefined on a first visit reads as ON
+    // in page.js, only an explicit false turns it off (github#23).
+    compactAxis: loadSettings().compactAxis,
+    onCompactAxis: function (v) { saveSettings({ compactAxis: v }); },
+    // The hub. Scoped by vault like everything else here, which matters more for this than
+    // for colours: these are note IDS, and two vaults built to the same file:// origin
+    // would otherwise hand each other ids that resolve to different notes or to none.
+    // page.js filters what arrives against the graph, so a stale id is dropped rather
+    // than held as an empty slot.
+    pinned: loadSettings().pinned,
+    onPinned: function (ids) { saveSettings({ pinned: ids }); }
+  }
+);
+</script>
+</body>
+</html>

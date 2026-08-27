@@ -1,0 +1,224 @@
+<div id="vg-app" class="vault-graph" data-theme="dark">
+  <aside id="vg-sidebar">
+    <div class="brand">
+      <h1 id="vg-vname">Codanna Graph</h1> <!-- codanna: vocabulary -->
+      <!-- Hidden until a host opts in, and TWO different deps opt in -- which is worth
+           saying plainly here, because this comment used to name only one and was read
+           (by its own author, out loud, wrongly) as "the plugin has no gear". Both hosts
+           show it; they differ in what it OPENS.
+
+             settingsUI      the gear opens the panel below, #vg-settings. The STANDALONE
+                             sets this, because nothing else there can hold a setting.
+             openSettings()  the gear hands its click to the host. The PLUGIN sets this,
+                             and Obsidian's own settings tab opens -- the same setting
+                             behind two UIs in one product is how the two drift apart.
+
+           So the swatch panel below is standalone-only, which is also why the demo
+           storyboard can click through it: the demo records the standalone page. See the
+           deps table at the top of page.js, which had this right. -->
+      <button id="vg-gear" class="gear" hidden aria-expanded="false"
+              aria-controls="vg-settings" title="Settings">
+        <span aria-hidden="true">&#9881;</span><span class="sr">Settings</span>
+      </button>
+    </div>
+    <!-- codanna: what the disc represents -- the scope, the relations, the grouping -->
+    <div id="vg-vscope" class="sub"></div>
+
+    <div class="block" id="vg-settings" hidden>
+      <!-- Generic boolean options -- one row today (compactAxis, github#23), rendered once
+           by buildOptions() rather than rebuilt per-folder the way #vg-setbody is. A second
+           standalone setting is one entry in OPTION_ROWS away, not a new panel. -->
+      <div id="vg-optbody"></div>
+      <div class="row" style="margin-bottom:7px">
+        <div class="lbl" style="margin:0">Module colours</div> <!-- codanna: vocabulary -->
+        <div class="mini"><button id="vg-fcreset" title="Drop every module AND submodule override and go back to the automatic order">Reset</button></div>
+      </div>
+      <div id="vg-setbody"></div>
+      <p class="hint">Twelve slots, handed out in module order and round again. Setting
+        one module never moves another, and two modules may share a colour.</p>
+    </div>
+
+    <div class="block">
+    </div>
+
+    <div class="block">
+      <div class="lbl">Search</div>
+      <input type="search" id="vg-q" placeholder="Find a symbol...">
+      <div id="vg-hits"></div>
+    </div>
+
+    <div class="block">
+      <div class="row" style="margin-bottom:7px">
+        <div class="lbl" style="margin:0">Groups <span id="vg-gcount" class="val"></span></div>
+        <div class="mini"><button id="vg-allon">All</button><button id="vg-alloff">None</button></div>
+      </div>
+      <div id="vg-legend"></div>
+    </div>
+
+    <div class="block">
+      <div class="lbl">View</div>
+      <div class="tools">
+        <button id="vg-refresh" title="Back to the defaults, and replay the intro. Clears highlights and the date range, and returns each module to the visibility set in the gear. This page is a snapshot -- its data was baked in when it was built -- so to pick up code indexed since, run the graph skill again.">Refresh</button>
+        <button id="vg-png">Save PNG</button>
+        <!-- Dumps the exact state to the clipboard: filters, spacing, seam, per-band
+             geometry and dot sizes. For pasting into a bug report rather than describing it. -->
+        <button id="vg-dbg" title="Copy the exact layout state, for a bug report">Debug</button>
+      </div>
+    </div>
+
+    <div id="vg-stats"></div>
+  </aside>
+
+  <main id="vg-stage">
+    <!-- Notes added per day, above the disc. Its own grid row, so the disc is
+         centred in what is left rather than being overlapped. -->
+    <div id="vg-heat">
+      <div class="hrow">
+        <div class="lbl">Symbols added</div> <!-- codanna: vocabulary -->
+        <span id="vg-heatnote"></span>
+        <div id="vg-heatscale" aria-hidden="true">
+          <span>fewer</span><canvas id="vg-heatkey"></canvas><span>more</span>
+        </div>
+        <!-- THE RANGE LIVES UP HERE, beside the counts it qualifies, so the strip below is
+             nothing but the strip: a row of its own under the ribbon cost 22px of the disc
+             for two things nobody looks at except when they are already looking here.
+
+             AT THE END OF THE ROW, and as one group. It was loose in the middle, between the
+             prose and the legend, where it read as a third unrelated thing rather than as
+             the control it is. Three items that act on one filter belong together, and the
+             end of the row is the one place a group can grow without pushing anything about.
+
+             REAL DATE FIELDS, not a readout. They were text, so the only way to set a range
+             was to find and drag a handle -- fine for browsing, useless for "just show me
+             2024". A native picker also brings a calendar, keyboard entry and the locale's
+             own date order for free, none of which is worth reimplementing on a canvas. -->
+        <!-- A VIEW-LEVEL control, not only the settings-tab one: the plugin's gear hands
+             off to Obsidian's own settings tab (openSettings, see page.html's own comment
+             on #vg-gear), so there is no other way to flip this from inside the view at
+             all on that host -- unlike panEnabled, which the corner button already covers.
+             Mirrors that button's shape exactly: a mode, aria-pressed, persists on click. -->
+        <button id="vg-compact" type="button" aria-pressed="true"
+                title="Compact the date axis by symbol count. Off gives every year and month equal width."
+                aria-label="Compact date axis">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <path d="M3 4l3 4-3 4M13 4l-3 4 3 4" fill="none" stroke="currentColor"
+                  stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div id="vg-rangebox">
+          <input id="vg-from" class="dt" type="date" aria-label="Range start">
+          <span class="arw" aria-hidden="true">&rarr;</span>
+          <input id="vg-to" class="dt" type="date" aria-label="Range end">
+          <button id="vg-rangeall" class="btn" title="Clear the date range">All dates</button>
+        </div>
+      </div>
+      <div id="vg-heatwrap"><canvas id="vg-heatc"></canvas></div>
+      <!-- The whole history, brushable. The band above is a 52-week window onto whatever
+           this selects. -->
+      <canvas id="vg-ribbon"></canvas>
+      <!-- THE YEARS ARE BUTTONS, not text painted on the strip above. They were canvas, which
+           meant hit-testing a pixel band by hand, no keyboard, no focus ring, no hover state
+           the browser could give us -- and a control that only a mouse can reach is half a
+           control. Positioned per year against the same scale the strip uses. -->
+      <div id="vg-years"></div>
+      <div id="vg-rtip" hidden></div>
+      <div id="vg-htip" hidden></div>
+    </div>
+
+    <div id="vg-canvas">
+      <!-- Before #graph on purpose: the canvases then paint OVER the logo, so if an
+           unlinked note is ever sunflower-packed into the hub hole it draws on top of
+           the logo rather than being hidden behind it. (This vault currently has 0
+           unlinked notes, so the hole is empty -- but that is data, not a guarantee.) -->
+      <div id="vg-logo" aria-hidden="true" hidden></div>
+      <!-- Two-ring mode only: the inner band's palette, masked to the middle of the mark
+           so it fades out into the outer band's colours. Same logo mask, intersected
+           with a radial fade. -->
+      <div id="vg-logoInner" aria-hidden="true" hidden></div>
+      <div id="vg-graph"></div>
+      <!-- The hub's drop target, shown only while a note is being dragged.
+
+           AFTER #vg-graph, unlike the logo above, and that placement is a measurement
+           rather than a preference: anything drawn into the hole from the DOM sits UNDER
+           sigma's canvases, and every edge in the vault converges on the hub -- the tangle
+           is dense enough to bury it completely. Two of the concepts spiked for github#12
+           died on exactly this. -->
+      <div id="vg-hubdrop" aria-hidden="true" hidden></div>
+      <!-- CAMERA CONTROLS, in the corner of the STAGE rather than in the sidebar, because
+           they answer questions you have while looking at the graph -- "closer", "how do I
+           get back" -- and the sidebar is not where you are looking when you have them.
+           github#4 asked for the cluster, and it REPLACES the Fit button in View: one
+           place to look rather than two doing the same job.
+
+           BOTTOM right, not top: the detail card owns the top-right corner, and a control
+           that moves out of a panel's way is a moving target. The card yields instead --
+           see --controls-h in page.css.
+
+           Order is deliberate. Zoom is the pair reached for most, so it sits furthest from
+           the corner and is easiest to hit twice; pan is a MODE rather than an action, so
+           it sits apart at the bottom, where a mode switch belongs. -->
+      <div id="vg-cam" role="group" aria-label="View controls">
+        <button id="vg-zin" type="button" title="Zoom in" aria-label="Zoom in">
+          <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
+            <path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="vg-zout" type="button" title="Zoom out" aria-label="Zoom out">
+          <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
+            <path d="M3.5 8h9" fill="none" stroke="currentColor" stroke-width="1.6"
+                  stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="vg-reset" type="button" title="Fit the disc (or double-click the graph)"
+                aria-label="Fit the disc">
+          <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
+            <path d="M1.5 5.5V2.5a1 1 0 0 1 1-1h3M14.5 5.5V2.5a1 1 0 0 0-1-1h-3M1.5 10.5v3a1 1 0 0 0 1 1h3M14.5 10.5v3a1 1 0 0 1-1 1h-3"
+                  fill="none" stroke="currentColor" stroke-width="1.5"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="8" cy="8" r="1.6" fill="currentColor"/>
+          </svg>
+        </button>
+        <!-- A MODE, so it carries aria-pressed and fills when on. On by default; the gear
+             holds that default, so a vault where dragging gets in the way can start with
+             it off. -->
+        <button id="vg-pan" type="button" aria-pressed="true"
+                title="Drag to pan. Off pins the disc to the centre."
+                aria-label="Drag to pan">
+          <svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
+            <path d="M8 2v12M2 8h12M8 2 6.4 4M8 2l1.6 2M8 14l-1.6-2M8 14l1.6-2M2 8l2-1.6M2 8l2 1.6M14 8l-2-1.6M14 8l-2 1.6"
+                  fill="none" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+      <div id="vg-tip" hidden></div>
+      <div id="vg-detail" hidden></div>
+    </div>
+
+    <div id="vg-busy">Laying out graph...</div>
+  </main>
+
+  <!-- Right-click on a folder or subfolder row in the legend opens this: the same twelve
+       swatches + Auto the settings panel already has, at the click point rather than in
+       the sidebar. A SIBLING of the sidebar and the stage, not nested in either -- it is
+       positioned fixed against the viewport, and needs to sit above both. -->
+  <div id="vg-ctxmenu" class="ctxmenu" hidden role="menu"></div>
+
+  <!-- THE RECORDING'S CURSOR, drawn here rather than moved at the OS level. See
+       demoCursorAt in page.js: an OS-level pointer is a SECOND, genuinely native
+       input stream landing in the same window as the CDP-injected one, and the two
+       disagree on `buttons` in a way that used to abort a drag mid-glide. This is
+       just a positioned icon, on top of everything else, hit-testing nothing.
+       A SIBLING of the sidebar and the stage, like #vg-ctxmenu above -- nested inside
+       #vg-canvas it was clipped by that element's own `overflow: hidden` the moment a
+       beat's target sat in the sidebar, the heatmap band or the ribbon, which is most
+       of the storyboard: the cursor would vanish for every beat that was not literally
+       over the disc. -->
+  <div id="vg-democursor" aria-hidden="true" hidden>
+    <svg viewBox="0 0 24 24" width="22" height="22">
+      <path d="M3 2 L3 18.5 L7.2 14.6 L10.6 21.8 L13.3 20.5 L9.9 13.4 L16.5 13.4 Z"
+            fill="#fff" stroke="#000" stroke-width="1.3" stroke-linejoin="round"/>
+    </svg>
+  </div>
+</div>

@@ -1,25 +1,50 @@
 # Upstream: vault-graph
 
-`template.html` and `vendor/` are taken from https://github.com/luke321/vault-graph
-(MIT, Lukas Proprentner) at commit `1f0aba5`. The renderer -- plan, layout, cascade,
-sigma reducers, the `__vg` probe API and everything `.ai-context/invariants.md` measures --
-is unchanged. Upgrading = copy the new `src/template.html` and `vendor/*` over, then
-re-apply the hunks below (each is tagged `codanna:` in the file, so
-`diff upstream/src/template.html template.html` shows exactly this list).
+The page -- `shell.html`, `page.html`, `page.css`, `page.js` -- plus `lib/vendor.mjs`
+and `vendor/{sigma.min.js,graphology.umd.min.js,NOTICE.md}` are taken from
+https://github.com/luke321/vault-graph (MIT, Lukas Proprentner) at commit `a49b2e0`
+(release 1.8.0), through the fork `bartolli/vault-graph`. The renderer -- plan,
+layout, cascade, sigma reducers, the `__vg` probe API -- is unchanged. `graph.mjs`
+assembles the standalone document exactly as upstream's `build-graph.mjs` does
+(shell markers `<!--CSS-->`, `<!--MARKUP-->`, `<!--SCRIPT-->`, `<!--LIBS-->`,
+`<!--ASSETS-->`, `<!--DATA-->`; `page.js`'s `export` line stripped so the result
+stays a classic script).
+
+Upgrading = copy the new `src/shell.html`, `src/page.html`, `src/page.css`,
+`src/page.js`, `src/vendor.mjs` (to `lib/`) and `vendor/*` over, then re-apply the
+hunks below -- each is tagged `codanna:` in the files, so a diff against upstream
+shows exactly this list.
 
 | Hunk | What |
 |---|---|
-| vocabulary | title, search placeholder, timeline/today/refresh titles, heatmap label and day copy, tooltip and detail-panel nouns (note -> symbol, link -> edge, words -> lines) |
-| detail panel | the `obsidian://` open link becomes the symbol's `file:start-end` chip |
-| `buildStats` | footer reads `DATA.codanna` (relations, kinds, scope, index totals, date source) |
+| vocabulary | shell + page.html titles, search placeholder, heatmap label and compact-axis tooltip, Refresh tooltip, settings-panel labels (Module colours), tooltip/detail/heatnote/heatkey/day-tooltip/year-chip nouns (note -> symbol, link -> edge, words -> lines) |
+| vscope | scope line under the title: `#vg-vscope` div (page.html), its CSS, filled by `buildStats` with root/relations/group |
+| detail panel | the `obsidian://` open link becomes the symbol's `file:start-end` chip; the signature renders as `<pre class="sig">` through `sigHtml()` (highlight.js when the build inlined the language's grammar, escaped plain otherwise); the neighbour list is grouped by relation and direction from the adjacency histogram. Pin-to-hub stays |
+| graph data | node attrs carry `sig` and `lang`; each `adj` entry carries `r` -- the relation/direction histogram normalised to that node's perspective (`r[Relation] = [outgoing, incoming]`). On the adjacency, not on edge attributes, because budgeted vaults never materialise trimmed edges |
+| buildStats | title = project, `#vg-vscope` = scope line, `DOC.title`, footer reads `DATA.codanna` (relations, kinds, scope, index totals, date source) |
 | PNG name | `codanna-graph.png` |
-| camera | `enableCameraPanning: true`, the centre lock reduced to angle-only, `#zoomctl` (+ / - / fit) wired to `animatedZoom` / `animatedUnzoom` / `fit()` -- upstream pins the camera to the disc centre by design; a 10k-symbol disc needs its rim reachable |
-| palette seam | `injectedPalette()` in `readTheme` + `THEME.slots.length` in `buildColors`: `window.VAULT_PALETTE = {dark, light}` from the CLI replaces the ten documented slots when the index has more groups (`lib/tokens.mjs`, golden-angle OKLCH hues at the slots' median L/C) |
-| focus web | `drawFocusWeb`: the lit edges stroked once more on the hovers canvas, then the focus neighbours' discs re-drawn over them, under the label pill -- dim discs < web < lit discs < pill. (Not by marking the neighbours `highlighted`: that lifts them above the pill too.) Also offered upstream (not a codanna-specific change). |
-| theme override | not a template hunk: the CLI appends a `<style>` of token custom-property overrides (`lib/tokens.mjs`, both theme selectors mirrored) after the template's styles; the template keeps upstream's palette values, the injection wins the cascade. Slots 5-10 are re-assigned vs upstream (CVD gate; see the tokens module header). |
-| hover ramp | `hoverAmount()` pinned at 1 while the hovered note is the selected one -- otherwise the leave-tween ramps the active note's size, the web's alpha and the dim down and snaps them back when it releases `state.hovered`: a flick on every mouse-out. Upstream has the same ramp; candidate for the same offer branch. |
+| hover ramp | `hoverAmount()` pinned at 1 while the hovered note is the selected one -- otherwise the leave-tween ramps the active note's size, the web's alpha and the dim down and snaps them back when it releases `state.hovered`: a flick on every mouse-out. Upstream still ships the ramp at 1.8.0; candidate offer branch `0004-*` |
+| edge pixel clamp | 1.7.0's identity `zoomToSizeRatioFunction` (dots track the lattice) makes edge strokes grow linearly with zoom: 8px at 5x, 16px at 10x, a hub fan merging into a ribbon wider than its discs. The edge reducer clamps size to `EDGE_MAX_PX * ratio` (drawn px = size / ratio, so strokes never pass 4px); the camera hook re-runs reducers, rAF-throttled, only while the clamp can bind (ratio < 0.4). Dots keep the identity law -- `measureSizeScale` documents why a pixel cap on dots is wrong. Candidate upstream offer alongside the hover ramp |
+| hop trail | the relationship lists walk the graph with no way back: hops through `data-go` (and only hops) accumulate `navTrail`, rendered as a back arrow plus clickable crumbs at the top of the card (first, ellipsis, last two). A crumb click truncates the trail to that point; a fresh selection or close starts over. Keyboard: Alt+ArrowLeft / Backspace step back (preventDefault -- the browser answers both with history navigation, which on a file:// page leaves the graph), Escape blurs the input / closes the settings panel / closes the card, `/` focuses search; keys inside inputs stay the input's, and with two views in one document only the focused one acts |
+| hljs | `vendor/hljs/` (BSD-3-Clause, `BUILD.md` there has the esbuild recipe): core + one grammar per language present in the dump, inlined by `graph.mjs` after sigma/graphology, each gated on `findNetworkPrimitives()` finding nothing. `page.css` maps the `hljs-*` classes onto the page's own palette slots |
 
-Data contract the template reads (`window.VAULT_DATA`): `nodes[{id,label,folder,dirs,sub,type,tags,created,touched,words,deg}]`,
-`edges[{s,t,w}]`, `stats{nodes,edges,orphans,unresolved,files,templatesExcluded,ghostsIncluded}`, `vault`, `generated`,
-plus the codanna-only `codanna{relations,kinds,root,dates,symbolsTotal,relationshipsTotal,builderCommit,emissionVersion}`.
+Dropped from the previous vendoring (baseline `1f0aba5`), superseded upstream:
+camera/`#zoomctl` (1.7.0's corner camera cluster + `enableCameraPanning` default-on),
+focus web (`drawFocusWeb` adopted, with a `checkFocusWeb` diagnostic), the unlinked
+group colour fix (adopted), the generated-palette seam and `lib/tokens.mjs` (upstream's
+twelve cycling slots + per-folder picker replace both; its role tokens are the values
+our tokens module canonised, and its 12-slot palette absorbed the slot-5/6
+transposition and the slot-6/10 de-pastel with measurement).
+
+Data contract the page reads (`window.VAULT_DATA`):
+`nodes[{id,label,folder,dirs,sub,type,tags,created,touched,words,deg,sig,lang}]`,
+`edges[{s,t,w,r}]` (`r[Relation] = [count s->t, count t->s]`, `s < t`),
+`stats{nodes,edges,orphans,unresolved,files,templatesExcluded,ghostsIncluded}`,
+`vault`, `generated`, plus the codanna-only `codanna{relations,kinds,root,group,
+dates,unlinked,symbolsTotal,relationshipsTotal,builderCommit,emissionVersion}`.
 `lib/adapter.mjs` is the only producer.
+
+Page settings (colour picks, per-module visibility defaults, pan mode, compact axis,
+pinned hub symbols) persist in the browser's localStorage under
+`vault-graph:settings:<vault>` -- scoped by the index name, wrapped in try/catch, so
+a blocked store costs only persistence.

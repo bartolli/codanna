@@ -95,6 +95,7 @@ export async function buildData(dump, opts) {
       touched: touchedDay(absolute(opts.workingDir, file)),
       words: Math.max(1, (sym.endLine || sym.line) - sym.line + 1),
       sig: sym.signature || "",
+      lang: String(sym.language || "").toLowerCase(),
     });
   }
 

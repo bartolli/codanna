@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
  * graph.mjs -- the codanna index as one self-contained disc: wedges per module, hubs at
- * the centre, one HTML file. Renders through the vault-graph template (MIT, see
+ * the centre, one HTML file. Assembled from the vault-graph page (MIT, see
  * vendor/LICENSE-vault-graph and UPSTREAM.md) fed by `codanna dump` instead of a vault.
  *
  * Usage: node graph.mjs [--group module|language|kind[/module|kind|visibility]]
  *                       [--root PREFIX] [--kinds a,b] [--relation calls,uses]
  *                       [--dates blame|git|none] [--from graph.jsonl] [--binary PATH]
- *                       [--unlinked include|drop] [--palette auto|fixed|generated]
+ *                       [--unlinked include|drop]
  *                       [--out FILE] [--name NAME] [--light] [--no-open]
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { readDump } from "./lib/dump.mjs";
 import { buildData, parseGroup, DEFAULT_KINDS, RELATIONS } from "./lib/adapter.mjs";
-import { tokens, cssBlock, generatePalette } from "./lib/tokens.mjs";
+import { readVendorSource, findNetworkPrimitives } from "./lib/vendor.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -40,8 +40,6 @@ const unlinked = opt("unlinked", "include");
 if (unlinked !== "include" && unlinked !== "drop") { console.error("--unlinked takes include|drop"); process.exit(2); }
 let group;
 try { group = parseGroup(opt("group", "module")); } catch (e) { console.error(e.message); process.exit(2); }
-const palette = opt("palette", "auto");
-if (!["auto", "fixed", "generated"].includes(palette)) { console.error("--palette takes auto|fixed|generated"); process.exit(2); }
 
 let dump;
 try { dump = readDump({ from: opt("from"), binary: opt("binary", "codanna"), workingDir }); }
@@ -50,61 +48,72 @@ const data = await buildData(dump, { kinds, relations, root: opt("root"), dates,
   dateCachePath: join(workingDir, ".codanna", "visualizations", "dates-cache.json") });
 
 const LIB_NOTICE = `<!--
-  Rendered by the codanna graph skill through the vault-graph template
+  Rendered by the codanna graph skill through the vault-graph page
     vault-graph (c) Lukas Proprentner, MIT -- https://github.com/luke321/vault-graph
   which inlines two MIT-licensed libraries:
     graphology  (c) Guillaume Plique and graphology contributors
                 https://github.com/graphology/graphology
     Sigma.js    (c) Alexis Jacomy, Guillaume Plique and Sigma.js contributors
                 https://github.com/jacomyal/sigma.js
+  The bundles are inlined with their unreachable network calls replaced at build
+  time; vendor/NOTICE.md in the skill directory records the modification.
+  Signature highlighting: highlight.js (c) Ivan Sagalaev and contributors,
+  BSD-3-Clause -- https://github.com/highlightjs/highlight.js -- core plus only
+  the grammars for languages present in this index (vendor/hljs/BUILD.md).
   Full licence texts: vendor/ in the skill directory.
 -->`;
+// highlight.js is progressive by construction: core + one grammar per language
+// actually present in the data, nothing when the dump carries no signatures.
+const langs = [...new Set(data.nodes.map((n) => n.lang).filter(Boolean))]
+  .filter((l) => existsSync(join(HERE, "vendor", "hljs", `${l}.min.js`))).sort();
+const hljsFiles = data.nodes.some((n) => n.sig) ? ["core.min.js", ...langs.map((l) => `${l}.min.js`)] : [];
+const hljsScripts = hljsFiles.map((f) => {
+  const src = readFileSync(join(HERE, "vendor", "hljs", f), "utf8");
+  const hits = findNetworkPrimitives(src);
+  if (hits.length) {
+    console.error(`vendor/hljs/${f} contains network primitives (${hits.map((h) => h.name).join(", ")}); refusing to inline it`);
+    process.exit(1);
+  }
+  return `<script>\n${src}\n</script>`;
+});
 const libs = LIB_NOTICE + "\n" + ["graphology.umd.min.js", "sigma.min.js"]
-  .map((f) => `<script>\n${readFileSync(join(HERE, "vendor", f), "utf8")}\n</script>`).join("\n");
+  .map((f) => `<script>\n${readVendorSource(HERE, f)}\n</script>`).concat(hljsScripts).join("\n");
 const mask = (() => {
   try {
     const svg = readFileSync(join(HERE, "assets", "logo-mask.svg"), "utf8");
     return "data:image/svg+xml;base64," + Buffer.from(svg).toString("base64");
   } catch { return ""; }
 })();
-let html = readFileSync(join(HERE, "template.html"), "utf8");
 
-// Wedge colours: the template has ten documented hue slots and falls back to three
-// neutrals past them. An index usually has more top-level modules than that, so by
-// default a palette sized to the group count is generated in the same family
-// (--palette fixed keeps the upstream ten; generated forces one even for few groups).
-const groups = new Set(data.nodes.filter((n) => n.deg > 0).map((n) => n.folder));
-if (data.stats.orphans && unlinked !== "drop") groups.add("(unlinked)");
-const slots = { light: tokens("light").slots, dark: tokens("dark").slots };
-const wantGenerated = palette === "generated" || (palette === "auto" && groups.size > 10);
-const generated = wantGenerated
-  ? { dark: generatePalette(groups.size, slots.dark), light: generatePalette(groups.size, slots.light) }
-  : null;
-data.codanna.palette = generated ? `generated (${groups.size} groups)` : "documented slots";
+// One page, two mounts upstream (standalone + Obsidian plugin); here only the
+// standalone shape is assembled, exactly as their build-graph.mjs does it: the
+// page is four parts, page.js's `export` line comes off so the result stays a
+// classic script openable from file://.
+const part = (f) => readFileSync(join(HERE, f), "utf8");
+const asScript = (js) => js.replace(/^export \{[^}]*\};?\s*$/m, "").trimEnd();
 
-// Token overrides ship as a style block AFTER the template's own styles (via the
-// DATA marker at the end of the page -- the ASSETS marker precedes them and would
-// lose the cascade), mirroring its two theme selectors; the template file itself
-// stays at the upstream pin.
-const themeCss = `<style>\n${cssBlock("light", ":root")}\n${cssBlock("dark", ':root:not([data-theme=\"light\"])')}\n</style>`;
-const assets = `<script>window.VAULT_LOGO_MASK=${JSON.stringify(mask)};</script>` +
-  (generated ? `\n<script>window.VAULT_PALETTE=${JSON.stringify(generated)};</script>` : "");
+let markup = part("page.html").trimEnd();
+if (flag("light")) markup = markup.replace('class="vault-graph" data-theme="dark"', 'class="vault-graph" data-theme="light"');
 
-if (flag("light")) html = html.replace('<html lang="en" data-theme="dark">', '<html lang="en" data-theme="light">');
-html = html
+const html = part("shell.html")
+  .replace("<!--CSS-->", () => part("page.css").trimEnd())
+  .replace("<!--MARKUP-->", () => markup)
+  .replace("<!--SCRIPT-->", () => asScript(part("page.js")))
   .replace("<!--LIBS-->", () => libs)
-  .replace("<!--ASSETS-->", () => assets)
-  .replace("<!--DATA-->", () => `${themeCss}\n<script>window.VAULT_DATA=${JSON.stringify(data)};</script>`);
+  .replace("<!--ASSETS-->", () => `<script>window.VAULT_LOGO_MASK=${JSON.stringify(mask)};</script>`)
+  .replace("<!--DATA-->", () => `<script>window.VAULT_DATA=${JSON.stringify(data)};</script>`);
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 const OUT = opt("out") ? resolve(process.cwd(), opt("out")) : join(workingDir, ".codanna", "visualizations", `graph-disc-${stamp}.html`);
 if (!existsSync(dirname(OUT))) mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(OUT, html, "utf8");
 
+const groups = new Set(data.nodes.filter((n) => n.deg > 0).map((n) => n.folder));
+if (data.stats.orphans && unlinked !== "drop") groups.add("(unlinked)");
 const s = data.stats, c = data.codanna;
 console.log(`codanna-graph: ${s.nodes} symbols (of ${c.symbolsTotal}), ${s.edges} edges [${c.relations.join(",")}], ` +
             (s.unlinkedDropped ? `${s.unlinkedDropped} unlinked dropped` : `${s.orphans} unlinked`) +
-            `, ${s.files} files, ${groups.size} groups by ${c.group} (${c.palette})` + (c.root ? `, root ${c.root}` : ""));
+            `, ${s.files} files, ${groups.size} groups by ${c.group}` + (c.root ? `, root ${c.root}` : ""));
 console.log(`wrote ${OUT} (${(Buffer.byteLength(html) / 1024).toFixed(0)} KB)`);
 // Measured: the disc stays smooth to a few thousand symbols; at ~10,000 the hover ramp
 // re-runs the reducers over every node per frame and drops to ~10 fps.

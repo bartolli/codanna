@@ -20,6 +20,35 @@ below rather than living in the files.
 | `sigma.min.js` | Sigma.js — WebGL graph renderer | https://github.com/jacomyal/sigma.js |
 | `graphology.umd.min.js` | graphology — graph data structure | https://github.com/graphology/graphology |
 
+## Modifications
+
+The bundles here are **byte-identical to upstream** and are meant to stay that way, so that
+a reader can diff them against the release they came from. One change is applied **at build
+time**, by `src/vendor.mjs`, and therefore travels in every redistributed build:
+
+| file | change |
+|---|---|
+| `sigma.min.js` | the two `fetch()` calls inside `loadSVGImage` are replaced with a function that throws |
+| `sigma.min.js` | `handleLeave` clears `hoveredNode` and `hoveredEdge`, which upstream leaves set |
+
+The first is in Sigma's node-image path, which this project never registers a program for, so
+those calls were unreachable. They are removed rather than left in place because the shipped file
+is read by users and by the Obsidian directory's automated review, and "zero network calls"
+is a claim a reader can check while "unreachable" is one they have to take on trust. The
+reasoning, and the alternatives that were rejected, are in
+[`.ai-context/decisions/0008-zero-network-calls.md`](../.ai-context/decisions/0008-zero-network-calls.md).
+
+The second is an upstream defect rather than a preference. `handleLeave` emits `leaveNode`
+but never clears the node it just said you left, so once the pointer leaves the container
+Sigma still believes it is hovering — and moving back onto the *same* node emits nothing,
+because the re-entry test is `hoveredNode !== nodeAtPosition`. The hover simply never comes
+back. `handleMove` two lines earlier does clear it, which is what makes this look like an
+oversight rather than a design. Measured and asserted by
+`node scripts/smoke.mjs` — "hover re-arms after the pointer leaves the stage".
+
+MIT asks that the notice above be preserved in redistributions; stating what was changed is
+the other half of doing that honestly.
+
 > **Versions are not recorded.** These were vendored without pinning a version, which is a
 > gap worth closing: nobody — including us — can currently tell which release is in the
 > tree or whether it is behind on a fix. If you update either file, record the version here
