@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-08-28
+
+Fixes Rust call resolution for module-anchored qualified calls and updates the bundled Claude Code plugin skills and README demos. Index format and emission semantics are unchanged (v3).
+
+### Fixed
+
+- Rust free-function calls qualified with `crate::`, `super::`, or `self::` resolve on the static-call path. The anchor resolves against the calling file's module identity; a candidate matches in the resolved module or a segment-aware descendant (definitions re-exported one level down, as in the six-file parser layout). Multiple surviving candidates pass through the existing disambiguation gate; unresolvable anchors fail closed. These calls previously resolved to nothing, so `crate::`-style call edges were missing from call graphs.
+
+### Added
+
+- Demo recordings: committed scenes under `contributing/demos/` regenerate the README's animated loops; the README embeds them by absolute raw URLs so surfaces that ship the README without the repository (crates.io) render them.
+
+### Changed
+
+- codanna-toolset 0.18.0: the graph skill's disc renderer builds on vault-graph 1.8.0; detail-panel signature blocks are syntax-highlighted via vendored highlight.js themes (dark and light); disc relation rows carry the same-name qualifier shared with the x-ray skill; both skills share the detail-panel mechanics.
+- The crates.io package additionally excludes `assets/` (demo media).
+
+Indexes built at 0.14.0 or earlier under-report module-anchored call edges until one `codanna index --force` with this version. This is separate from v0.14.0's multi-root adoption note, which covered cross-root edges.
+
 ## [0.14.0] - 2026-08-25
 
 Adds `codanna dump` for bulk graph export and fixes silent cross-root edge loss in multi-root workspaces. Index format and emission semantics are unchanged (v3); single-root indexes need no rebuild.
