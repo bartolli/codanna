@@ -433,7 +433,8 @@ function mountVaultGraph(root, data, deps) {
       tags: n.tags || [], path: n.id, deg: n.deg,
       created: n.created || "", touched: n.touched || "",
       words: n.words || 0, ghost: !!n.ghost,
-      sig: n.sig || "", lang: n.lang || ""   /* codanna: signature + language, for the detail panel */
+      sig: n.sig || "", lang: n.lang || "",  /* codanna: signature + language, for the detail panel */
+      mod: n.mod || "", cls: n.cls || ""     /* codanna: qualifier inputs (module path, containing type) */
     });
   });
   /**
@@ -7607,6 +7608,26 @@ function mountVaultGraph(root, data, deps) {
     return esc(sig);
   }
 
+  // codanna: same-name disambiguation for the relation rows -- the x-ray qualifier
+  // (window.__qualify, inlined by graph.mjs when the sibling skill is present), run
+  // once over the whole node set on first use. Rows render scope-qualified labels
+  // (rust::register, JSON.Render); qualifier absent leaves labels bare.
+  var qualLabels = null;
+  function qualLabel(id) {
+    if (!WIN.__qualify) return graph.getNodeAttribute(id, "label");
+    if (!qualLabels) {
+      qualLabels = {};
+      var qn = graph.nodes().map(function (nid) {
+        var a = graph.getNodeAttributes(nid);
+        return { _id: nid, name: a.label, module: a.mod || "", language: a.lang || "",
+                 cls: a.cls || "", file: String(a.path || "").split(":")[0] };
+      });
+      WIN.__qualify.qualify(qn);
+      qn.forEach(function (q) { qualLabels[q._id] = WIN.__qualify.labelOf(q); });
+    }
+    return qualLabels[id] || graph.getNodeAttribute(id, "label");
+  }
+
   // codanna: hop history for the relationship lists. Clicking a connected symbol walks
   // the graph and quickly loses the starting point, so hops -- and only hops -- accumulate
   // a trail, rendered as a back arrow plus crumbs at the top of the card. A fresh
@@ -7745,7 +7766,7 @@ function mountVaultGraph(root, data, deps) {
       REL_ORDER.forEach(function (rel) { var lab = REL_LABEL[rel]; headings.push(lab[0], lab[1]); });
       Object.keys(relGroups).forEach(function (k) { if (headings.indexOf(k) < 0) headings.push(k); });
       var row = function (it) {
-        return '<li><button data-go="' + it.n + '">' + esc(graph.getNodeAttribute(it.n, "label")) +
+        return '<li><button data-go="' + it.n + '">' + esc(qualLabel(it.n)) +
                (it.k > 1 ? ' <span class="rk">&times;' + it.k + '</span>' : '') +
                ' <span style="color:var(--text-3)">' + graph.getNodeAttribute(it.n, "deg") + '</span></button></li>';
       };

@@ -835,8 +835,10 @@
   .vault-graph #vg-vscope { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color: var(--text-2); margin-top: 5px; word-break: break-word; }
   .vault-graph #vg-vscope b { color: var(--text-1); font-weight: 600; }
-  /* codanna: the symbol signature block in the detail panel; token colours are
-     highlight.js classes mapped onto the page's own palette slots */
+  /* codanna: the symbol signature block in the detail panel. The palette-slot
+     token rules below are the fallback when the vendored github theme pair is
+     absent; graph.mjs appends the scope-transformed theme after this sheet,
+     which then overrides them by order */
   .vault-graph #vg-detail pre.sig { font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     white-space: pre-wrap; word-break: break-word; margin: 8px 0 4px; padding: 7px 8px;
     background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border);

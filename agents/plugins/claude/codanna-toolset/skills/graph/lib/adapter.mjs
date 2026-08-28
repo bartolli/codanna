@@ -96,6 +96,8 @@ export async function buildData(dump, opts) {
       words: Math.max(1, (sym.endLine || sym.line) - sym.line + 1),
       sig: sym.signature || "",
       lang: String(sym.language || "").toLowerCase(),
+      mod: sym.module || "",
+      cls: containerName || "",
     });
   }
 

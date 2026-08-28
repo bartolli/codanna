@@ -18,7 +18,8 @@ const QUALIFY_SRC = fs.readFileSync(path.join(__dirname, 'qualify.js'), 'utf8');
 // (2) a vendor/hljs walked up from here (plugin root without the env var);
 // (3) the sibling graph skill's vendor/hljs (current layout);
 // absent everywhere, or an empty language set, degrades to the built-in
-// tokenizer.
+// tokenizer. The github theme CSS pair rides the same dir; both highlight
+// paths emit hljs classes, so one theme covers grammar and tokenizer output.
 const HLJS_DIR = (() => {
   const candidates = [];
   if (process.env.CLAUDE_PLUGIN_ROOT) candidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'vendor', 'hljs'));
@@ -42,6 +43,29 @@ function hljsScripts(langs) {
     }
     return '<script>\n' + src + '\n</scr' + 'ipt>';
   }).join('\n');
+}
+
+// The sig block is an hljs surface: token colors come from the vendored github
+// theme pair, scoped so they override the page cascade. `.hljs` (the theme's
+// block base rule) maps onto the sig block itself; block-layout selectors
+// (`pre code.hljs`, `code.hljs`) are dropped -- the sig block owns its layout.
+function scopeHljsTheme(css, prefix) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '').split('}').map(rule => {
+    const i = rule.indexOf('{');
+    if (i < 0) return '';
+    const decls = rule.slice(i + 1).trim();
+    const sels = rule.slice(0, i).split(',').map(s => s.trim())
+      .filter(s => s && !/^(pre )?code\.hljs$/.test(s))
+      .map(s => (s === '.hljs' ? prefix : prefix + ' ' + s));
+    return sels.length && decls ? sels.join(', ') + ' { ' + decls + ' }' : '';
+  }).filter(Boolean).join('\n');
+}
+function hljsThemeCss() {
+  const dark = path.join(HLJS_DIR, 'github-dark.min.css');
+  const light = path.join(HLJS_DIR, 'github.min.css');
+  if (!fs.existsSync(dark) || !fs.existsSync(light)) return '';
+  return scopeHljsTheme(fs.readFileSync(dark, 'utf8'), '#detail pre.sig') + '\n'
+    + scopeHljsTheme(fs.readFileSync(light, 'utf8'), ':root[data-theme="light"] #detail pre.sig');
 }
 
 // Symbol kinds on the categorical slots, fixed assignment, never cycled;
@@ -69,6 +93,15 @@ const TOKENS = {
   dark: { ...jsTheme('dark'), kinds: kindColors('dark') },
   light: { ...jsTheme('light'), kinds: kindColors('light') },
 };
+
+// Sig token colors when the vendored theme pair is absent: categorical slots.
+const SIG_FALLBACK_CSS = `#detail pre.sig .hljs-keyword, #detail pre.sig .hljs-literal, #detail pre.sig .hljs-built_in { color: var(--g7); }
+#detail pre.sig .hljs-type { color: var(--g3); }
+#detail pre.sig .hljs-title, #detail pre.sig .hljs-title.function_ { color: var(--text-1); font-weight: 600; }
+#detail pre.sig .hljs-title.class_ { color: var(--g3); font-weight: 600; }
+#detail pre.sig .hljs-string { color: var(--g5); }
+#detail pre.sig .hljs-number { color: var(--g2); }
+#detail pre.sig .hljs-comment { color: var(--text-3); }`;
 
 /** Token custom properties (both themes) + the chrome every page shares:
  *  body ground, info panel, buttons, and the theme toggle cluster (same shape
@@ -130,17 +163,7 @@ html, body { background: var(--surface-0); color: var(--text-1); font-family: va
 #detail pre.sig { font: 11px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-word;
   margin: 8px 0 4px; padding: 7px 8px; background: var(--surface-1); color: var(--text-1);
   border: 1px solid var(--border); border-radius: 6px; max-height: 180px; overflow: auto; }
-#detail pre.sig .tk-kw { color: var(--g7); }
-#detail pre.sig .tk-ty { color: var(--g3); }
-#detail pre.sig .tk-fn { color: var(--text-1); font-weight: 600; }
-#detail pre.sig .tk-str { color: var(--g5); }
-#detail pre.sig .tk-num { color: var(--g2); }
-#detail pre.sig .hljs-keyword, #detail pre.sig .hljs-literal, #detail pre.sig .hljs-built_in { color: var(--g7); }
-#detail pre.sig .hljs-type, #detail pre.sig .hljs-title.class_ { color: var(--g3); }
-#detail pre.sig .hljs-title, #detail pre.sig .hljs-title.function_ { color: var(--text-1); font-weight: 600; }
-#detail pre.sig .hljs-string { color: var(--g5); }
-#detail pre.sig .hljs-number { color: var(--g2); }
-#detail pre.sig .hljs-comment { color: var(--text-3); }
+${hljsThemeCss() || SIG_FALLBACK_CSS}
 #themectl { position: absolute; top: 12px; right: 12px; z-index: 9; }
 #themectl button { font-family: var(--font-ui); width: 30px; height: 30px; padding: 0;
   cursor: pointer; background: var(--surface-2); color: var(--text-2);
@@ -182,7 +205,7 @@ window.TOKENS = ${JSON.stringify(TOKENS)};
 
 /** The disc sidebar's panel engine, shared by the x-ray pages: meta row, tag
  *  chips, dotted path, file:span chip, highlighted signature (the disc's
- *  tokenizer ported verbatim), and relation groups (Calls / Called by, ...)
+ *  tokenizer, emitting hljs classes), and relation groups (Calls / Called by, ...)
  *  with x-count badges; rows with a `ref` become go-buttons wired to `onGo`.
  *  spec: {name, dotted, kind, visibility, language, edges, lines, path,
  *  signature, rels: {label: [{name, k, ref?}]}, href}. */
@@ -212,15 +235,16 @@ window.__detail = (function () {
     var DECL = { fn: 1, def: 1, func: 1, 'function': 1, fun: 1, proc: 1, defn: 1, defmacro: 1, sub: 1 };
     while ((m = re.exec(src))) {
       var tok = m[0], cls = '';
-      if (m[1]) cls = 'tk-str';
-      else if (m[2]) cls = 'tk-num';
+      if (m[1]) cls = 'hljs-string';
+      else if (m[2]) cls = 'hljs-number';
       else if (m[3]) {
         var rest = src.slice(re.lastIndex).replace(/^\\s+/, '');
         var callable = rest.charAt(0) === '(' || (rest.charAt(0) === '<' && /^<[^>]*>\\s*\\(/.test(rest));
-        if (callable && DECL[prevWord]) cls = 'tk-fn';
-        else if (sigKw[tok]) cls = 'tk-kw';
-        else if (sigPrim[tok] || /^[A-Z]/.test(tok)) cls = 'tk-ty';
-        else if (callable) cls = 'tk-fn';
+        if (callable && DECL[prevWord]) cls = 'hljs-title function_';
+        else if (sigKw[tok]) cls = 'hljs-keyword';
+        else if (sigPrim[tok]) cls = 'hljs-type';
+        else if (/^[A-Z]/.test(tok)) cls = 'hljs-title class_';
+        else if (callable) cls = 'hljs-title function_';
         prevWord = tok;
       }
       out += cls ? '<span class="' + cls + '">' + esc(tok) + '</span>' : esc(tok);

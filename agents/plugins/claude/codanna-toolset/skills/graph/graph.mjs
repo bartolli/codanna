@@ -76,8 +76,35 @@ const hljsScripts = hljsFiles.map((f) => {
   }
   return `<script>\n${src}\n</script>`;
 });
+// codanna: the x-ray qualifier (same-name disambiguation for the relation
+// rows), one implementation shared across the toolset, resolved from the
+// sibling skill; absent leaves the rows bare (page.js guards on
+// window.__qualify).
+const qualifyPath = join(HERE, "..", "x-ray", "graph", "qualify.js");
+const qualifyScript = existsSync(qualifyPath) ? [`<script>\n${readFileSync(qualifyPath, "utf8")}\n</script>`] : [];
 const libs = LIB_NOTICE + "\n" + ["graphology.umd.min.js", "sigma.min.js"]
-  .map((f) => `<script>\n${readVendorSource(HERE, f)}\n</script>`).concat(hljsScripts).join("\n");
+  .map((f) => `<script>\n${readVendorSource(HERE, f)}\n</script>`).concat(hljsScripts, qualifyScript).join("\n");
+// codanna: the sig block is an hljs surface -- the vendored github theme pair,
+// scope-transformed onto the detail card (dark on the default scope, light
+// under [data-theme="light"], the `.hljs` base rule mapped onto the block
+// itself) so token colours carry hljs semantics over the page cascade; files
+// absent leaves page.css's categorical fallback in charge.
+const scopeHljsTheme = (css, prefix) => css.replace(/\/\*[\s\S]*?\*\//g, "").split("}").map((rule) => {
+  const i = rule.indexOf("{");
+  if (i < 0) return "";
+  const decls = rule.slice(i + 1).trim();
+  const sels = rule.slice(0, i).split(",").map((s) => s.trim())
+    .filter((s) => s && !/^(pre )?code\.hljs$/.test(s))
+    .map((s) => (s === ".hljs" ? prefix : `${prefix} ${s}`));
+  return sels.length && decls ? `${sels.join(", ")} { ${decls} }` : "";
+}).filter(Boolean).join("\n");
+const hljsTheme = (() => {
+  const dark = join(HERE, "vendor", "hljs", "github-dark.min.css");
+  const light = join(HERE, "vendor", "hljs", "github.min.css");
+  if (!hljsFiles.length || !existsSync(dark) || !existsSync(light)) return "";
+  return scopeHljsTheme(readFileSync(dark, "utf8"), ".vault-graph #vg-detail pre.sig") + "\n"
+    + scopeHljsTheme(readFileSync(light, "utf8"), '.vault-graph[data-theme="light"] #vg-detail pre.sig');
+})();
 const mask = (() => {
   try {
     const svg = readFileSync(join(HERE, "assets", "logo-mask.svg"), "utf8");
@@ -96,7 +123,7 @@ let markup = part("page.html").trimEnd();
 if (flag("light")) markup = markup.replace('class="vault-graph" data-theme="dark"', 'class="vault-graph" data-theme="light"');
 
 const html = part("shell.html")
-  .replace("<!--CSS-->", () => part("page.css").trimEnd())
+  .replace("<!--CSS-->", () => part("page.css").trimEnd() + (hljsTheme ? "\n" + hljsTheme : ""))
   .replace("<!--MARKUP-->", () => markup)
   .replace("<!--SCRIPT-->", () => asScript(part("page.js")))
   .replace("<!--LIBS-->", () => libs)

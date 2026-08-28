@@ -27,7 +27,7 @@
 
   /** Assigns n.qual/n.qsep on duplicate-name nodes; returns the label fn. */
   function qualify(nodes) {
-    var byName = {};
+    var byName = Object.create(null);
     nodes.forEach(function (n) { (byName[n.name] || (byName[n.name] = [])).push(n); });
     Object.keys(byName).forEach(function (name) {
       var group = byName[name];

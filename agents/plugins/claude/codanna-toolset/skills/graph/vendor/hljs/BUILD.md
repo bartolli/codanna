@@ -4,7 +4,10 @@ Built from npm `highlight.js@11.12.0` (BSD-3-Clause, `LICENSE-highlightjs`).
 `core.min.js` exposes `window.hljs`; each `<lang>.min.js` registers one grammar
 onto it. `graph.mjs` inlines core plus only the grammars for languages present
 in the dump, and refuses any bundle in which `findNetworkPrimitives()` finds a
-network call.
+network call. `github-dark.min.css` / `github.min.css` are `styles/` from the
+same package, verbatim; each host inlines them scope-transformed onto its
+detail-panel signature block (this skill's graph.mjs, x-ray's theme.js; dark
+on the default scope, light under its `[data-theme="light"]` scope).
 
 ## Recipe (esbuild 0.25)
 
