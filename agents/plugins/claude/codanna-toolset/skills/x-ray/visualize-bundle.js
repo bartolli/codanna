@@ -15,7 +15,7 @@
 const { readDump } = require('./graph/dump');
 const { buildHierarchy, DEFAULT_KINDS } = require('./graph/hierarchy');
 const { generateBundleHTML } = require('./graph/bundle-render');
-const { buildDetails, sidsInTree } = require('./graph/details');
+const { buildDetails, leafSidsInTree } = require('./graph/details');
 const { saveArtifact, openFile } = require('./graph/publish');
 
 const workingDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -71,7 +71,7 @@ console.log(`${opts.relation}: ${total} edges in the index; ${edges.length} arcs
 
 const title = `${hierarchy.name} - ${opts.relation} bundling`;
 const subtitle = `${graph.summary.symbols} symbols in the index` + (opts.root ? `, root ${opts.root}` : '') + (Number.isFinite(opts.depth) ? `, depth ${opts.depth}` : '');
-const html = generateBundleHTML(hierarchy, edges, { title, subtitle, workingDir, leaves, relation: opts.relation, legendKinds: [...opts.kinds], theme: opts.theme, details: buildDetails(graph, sidsInTree(hierarchy)) });
+const html = generateBundleHTML(hierarchy, edges, { title, subtitle, workingDir, leaves, relation: opts.relation, legendKinds: [...opts.kinds], theme: opts.theme, details: buildDetails(graph, leafSidsInTree(hierarchy)) });
 const safeName = (opts.root || 'index').replace(/[^a-zA-Z0-9_-]/g, '_');
 const artifactFile = saveArtifact(html, `bundle-${safeName}`, workingDir);
 console.log(`\nBundle saved to: ${artifactFile}`);

@@ -9,7 +9,7 @@
       "name": "codanna-toolset",
       "source": "./agents/plugins/claude/codanna-toolset",
       "description": "Codanna toolset for Claude Code: x-ray (semantic search + relationship traversal with 3D neighbourhood, radial tree and edge-bundle views) and graph (the whole index as a module disc with hubs at the centre, timeline and heatmap). Needs the codanna CLI.",
-      "version": "0.16.0",
+      "version": "0.17.0",
       "author": {
         "name": "Angel Bartolli"
       },

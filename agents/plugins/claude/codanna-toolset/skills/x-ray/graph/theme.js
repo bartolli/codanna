@@ -3,7 +3,46 @@
 // kind -> categorical-slot mapping. Reads the vendored ESM tokens module via
 // require(esm): node >= 22.12 (or 20.19) required.
 const path = require('path');
+const fs = require('fs');
 const { tokens, cssBlock, jsTheme } = require(path.join(__dirname, 'tokens.mjs'));
+
+// The qualifier is one implementation for both hosts: required here for
+// generate-time consumers (details.js), embedded verbatim into the page by
+// detailScript() below (window.__qualify).
+const QUALIFY_SRC = fs.readFileSync(path.join(__dirname, 'qualify.js'), 'utf8');
+
+// Signature highlighting: vendored highlight.js (BSD-3-Clause; core plus one
+// grammar per language actually present). Resolution chain, first hit wins:
+// (1) $CLAUDE_PLUGIN_ROOT/vendor/hljs -- the plugin-root vendors layout, the
+//     target home so any single skill works when installed alone;
+// (2) a vendor/hljs walked up from here (plugin root without the env var);
+// (3) the sibling graph skill's vendor/hljs (current layout);
+// absent everywhere, or an empty language set, degrades to the built-in
+// tokenizer.
+const HLJS_DIR = (() => {
+  const candidates = [];
+  if (process.env.CLAUDE_PLUGIN_ROOT) candidates.push(path.join(process.env.CLAUDE_PLUGIN_ROOT, 'vendor', 'hljs'));
+  for (let up = path.join(__dirname, '..'), i = 0; i < 4; up = path.join(up, '..'), i++) {
+    candidates.push(path.join(up, 'vendor', 'hljs'));
+  }
+  candidates.push(path.join(__dirname, '..', '..', 'graph', 'vendor', 'hljs'));
+  return candidates.find(c => fs.existsSync(path.join(c, 'core.min.js'))) || candidates[candidates.length - 1];
+})();
+const NET_RE = [/\bfetch\s*\(/, /\bXMLHttpRequest\b/, /\bWebSocket\b/, /\bEventSource\b/, /\bsendBeacon\b/, /\bimportScripts\b/];
+function hljsScripts(langs) {
+  if (!langs || !langs.length || !fs.existsSync(path.join(HLJS_DIR, 'core.min.js'))) return '';
+  const grammars = [...new Set(langs.map(l => String(l).toLowerCase()))].sort()
+    .filter(l => fs.existsSync(path.join(HLJS_DIR, l + '.min.js')));
+  if (!grammars.length) return '';
+  return ['core.min.js', ...grammars.map(l => l + '.min.js')].map(f => {
+    const src = fs.readFileSync(path.join(HLJS_DIR, f), 'utf8');
+    if (NET_RE.some(re => re.test(src))) {
+      console.error('hljs vendor ' + f + ' contains network primitives; refusing to inline it');
+      process.exit(1);
+    }
+    return '<script>\n' + src + '\n</scr' + 'ipt>';
+  }).join('\n');
+}
 
 // Symbol kinds on the categorical slots, fixed assignment, never cycled;
 // structural noise kinds take the neutrals.
@@ -58,6 +97,12 @@ html, body { background: var(--surface-0); color: var(--text-1); font-family: va
   padding: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.16); font-size: var(--fs-body);
   max-height: calc(100% - 130px); overflow-y: auto; }
 #detail h2 { font-size: var(--fs-base); margin: 0 22px 6px 0; line-height: 1.3; }
+#detail .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 1px; margin: 0 18px 5px 0; }
+#detail .crumbs .crumb, #detail .crumbs .nvb { background: none; border: none; cursor: pointer;
+  color: var(--accent); font: inherit; font-size: var(--fs-micro); padding: 1px 3px;
+  max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detail .crumbs .crumb:hover, #detail .crumbs .nvb:hover { text-decoration: underline; }
+#detail .crumbs .sep, #detail .crumbs .dots { color: var(--text-3); font-size: var(--fs-micro); }
 #detail .meta { font-size: var(--fs-small); color: var(--text-2); margin-bottom: 9px; word-break: break-all; }
 #detail .chip { display: inline-block; font-size: var(--fs-micro); padding: 1px 6px; margin: 0 3px 3px 0;
   border: 1px solid var(--border); border-radius: 999px; color: var(--text-2); }
@@ -90,6 +135,12 @@ html, body { background: var(--surface-0); color: var(--text-1); font-family: va
 #detail pre.sig .tk-fn { color: var(--text-1); font-weight: 600; }
 #detail pre.sig .tk-str { color: var(--g5); }
 #detail pre.sig .tk-num { color: var(--g2); }
+#detail pre.sig .hljs-keyword, #detail pre.sig .hljs-literal, #detail pre.sig .hljs-built_in { color: var(--g7); }
+#detail pre.sig .hljs-type, #detail pre.sig .hljs-title.class_ { color: var(--g3); }
+#detail pre.sig .hljs-title, #detail pre.sig .hljs-title.function_ { color: var(--text-1); font-weight: 600; }
+#detail pre.sig .hljs-string { color: var(--g5); }
+#detail pre.sig .hljs-number { color: var(--g2); }
+#detail pre.sig .hljs-comment { color: var(--text-3); }
 #themectl { position: absolute; top: 12px; right: 12px; z-index: 9; }
 #themectl button { font-family: var(--font-ui); width: 30px; height: 30px; padding: 0;
   cursor: pointer; background: var(--surface-2); color: var(--text-2);
@@ -135,8 +186,10 @@ window.TOKENS = ${JSON.stringify(TOKENS)};
  *  with x-count badges; rows with a `ref` become go-buttons wired to `onGo`.
  *  spec: {name, dotted, kind, visibility, language, edges, lines, path,
  *  signature, rels: {label: [{name, k, ref?}]}, href}. */
-function detailScript() {
-  return `<script>
+function detailScript(langs) {
+  return `${hljsScripts(langs)}
+<script>${QUALIFY_SRC}</script>
+<script>
 window.__detail = (function () {
   var esc = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   var SIG_KW = ('fn pub const static async unsafe impl trait struct enum type where mut self Self let ' +
@@ -175,9 +228,76 @@ window.__detail = (function () {
     return out;
   }
   var REL_ORDER = ['Calls', 'Called by', 'Uses', 'Used by', 'Implements', 'Implemented by', 'Extends', 'Extended by', 'Defines', 'Defined in'];
-  function show(spec, onGo) {
+  /** Same-name disambiguation, shared by canvas labels and panel rows: per
+   *  node, the shortest module suffix unique within its name group, rendered
+   *  by that suffix's head segment; identical modules fall back to the file
+   *  stem. Assigns n.qual; returns the label function. */
+  var qualify = window.__qualify.qualify;
+  /* The signature block: highlight.js when the build inlined a grammar for the
+   * symbol's language; the built-in tokenizer otherwise. */
+  function sigHtml(sig, lang) {
+    var hl = window.hljs;
+    if (hl && lang && hl.getLanguage(String(lang).toLowerCase())) {
+      try { return hl.highlight(String(sig), { language: String(lang).toLowerCase() }).value; }
+      catch (e) { /* malformed fragment: fall through */ }
+    }
+    return highlightSig(sig);
+  }
+  /* The hop trail (the disc's navTrail, ported): a go-button hop pushes the
+   * symbol it left onto the trail; crumbs render first + ellipsis + last two;
+   * Backspace or Alt+Left steps back; Escape closes and ends the trail; a
+   * fresh selection (renderer show with a new ref, no hop) starts over. */
+  var trail = [], current = null, curName = '', navHop = false, activeGo = null, activeClose = null;
+  function closePanel() {
+    var p = document.getElementById('detail');
+    if (p) p.style.display = 'none';
+    trail.length = 0; current = null; navHop = false; activeGo = null;
+    if (activeClose) { var cb = activeClose; activeClose = null; cb(); }
+  }
+  function navBackTo(i) {
+    if (!activeGo || i < 0 || i >= trail.length) return;
+    var target = trail[i];
+    trail.length = i;
+    navHop = true;
+    activeGo(target.ref);
+  }
+  document.addEventListener('keydown', function (ev) {
+    var p = document.getElementById('detail');
+    if (!p || p.style.display !== 'block') return;
+    if (ev.key === 'Escape') { closePanel(); return; }
+    var t = ev.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+    if ((ev.key === 'Backspace' && !ev.altKey && !ev.ctrlKey && !ev.metaKey) ||
+        (ev.key === 'ArrowLeft' && ev.altKey)) {
+      if (trail.length) { navBackTo(trail.length - 1); ev.preventDefault(); }
+    }
+  });
+  function show(spec, onGo, opts) {
+    opts = opts || {};
     var panel = document.getElementById('detail');
+    if (opts.ref != null) {
+      if (!navHop && opts.ref !== current) trail.length = 0;
+      current = opts.ref;
+    } else {
+      trail.length = 0;
+      current = null;
+    }
+    navHop = false;
+    curName = spec.name;
+    activeGo = onGo || null;
+    activeClose = opts.onClose || null;
+    var crumbs = '';
+    if (trail.length) {
+      var crumbBtn = function (i) {
+        return '<button class="crumb" data-tr="' + i + '" title="Back to ' + esc(trail[i].name) + '">' + esc(trail[i].name) + '</button>';
+      };
+      var parts = [];
+      if (trail.length <= 3) { for (var ti = 0; ti < trail.length; ti++) parts.push(crumbBtn(ti)); }
+      else parts.push(crumbBtn(0), '<span class="dots">&hellip;</span>', crumbBtn(trail.length - 2), crumbBtn(trail.length - 1));
+      crumbs = '<div class="crumbs"><button class="nvb" data-tr="' + (trail.length - 1) + '" title="Back (Alt+Left or Backspace)">&#8592;</button>' + parts.join('<span class="sep">&rsaquo;</span>') + '</div>';
+    }
     var h = '<button class="x" title="Close">&times;</button>'
+      + crumbs
       + '<h2>' + esc(spec.name) + '</h2>'
       + '<div class="meta">'
       + (spec.edges != null ? '<span>' + spec.edges + ' edge' + (spec.edges === 1 ? '' : 's') + '</span>' : '')
@@ -186,7 +306,7 @@ window.__detail = (function () {
       + [spec.kind, spec.visibility, spec.language].filter(Boolean).map(function (t) { return '<span class="chip">#' + esc(String(t).toLowerCase()) + '</span>'; }).join('')
       + (spec.dotted ? '<div class="chip" style="border-style:dashed">' + esc(spec.dotted) + '</div>' : '')
       + (spec.path ? '<div class="chip mono">' + esc(spec.path) + '</div>' : '')
-      + (spec.signature ? '<pre class="sig">' + highlightSig(spec.signature) + '</pre>' : '');
+      + (spec.signature ? '<pre class="sig">' + sigHtml(spec.signature, spec.language) + '</pre>' : '');
     var rels = spec.rels || {}, any = false;
     var heads = REL_ORDER.concat(Object.keys(rels).filter(function (k) { return REL_ORDER.indexOf(k) < 0; }));
     heads.forEach(function (hd) {
@@ -204,14 +324,44 @@ window.__detail = (function () {
     if (spec.href) h += '<a class="open" href="' + esc(spec.href) + '" target="_blank">Open file</a>';
     panel.innerHTML = h;
     panel.style.display = 'block';
-    panel.querySelector('.x').onclick = function () { panel.style.display = 'none'; };
+    panel.querySelector('.x').onclick = closePanel;
     if (onGo) Array.prototype.forEach.call(panel.querySelectorAll('[data-go]'), function (b) {
-      b.onclick = function () { onGo(b.getAttribute('data-go')); };
+      b.onclick = function () {
+        if (current != null) { trail.push({ ref: current, name: curName }); navHop = true; }
+        onGo(b.getAttribute('data-go'));
+      };
+    });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-tr]'), function (b) {
+      b.onclick = function () { navBackTo(+b.getAttribute('data-tr')); };
     });
   }
-  return { show: show, esc: esc, highlightSig: highlightSig };
+  return { show: show, esc: esc, highlightSig: highlightSig, qualify: qualify, close: closePanel };
 })();
 </` + `script>`;
 }
 
-module.exports = { TOKENS, kindColors, kindVars, themeStyle, themeScript, detailScript };
+/** The recording busy oracle, emitted AFTER the page's d3 script tag (the
+ *  shim wraps d3's transition entry point, so d3 must exist first). Counts
+ *  active transitions -- zoom flights, expand/collapse, go-hops all route
+ *  through selection.transition -- and settles when every one has ended or
+ *  been interrupted. The driver polls `window.__xr.busy()` with its quiet
+ *  window; interactive gestures without transitions change nothing between
+ *  events and settle through the quiet window alone. */
+function busyOracleScript() {
+  return `<script>
+window.__xr = (function () {
+  var n = 0;
+  var t = d3.selection.prototype.transition;
+  d3.selection.prototype.transition = function () {
+    var tr = t.apply(this, arguments);
+    n++;
+    var done = function () { n = Math.max(0, n - 1); };
+    try { tr.end().then(done, done); } catch (e) { done(); }
+    return tr;
+  };
+  return { busy: function () { return n > 0; } };
+})();
+</` + `script>`;
+}
+
+module.exports = { TOKENS, kindColors, kindVars, themeStyle, themeScript, detailScript, busyOracleScript };

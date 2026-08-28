@@ -3,7 +3,7 @@
 // the chart function so it stays verbatim.
 const fs = require('fs');
 const path = require('path');
-const { themeStyle, themeScript, detailScript, kindVars } = require('./theme');
+const { themeStyle, themeScript, detailScript, kindVars, busyOracleScript } = require('./theme');
 
 const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 
@@ -122,6 +122,7 @@ function Tree(data, { // data is either tabular (array of objects) or hierarchy 
  */
 function generateTreeHTML(hierarchy, { title, subtitle = '', workingDir = '', leaves = 0, legendKinds = [], theme = 'dark', details = {} } = {}) {
   const d3src = fs.readFileSync(D3, 'utf8');
+  const sigLangs = [...new Set(Object.values(details).map(x => x.lang).filter(Boolean))];
   const radius = Math.max(480, Math.round(leaves * 11 / (2 * Math.PI)));
   const margin = 140;
   const size = 2 * (radius + margin);
@@ -142,7 +143,7 @@ function generateTreeHTML(hierarchy, { title, subtitle = '', workingDir = '', le
 <body>
   <div id="chart"></div>
   ${themeScript(theme)}
-  ${detailScript()}
+  ${detailScript(sigLangs)}
   <div id="detail"></div>
   <div id="info">
     <h3>${title}</h3>
@@ -153,6 +154,7 @@ function generateTreeHTML(hierarchy, { title, subtitle = '', workingDir = '', le
   </div>
   <div id="hint">Scroll: zoom, Drag: pan, Hover: path, Click a symbol: details</div>
   <script>${d3src}</script>
+  ${busyOracleScript()}
   <script>
 ${TREE_FN}
     const data = ${JSON.stringify(hierarchy)};
@@ -187,21 +189,62 @@ ${TREE_FN}
     document.getElementById('chart').appendChild(svgNode);
     document.getElementById('reset-btn').addEventListener('click', () => svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity));
 
-    // The poster's click opens the info panel (no go-buttons: this is the
-    // glance view); Open file stays the explicit action inside the panel.
-    svg.selectAll('a').on('click', (ev, d) => {
-      if (!d.data || d.data.sid == null) return;
+    // The panel with the shared mechanics: relation rows are go-buttons that
+    // rotate the poster to the related symbol and reopen there, hops leave a
+    // crumb trail, and the panel's node stays active (accent dot, bold label,
+    // root-to-node path lit) until the panel closes.
+    const aSel = svg.selectAll('a');
+    const linkSel = svg.selectAll('g path');
+    const bySid = new Map();
+    aSel.each(d => { if (d.data && d.data.sid != null) bySid.set(d.data.sid, d); });
+
+    let selected = null, selPath = new Set();
+    function applySelection() {
+      aSel.select('circle')
+        .attr('r', d => d === selected ? 5 : 3)
+        .style('fill', d => d === selected ? 'var(--accent)' : (d.children ? 'var(--text-3)' : (KVAR[d.data.kind] || 'var(--n3)')));
+      aSel.select('text').attr('font-weight', d => d === selected ? 700 : null);
+      linkSel
+        .style('stroke', l => selPath.has(l.target) ? 'var(--accent)' : null)
+        .style('stroke-opacity', l => selPath.has(l.target) ? 0.9 : null);
+    }
+    function markSelected(d) {
+      selected = d;
+      selPath = new Set(d ? d.ancestors() : []);
+      applySelection();
+    }
+
+    function showDetail(d) {
       const det = DETAILS[d.data.sid];
       const dotted = d.ancestors().reverse().map(a => a.data.name).join('.');
+      markSelected(d);
       window.__detail.show({
-        name: d.data.name, dotted, kind: d.data.kind,
+        name: (det && det.label) || d.data.name, dotted, kind: d.data.kind,
         visibility: det && det.vis, language: det && det.lang,
         edges: det ? det.edges : undefined,
         lines: det ? det.endLine - det.line + 1 : undefined,
         path: d.data.file ? d.data.file + ':' + (det ? det.line + '-' + det.endLine : d.data.line) : '',
         signature: det && det.sig, rels: det ? det.rels : {},
         href: d.data.file && workingDir ? 'file://' + workingDir + '/' + d.data.file : '',
-      });
+      }, goTo, { ref: d.data.sid, onClose: () => markSelected(null) });
+    }
+
+    function goTo(ref) {
+      const d = bySid.get(+ref);
+      if (!d) return;
+      // Radial layout: angle d.x (12 o'clock origin), radius d.y; the visible
+      // centre in viewBox coordinates is the disc centre (0, 0).
+      const ang = d.x - Math.PI / 2;
+      const px = Math.cos(ang) * d.y, py = Math.sin(ang) * d.y;
+      const k = d3.zoomTransform(svg.node()).k;
+      svg.transition().duration(400).call(zoom.transform,
+        d3.zoomIdentity.translate(-k * px, -k * py).scale(k));
+      showDetail(d);
+    }
+
+    aSel.on('click', (ev, d) => {
+      if (!d.data || d.data.sid == null) return;
+      showDetail(d);
       ev.stopPropagation();
     });
 

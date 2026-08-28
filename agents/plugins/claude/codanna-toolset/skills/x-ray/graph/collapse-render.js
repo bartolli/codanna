@@ -4,7 +4,7 @@
 // as the radial tree; design tokens + the runtime theme toggle shared.
 const fs = require('fs');
 const path = require('path');
-const { themeStyle, themeScript, detailScript, kindVars } = require('./theme');
+const { themeStyle, themeScript, detailScript, kindVars, busyOracleScript } = require('./theme');
 
 const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 
@@ -15,6 +15,7 @@ const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
  */
 function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = '', legendKinds = [], openDepth = 2, theme = 'dark', details = {} } = {}) {
   const d3src = fs.readFileSync(D3, 'utf8');
+  const sigLangs = [...new Set(Object.values(details).map(x => x.lang).filter(Boolean))];
   const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
   return `<!DOCTYPE html>
 <html>
@@ -31,7 +32,7 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
 <body>
   <div id="chart"></div>
   ${themeScript(theme)}
-  ${detailScript()}
+  ${detailScript(sigLangs)}
   <div id="info">
     <h3>${title}</h3>
     ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
@@ -44,6 +45,7 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
   <div id="detail"></div>
   <div id="hint">Drag: pan, Scroll: zoom. Click a name: expand / collapse. Click a leaf: details</div>
   <script>${d3src}</script>
+  ${busyOracleScript()}
   <script>
     const data = ${JSON.stringify(hierarchy)};
     const workingDir = ${JSON.stringify(workingDir)};
@@ -140,6 +142,7 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
           .attr("d", d => { const o = { x: source.x, y: source.y }; return diagonal({ source: o, target: o }); });
 
       root.eachBefore(d => { d.x0 = d.x; d.y0 = d.y; });
+      applySelection();
       document.getElementById('stats').textContent =
         'Visible: ' + root.descendants().length + ' of ' + total + '  Depth: ' + root.height;
     }
@@ -171,7 +174,7 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
       const det = d.data.sid != null ? DETAILS[d.data.sid] : null;
       const dotted = d.ancestors().reverse().map(a => a.data.name).join('.');
       const spec = {
-        name: d.data.name,
+        name: (det && det.label) || d.data.name,
         dotted,
         kind: d.data.kind,
         visibility: det && det.vis,
@@ -184,12 +187,16 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
         href: d.data.file && workingDir ? 'file://' + workingDir + '/' + d.data.file : '',
       };
       if (d.data.count) (spec.rels = Object.assign({}, spec.rels))['Collapsed inside'] = [{ name: d.data.count + ' symbols', k: 1 }];
-      window.__detail.show(spec, goTo);
+      markSelected(d);
+      window.__detail.show(spec, goTo, { ref: 'n' + d.id, onClose: () => markSelected(null) });
     }
 
+    // Trail refs name tree NODES ('n' + id: every openable node has one);
+    // relation rows carry symbol ids. Both land here.
     function goTo(ref) {
-      const sid = +ref;
-      const target = allNodes.find(n => n.data.sid === sid);
+      const target = String(ref).charAt(0) === 'n'
+        ? allNodes.find(n => n.id === +String(ref).slice(1))
+        : allNodes.find(n => n.data.sid === +ref);
       if (!target) return;
       target.ancestors().forEach(a => { if (a._children) a.children = a._children; });
       update(null, target.parent || target);
@@ -197,6 +204,26 @@ function generateCollapseHTML(hierarchy, { title, subtitle = '', workingDir = ''
       svg.transition().duration(400).call(zoom.transform,
         d3.zoomIdentity.translate(window.innerWidth / 2 - k * target.y, window.innerHeight / 2 - k * target.x).scale(k));
       showDetail(target);
+    }
+
+    // The panel's node stays active while the panel is open -- accent dot,
+    // bold label, and the root-to-node path lit (the tree's connection web) --
+    // cleared through the panel's onClose or replaced by the next selection.
+    let selectedId = null, selPath = new Set();
+    function applySelection() {
+      gNode.selectAll('g').select('circle')
+        .attr('r', d => d.id === selectedId ? 5 : 3)
+        .style('fill', d => d.id === selectedId ? 'var(--accent)' : dotFill(d));
+      gNode.selectAll('g').select('text')
+        .attr('font-weight', d => d.id === selectedId ? 700 : null);
+      gLink.selectAll('path')
+        .style('stroke', d => selPath.has(d.target.id) ? 'var(--accent)' : null)
+        .attr('stroke-opacity', d => selPath.has(d.target.id) ? 0.9 : null);
+    }
+    function markSelected(d) {
+      selectedId = d ? d.id : null;
+      selPath = new Set(d ? d.ancestors().map(a => a.id) : []);
+      applySelection();
     }
 
     const zoom = d3.zoom().scaleExtent([0.05, 12]).on('zoom', (e) => wrapper.attr('transform', e.transform));

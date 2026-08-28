@@ -4,7 +4,7 @@
 // deterministic for a given graph; design tokens + the runtime theme toggle.
 const fs = require('fs');
 const path = require('path');
-const { themeStyle, themeScript, detailScript, kindVars } = require('./theme');
+const { themeStyle, themeScript, detailScript, kindVars, busyOracleScript } = require('./theme');
 
 const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 
@@ -16,6 +16,11 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
   const d3src = fs.readFileSync(D3, 'utf8');
   const kinds = [...new Set(graphData.nodes.map(n => n.kind).filter(Boolean))];
   const legend = kinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
+  const sigLangs = [...new Set(graphData.nodes.map(n => n.language).filter(Boolean))];
+  const hasNonCall = graphData.links.some(l => l.type !== 'calls' && l.type !== 'calledBy');
+  const nonCallLegend = hasNonCall
+    ? `<span class="legend-item"><span class="swatch" style="background:repeating-linear-gradient(90deg, var(--n1) 0 3px, transparent 3px 6px)"></span>non-call relation (dotted)</span>`
+    : '';
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -32,18 +37,19 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
 <body>
   <div id="chart"></div>
   ${themeScript(theme)}
-  ${detailScript()}
+  ${detailScript(sigLangs)}
   <div id="info">
     <h3>${title}</h3>
     ${subtitle ? `<div class="stat">${subtitle}</div>` : ''}
     <div class="stat" id="stats"></div>
-    <div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>incoming (callers)</span><span class="legend-item"><span class="swatch" style="background:var(--g9)"></span>outgoing (callees)</span></div>
+    <div class="legend"><span class="legend-item"><span class="swatch" style="background:var(--accent)"></span>incoming (callers)</span><span class="legend-item"><span class="swatch" style="background:var(--g9)"></span>outgoing (callees)</span>${nonCallLegend}</div>
     <div class="legend">${legend}</div>
     <button id="reset-btn">Reset zoom</button>
   </div>
   <div id="detail"></div>
-  <div id="hint">Rows are call distance from the focus: callers above, callees below. Hover: edges. Click: details. Dashed: lateral or cycle edge</div>
+  <div id="hint">Rows are graph distance from the focus: callers above, callees below. Hover: edges. Click: details. Dashed: lateral or cycle edge${hasNonCall ? '. Dotted: non-call relation' : ''}</div>
   <script>${d3src}</script>
+  ${busyOracleScript()}
   <script>
     const data = ${JSON.stringify(graphData)};
     const workingDir = ${JSON.stringify(workingDir)};
@@ -57,8 +63,9 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
       const s = idx.get(l.source), t = idx.get(l.target);
       if (s === undefined || t === undefined || s === t) continue;
       const k = s + ' ' + t;
-      if (!pair.has(k)) pair.set(k, { s, t, n: 0, types: new Set(), rev: false });
+      if (!pair.has(k)) pair.set(k, { s, t, n: 0, types: new Set(), rev: false, call: false });
       const e = pair.get(k); e.n += 1; e.types.add(l.type || 'Calls');
+      if (l.type === 'calls' || l.type === 'calledBy' || !l.type) e.call = true;
     }
     const edges = [...pair.values()];
 
@@ -121,7 +128,9 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
     const bodyFont = getComputedStyle(document.body).fontFamily;
     const meas = document.createElement('canvas').getContext('2d');
     meas.font = '11px ' + bodyFont;
-    const labelOf = n => n.name;
+    // Same-name disambiguation is the shared panel lib's: canvas labels and
+    // sidebar rows carry the same module qualifier (rust::register, ...).
+    const labelOf = window.__detail.qualify(data.nodes);
     const X = new Array(N).fill(0), Y = new Array(N).fill(0);
     const GAP = 34, ROWP = 24, BANDGAP = 72, R = 4.5, MAXW = 1500;
     let maxW = 0, yBase = 0, totalH = 0;
@@ -165,7 +174,8 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
       .data(edges)
       .join('path')
         .attr('stroke-width', e => Math.min(4, 0.8 + Math.log2(e.n)))
-        .attr('stroke-dasharray', e => e.rev ? '4 3' : null)
+        .attr('stroke-dasharray', e => !e.call ? '1.5 3' : (e.rev ? '4 3' : null))
+        .attr('stroke-opacity', e => e.call ? null : 0.65)
         .attr('d', epath)
         .each(function(e) { e.el = this; })
         .call(p => p.append('title').text(e => [...e.types].join(', ') + (e.n > 1 ? ' x' + e.n : '')));
@@ -209,9 +219,33 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
       d3.select(this).select('text').attr('font-weight', 700);
     }
     function outed(ev, d) {
-      d3.selectAll(inEdges[d.i].map(e => e.el)).style('stroke', null);
-      d3.selectAll(outEdges[d.i].map(e => e.el)).style('stroke', null);
-      d3.select(this).select('text').attr('font-weight', d.n.level === 0 ? 700 : null);
+      paintSelectedEdges();
+      d3.select(this).select('text').attr('font-weight', d.n.level === 0 || d.i === selected ? 700 : null);
+    }
+
+    // The panel's symbol stays active on the canvas while the panel is open:
+    // it adopts the root's own style (large filled dot, accent ring, bold
+    // label) and its edge web stays painted the way hover paints it, so the
+    // connection survives mouse-out. Cleared through the panel's onClose (x,
+    // Escape) or replaced by the next selection.
+    let selected = null;
+    function paintSelectedEdges() {
+      linkSel.style('stroke', null);
+      if (selected != null) {
+        d3.selectAll(inEdges[selected].map(e => e.el)).style('stroke', 'var(--accent)').raise();
+        d3.selectAll(outEdges[selected].map(e => e.el)).style('stroke', 'var(--g9)').raise();
+      }
+    }
+    function markSelected(i) {
+      selected = i;
+      const active = d => d.n.level === 0 || d.i === selected;
+      node.select('circle')
+        .attr('r', d => active(d) ? 6.5 : R)
+        .style('fill', d => active(d) ? 'var(--text-1)' : (KVAR[d.n.kind] || 'var(--n3)'))
+        .style('stroke', d => active(d) ? 'var(--accent)' : null)
+        .attr('stroke-width', d => active(d) ? 2 : null);
+      node.select('text').attr('font-weight', d => active(d) ? 700 : null);
+      paintSelectedEdges();
     }
 
     // The disc sidebar: relation groups from this page's own edges; go-buttons
@@ -236,14 +270,15 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
             if (seen.has(canon)) continue;
             seen.add(canon);
             const lab = (REL_LABEL[canon] || [canon, canon + ' (in)'])[dir];
-            (rels[lab] ||= []).push({ name: data.nodes[otherOf(e)].name, k: e.n, ref: otherOf(e) });
+            (rels[lab] ||= []).push({ name: labelOf(data.nodes[otherOf(e)]), k: e.n, ref: otherOf(e) });
           }
         }
       };
       addRows(outEdges[i], 0, e => e.t);
       addRows(inEdges[i], 1, e => e.s);
+      markSelected(i);
       window.__detail.show({
-        name: n.name,
+        name: labelOf(n),
         dotted: n.module || '',
         kind: n.kind, visibility: n.visibility, language: n.language,
         edges: deg,
@@ -258,7 +293,7 @@ function generateDAGHTML(graphData, { title, subtitle = '', workingDir = '', the
         svg.transition().duration(400).call(zoom.transform,
           d3.zoomIdentity.translate(window.innerWidth / 2 - k * X[j], window.innerHeight / 2 - k * Y[j]).scale(k));
         showDetail(j);
-      });
+      }, { ref: i, onClose: () => markSelected(null) });
     }
 
     const zoom = d3.zoom().scaleExtent([0.05, 12]).on('zoom', (e) => wrapper.attr('transform', e.transform));

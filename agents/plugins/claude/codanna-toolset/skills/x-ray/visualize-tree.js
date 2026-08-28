@@ -51,7 +51,21 @@ const opts = parseArgs();
 const t0 = Date.now();
 const graph = readDump({ ...opts, workingDir });
 console.log(`dump: ${graph.summary.symbols} symbols, ${graph.summary.relationships} relationships (${Date.now() - t0} ms)`);
-const { hierarchy, leaves, containers, symbolLeaves } = buildHierarchy(graph, opts);
+let { hierarchy, leaves, containers, symbolLeaves } = buildHierarchy(graph, opts);
+// The radial poster stops reading (and starts lagging) past ~1200 leaf
+// labels: without an explicit --depth, deep levels collapse into counted
+// ancestors until the poster fits. --depth overrides.
+if (opts.view === 'radial' && !Number.isFinite(opts.depth) && leaves > 1200) {
+  for (let d = 5; d >= 2; d--) {
+    const t = buildHierarchy(graph, { ...opts, depth: d });
+    if (t.leaves <= 1200 || d === 2) {
+      ({ hierarchy, leaves, containers, symbolLeaves } = t);
+      opts.depth = d;
+      console.log(`auto depth ${d}: ${leaves} rendered leaves (explicit --depth overrides)`);
+      break;
+    }
+  }
+}
 console.log(`tree: root '${hierarchy.name}', ${symbolLeaves} symbol leaves, ${containers} containers, rendered leaves ${leaves}${Number.isFinite(opts.depth) ? ` (depth ${opts.depth})` : ''}`);
 if (leaves === 0) { console.error('nothing under that root / kinds'); process.exit(1); }
 

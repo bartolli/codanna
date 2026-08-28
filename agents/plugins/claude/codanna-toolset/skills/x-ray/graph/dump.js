@@ -36,7 +36,8 @@ function readDump({ from, binary, workingDir = process.cwd() }) {
         module: d.module_path || '',
         signature: d.signature || '',
         visibility: d.visibility || '',
-        language: d.language_id || ''
+        language: d.language_id || '',
+        cls: (d.scope_context && d.scope_context.ClassMember && d.scope_context.ClassMember.class_name) || ''
       });
     } else if (entity === 'relationship') {
       push(out, d.from.id, d.relation, d.to.id);

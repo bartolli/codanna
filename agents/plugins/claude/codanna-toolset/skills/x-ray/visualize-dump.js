@@ -203,6 +203,26 @@ if (opts.all) {
   graphData = buildGraph(graph, rootId, opts.depth, opts.cap);
   safeName = opts.symbol.replace(/[^a-zA-Z0-9_-]/g, '_');
   console.log(`Found ${graphData.nodes.length} nodes and ${graphData.links.length} links (root symbol_id:${rootId}, depth ${opts.depth}, cap ${opts.cap === 0 ? 'none' : opts.cap})`);
+  // The view must say what it shows: fold directional types into their
+  // relation, print the mix, and call out a root with no resolved call edges
+  // -- a neighborhood shaped only by defines/uses reads as a broken call
+  // graph unless labeled.
+  const FOLD = { calledBy: 'calls', usedBy: 'uses', implementedBy: 'implements', extendedBy: 'extends' };
+  const relMix = {};
+  const rootMix = {};
+  for (const l of graphData.links) {
+    const r = FOLD[l.type] || l.type;
+    relMix[r] = (relMix[r] || 0) + 1;
+    if (l.source === rootId || l.target === rootId) rootMix[r] = (rootMix[r] || 0) + 1;
+  }
+  graphData.relMix = relMix;
+  graphData.rootHasCalls = (rootMix.calls || 0) > 0;
+  const mixText = Object.entries(relMix).map(([r, n]) => `${r} ${n}`).join(' · ');
+  console.log(`Relations: ${mixText || 'none'}`);
+  if (!graphData.rootHasCalls && graphData.links.length > 0) {
+    const own = Object.keys(rootMix).join('/') || 'none';
+    console.error(`warning: ${opts.symbol} has no resolved call edges; its own edges are ${own} -- the view is not a call graph at the root`);
+  }
 }
 const large = graphData.nodes.length > 2000 || graphData.links.length > 3000;
 if (opts.bake === true || (opts.bake === null && large)) {
@@ -219,9 +239,11 @@ if (use3d) {
   if (opts.selfContained) html = inlineVendor(html);
 } else {
   const rootNode = graphData.nodes.find(n => n.level === 0);
+  const mix = graphData.relMix || {};
+  const mixText = Object.entries(mix).map(([r, n]) => `${r} ${n}`).join(' · ');
   html = generateDAGHTML(graphData, {
-    title: (rootNode ? rootNode.name : opts.symbol) + ' - Call DAG',
-    subtitle: `depth ${opts.depth}` + (opts.cap ? `, cap ${opts.cap}` : ''),
+    title: (rootNode ? rootNode.name : opts.symbol) + (graphData.rootHasCalls ? ' - Call DAG' : ' - Neighborhood DAG'),
+    subtitle: `depth ${opts.depth}` + (opts.cap ? `, cap ${opts.cap}` : '') + (mixText ? ` · ${mixText}` : ''),
     workingDir, theme: opts.theme || 'dark',
   });
 }

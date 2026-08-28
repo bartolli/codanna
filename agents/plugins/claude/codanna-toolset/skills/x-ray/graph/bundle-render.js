@@ -3,7 +3,7 @@
 // arcs between leaves. Pure d3/SVG, self-contained, pan/zoom, dark theme.
 const fs = require('fs');
 const path = require('path');
-const { themeStyle, themeScript, detailScript, kindVars } = require('./theme');
+const { themeStyle, themeScript, detailScript, kindVars, busyOracleScript } = require('./theme');
 
 const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
 
@@ -13,6 +13,7 @@ const D3 = path.join(__dirname, 'vendor', 'd3.min.js');
  */
 function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir = '', leaves = 0, relation = 'Calls', legendKinds = [], theme = 'dark', details = {} } = {}) {
   const d3src = fs.readFileSync(D3, 'utf8');
+  const sigLangs = [...new Set(Object.values(details).map(x => x.lang).filter(Boolean))];
   const radius = Math.max(520, Math.round(leaves * 11 / (2 * Math.PI)));
   const width = 2 * radius;
   const legend = legendKinds.map(k => `<span class="legend-item"><span class="dot" style="background:${kindVars[k] || 'var(--n3)'}"></span>${k}</span>`).join('');
@@ -35,7 +36,7 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
 <body>
   <div id="chart"></div>
   ${themeScript(theme)}
-  ${detailScript()}
+  ${detailScript(sigLangs)}
   <div id="detail"></div>
   <div id="info">
     <h3>${title}</h3>
@@ -47,6 +48,7 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
   </div>
   <div id="hint">Scroll: zoom, Drag: pan. Hover a name: its ${rel} in and out. Click: details</div>
   <script>${d3src}</script>
+  ${busyOracleScript()}
   <script>
     const data = ${JSON.stringify(hierarchy)};
     const edgeList = ${JSON.stringify(edges)};
@@ -147,17 +149,43 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
       d3.selectAll(d.incoming.map(([d]) => d.text)).style('fill', textColor).attr('font-weight', null);
       d3.selectAll(d.outgoing.map(d => d.path)).style('stroke', null);
       d3.selectAll(d.outgoing.map(([, d]) => d.text)).style('fill', textColor).attr('font-weight', null);
+      paintSelected();
+    }
+
+    // The panel's leaf stays active while the panel is open: its label reads
+    // accent+bold and its arc web keeps the hover palette (incoming blue,
+    // outgoing red; blend off so the colours stay pure). Cleared through the
+    // panel's onClose or replaced by the next selection.
+    let selected = null;
+    function paintSelected() {
+      if (!selected) { link.style('mix-blend-mode', blend()); return; }
+      link.style('mix-blend-mode', null);
+      d3.select(selected.text).style('fill', 'var(--accent)').attr('font-weight', 'bold');
+      d3.selectAll(selected.incoming.map(p => p.path)).style('stroke', colorin).raise();
+      d3.selectAll(selected.incoming.map(([s]) => s.text)).style('fill', colorin).attr('font-weight', 'bold');
+      d3.selectAll(selected.outgoing.map(p => p.path)).style('stroke', colorout).raise();
+      d3.selectAll(selected.outgoing.map(([, t]) => t.text)).style('fill', colorout).attr('font-weight', 'bold');
+    }
+    function markSelected(d) {
+      selected = d;
+      link.style('stroke', null);
+      node.style('fill', textColor).attr('font-weight', null);
+      paintSelected();
     }
     // Blend mode is the one colour decision CSS vars cannot carry.
     document.addEventListener('themechange', () => link.style('mix-blend-mode', blend()));
 
     // The shared panel; go-buttons pan to the related leaf on the rim.
-    const bySid = new Map(root.leaves().filter(d => d.data.sid != null).map(d => [d.data.sid, d]));
+    // Trail refs name leaves by rim index ('n' + i: collapsed count leaves
+    // have no sid); relation rows carry symbol ids. goTo takes both.
+    const leavesArr = root.leaves();
+    leavesArr.forEach((d, i) => { d.i = i; });
+    const bySid = new Map(leavesArr.filter(d => d.data.sid != null).map(d => [d.data.sid, d]));
     const cartesian = (d) => { const a = d.x - Math.PI / 2; return [d.y * Math.cos(a), d.y * Math.sin(a)]; };
     function showDetail(d) {
       const det = d.data.sid != null ? DETAILS[d.data.sid] : null;
       const spec = {
-        name: d.data.name, dotted: id(d), kind: d.data.kind,
+        name: (det && det.label) || d.data.name, dotted: id(d), kind: d.data.kind,
         visibility: det && det.vis, language: det && det.lang,
         edges: det ? det.edges : undefined,
         lines: det ? det.endLine - det.line + 1 : undefined,
@@ -166,15 +194,16 @@ function generateBundleHTML(hierarchy, edges, { title, subtitle = '', workingDir
         href: d.data.file && workingDir ? 'file://' + workingDir + '/' + d.data.file : '',
       };
       if (d.data.count) spec.rels['Collapsed inside'] = [{ name: d.data.count + ' symbols', k: 1 }];
+      markSelected(d);
       window.__detail.show(spec, (ref) => {
-        const t = bySid.get(+ref);
+        const t = String(ref).charAt(0) === 'n' ? leavesArr[+String(ref).slice(1)] : bySid.get(+ref);
         if (!t) return;
         const k = d3.zoomTransform(svg.node()).k;
         const [cx, cy] = cartesian(t);
         svg.transition().duration(400).call(zoom.transform,
           d3.zoomIdentity.translate(vw / 2 - k * cx, vh / 2 - k * cy).scale(k));
         showDetail(t);
-      });
+      }, { ref: 'n' + d.i, onClose: () => markSelected(null) });
     }
 
     const zoom = d3.zoom().scaleExtent([0.05, 12]).on('zoom', (e) => wrapper.attr('transform', e.transform));

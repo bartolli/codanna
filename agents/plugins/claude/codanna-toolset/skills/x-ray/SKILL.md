@@ -106,24 +106,36 @@ node ${CLAUDE_SKILL_DIR}/visualize-graph.js <symbol_id:ID> [depth]
 Structure and flow over the same dump:
 
 ```bash
-# structure: collapsible left-to-right tree (drill-down); --radial for the all-at-once poster
+# structure: collapsible left-to-right tree (drill-down); --radial for the poster IMAGE
 node ${CLAUDE_SKILL_DIR}/visualize-tree.js [--root crate::indexing] [--depth N] [--kinds Function,Method,...] [--radial]
 # dependencies on the structure: hierarchical edge bundling (Calls by default)
 node ${CLAUDE_SKILL_DIR}/visualize-bundle.js [--root crate::indexing] [--depth N] [--relation calls|uses|implements|extends]
 ```
 
 - Pick by question: "what depends on this symbol / what breaks if I change it"
-  -> `visualize-dump.js` (call DAG); "how is this module organized" ->
-  `visualize-tree.js` (expand/collapse like a file explorer); "which modules
-  call which" -> `visualize-bundle.js --depth N` (arcs aggregate to collapsed
-  leaves, width ~ log count; hover: callers blue, callees red)
+  -> `visualize-dump.js` (call DAG); "how is this module organized / let me
+  explore" -> `visualize-tree.js` (expand/collapse like a file explorer -- the
+  NAVIGATION surface for structure); "which modules call which, inside one
+  scope, on a printable page" -> `visualize-bundle.js --depth N` (arcs
+  aggregate to collapsed leaves, width ~ log count; hover: callers blue,
+  callees red)
+- `--radial` is a POSTER, not a navigation surface: one all-at-once image of a
+  scope's containment shape for docs, slides, and side-by-side scope
+  comparison. Without an explicit `--depth` it auto-collapses deep levels into
+  counted ancestors (<= ~1200 rendered leaves). Never reach for it when the
+  user wants to explore -- that is the collapsible tree's job
 - Every 2D view opens the same detail panel on click (signature, kind chips,
   file:span, relation groups with go-navigation where the view supports it);
   opening the source is the explicit Open-file action inside the panel, never
   the click itself -- file:// opens in the browser, not the editor
-- "what is the shape of the WHOLE codebase -- module shares, hubs, history" ->
-  the sibling `graph` skill (`node ${CLAUDE_SKILL_DIR}/../graph/graph.mjs`):
-  the disc is the map these neighbourhood views zoom into
+- "what is the shape of the WHOLE codebase -- module shares, hubs, which
+  modules talk, history over time" -> the sibling `graph` skill
+  (`node ${CLAUDE_SKILL_DIR}/../graph/graph.mjs`): the disc is the living
+  whole-map these views zoom into. The division: the disc owns
+  whole-codebase RELATIONSHIP shape (edge webs, hubs, git-date timeline);
+  x-ray owns scoped CONTAINMENT structure and single-symbol neighbourhoods.
+  When both could answer, prefer the disc for whole-codebase questions and
+  x-ray for scoped ones -- never render both for one question
 - `--depth` collapses deeper levels into counted labels; `--root` scopes to a
   module prefix (edges crossing the root are dropped and counted); symbols
   without a module path hang off their file path; Field/Variable/Parameter out
