@@ -407,3 +407,107 @@ fn serve_http_no_event_ids_and_reissue_succeeds() {
         "re-issue serves the full result\n{payload}"
     );
 }
+
+/// A 2026-07-28 request (generation named by the header) whose params
+/// carry no `_meta` is refused per-request with InvalidParams (-32602);
+/// the server keeps serving on the same port.
+#[test]
+fn serve_http_stateless_missing_meta_invalid_params() {
+    let workspace = seed_workspace();
+    let serve = spawn_http_serve(workspace.path());
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    })
+    .to_string();
+
+    let (_, _, resp_body) = http_request(
+        serve.port,
+        "POST",
+        "/mcp",
+        &mcp_headers("tools/list", &[("MCP-Protocol-Version", "2026-07-28")]),
+        Some(&body),
+    );
+    let payload = response_payload(&resp_body);
+    assert_eq!(
+        payload["error"]["code"], -32602,
+        "missing per-request _meta is InvalidParams\n{payload}"
+    );
+
+    let good = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": { "_meta": stateless_meta() }
+    })
+    .to_string();
+    let (status, _, resp_body) = http_request(
+        serve.port,
+        "POST",
+        "/mcp",
+        &mcp_headers("tools/list", &[("MCP-Protocol-Version", "2026-07-28")]),
+        Some(&good),
+    );
+    assert_eq!(status, 200, "server keeps serving after the refusal");
+    let payload = response_payload(&resp_body);
+    assert_eq!(
+        payload["result"]["tools"].as_array().map(Vec::len),
+        Some(9),
+        "well-formed request still serves\n{payload}"
+    );
+}
+
+/// A stateless request carrying `_meta` but no `MCP-Protocol-Version`
+/// header is refused with the missing-header code (-32020); the server
+/// keeps serving on the same port.
+#[test]
+fn serve_http_stateless_missing_protocol_header_coded() {
+    let workspace = seed_workspace();
+    let serve = spawn_http_serve(workspace.path());
+
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": { "_meta": stateless_meta() }
+    })
+    .to_string();
+
+    let (_, _, resp_body) = http_request(
+        serve.port,
+        "POST",
+        "/mcp",
+        &mcp_headers("tools/list", &[]),
+        Some(&body),
+    );
+    let payload = response_payload(&resp_body);
+    assert_eq!(
+        payload["error"]["code"], -32020,
+        "missing MCP-Protocol-Version header is the coded refusal\n{payload}"
+    );
+
+    let good = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": { "_meta": stateless_meta() }
+    })
+    .to_string();
+    let (status, _, resp_body) = http_request(
+        serve.port,
+        "POST",
+        "/mcp",
+        &mcp_headers("tools/list", &[("MCP-Protocol-Version", "2026-07-28")]),
+        Some(&good),
+    );
+    assert_eq!(status, 200, "server keeps serving after the refusal");
+    let payload = response_payload(&resp_body);
+    assert_eq!(
+        payload["result"]["tools"].as_array().map(Vec::len),
+        Some(9),
+        "well-formed request still serves\n{payload}"
+    );
+}
