@@ -88,7 +88,7 @@ try {
   await type(page, FOCUS);
   await page.eval(`document.querySelector("#vg-q").dispatchEvent(new Event("input", {bubbles:true})); void 0`);
   await sleep(600);
-  at = await click(page, "#vg-hits button", { moveCursor: move, from: at });
+  at = await click(page, "#vg-hits button", { moveCursor: move, from: at, steps: 20, gap: 26 });
   await sleep(2200);
 
   // Two hops, preferring neighbours that also carry multi-line signatures.
@@ -114,7 +114,7 @@ try {
       return el.getAttribute("data-go"); })()`);
     if (!pick) throw new Error("hop " + (h + 1) + ": no [data-go] targets in the panel");
     seen.push(pick);
-    at = await click(page, "#vg-detail [data-rec-target]", { moveCursor: move, from: at });
+    at = await click(page, "#vg-detail [data-rec-target]", { moveCursor: move, from: at, steps: 26, gap: 30 });
     await sleep(1800);
   }
   // Back to the whole disc while the card is still up, THEN dismiss it -- fit and
@@ -137,7 +137,7 @@ try {
   await cast.stop();
 
   mkdirSync(dirname(OUT), { recursive: true });
-  const r = cast.assemble(OUT, { q: 60, budget: 6 * 1024 * 1024 });
+  const r = cast.assemble(OUT, { q: 65, budget: 6 * 1024 * 1024 });
   console.log("wrote " + OUT + " (" + Math.round(r.size / 1024) + "KB, " + r.frames + " frames)");
 } finally {
   await session.close();
