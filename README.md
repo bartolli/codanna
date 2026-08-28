@@ -24,6 +24,10 @@
 
 </div>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bartolli/codanna/main/assets/readme/disc-tour.webp" alt="The codanna index as an interactive disc: module wedges, call webs, symbol search, commit timeline" width="100%">
+</p>
+
 Codanna is a local code intelligence and semantic code search MCP server for AI coding agents. One MCP call returns symbol context, call graph, and impact analysis, pre-correlated — the grep-and-read loop your agent runs today, collapsed into a single response it can act on.
 
 It indexes your repository on disk and serves symbol search, semantic search, call graphs, dependency tracking, document RAG, and impact analysis to Claude Code, Cursor, Windsurf, Codex, Gemini, and any MCP-compatible client — as a persistent MCP server for session-long work, or a one-shot CLI for instant answers when LSP is too slow. Written in Rust. 15 languages. No source code leaves your machine.
@@ -168,6 +172,19 @@ The difference: Codanna understands code structure. It knows `parseConfig` is a 
 **Performance:** parser throughput 76,000-249,000 symbols/second depending on language; warm-server lookups under 10 ms (0.3 ms exact, ~3 ms semantic). Parsing is the fast layer; embedding generation during indexing takes longer and scales with your cores. Measured numbers, machine spec, and reproduction commands: [Benchmarks](https://docs.codanna.sh/reference/benchmarks).
 
 **Languages:** Rust, Python, JavaScript, TypeScript, Java, Kotlin, Go, PHP, C, C++, C#, Clojure, Lua, Swift, GDScript.
+
+## Claude Code plugin
+
+Two skills over the index, driven by the agent: it picks the view that fits the question. **x-ray** covers scoped questions — a symbol's blast radius as a call DAG, module structure as a collapsible tree or radial poster, cross-module calls as an edge-bundle page. **graph** covers codebase shape: the module disc with hubs at the centre, a commit timeline, and a heatmap. Symbol search, detail panels with highlighted signatures, call-graph navigation. The disc renderer is adapted from [vault-graph](https://github.com/luke321/vault-graph) by Lukas Proprentner (MIT).
+
+```
+/plugin marketplace add bartolli/codanna
+/plugin install codanna-toolset@codanna
+```
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bartolli/codanna/main/assets/readme/xray-tree.webp" alt="The x-ray collapsible tree: module structure with symbol detail panels and call-graph navigation" width="100%">
+</p>
 
 ## Integration
 

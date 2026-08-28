@@ -92,7 +92,7 @@ if (process.argv.includes("--list")) {
 
 const SKILL = process.env.RECORD_DEMO_SKILL || join(homedir(), ".claude", "skills", "record-demo");
 if (!existsSync(join(SKILL, "lib", "record.mjs"))) {
-  console.error("record-demo skill not found at " + SKILL + " -- run `skills link record-demo` or set RECORD_DEMO_SKILL");
+  console.error("record-demo skill not found at " + SKILL + " -- set RECORD_DEMO_SKILL or link the skill there");
   process.exit(1);
 }
 const { launch, settle, DISC, cursor, click, glide, drag, key, type, screencast } =

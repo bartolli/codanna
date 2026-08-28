@@ -12,7 +12,7 @@ readme = "README.md"
 keywords = ["code-indexing", "code-intelligence", "mcp-server", "semantic-search", "ai-agents"]
 categories = ["development-tools", "command-line-utilities", "parsing", "text-processing", "compilers"]
 autoexamples = false
-exclude = [".github/", "contributing/", "tests/", "docs/", "agents/", ".claude-plugin/"]
+exclude = [".github/", "contributing/", "tests/", "docs/", "agents/", ".claude-plugin/", "assets/"]
 
 [package.metadata.binstall]
 pkg-fmt = "txz"

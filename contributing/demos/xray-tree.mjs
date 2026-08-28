@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SKILL = process.env.RECORD_DEMO_SKILL || join(homedir(), ".claude", "skills", "record-demo");
 if (!existsSync(join(SKILL, "lib", "record.mjs"))) {
-  console.error("record-demo skill not found at " + SKILL + " -- run `skills link record-demo` or set RECORD_DEMO_SKILL");
+  console.error("record-demo skill not found at " + SKILL + " -- set RECORD_DEMO_SKILL or link the skill there");
   process.exit(1);
 }
 const { launch, settle, XRAY, cursor, click, key, screencast } =
