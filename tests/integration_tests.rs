@@ -81,3 +81,6 @@ mod test_resolve_param_type_inference;
 
 #[path = "integration/test_resolve_php_keyword_static_call.rs"]
 mod test_resolve_php_keyword_static_call;
+
+#[path = "integration/test_resolve_shadowed_instance_call.rs"]
+mod test_resolve_shadowed_instance_call;

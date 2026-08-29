@@ -241,40 +241,44 @@ impl ResolveStage {
             &context.imports,
         );
 
+        // A tier pick the guards reject is not evidence that the call has no
+        // target. The tier returns the caller-local same-name candidate first,
+        // and for an instance call that candidate is often a free function —
+        // never a member of the receiver's type. The receiver-typed arm still
+        // owns the evidence, so every arm ends there rather than at None. It
+        // re-filters to Method-kind candidates on the receiver's chain, so a
+        // rejected candidate cannot come back through it.
         match result {
             ResolveResult::Found(to_id) => {
-                if !self.is_compatible(
+                if self.is_compatible(
                     from_kind,
                     to_id,
                     unresolved.kind,
                     caller.file_id,
                     &caller.language_id,
-                ) {
-                    return None;
-                }
-                if !self.is_instance_type_compatible(
+                ) && self.is_instance_type_compatible(
                     unresolved,
                     to_id,
                     &caller.language_id,
                     context,
-                ) {
-                    return None;
-                }
-                if self.is_file_scoped_private_member_cross_file(
+                ) && !self.is_file_scoped_private_member_cross_file(
                     to_id,
                     caller.file_id,
                     &caller.language_id,
-                ) {
-                    return None;
+                ) && !self
+                    .is_unevidenced_cross_file_member_pick(to_id, unresolved, &caller, context)
+                {
+                    return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
                 }
-                if self.is_unevidenced_cross_file_member_pick(to_id, unresolved, &caller, context) {
-                    return None;
-                }
-                self.accept_unwitnessed_pick(from_id, to_id, unresolved)
+                self.resolve_typed_receiver_global(from_id, from_kind, unresolved, &caller, context)
             }
             ResolveResult::Ambiguous(candidates) => {
-                let to_id = self.disambiguate(&candidates, unresolved, &caller, context, false)?;
-                self.accept_unwitnessed_pick(from_id, to_id, unresolved)
+                if let Some(to_id) =
+                    self.disambiguate(&candidates, unresolved, &caller, context, false)
+                {
+                    return self.accept_unwitnessed_pick(from_id, to_id, unresolved);
+                }
+                self.resolve_typed_receiver_global(from_id, from_kind, unresolved, &caller, context)
             }
             ResolveResult::NotFound => {
                 self.resolve_typed_receiver_global(from_id, from_kind, unresolved, &caller, context)
