@@ -11,7 +11,50 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tree_sitter::Language;
+use tree_sitter::{Language, Node};
+
+/// Declared type of the named parameter in a kotlin signature.
+///
+/// ```text
+/// parameter
+///   simple_identifier            the name
+///   user_type > type_identifier  the declared type
+/// ```
+///
+/// The type is reduced to its `type_identifier`, so a qualified or generic
+/// annotation yields the bare class name a ClassMember carries.
+fn find_parameter_type(node: Node, code: &str, var_name: &str) -> Option<String> {
+    if node.kind() == "parameter" {
+        let mut cursor = node.walk();
+        let mut matches_name = false;
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "simple_identifier" if !matches_name => {
+                    if &code[child.byte_range()] != var_name {
+                        break;
+                    }
+                    matches_name = true;
+                }
+                "user_type" if matches_name => {
+                    let mut type_cursor = child.walk();
+                    return child
+                        .children(&mut type_cursor)
+                        .find(|part| part.kind() == "type_identifier")
+                        .map(|part| code[part.byte_range()].to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
 
 /// Language behavior for Kotlin
 #[derive(Clone)]
@@ -293,6 +336,22 @@ impl LanguageBehavior for KotlinBehavior {
         }
 
         Some(segments.join("."))
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        // Stored kotlin signatures carry no `fun` keyword (`seed (h: HubKt)`),
+        // which does not parse as a function_declaration. Restore it so the
+        // `parameter` nodes appear; an already-prefixed signature is left
+        // alone.
+        let wrapped = if signature.trim_start().starts_with("fun ") {
+            signature.to_string()
+        } else {
+            format!("fun {signature}")
+        };
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.get_language()).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
     }
 
     fn get_language(&self) -> Language {

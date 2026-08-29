@@ -445,6 +445,59 @@ impl KotlinParser {
             .map(|(_, typ, _)| *typ)
     }
 
+    /// Bind an ANNOTATED property to its declared type.
+    ///
+    /// ```text
+    /// property_declaration
+    ///   binding_pattern_kind          "val" / "var"
+    ///   variable_declaration
+    ///     simple_identifier           the name
+    ///     user_type > type_identifier the declared type
+    /// ```
+    ///
+    /// An un-annotated `val h = HubKt()` stays unbound: kotlin constructors
+    /// are syntactically identical to function calls, and a type name that
+    /// anchors to no Class is matched name-keyed against candidate members —
+    /// a guessed class name can mis-pick, and under-report beats mis-report.
+    fn record_annotated_property_type<'a>(
+        &self,
+        node: Node,
+        code: &'a str,
+        var_types: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        let mut cursor = node.walk();
+        let Some(declaration) = node
+            .children(&mut cursor)
+            .find(|child| child.kind() == "variable_declaration")
+        else {
+            return;
+        };
+
+        let mut inner = declaration.walk();
+        let mut name = None;
+        let mut declared = None;
+        for child in declaration.children(&mut inner) {
+            match child.kind() {
+                NODE_SIMPLE_IDENTIFIER if name.is_none() => {
+                    name = Some(self.trimmed_text(code, child));
+                }
+                "user_type" => {
+                    let mut type_cursor = child.walk();
+                    declared = child
+                        .children(&mut type_cursor)
+                        .find(|part| part.kind() == NODE_TYPE_IDENTIFIER)
+                        .map(|part| self.trimmed_text(code, part));
+                }
+                _ => {}
+            }
+        }
+
+        if let (Some(name), Some(declared)) = (name, declared) {
+            let range = self.node_to_range(node);
+            self.insert_var_type(var_types, name, declared, range);
+        }
+    }
+
     fn record_literal_type<'a>(
         &self,
         node: Node,
@@ -1640,6 +1693,16 @@ impl KotlinParser {
 
         // Record literal expression types.
         self.record_literal_type(node, code, var_types);
+
+        // Variable-name-keyed bindings for the receiver-type channel. The
+        // entries above key on EXPRESSION TEXT, which the generic and
+        // extension inference consume; `binding_type_at_call_site` joins on
+        // the variable name instead, so a declaration must also bind under
+        // its own identifier. A simple identifier is its own expression
+        // text, so the two keyings agree.
+        if node.kind() == NODE_PROPERTY_DECLARATION {
+            self.record_annotated_property_type(node, code, var_types);
+        }
 
         // Attempt to infer call expression return types.
         if node.kind() == NODE_CALL_EXPRESSION {
