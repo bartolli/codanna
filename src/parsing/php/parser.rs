@@ -1426,8 +1426,11 @@ impl PhpParser {
                         type_name = Some(&code[child.byte_range()]);
                     }
                     "variable_name" => {
-                        let raw_name = &code[child.byte_range()];
-                        var_name = Some(raw_name.trim_start_matches('$'));
+                        // The sigil stays: call rows carry the raw receiver
+                        // token (`$h`), and the binding joins the call by
+                        // name equality. php's self_receiver_aliases is
+                        // `["$this"]` — one token form per language.
+                        var_name = Some(&code[child.byte_range()]);
                     }
                     _ => {}
                 }

@@ -216,3 +216,6 @@ mod test_java_extract_parameter_type;
 
 #[path = "parsers/java/test_method_kind.rs"]
 mod test_java_method_kind;
+
+#[path = "parsers/php/test_variable_binding_sigil.rs"]
+mod test_php_variable_binding_sigil;

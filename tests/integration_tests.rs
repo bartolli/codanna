@@ -84,3 +84,6 @@ mod test_resolve_php_keyword_static_call;
 
 #[path = "integration/test_resolve_shadowed_instance_call.rs"]
 mod test_resolve_shadowed_instance_call;
+
+#[path = "integration/test_resolve_php_binding_receiver.rs"]
+mod test_resolve_php_binding_receiver;
