@@ -1409,12 +1409,35 @@ impl PhpParser {
         }
     }
 
-    /// Text of the `named_type` a wrapper type node encloses (`?Foo` -> `Foo`).
+    /// Class a `named_type` names, reduced to the bare tail: the binding type
+    /// is matched against a ClassMember class name, which carries no
+    /// namespace prefix. `\App\Foo` -> `Foo`, `Foo` -> `Foo`.
+    fn named_type_class<'a>(node: Node, code: &'a str) -> &'a str {
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .find(|child| child.kind() == "qualified_name")
+            .and_then(|child| Self::qualified_name_tail(child, code))
+            .unwrap_or(&code[node.byte_range()])
+    }
+
+    /// Last `name` of a `qualified_name` (`\App\Sub\Foo` -> `Foo`).
+    fn qualified_name_tail<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        let mut cursor = node.walk();
+        let mut tail = None;
+        for part in node.children(&mut cursor) {
+            if part.kind() == "name" {
+                tail = Some(&code[part.byte_range()]);
+            }
+        }
+        tail
+    }
+
+    /// Class of the `named_type` a wrapper type node encloses (`?Foo` -> `Foo`).
     fn named_type_text<'a>(node: Node, code: &'a str) -> Option<&'a str> {
         let mut cursor = node.walk();
         node.children(&mut cursor)
             .find(|child| child.kind() == "named_type")
-            .map(|child| &code[child.byte_range()])
+            .map(|child| Self::named_type_class(child, code))
     }
 
     /// Class named by `new Foo()` / `new \App\Foo()`, reduced to the bare
@@ -1424,16 +1447,7 @@ impl PhpParser {
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "name" => return Some(&code[child.byte_range()]),
-                "qualified_name" => {
-                    let mut inner = child.walk();
-                    let mut tail = None;
-                    for part in child.children(&mut inner) {
-                        if part.kind() == "name" {
-                            tail = Some(&code[part.byte_range()]);
-                        }
-                    }
-                    return tail;
-                }
+                "qualified_name" => return Self::qualified_name_tail(child, code),
                 _ => {}
             }
         }
@@ -1453,7 +1467,10 @@ impl PhpParser {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 match child.kind() {
-                    "type_list" | "named_type" | "primitive_type" => {
+                    "named_type" => {
+                        type_name = Some(Self::named_type_class(child, code));
+                    }
+                    "type_list" | "primitive_type" => {
                         type_name = Some(&code[child.byte_range()]);
                     }
                     // `?Foo` wraps the named type. Foo-or-null names one

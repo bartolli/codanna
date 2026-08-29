@@ -127,3 +127,41 @@ function seed(): void
         "a non-constructor initializer supplies no type evidence, got {got:?}"
     );
 }
+
+#[test]
+fn qualified_parameter_type_binds_the_class_tail() {
+    // The assignment arm already reduces `new \App\Foo()` to `Foo`. A
+    // parameter annotated `\App\Foo` must reduce the same way: the binding
+    // type is matched against a ClassMember class name, which carries no
+    // namespace prefix.
+    let code = r#"<?php
+namespace App;
+
+function seed(\App\HubPhp $qualified): void
+{
+    $qualified->ping();
+}
+"#;
+    let got = bindings_for(code);
+    assert!(
+        got.contains(&("$qualified".to_string(), "HubPhp".to_string())),
+        "a namespace-qualified parameter type binds its class tail, got {got:?}"
+    );
+}
+
+#[test]
+fn nullable_qualified_parameter_type_binds_the_class_tail() {
+    let code = r#"<?php
+namespace App;
+
+function seed(?\App\HubPhp $both): void
+{
+    $both->ping();
+}
+"#;
+    let got = bindings_for(code);
+    assert!(
+        got.contains(&("$both".to_string(), "HubPhp".to_string())),
+        "the nullable and qualified reductions compose, got {got:?}"
+    );
+}
