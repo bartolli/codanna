@@ -219,3 +219,6 @@ mod test_java_method_kind;
 
 #[path = "parsers/php/test_variable_binding_sigil.rs"]
 mod test_php_variable_binding_sigil;
+
+#[path = "parsers/java/test_variable_bindings.rs"]
+mod test_java_variable_bindings;
