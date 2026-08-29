@@ -147,7 +147,7 @@ path = "examples/parser_census.rs"
 
 [[example]]
 name = "resolution_precision"
-path = "examples/resolution_precision.rs"
+path = "examples/resolution_precision/main.rs"
 
 [[bench]]
 name = "unified_output_bench"
