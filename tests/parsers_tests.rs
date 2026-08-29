@@ -231,3 +231,9 @@ mod test_kotlin_variable_bindings;
 
 #[path = "parsers/go/test_variable_bindings.rs"]
 mod test_go_variable_bindings;
+
+#[path = "parsers/swift/test_variable_bindings.rs"]
+mod test_swift_variable_bindings;
+
+#[path = "parsers/swift/test_extract_parameter_type.rs"]
+mod test_swift_extract_parameter_type;

@@ -1647,9 +1647,121 @@ impl SwiftParser {
             _ => None,
         }
     }
+
+    /// Type named by a `type_annotation` child: `user_type` directly or
+    /// wrapped in `optional_type`.
+    fn annotation_type_name<'a>(annotation: Node, code: &'a str) -> Option<&'a str> {
+        let named = annotation.child_by_field_name("name")?;
+        let user_type = match named.kind() {
+            "user_type" => named,
+            "optional_type" => named
+                .child_by_field_name("wrapped")
+                .filter(|w| w.kind() == "user_type")?,
+            _ => return None,
+        };
+        let mut cursor = user_type.walk();
+        let last = user_type
+            .named_children(&mut cursor)
+            .filter(|c| c.kind() == "type_identifier")
+            .last()?;
+        Some(&code[last.byte_range()])
+    }
+
+    fn binding_range(node: Node) -> Range {
+        Range::new(
+            node.start_position().row as u32,
+            node.start_position().column as u16,
+            node.end_position().row as u32,
+            node.end_position().column as u16,
+        )
+    }
+
+    /// Type named by an initializer `call_expression`. A called type name
+    /// is always `.init` in swift (no invoke operator on metatypes), so
+    /// the callee is capture evidence; a captured factory name matches no
+    /// ClassMember class downstream and stays inert (story Decisions).
+    fn initializer_type_name<'a>(value: Node, code: &'a str) -> Option<&'a str> {
+        if value.kind() != "call_expression" {
+            return None;
+        }
+        let mut cursor = value.walk();
+        let callee = value.named_children(&mut cursor).next()?;
+        match callee.kind() {
+            "simple_identifier" => Some(&code[callee.byte_range()]),
+            // `Module.Type()` / `Type.init()`: the suffix segment names the
+            // type unless it is `init`, where the target does.
+            "navigation_expression" => {
+                let target = callee.child_by_field_name("target")?;
+                let suffix = callee
+                    .child_by_field_name("suffix")
+                    .and_then(|s| s.child_by_field_name("suffix"))?;
+                let suffix_text = &code[suffix.byte_range()];
+                if suffix_text == "init" {
+                    (target.kind() == "simple_identifier").then(|| &code[target.byte_range()])
+                } else {
+                    Some(suffix_text)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Sequential name/annotation/value groups of one `property_declaration`
+    /// (`let a = A(), b: B = makeB()` repeats the trio per name).
+    fn collect_variable_types<'a>(
+        node: Node,
+        code: &'a str,
+        bindings: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        if node.kind() == "property_declaration" {
+            let mut cursor = node.walk();
+            let mut name: Option<&str> = None;
+            let mut ty: Option<&str> = None;
+            let mut flush = |name: &mut Option<&'a str>, ty: &mut Option<&'a str>| {
+                if let (Some(n), Some(t)) = (name.take(), ty.take()) {
+                    bindings.push((n, t, Self::binding_range(node)));
+                }
+                *ty = None;
+            };
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "pattern" => {
+                        flush(&mut name, &mut ty);
+                        name = child
+                            .child_by_field_name("bound_identifier")
+                            .map(|n| &code[n.byte_range()]);
+                    }
+                    "type_annotation" => {
+                        ty = Self::annotation_type_name(child, code);
+                    }
+                    // The declared annotation outranks the initializer.
+                    "call_expression" if ty.is_none() => {
+                        ty = Self::initializer_type_name(child, code);
+                    }
+                    _ => {}
+                }
+            }
+            flush(&mut name, &mut ty);
+        }
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            Self::collect_variable_types(child, code, bindings);
+        }
+    }
 }
 
 impl LanguageParser for SwiftParser {
+    fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        let mut bindings = Vec::new();
+        Self::collect_variable_types(tree.root_node(), code, &mut bindings);
+        bindings
+    }
+
     fn parse(
         &mut self,
         code: &str,

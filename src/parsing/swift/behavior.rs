@@ -10,6 +10,40 @@ use tree_sitter::Language;
 
 use super::resolution::{SwiftInheritanceResolver, SwiftResolutionContext};
 
+/// Type of the `parameter` whose internal name is `var_name`. The argument
+/// label lives in field `external_name`; the internal name and the type
+/// both sit in field `name`, in that order.
+fn find_parameter_type(node: tree_sitter::Node, code: &str, var_name: &str) -> Option<String> {
+    if node.kind() == "parameter" {
+        let mut cursor = node.walk();
+        let named: Vec<_> = node.children_by_field_name("name", &mut cursor).collect();
+        if let [ident, ty] = named.as_slice() {
+            if ident.kind() == "simple_identifier" && &code[ident.byte_range()] == var_name {
+                let ty = match ty.kind() {
+                    "optional_type" => ty.child_by_field_name("wrapped")?,
+                    _ => *ty,
+                };
+                if ty.kind() == "user_type" {
+                    let mut type_cursor = ty.walk();
+                    return ty
+                        .named_children(&mut type_cursor)
+                        .filter(|part| part.kind() == "type_identifier")
+                        .last()
+                        .map(|part| code[part.byte_range()].to_string());
+                }
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 /// Language behavior for Swift
 #[derive(Clone)]
 pub struct SwiftBehavior {
@@ -225,6 +259,16 @@ impl LanguageBehavior for SwiftBehavior {
         }
 
         Some(segments.join("."))
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        // A stored signature carries no body and alone parses as ERROR; the
+        // appended `{}` yields a clean function_declaration (go precedent).
+        let wrapped = format!("{signature} {{}}");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.get_language()).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
     }
 
     fn get_language(&self) -> Language {
