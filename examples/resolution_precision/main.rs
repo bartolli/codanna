@@ -26,6 +26,18 @@
 //! kotlin and go run on tree-sitter (`ast`). Not part of the product
 //! surface.
 //!
+//! Bound on every verdict: this compares the receiver's declared type
+//! against the target's owning type. It reads `receiver` and the call
+//! line from the row and never checks that a call to that method, on
+//! that receiver, exists there — a fabricated or mis-sited edge passes
+//! as class-match. A clean mismatch column bounds mis-typing, not edge
+//! existence.
+//!
+//! Both sides compare type NAMES, so a pick among same-named types
+//! reads as class-match by construction. The tool does not yet report
+//! which class-match rows are name-forced (one owner) versus
+//! name-ambiguous (several), so that share is measured outside it.
+//!
 //! Usage: resolution_precision <edge-dump-file> <corpus-root>
 
 mod ast;
@@ -41,6 +53,7 @@ pub enum Lang {
     Java,
     Kotlin,
     Go,
+    Swift,
 }
 
 impl Lang {
@@ -51,6 +64,7 @@ impl Lang {
             Lang::Java => "java",
             Lang::Kotlin => "kotlin",
             Lang::Go => "go",
+            Lang::Swift => "swift",
         }
     }
 }
@@ -62,6 +76,7 @@ fn lang_of(path: &str) -> Option<Lang> {
         "java" => Some(Lang::Java),
         "kt" | "kts" => Some(Lang::Kotlin),
         "go" => Some(Lang::Go),
+        "swift" => Some(Lang::Swift),
         _ => None,
     }
 }
