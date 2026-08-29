@@ -93,6 +93,43 @@ impl StatefulBehavior for CSharpBehavior {
     }
 }
 
+/// Type of the `parameter` whose `name:` field is `var_name`. Reduction:
+/// identifier verbatim, `qualified_name` rightmost, `generic_name` base
+/// identifier, `nullable_type` unwrapped; `predefined_type` stays
+/// unbound.
+fn find_parameter_type(node: tree_sitter::Node, code: &str, var_name: &str) -> Option<String> {
+    if node.kind() == "parameter" {
+        let name = node.child_by_field_name("name")?;
+        if &code[name.byte_range()] != var_name {
+            return None;
+        }
+        return reduce_type(node.child_by_field_name("type")?, code);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = find_parameter_type(child, code, var_name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn reduce_type(ty: tree_sitter::Node, code: &str) -> Option<String> {
+    match ty.kind() {
+        "identifier" => Some(code[ty.byte_range()].to_string()),
+        "qualified_name" => reduce_type(ty.child_by_field_name("name")?, code),
+        "nullable_type" => reduce_type(ty.child_by_field_name("type")?, code),
+        "generic_name" => {
+            let mut cursor = ty.walk();
+            ty.named_children(&mut cursor)
+                .find(|c| c.kind() == "identifier")
+                .map(|c| code[c.byte_range()].to_string())
+        }
+        _ => None,
+    }
+}
+
 impl LanguageBehavior for CSharpBehavior {
     /// partial classes split one type across files.
     fn type_members_span_files(&self) -> bool {
@@ -115,6 +152,16 @@ impl LanguageBehavior for CSharpBehavior {
         // C# uses namespaces as module paths, not including the symbol name
         // All symbols in the same namespace share the same module path
         base_path.to_string()
+    }
+
+    fn extract_parameter_type(&self, signature: &str, var_name: &str) -> Option<String> {
+        // A stored method signature is only valid inside a class; the wrap
+        // makes it a method_declaration (java precedent).
+        let wrapped = format!("class __W__ {{ {signature} {{}} }}");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&self.get_language()).ok()?;
+        let tree = parser.parse(&wrapped, None)?;
+        find_parameter_type(tree.root_node(), &wrapped, var_name)
     }
 
     fn get_language(&self) -> Language {

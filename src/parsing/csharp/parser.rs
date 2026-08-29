@@ -1160,9 +1160,10 @@ impl CSharpParser {
                     // Strategy 2: Fall back to explicit type annotation
                     // This handles cases like "Helper helper = ..." or "IService service = factory.Create()"
                     if let Some(type_node) = type_node {
-                        let type_str = &code[type_node.byte_range()];
-                        // Skip "var" keyword - we can't infer type without analyzing the full expression
-                        // (which would require complex type inference beyond current scope)
+                        // Reduce through the same helper as the initializer arm:
+                        // the two arms feed one name-equality join and must
+                        // agree on the token form.
+                        let type_str = self.extract_simple_type_name(&type_node, code);
                         if type_str != "var" {
                             let range = Range::new(
                                 child.start_position().row as u32,
@@ -1209,9 +1210,16 @@ impl CSharpParser {
         match type_node.kind() {
             "identifier" => &code[type_node.byte_range()],
             "generic_name" => {
-                // Generic name has an identifier child
-                if let Some(ident) = type_node.child_by_field_name("name") {
-                    &code[ident.byte_range()]
+                let mut cursor = type_node.walk();
+                type_node
+                    .children(&mut cursor)
+                    .find(|c| c.kind() == "identifier")
+                    .map(|c| &code[c.byte_range()])
+                    .unwrap_or(&code[type_node.byte_range()])
+            }
+            "nullable_type" => {
+                if let Some(inner) = type_node.child_by_field_name("type") {
+                    self.extract_simple_type_name(&inner, code)
                 } else {
                     &code[type_node.byte_range()]
                 }

@@ -237,3 +237,15 @@ mod test_swift_variable_bindings;
 
 #[path = "parsers/swift/test_extract_parameter_type.rs"]
 mod test_swift_extract_parameter_type;
+
+#[path = "parsers/gdscript/test_variable_bindings.rs"]
+mod test_gdscript_variable_bindings;
+
+#[path = "parsers/gdscript/test_extract_parameter_type.rs"]
+mod test_gdscript_extract_parameter_type;
+
+#[path = "parsers/csharp/test_extract_parameter_type.rs"]
+mod test_csharp_extract_parameter_type;
+
+#[path = "parsers/csharp/test_variable_bindings.rs"]
+mod test_csharp_variable_bindings;

@@ -216,6 +216,40 @@ func swiftParamCaller(with widget: SwiftWidget) -> Int {
 }
 "#;
 
+const GDSCRIPT_FIXTURE: &str = r#"class_name GdFixture
+
+class GdWidget:
+    func gd_helper() -> int:
+        return 1
+
+    func gd_run() -> int:
+        return gd_helper()
+
+func gd_ctor_caller() -> int:
+    var w := GdWidget.new()
+    return w.gd_run()
+
+func gd_param_caller(widget: GdWidget) -> int:
+    return widget.gd_helper()
+"#;
+
+const CSHARP_FIXTURE: &str = r#"class CsWidget {
+    public int CsHelper() {
+        return 1;
+    }
+
+    public int CsRun() {
+        return CsHelper();
+    }
+}
+
+class CsCallers {
+    public int CsParamCaller(CsWidget widget) {
+        return widget.CsRun();
+    }
+}
+"#;
+
 fn write_fixtures(workspace: &Path) {
     let src = workspace.join("src");
     std::fs::create_dir_all(&src).expect("create src dir");
@@ -226,6 +260,8 @@ fn write_fixtures(workspace: &Path) {
         ("fixture.ts", TS_FIXTURE),
         ("fixture.go", GO_FIXTURE),
         ("fixture.swift", SWIFT_FIXTURE),
+        ("fixture.gd", GDSCRIPT_FIXTURE),
+        ("fixture.cs", CSHARP_FIXTURE),
     ] {
         std::fs::write(src.join(name), content).expect("write fixture");
     }
@@ -466,6 +502,31 @@ fn call_metadata_exact_across_languages_tools_and_forms() {
             "swiftParamCaller",
             "swiftRun",
             "return widget.swiftRun()",
+        ),
+        // gdscript: `X.new()`-typed and parameter-typed local receivers
+        // resolve through the binding channels end-to-end
+        (
+            GDSCRIPT_FIXTURE,
+            "get_calls",
+            "gd_ctor_caller",
+            "gd_run",
+            "return w.gd_run()",
+        ),
+        (
+            GDSCRIPT_FIXTURE,
+            "find_callers",
+            "gd_helper",
+            "gd_param_caller",
+            "return widget.gd_helper()",
+        ),
+        // csharp: parameter-typed receiver resolves via
+        // extract_parameter_type over the wrapped stored signature
+        (
+            CSHARP_FIXTURE,
+            "get_calls",
+            "CsParamCaller",
+            "CsRun",
+            "return widget.CsRun();",
         ),
     ];
 

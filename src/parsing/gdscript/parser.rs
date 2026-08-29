@@ -1064,7 +1064,82 @@ impl GdscriptParser {
     }
 }
 
+/// Type named by a `variable_statement` or `typed_parameter` binding.
+///
+/// Annotation: `type: (type (identifier))`. Initializer: the explicit
+/// constructor idiom `X.new()` — an `attribute` whose head identifier
+/// names the type and whose `attribute_call` is `new`. A plain call
+/// (`make_thing()`) is a factory whose return type lives in another
+/// signature; not evidence.
+fn binding_type_name<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+    if let Some(ty) = node.child_by_field_name("type") {
+        if ty.kind() == "type" {
+            let mut cursor = ty.walk();
+            if let Some(ident) = ty
+                .named_children(&mut cursor)
+                .find(|c| c.kind() == "identifier")
+            {
+                return Some(&code[ident.byte_range()]);
+            }
+        }
+    }
+    let value = node.child_by_field_name("value")?;
+    if value.kind() != "attribute" {
+        return None;
+    }
+    let mut cursor = value.walk();
+    let children: Vec<Node> = value.named_children(&mut cursor).collect();
+    if let [head, call] = children.as_slice() {
+        if head.kind() == "identifier" && call.kind() == "attribute_call" {
+            let mut call_cursor = call.walk();
+            let callee = call
+                .named_children(&mut call_cursor)
+                .find(|c| c.kind() == "identifier")?;
+            if &code[callee.byte_range()] == "new" {
+                return Some(&code[head.byte_range()]);
+            }
+        }
+    }
+    None
+}
+
+fn collect_variable_types<'a>(
+    node: Node,
+    code: &'a str,
+    bindings: &mut Vec<(&'a str, &'a str, Range)>,
+) {
+    if node.kind() == "variable_statement" {
+        if let (Some(name), Some(ty)) = (
+            node.child_by_field_name("name"),
+            binding_type_name(node, code),
+        ) {
+            let range = Range::new(
+                node.start_position().row as u32,
+                node.start_position().column as u16,
+                node.end_position().row as u32,
+                node.end_position().column as u16,
+            );
+            bindings.push((&code[name.byte_range()], ty, range));
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_variable_types(child, code, bindings);
+    }
+}
+
 impl LanguageParser for GdscriptParser {
+    fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+        let mut bindings = Vec::new();
+        collect_variable_types(tree.root_node(), code, &mut bindings);
+        bindings
+    }
+
     fn parse(
         &mut self,
         code: &str,
