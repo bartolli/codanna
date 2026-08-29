@@ -228,3 +228,6 @@ mod test_php_variable_binding_assignments;
 
 #[path = "parsers/kotlin/test_variable_bindings.rs"]
 mod test_kotlin_variable_bindings;
+
+#[path = "parsers/go/test_variable_bindings.rs"]
+mod test_go_variable_bindings;

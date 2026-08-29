@@ -2032,6 +2032,130 @@ impl GoParser {
     }
 }
 
+impl GoParser {
+    /// Local bindings for the receiver-type evidence channel.
+    ///
+    /// ```text
+    /// short_var_declaration
+    ///   left:  expression_list(identifier, ...)
+    ///   right: expression_list(composite_literal | unary_expression(&T{}), ...)
+    ///
+    /// var_declaration > var_spec
+    ///   name: identifier (one or more)
+    ///   type: type_identifier | pointer_type | qualified_type
+    /// ```
+    ///
+    /// A composite literal names its type outright; a `NewT()` call does not,
+    /// since the return type lives in another function's signature. The `New`
+    /// prefix is a convention, and a convention is not evidence.
+    fn collect_variable_types<'a>(
+        node: Node,
+        code: &'a str,
+        bindings: &mut Vec<(&'a str, &'a str, Range)>,
+    ) {
+        match node.kind() {
+            "short_var_declaration" => {
+                if let (Some(left), Some(right)) = (
+                    node.child_by_field_name("left"),
+                    node.child_by_field_name("right"),
+                ) {
+                    let names = Self::expression_list_children(left);
+                    let values = Self::expression_list_children(right);
+                    // Positional pairing is only defined when the lists match;
+                    // `a, b := f()` has no per-name type to take.
+                    if names.len() == values.len() {
+                        for (name_node, value_node) in names.iter().zip(values.iter()) {
+                            if name_node.kind() != "identifier" {
+                                continue;
+                            }
+                            if let Some(type_name) = Self::composite_literal_type(*value_node, code)
+                            {
+                                bindings.push((
+                                    &code[name_node.byte_range()],
+                                    type_name,
+                                    Self::range_of(node),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            "var_spec" => {
+                if let Some(type_node) = node.child_by_field_name("type") {
+                    if let Some(type_name) = Self::reduce_type_name(type_node, code) {
+                        let mut cursor = node.walk();
+                        for child in node.children(&mut cursor) {
+                            if child.kind() == "identifier" {
+                                bindings.push((
+                                    &code[child.byte_range()],
+                                    type_name,
+                                    Self::range_of(node),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            Self::collect_variable_types(child, code, bindings);
+        }
+    }
+
+    fn expression_list_children(node: Node) -> Vec<Node> {
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .filter(|child| child.is_named())
+            .collect()
+    }
+
+    /// Type named by `T{}` or `&T{}`.
+    fn composite_literal_type<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        let literal = match node.kind() {
+            "composite_literal" => node,
+            // `&T{}` wraps the literal in a unary expression.
+            "unary_expression" => {
+                let operand = node.child_by_field_name("operand")?;
+                if operand.kind() != "composite_literal" {
+                    return None;
+                }
+                operand
+            }
+            _ => return None,
+        };
+        Self::reduce_type_name(literal.child_by_field_name("type")?, code)
+    }
+
+    /// Bare class name a type node denotes: `*T` -> `T`, `pkg.T` -> `T`.
+    fn reduce_type_name<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        match node.kind() {
+            "type_identifier" => Some(&code[node.byte_range()]),
+            "pointer_type" => {
+                let mut cursor = node.walk();
+                node.children(&mut cursor)
+                    .find(|child| child.is_named())
+                    .and_then(|child| Self::reduce_type_name(child, code))
+            }
+            "qualified_type" => node
+                .child_by_field_name("name")
+                .map(|name| &code[name.byte_range()]),
+            _ => None,
+        }
+    }
+
+    fn range_of(node: Node) -> Range {
+        Range::new(
+            node.start_position().row as u32,
+            node.start_position().column as u16,
+            node.end_position().row as u32,
+            node.end_position().column as u16,
+        )
+    }
+}
+
 impl LanguageParser for GoParser {
     fn parse(
         &mut self,
@@ -2125,6 +2249,17 @@ impl LanguageParser for GoParser {
         self.extract_calls_recursive(&root, code, None, &mut calls);
 
         calls
+    }
+
+    fn find_variable_types<'a>(&mut self, code: &'a str) -> Vec<(&'a str, &'a str, Range)> {
+        let tree = match self.parser.parse(code, None) {
+            Some(tree) => tree,
+            None => return Vec::new(),
+        };
+
+        let mut bindings = Vec::new();
+        Self::collect_variable_types(tree.root_node(), code, &mut bindings);
+        bindings
     }
 
     /// Extract method calls from Go source code
