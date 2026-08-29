@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-08-29
+
+Receiver-typed call resolution reaches seven more languages: local and parameter declarations now supply receiver types for PHP, Java, Kotlin, Go, Swift, GDScript, and C#. Index format and emission semantics are unchanged (v3); receiver bindings are resolved in memory and never persisted.
+
+### Added
+
+- Variable-binding channels (`find_variable_types` / `extract_parameter_type`) for PHP (typed and promoted parameters, constructor-assigned locals, typed properties), Java (local declarations, `var` with constructor initializer), Kotlin (annotated properties and parameters), Go (composite literals, `var` declarations, `&T{}`), Swift (annotation- and initializer-typed `let`/`var`, labeled and `inout` parameters, `Type.init`), GDScript (`var x: Type`, `X.new()` on `=` and `:=`, typed parameters), and C# (parameters with `ref`/`out`/`in`, generics reduced to the base identifier, nullable and qualified types). Member calls on receivers bound by these declarations now resolve; factory-call initializers (`makeThing()`, `NewT()`) stay unbound by design.
+- `resolution_precision` example: per-edge precision verdicts (class-match / inherited / implementor / mismatch) for receiver-typed call edges against corpus source, with tree-sitter extraction for PHP, Java, Kotlin, Go, and Swift alongside the original JS-family heuristics.
+
+### Fixed
+
+- A resolution tier that rejected its own candidate ended resolution for that call; rejected picks now fall through to the typed-receiver arm.
+- PHP binding names carry the `$` sigil, matching the receiver form on call rows; the join between the two previously dropped every PHP variable receiver.
+- C# annotation-typed locals bound raw type text (`List<Item>`, `Session?`, `Foo.Bar`) that could never match a member's class; both capture arms now reduce to the same base-identifier form.
+
+Indexes built at 0.15.0 or earlier lack the new receiver-typed edges until one `codanna index --force` with this version; incremental re-index adopts them per file as files change.
+
 ## [0.15.0] - 2026-08-28
 
 Fixes Rust call resolution for module-anchored qualified calls and updates the bundled Claude Code plugin skills and README demos. Index format and emission semantics are unchanged (v3).
