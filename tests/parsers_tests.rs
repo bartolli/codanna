@@ -222,3 +222,6 @@ mod test_php_variable_binding_sigil;
 
 #[path = "parsers/java/test_variable_bindings.rs"]
 mod test_java_variable_bindings;
+
+#[path = "parsers/php/test_variable_binding_assignments.rs"]
+mod test_php_variable_binding_assignments;

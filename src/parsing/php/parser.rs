@@ -1409,6 +1409,37 @@ impl PhpParser {
         }
     }
 
+    /// Text of the `named_type` a wrapper type node encloses (`?Foo` -> `Foo`).
+    fn named_type_text<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .find(|child| child.kind() == "named_type")
+            .map(|child| &code[child.byte_range()])
+    }
+
+    /// Class named by `new Foo()` / `new \App\Foo()`, reduced to the bare
+    /// tail so it can match a ClassMember class name.
+    fn constructed_class_name<'a>(node: Node, code: &'a str) -> Option<&'a str> {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "name" => return Some(&code[child.byte_range()]),
+                "qualified_name" => {
+                    let mut inner = child.walk();
+                    let mut tail = None;
+                    for part in child.children(&mut inner) {
+                        if part.kind() == "name" {
+                            tail = Some(&code[part.byte_range()]);
+                        }
+                    }
+                    return tail;
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn extract_variable_types_from_node<'a>(
         &self,
         node: Node,
@@ -1425,6 +1456,16 @@ impl PhpParser {
                     "type_list" | "named_type" | "primitive_type" => {
                         type_name = Some(&code[child.byte_range()]);
                     }
+                    // `?Foo` wraps the named type. Foo-or-null names one
+                    // class, so a call on it targets Foo.
+                    "optional_type" => {
+                        type_name = Self::named_type_text(child, code);
+                    }
+                    // `A|B` names no single class. The channel carries one
+                    // type per variable and the join takes the latest
+                    // binding, so emitting both members would silently pick
+                    // one — stay unbound.
+                    "union_type" => {}
                     "variable_name" => {
                         // The sigil stays: call rows carry the raw receiver
                         // token (`$h`), and the binding joins the call by
@@ -1439,6 +1480,24 @@ impl PhpParser {
             if let (Some(var), Some(typ)) = (var_name, type_name) {
                 let range = self.node_to_range(node);
                 variable_types.push((var, typ, range));
+            }
+        }
+
+        // `$x = new Foo();` — the most direct receiver-typing idiom in php.
+        // Only a constructor right-hand side carries a type without full
+        // inference; anything else stays unbound rather than guessed.
+        if node.kind() == "assignment_expression" {
+            if let (Some(left), Some(right)) = (
+                node.child_by_field_name("left"),
+                node.child_by_field_name("right"),
+            ) {
+                if left.kind() == "variable_name"
+                    && right.kind() == "object_creation_expression"
+                    && let Some(class) = Self::constructed_class_name(right, code)
+                {
+                    let range = self.node_to_range(node);
+                    variable_types.push((&code[left.byte_range()], class, range));
+                }
             }
         }
 
