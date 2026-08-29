@@ -59,6 +59,7 @@ fn parser_for(lang: Lang) -> Option<Parser> {
         Lang::Java => tree_sitter_java::LANGUAGE.into(),
         Lang::Kotlin => tree_sitter_kotlin_codanna::language(),
         Lang::Go => tree_sitter_go::LANGUAGE.into(),
+        Lang::Swift => tree_sitter_swift::LANGUAGE.into(),
         Lang::Js => return None,
     };
     parser.set_language(&language).ok()?;
@@ -117,6 +118,7 @@ fn is_scope_boundary(lang: Lang, node: Node<'_>) -> bool {
             "anonymous_function",
         ],
         Lang::Go => &["function_declaration", "method_declaration", "func_literal"],
+        Lang::Swift => &["function_declaration", "init_declaration", "lambda_literal"],
         Lang::Js => &[],
     };
     kinds.contains(&node.kind())
@@ -186,6 +188,7 @@ fn binding_sites<'a>(lang: Lang, node: Node<'a>, source: &str) -> Vec<(String, N
         Lang::Java => java_bindings(node, source),
         Lang::Kotlin => kotlin_bindings(node, source),
         Lang::Go => go_bindings(node, source),
+        Lang::Swift => swift_bindings(node, source),
         Lang::Js => Vec::new(),
     }
 }
@@ -351,6 +354,53 @@ fn composite_type(value: Node<'_>) -> Option<Node<'_>> {
     literal.child_by_field_name("type")
 }
 
+/// swift `property_declaration` interleaves name/annotation/value trios;
+/// `parameter` separates the argument label (field `external_name`) from
+/// the internal name and the type, which both sit in field `name`. A
+/// called type name is always `.init` in swift, so the initializer callee
+/// is binding evidence; the annotation outranks it.
+fn swift_bindings<'a>(node: Node<'a>, source: &str) -> Vec<(String, Node<'a>)> {
+    match node.kind() {
+        "property_declaration" => {
+            let mut out = Vec::new();
+            let mut name: Option<Node<'a>> = None;
+            let mut ty: Option<Node<'a>> = None;
+            for child in named_children(node) {
+                match child.kind() {
+                    "pattern" => {
+                        if let (Some(n), Some(t)) = (name, ty.take()) {
+                            out.push((text(n, source).to_string(), t));
+                        }
+                        name = child.child_by_field_name("bound_identifier");
+                    }
+                    "type_annotation" => {
+                        ty = child.child_by_field_name("name");
+                    }
+                    "call_expression" if ty.is_none() => {
+                        ty = named_children(child).into_iter().next();
+                    }
+                    _ => {}
+                }
+            }
+            if let (Some(n), Some(t)) = (name, ty) {
+                out.push((text(n, source).to_string(), t));
+            }
+            out
+        }
+        "parameter" => {
+            let mut cursor = node.walk();
+            let named: Vec<_> = node.children_by_field_name("name", &mut cursor).collect();
+            match named.as_slice() {
+                [ident, ty] if ident.kind() == "simple_identifier" => {
+                    vec![(text(*ident, source).to_string(), *ty)]
+                }
+                _ => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn type_name(lang: Lang, node: Node<'_>, source: &str) -> Option<String> {
     let first = || named_children(node).into_iter().next();
     match (lang, node.kind()) {
@@ -383,6 +433,29 @@ fn type_name(lang: Lang, node: Node<'_>, source: &str) -> Option<String> {
         (Lang::Kotlin, "nullable_type") => type_name(lang, first()?, source),
 
         (Lang::Go, "type_identifier") => Some(text(node, source).to_string()),
+
+        (Lang::Swift, "type_identifier") => Some(text(node, source).to_string()),
+        (Lang::Swift, "user_type") => named_children(node)
+            .into_iter()
+            .rfind(|c| c.kind() == "type_identifier")
+            .map(|n| text(n, source).to_string()),
+        (Lang::Swift, "optional_type") => {
+            type_name(lang, node.child_by_field_name("wrapped")?, source)
+        }
+        (Lang::Swift, "simple_identifier") => Some(text(node, source).to_string()),
+        // `Module.Type()` / `Type.init()`: the suffix names the type unless
+        // it is `init`, where the target does.
+        (Lang::Swift, "navigation_expression") => {
+            let target = node.child_by_field_name("target")?;
+            let suffix = node
+                .child_by_field_name("suffix")
+                .and_then(|sfx| sfx.child_by_field_name("suffix"))?;
+            if text(suffix, source) == "init" {
+                type_name(lang, target, source)
+            } else {
+                Some(text(suffix, source).to_string())
+            }
+        }
         (Lang::Go, "pointer_type" | "generic_type") => type_name(lang, first()?, source),
         (Lang::Go, "qualified_type") => type_name(lang, node.child_by_field_name("name")?, source),
 
@@ -397,6 +470,15 @@ pub fn enclosing_type(lang: Lang, parsed: &Parsed, target_line: usize) -> Option
     let chain = chain_at(parsed.root(), target_line);
     let source = &parsed.source;
     for node in chain.iter().rev() {
+        // swift folds class/struct/enum/extension into class_declaration;
+        // an extension's name is a user_type, a class's a type_identifier,
+        // and either way it is the owning type.
+        if lang == Lang::Swift {
+            if matches!(node.kind(), "class_declaration" | "protocol_declaration") {
+                return type_name(lang, node.child_by_field_name("name")?, source);
+            }
+            continue;
+        }
         // go has no class syntax: a method's owner is its receiver's type,
         // and a plain function has no owner at all.
         if lang == Lang::Go {
@@ -438,6 +520,7 @@ fn container_kinds(lang: Lang) -> &'static [&'static str] {
             "annotation_type_declaration",
         ],
         Lang::Kotlin => &["class_declaration", "object_declaration"],
+        Lang::Swift => &["class_declaration", "protocol_declaration"],
         Lang::Go | Lang::Js => &[],
     }
 }
@@ -468,6 +551,11 @@ pub fn supply_pairs(lang: Lang, parsed: &Parsed, mut emit: impl FnMut(String, St
 
 fn declared_name(lang: Lang, node: Node<'_>, source: &str) -> Option<String> {
     match lang {
+        Lang::Swift => container_kinds(lang)
+            .contains(&node.kind())
+            .then(|| node.child_by_field_name("name"))
+            .flatten()
+            .and_then(|n| type_name(lang, n, source)),
         Lang::Kotlin => container_kinds(lang)
             .contains(&node.kind())
             .then(|| child_kind(node, "type_identifier"))
@@ -563,6 +651,18 @@ fn supertypes(lang: Lang, node: Node<'_>, source: &str) -> Vec<String> {
                 f.kind() == "field_declaration" && f.child_by_field_name("name").is_none()
             }) {
                 if let Some(ty) = field.child_by_field_name("type") {
+                    push(ty);
+                }
+            }
+        }
+        Lang::Swift => {
+            // `: Base, Proto` on class/struct/enum, and on extensions,
+            // where it declares conformance of the extended type.
+            for spec in named_children(node)
+                .into_iter()
+                .filter(|c| c.kind() == "inheritance_specifier")
+            {
+                for ty in named_children(spec) {
                     push(ty);
                 }
             }
