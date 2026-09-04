@@ -392,6 +392,7 @@ fn initialize_registry(registry: &mut LanguageRegistry) {
     super::clojure::register(registry);
     super::lua::register(registry);
     super::swift::register(registry);
+    super::svelte::register(registry);
 }
 
 /// Get the global registry
