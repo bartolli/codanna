@@ -213,6 +213,9 @@ impl MmapVectorStorage {
             self.write_header(&mut file)?;
         }
 
+        // Buffer the payload instead of issuing one system call per float.
+        let mut file = io::BufWriter::new(file);
+
         // Write vectors
         for (id, vector) in vectors {
             // Write vector ID
