@@ -327,6 +327,58 @@ fn serve_stdio_legacy_handshake_unaffected() {
     );
 }
 
+/// Closing the MCP transport during a filesystem burst must not leave the
+/// platform watcher callback blocked on its event channel or keep stdio serve
+/// alive. macOS wake and large checkouts can produce this shape naturally.
+#[test]
+fn serve_stdio_watch_exits_during_large_change_burst() {
+    let workspace = seed_workspace();
+    let mut session = spawn_serve_watch(workspace.path());
+
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "watch-shutdown-test", "version": "0"}
+            }
+        })
+    )
+    .expect("write initialize");
+    writeln!(
+        session.stdin,
+        "{}",
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    )
+    .expect("write initialized notification");
+    session.stdin.flush().expect("flush handshake");
+    let init = recv_json(&session.rx);
+    assert_eq!(init["id"], 1, "initialize response id\n{init}");
+
+    // Let directory registration settle, then exceed the historical bounded
+    // event channel capacity before closing stdin.
+    std::thread::sleep(Duration::from_millis(250));
+    for i in 0..256 {
+        std::fs::write(
+            workspace.path().join("src").join(format!("burst_{i}.rs")),
+            format!("pub fn burst_{i}() -> usize {{ {i} }}\n"),
+        )
+        .expect("write burst fixture");
+    }
+
+    drop(session.stdin);
+    let status = wait_with_timeout(&mut session.child, Duration::from_secs(10));
+    assert!(
+        status.success(),
+        "serve exits cleanly during a filesystem burst, got {status:?}"
+    );
+}
+
 /// A gate-refused index still serves both generations degraded: the bare
 /// probe is answered by the stale server (heal command in instructions)
 /// and the process keeps the gate exit code at session end.

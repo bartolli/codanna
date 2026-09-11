@@ -18,6 +18,11 @@ use super::error::WatchError;
 use super::handler::{WatchAction, WatchHandler};
 use super::path_registry::PathRegistry;
 
+/// Above this size, reconcile a modification burst through the shared batch
+/// lane. This avoids one semantic-index save per path after large filesystem
+/// event bursts such as a macOS wake or branch checkout.
+const BATCH_MODIFICATION_THRESHOLD: usize = 32;
+
 /// Unified file watcher with pluggable handlers.
 ///
 /// Provides a single `notify::RecommendedWatcher` that routes file events
@@ -30,7 +35,7 @@ pub struct UnifiedWatcher {
     /// Shared debouncer for all file events.
     debouncer: Debouncer,
     /// Channel for receiving file events.
-    event_rx: mpsc::Receiver<notify::Result<Event>>,
+    event_rx: mpsc::UnboundedReceiver<notify::Result<Event>>,
     /// The underlying file watcher.
     _watcher: notify::RecommendedWatcher,
     /// Notification broadcaster for MCP integration.
@@ -144,13 +149,16 @@ impl UnifiedWatcher {
                         // remove + create to the shared batch lane in one
                         // wave so discovery can pair them.
                         if let Some((removed, modified)) = self.debouncer.take_settled_burst() {
-                            self.process_removal_wave(removed, modified).await;
+                            self.process_change_wave(removed, modified).await;
                         }
                     } else {
                         let ready = self.debouncer.take_ready();
+                        let ready_count = ready.len();
                         let (vanished, alive): (Vec<PathBuf>, Vec<PathBuf>) =
                             ready.into_iter().partition(|path| !path.exists());
-                        if vanished.is_empty() {
+                        if ready_count >= BATCH_MODIFICATION_THRESHOLD {
+                            self.process_change_wave(vanished, alive).await;
+                        } else if vanished.is_empty() {
                             for path in alive {
                                 self.process_modification(&path).await;
                             }
@@ -388,14 +396,14 @@ impl UnifiedWatcher {
         }
     }
 
-    /// Process one settled burst that contains removal observations.
+    /// Process one settled removal wave or a large modification burst.
     ///
     /// Roots owned by a batch-sync-covered handler run the shared batch
     /// incremental lane: its discovery re-derives new/modified/deleted
     /// from disk-vs-index truth and pairs renames -- the one boundary
     /// all incremental entry points share. Paths outside every synced
     /// root keep per-file semantics.
-    async fn process_removal_wave(&mut self, removed: Vec<PathBuf>, modified: Vec<PathBuf>) {
+    async fn process_change_wave(&mut self, removed: Vec<PathBuf>, modified: Vec<PathBuf>) {
         let mut roots: Vec<PathBuf> = Vec::new();
         for path in removed.iter().chain(modified.iter()) {
             if let Some(root) = self
@@ -828,12 +836,16 @@ impl UnifiedWatcherBuilder {
             .index_path
             .unwrap_or_else(|| workspace_root.join(".codanna/index"));
 
-        // Create channel for events
-        let (tx, rx) = mpsc::channel(100);
+        // The notify callback runs on the platform watcher thread. It must
+        // never block on Tokio: a full bounded channel can otherwise pin the
+        // macOS FSEvents callback during an event storm and prevent clean
+        // watcher teardown. The async side debounces by path and batches large
+        // bursts before indexing, keeping the queue short in normal use.
+        let (tx, rx) = mpsc::unbounded_channel();
 
         // Create the notify watcher
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            let _ = tx.blocking_send(res);
+            let _ = tx.send(res);
         })?;
 
         Ok(UnifiedWatcher {

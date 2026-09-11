@@ -280,6 +280,8 @@ async fn run_stdio_server(
     let broadcaster = Arc::new(crate::mcp::notifications::NotificationBroadcaster::new(100));
     let server =
         crate::mcp::CodeIntelligenceServer::new(facade).with_broadcaster(broadcaster.clone());
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let mut background_tasks = Vec::new();
 
     // Load document store and attach to server (shared with watcher later)
     let document_store_arc = crate::documents::load_from_settings(&config);
@@ -301,11 +303,15 @@ async fn run_stdio_server(
             settings.clone(),
             Duration::from_secs(actual_watch_interval),
         );
+        let watcher_cancellation = cancellation.clone();
 
         // Spawn watcher in background
-        tokio::spawn(async move {
-            watcher.watch().await;
-        });
+        background_tasks.push(tokio::spawn(async move {
+            tokio::select! {
+                _ = watcher.watch() => {}
+                _ = watcher_cancellation.cancelled() => {}
+            }
+        }));
 
         eprintln!("Hot-reload watcher started");
     }
@@ -364,22 +370,30 @@ async fn run_stdio_server(
         // Build and start the unified watcher
         match builder.build() {
             Ok(unified_watcher) => {
-                tokio::spawn(async move {
-                    if let Err(e) = unified_watcher.watch().await {
-                        eprintln!("Unified watcher error: {e}");
+                let watcher_cancellation = cancellation.clone();
+                background_tasks.push(tokio::spawn(async move {
+                    tokio::select! {
+                        result = unified_watcher.watch() => {
+                            if let Err(e) = result {
+                                eprintln!("Unified watcher error: {e}");
+                            }
+                        }
+                        _ = watcher_cancellation.cancelled() => {}
                     }
-                });
+                }));
                 eprintln!(
                     "Unified watcher started (debounce: {debounce_ms}ms, config: {})",
                     crate::parsing::paths::render_absolute_path(&settings_path).display()
                 );
 
                 // Start notification listener to forward events to MCP client
-                tokio::spawn(async move {
-                    notification_server
-                        .start_notification_listener(notification_receiver)
-                        .await;
-                });
+                let notification_cancellation = cancellation.clone();
+                background_tasks.push(tokio::spawn(async move {
+                    tokio::select! {
+                        _ = notification_server.start_notification_listener(notification_receiver) => {}
+                        _ = notification_cancellation.cancelled() => {}
+                    }
+                }));
             }
             Err(e) => {
                 eprintln!("Failed to start unified watcher: {e}");
@@ -398,16 +412,42 @@ async fn run_stdio_server(
         Ok(service) => service,
         Err(e) => {
             eprintln!("Failed to start MCP server: {e}");
+            stop_stdio_background_tasks(cancellation, background_tasks).await;
             drop(serve_lock);
             std::process::exit(1);
         }
     };
 
     // Wait for server to complete
-    if let Err(e) = service.waiting().await {
+    let service_result = service.waiting().await;
+    stop_stdio_background_tasks(cancellation, background_tasks).await;
+    if let Err(e) = service_result {
         eprintln!("MCP server error: {e}");
         drop(serve_lock);
         std::process::exit(1);
+    }
+}
+
+/// Cancel stdio-owned background tasks and give them one shared grace window
+/// to drop platform watcher resources before aborting any stragglers.
+async fn stop_stdio_background_tasks(
+    cancellation: tokio_util::sync::CancellationToken,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+) {
+    cancellation.cancel();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut aborted = Vec::new();
+    for mut task in tasks {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() || tokio::time::timeout(remaining, &mut task).await.is_err() {
+            task.abort();
+            aborted.push(task);
+        }
+    }
+
+    for task in aborted {
+        let _ = task.await;
     }
 }
 
