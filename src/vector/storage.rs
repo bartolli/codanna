@@ -308,6 +308,7 @@ impl MmapVectorStorage {
         let dimension = self.dimension.get();
         let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;
         let mut vectors = Vec::with_capacity(ids.len());
+        let mut remaining = ids.clone();
         let mut offset = HEADER_SIZE;
 
         while offset + vector_size <= mmap.len() {
@@ -321,7 +322,7 @@ impl MmapVectorStorage {
                 VectorStorageError::InvalidFormat("Invalid vector ID".to_string())
             })?;
 
-            if ids.contains(&id) {
+            if remaining.remove(&id) {
                 let mut vector = Vec::with_capacity(dimension);
                 let data_offset = offset + BYTES_PER_ID;
                 for i in 0..dimension {
@@ -335,7 +336,7 @@ impl MmapVectorStorage {
                 }
                 vectors.push((id, vector));
 
-                if vectors.len() == ids.len() {
+                if remaining.is_empty() {
                     break;
                 }
             }
@@ -704,6 +705,43 @@ mod tests {
         assert_eq!(found[0], test_data[1]);
         assert_eq!(found[1], test_data[10]);
         assert_eq!(found[2], test_data[19]);
+    }
+
+    #[test]
+    fn hardening_batch_lookup_returns_first_duplicate_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+
+        let first = [
+            (VectorId::new(1).unwrap(), vec![1.0f32, 1.0]),
+            (VectorId::new(2).unwrap(), vec![2.0f32, 2.0]),
+        ];
+        let refs: Vec<(VectorId, &[f32])> = first
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&refs).unwrap();
+
+        let second = [
+            (VectorId::new(1).unwrap(), vec![10.0f32, 10.0]),
+            (VectorId::new(3).unwrap(), vec![3.0f32, 3.0]),
+        ];
+        let refs: Vec<(VectorId, &[f32])> = second
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&refs).unwrap();
+
+        let requested = [VectorId::new(1).unwrap(), VectorId::new(3).unwrap()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let found = storage.read_vectors(&requested).unwrap();
+
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0], first[0]);
+        assert_eq!(found[1], second[1]);
     }
 
     #[test]
