@@ -16,6 +16,7 @@
 //! - Memory usage: 4 bytes per dimension per vector
 //! - Startup time: <1ms (mmap is lazy-loaded by OS)
 
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -286,6 +287,65 @@ impl MmapVectorStorage {
         None
     }
 
+    /// Reads a requested set of vectors in a single sequential mmap scan.
+    ///
+    /// Point lookups are linear in the number of stored records. Search paths
+    /// that need many candidate vectors should use this method so the file is
+    /// traversed once instead of once per candidate. Missing IDs are ignored.
+    pub fn read_vectors(
+        &mut self,
+        ids: &HashSet<VectorId>,
+    ) -> Result<Vec<(VectorId, Vec<f32>)>, VectorStorageError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.ensure_mapped()?;
+        let mmap = self.mmap.as_ref().ok_or_else(|| {
+            VectorStorageError::InvalidFormat("Vector storage is not mapped".to_string())
+        })?;
+
+        let dimension = self.dimension.get();
+        let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;
+        let mut vectors = Vec::with_capacity(ids.len());
+        let mut offset = HEADER_SIZE;
+
+        while offset + vector_size <= mmap.len() {
+            let id_bytes = [
+                mmap[offset],
+                mmap[offset + 1],
+                mmap[offset + 2],
+                mmap[offset + 3],
+            ];
+            let id = VectorId::from_bytes(id_bytes).ok_or_else(|| {
+                VectorStorageError::InvalidFormat("Invalid vector ID".to_string())
+            })?;
+
+            if ids.contains(&id) {
+                let mut vector = Vec::with_capacity(dimension);
+                let data_offset = offset + BYTES_PER_ID;
+                for i in 0..dimension {
+                    let bytes_offset = data_offset + i * BYTES_PER_F32;
+                    vector.push(f32::from_le_bytes([
+                        mmap[bytes_offset],
+                        mmap[bytes_offset + 1],
+                        mmap[bytes_offset + 2],
+                        mmap[bytes_offset + 3],
+                    ]));
+                }
+                vectors.push((id, vector));
+
+                if vectors.len() == ids.len() {
+                    break;
+                }
+            }
+
+            offset += vector_size;
+        }
+
+        Ok(vectors)
+    }
+
     /// Reads all vectors from storage.
     ///
     /// This is useful for operations that need to process all vectors,
@@ -480,6 +540,14 @@ impl ConcurrentVectorStorage {
         self.inner.write().read_vector(id)
     }
 
+    /// Reads a requested set of vectors with one storage lock and one mmap scan.
+    pub fn read_vectors(
+        &self,
+        ids: &HashSet<VectorId>,
+    ) -> Result<Vec<(VectorId, Vec<f32>)>, VectorStorageError> {
+        self.inner.write().read_vectors(ids)
+    }
+
     /// Writes a batch of vectors with exclusive access.
     pub fn write_batch(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
         self.inner.write().write_batch(vectors).map_err(|e| {
@@ -604,6 +672,38 @@ mod tests {
 
         // Non-existent vector should return None
         assert!(storage.read_vector(VectorId::new(999).unwrap()).is_none());
+    }
+
+    #[test]
+    fn hardening_batch_lookup_reads_requested_ids_in_one_scan() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+
+        let test_data: Vec<_> = (1..=20)
+            .map(|i| (VectorId::new(i).unwrap(), vec![i as f32, (i * 2) as f32]))
+            .collect();
+        let vectors: Vec<(VectorId, &[f32])> = test_data
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&vectors).unwrap();
+
+        let requested = [
+            VectorId::new(2).unwrap(),
+            VectorId::new(11).unwrap(),
+            VectorId::new(20).unwrap(),
+            VectorId::new(999).unwrap(),
+        ]
+        .into_iter()
+        .collect::<HashSet<_>>();
+
+        let found = storage.read_vectors(&requested).unwrap();
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[0], test_data[1]);
+        assert_eq!(found[1], test_data[10]);
+        assert_eq!(found[2], test_data[19]);
     }
 
     #[test]
