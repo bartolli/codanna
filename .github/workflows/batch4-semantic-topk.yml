@@ -1,0 +1,61 @@
+name: Batch 4 semantic top-k patch
+
+on:
+  push:
+    branches:
+      - perf/semantic-top-k
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/semantic-top-k
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply top-k selection optimization
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("src/semantic/simple.rs")
+          s = path.read_text()
+          old = '''        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));\n        similarities.truncate(limit);\n'''
+          if "fn retain_top_k(" not in s:
+              count = s.count(old)
+              if count < 4:
+                  raise SystemExit(f"expected at least 4 semantic sort/truncate sites, found {count}")
+              s = s.replace(old, '''        retain_top_k(&mut similarities, limit);\n''')
+
+              marker = '''/// Calculate cosine similarity between two vectors\n'''
+              helper = '''/// Retains only the highest-scoring results without fully sorting the entire corpus.\n///\n/// Semantic search commonly asks for a small `limit` from a large embedding set.\n/// Partitioning first keeps selection O(n), then only the retained prefix is sorted.\nfn retain_top_k(similarities: &mut Vec<(SymbolId, f32)>, limit: usize) {\n    if limit == 0 {\n        similarities.clear();\n        return;\n    }\n\n    if similarities.len() > limit {\n        similarities.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));\n        similarities.truncate(limit);\n    }\n\n    similarities.sort_by(|a, b| b.1.total_cmp(&a.1));\n}\n\n'''
+              if marker not in s:
+                  raise SystemExit("cosine marker missing")
+              s = s.replace(marker, helper + marker, 1)
+
+              test_marker = '''    #[test]\n    fn test_cosine_similarity() {\n'''
+              test = '''    #[test]\n    fn hardening_top_k_selection_matches_full_sort() {\n        let mut results: Vec<(SymbolId, f32)> = (1..=200u32)\n            .map(|id| {\n                let score = ((id * 37) % 101) as f32 / 100.0;\n                (SymbolId::new(id).unwrap(), score)\n            })\n            .collect();\n        let mut expected = results.clone();\n        expected.sort_by(|a, b| b.1.total_cmp(&a.1));\n        expected.truncate(10);\n\n        retain_top_k(&mut results, 10);\n\n        assert_eq!(results.len(), 10);\n        let actual_scores: Vec<_> = results.iter().map(|(_, score)| *score).collect();\n        let expected_scores: Vec<_> = expected.iter().map(|(_, score)| *score).collect();\n        assert_eq!(actual_scores, expected_scores);\n    }\n\n    #[test]\n    fn hardening_top_k_zero_limit_returns_no_results() {\n        let mut results = vec![(SymbolId::new(1).unwrap(), 0.9)];\n        retain_top_k(&mut results, 0);\n        assert!(results.is_empty());\n    }\n\n'''
+              if test_marker not in s:
+                  raise SystemExit("test marker missing")
+              s = s.replace(test_marker, test + test_marker, 1)
+              path.write_text(s)
+      - name: Format and test semantic search
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test semantic::simple::tests::hardening_top_k --lib
+          cargo test semantic::simple::tests::test_cosine_similarity --lib
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/semantic/simple.rs
+          git commit -m "perf: select semantic top-k before sorting"
+          git push origin HEAD:perf/semantic-top-k
