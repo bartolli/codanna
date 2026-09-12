@@ -143,6 +143,14 @@ impl SemanticVectorStorage {
         // Convert VectorId back to SymbolId without assuming on-disk IDs are valid.
         let mut result = Vec::with_capacity(vectors.len());
         for (vector_id, embedding) in vectors {
+            self.dimension.validate_vector(&embedding).map_err(|e| {
+                SemanticSearchError::StorageError {
+                    message: format!("Semantic vector storage contains invalid embedding data: {e}"),
+                    suggestion: "The semantic index is corrupt or was produced by an older unsafe build; rebuild the semantic index"
+                        .to_string(),
+                }
+            })?;
+
             let raw = vector_id.get();
             let symbol_id = SymbolId::new(raw).ok_or_else(|| SemanticSearchError::InvalidId {
                 id: raw,
@@ -452,5 +460,34 @@ mod tests {
         let err = SemanticVectorStorage::open(temp_dir.path())
             .expect_err("truncated vector generation must be rejected");
         assert!(err.to_string().contains("inconsistent"));
+    }
+
+    #[test]
+    fn hardening_semantic_storage_rejects_nonfinite_legacy_vector() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let temp_dir = TempDir::new().unwrap();
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage =
+            SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
+        storage
+            .save_embedding(SymbolId::new(1).unwrap(), &[1.0, 2.0])
+            .unwrap();
+        drop(storage);
+
+        // Simulate a pre-hardening/corrupted generation by replacing the first
+        // vector component in-place. Header(16) + VectorId(4) = first f32.
+        let path = temp_dir.path().join("segment_0.vec");
+        let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.seek(SeekFrom::Start(20)).unwrap();
+        file.write_all(&f32::NAN.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+        drop(file);
+
+        let mut storage = SemanticVectorStorage::open(temp_dir.path()).unwrap();
+        let err = storage
+            .load_all()
+            .expect_err("non-finite persisted embedding must be rejected");
+        assert!(err.to_string().contains("invalid embedding data"));
     }
 }

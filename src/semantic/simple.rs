@@ -272,7 +272,7 @@ impl SimpleSemanticSearch {
                 }
             })
             .collect();
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
         similarities.truncate(limit);
         Ok(similarities)
     }
@@ -319,7 +319,7 @@ impl SimpleSemanticSearch {
             .into_iter()
             .map(|(id, emb)| (*id, cosine_similarity(query_embedding, emb)))
             .collect();
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
         similarities.truncate(limit);
         Ok(similarities)
     }
@@ -358,7 +358,7 @@ impl SimpleSemanticSearch {
             .collect();
 
         // Sort by similarity descending
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Return top results
         similarities.truncate(limit);
@@ -417,7 +417,7 @@ impl SimpleSemanticSearch {
             .collect();
 
         // Sort by similarity descending
-        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
 
         // Return top results
         similarities.truncate(limit);
@@ -777,17 +777,27 @@ impl SimpleSemanticSearch {
     }
 }
 
-/// Calculate cosine similarity between two vectors
+/// Calculate cosine similarity between two vectors.
+///
+/// Semantic ranking must never emit a non-orderable score. Malformed direct
+/// callers or legacy in-memory vectors containing NaN/±infinity therefore
+/// degrade to zero similarity instead of propagating NaN into sorting.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let magnitude_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let magnitude_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    if magnitude_a == 0.0 || magnitude_b == 0.0 {
+    if !dot_product.is_finite()
+        || !magnitude_a.is_finite()
+        || !magnitude_b.is_finite()
+        || magnitude_a == 0.0
+        || magnitude_b == 0.0
+    {
         return 0.0;
     }
 
-    dot_product / (magnitude_a * magnitude_b)
+    let score = dot_product / (magnitude_a * magnitude_b);
+    if score.is_finite() { score } else { 0.0 }
 }
 
 /// Remove leftover staging directories owned by no live process: the
@@ -1112,5 +1122,35 @@ mod tests {
         // Opposite vectors
         let v4 = vec![-1.0, 0.0, 0.0];
         assert!((cosine_similarity(&v1, &v4) - (-1.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn hardening_cosine_similarity_never_returns_nonfinite_score() {
+        let finite = [1.0, 0.0];
+        for malformed in [
+            [f32::NAN, 1.0],
+            [f32::INFINITY, 1.0],
+            [f32::NEG_INFINITY, 1.0],
+        ] {
+            let score = cosine_similarity(&finite, &malformed);
+            assert!(score.is_finite());
+            assert_eq!(score, 0.0);
+        }
+    }
+
+    #[test]
+    fn hardening_semantic_search_handles_nonfinite_direct_query_without_panic() {
+        let mut search = SimpleSemanticSearch::new_empty(2, "test-remote");
+        search.store_embeddings(vec![(
+            SymbolId::new(1).unwrap(),
+            vec![1.0, 0.0],
+            "rust".to_string(),
+        )]);
+
+        let results = search
+            .search_with_embedding(&[f32::NAN, 1.0], 10, -1.0)
+            .expect("malformed direct query must degrade instead of panicking");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, 0.0);
     }
 }
