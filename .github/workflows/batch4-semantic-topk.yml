@@ -43,7 +43,7 @@ jobs:
               if count != 4:
                   raise SystemExit(f"expected 4 semantic ranking sites, patched {count}")
 
-              marker = '''/// Calculate cosine similarity between two vectors\n'''
+              marker = '''/// Calculate cosine similarity between two vectors.\n'''
               helper = '''/// Retains only the highest-scoring results without fully sorting the entire corpus.\n///\n/// Semantic search commonly asks for a small `limit` from a large embedding set.\n/// Partitioning first keeps selection O(n), then only the retained prefix is sorted.\nfn retain_top_k(similarities: &mut Vec<(SymbolId, f32)>, limit: usize) {\n    if limit == 0 {\n        similarities.clear();\n        return;\n    }\n\n    if similarities.len() > limit {\n        similarities.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));\n        similarities.truncate(limit);\n    }\n\n    similarities.sort_by(|a, b| b.1.total_cmp(&a.1));\n}\n\n'''
               if marker not in s:
                   raise SystemExit("cosine marker missing")
