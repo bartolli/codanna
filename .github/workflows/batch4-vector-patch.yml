@@ -1,0 +1,76 @@
+name: Batch 4 vector patch
+
+on:
+  push:
+    branches:
+      - perf/vector-batch-lookup
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/vector-batch-lookup
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply vector batch lookup optimization
+        shell: python
+        run: |
+          from pathlib import Path
+
+          storage = Path("src/vector/storage.rs")
+          s = storage.read_text()
+          if "pub fn read_vectors(" not in s:
+              s = s.replace(
+                  "use std::fs::{File, OpenOptions};\n",
+                  "use std::collections::HashSet;\nuse std::fs::{File, OpenOptions};\n",
+                  1,
+              )
+              marker = '''    /// Reads all vectors from storage.\n'''
+              method = '''    /// Reads a requested set of vectors in a single sequential mmap scan.\n    ///\n    /// Point lookups are linear in the number of stored records. Search paths\n    /// that need many candidate vectors should use this method so the file is\n    /// traversed once instead of once per candidate. Missing IDs are ignored.\n    pub fn read_vectors(\n        &mut self,\n        ids: &HashSet<VectorId>,\n    ) -> Result<Vec<(VectorId, Vec<f32>)>, VectorStorageError> {\n        if ids.is_empty() {\n            return Ok(Vec::new());\n        }\n\n        self.ensure_mapped()?;\n        let mmap = self.mmap.as_ref().ok_or_else(|| {\n            VectorStorageError::InvalidFormat("Vector storage is not mapped".to_string())\n        })?;\n\n        let dimension = self.dimension.get();\n        let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;\n        let mut vectors = Vec::with_capacity(ids.len());\n        let mut offset = HEADER_SIZE;\n\n        while offset + vector_size <= mmap.len() {\n            let id_bytes = [\n                mmap[offset],\n                mmap[offset + 1],\n                mmap[offset + 2],\n                mmap[offset + 3],\n            ];\n            let id = VectorId::from_bytes(id_bytes).ok_or_else(|| {\n                VectorStorageError::InvalidFormat("Invalid vector ID".to_string())\n            })?;\n\n            if ids.contains(&id) {\n                let mut vector = Vec::with_capacity(dimension);\n                let data_offset = offset + BYTES_PER_ID;\n                for i in 0..dimension {\n                    let bytes_offset = data_offset + i * BYTES_PER_F32;\n                    vector.push(f32::from_le_bytes([\n                        mmap[bytes_offset],\n                        mmap[bytes_offset + 1],\n                        mmap[bytes_offset + 2],\n                        mmap[bytes_offset + 3],\n                    ]));\n                }\n                vectors.push((id, vector));\n\n                if vectors.len() == ids.len() {\n                    break;\n                }\n            }\n\n            offset += vector_size;\n        }\n\n        Ok(vectors)\n    }\n\n'''
+              if marker not in s:
+                  raise SystemExit("storage insertion marker missing")
+              s = s.replace(marker, method + marker, 1)
+
+              concurrent_marker = '''    /// Writes a batch of vectors with exclusive access.\n'''
+              concurrent_method = '''    /// Reads a requested set of vectors with one storage lock and one mmap scan.\n    pub fn read_vectors(\n        &self,\n        ids: &HashSet<VectorId>,\n    ) -> Result<Vec<(VectorId, Vec<f32>)>, VectorStorageError> {\n        self.inner.write().read_vectors(ids)\n    }\n\n'''
+              if concurrent_marker not in s:
+                  raise SystemExit("concurrent insertion marker missing")
+              s = s.replace(concurrent_marker, concurrent_method + concurrent_marker, 1)
+
+              test_marker = '''    #[test]\n    fn test_read_all_vectors() {\n'''
+              test = '''    #[test]\n    fn hardening_batch_lookup_reads_requested_ids_in_one_scan() {\n        let temp_dir = TempDir::new().unwrap();\n        let segment = SegmentOrdinal::new(0);\n        let dimension = VectorDimension::new(2).unwrap();\n        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();\n\n        let test_data: Vec<_> = (1..=20)\n            .map(|i| (VectorId::new(i).unwrap(), vec![i as f32, (i * 2) as f32]))\n            .collect();\n        let vectors: Vec<(VectorId, &[f32])> = test_data\n            .iter()\n            .map(|(id, vector)| (*id, vector.as_slice()))\n            .collect();\n        storage.write_batch(&vectors).unwrap();\n\n        let requested = [\n            VectorId::new(2).unwrap(),\n            VectorId::new(11).unwrap(),\n            VectorId::new(20).unwrap(),\n            VectorId::new(999).unwrap(),\n        ]\n        .into_iter()\n        .collect::<HashSet<_>>();\n\n        let found = storage.read_vectors(&requested).unwrap();\n        assert_eq!(found.len(), 3);\n        assert_eq!(found[0], test_data[1]);\n        assert_eq!(found[1], test_data[10]);\n        assert_eq!(found[2], test_data[19]);\n    }\n\n'''
+              if test_marker not in s:
+                  raise SystemExit("storage test marker missing")
+              s = s.replace(test_marker, test + test_marker, 1)
+              storage.write_text(s)
+
+          engine = Path("src/vector/engine.rs")
+          e = engine.read_text()
+          old = '''        // Collect all vectors in the nearest cluster\n        let mut candidates = Vec::new();\n        for (vector_id, cluster_id) in &self.cluster_assignments {\n            if *cluster_id == nearest_cluster {\n                // Get vector from storage\n                if let Some(vector) = self.storage.read_vector(*vector_id) {\n                    let similarity = cosine_similarity(query, &vector);\n                    // Convert similarity to score (already in [0, 1] range)\n                    if let Ok(score) = Score::new(similarity) {\n                        candidates.push((*vector_id, score));\n                    }\n                }\n            }\n        }\n'''
+          new = '''        // Collect candidate IDs first, then fetch the whole cluster in one mmap scan.\n        // The old point-lookup loop scanned the vector file from the beginning for\n        // every candidate, making a search roughly O(cluster_size * total_vectors).\n        let candidate_ids = self\n            .cluster_assignments\n            .iter()\n            .filter_map(|(vector_id, cluster_id)| {\n                (*cluster_id == nearest_cluster).then_some(*vector_id)\n            })\n            .collect::<std::collections::HashSet<_>>();\n\n        let vectors = self.storage.read_vectors(&candidate_ids).map_err(|e| {\n            VectorError::Storage(std::io::Error::other(format!(\n                "Failed to read search candidates: {e}"\n            )))\n        })?;\n\n        let mut candidates = Vec::with_capacity(vectors.len());\n        for (vector_id, vector) in vectors {\n            let similarity = cosine_similarity(query, &vector);\n            if let Ok(score) = Score::new(similarity) {\n                candidates.push((vector_id, score));\n            }\n        }\n'''
+          if old in e:
+              e = e.replace(old, new, 1)
+              engine.write_text(e)
+          elif "candidate_ids = self" not in e:
+              raise SystemExit("engine search block missing")
+      - name: Format and test focused vector code
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test vector::storage::tests --lib
+          cargo test vector::engine::tests --lib
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vector/storage.rs src/vector/engine.rs
+          git commit -m "perf: batch vector candidate lookups"
+          git push origin HEAD:perf/vector-batch-lookup
