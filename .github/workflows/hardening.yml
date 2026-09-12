@@ -40,6 +40,19 @@ jobs:
       - name: Run watcher hardening tests
         run: cargo test hardening_watcher_ --all-features -- --nocapture
 
+  macos-watcher:
+    name: macOS watcher witness
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile macOS-specific watcher path
+        run: cargo check --all-features
+      - name: Run watcher hardening tests
+        run: cargo test hardening_watcher_ --all-features -- --nocapture
+
   stress:
     name: Stress and recovery smoke
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

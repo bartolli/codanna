@@ -100,10 +100,16 @@ impl UnifiedWatcher {
             );
         }
 
-        // Watch all directories
+        // FSEvents restarts its stream whenever a non-recursive path is added
+        // and has a practical path-count ceiling. On macOS the registered
+        // handler roots below are watched recursively, so thousands of
+        // individual directory registrations are both redundant and harmful.
+        #[cfg(not(target_os = "macos"))]
         for dir in new_dirs {
             self.watch_directory(&dir)?;
         }
+        #[cfg(target_os = "macos")]
+        let _ = new_dirs;
 
         self.register_handler_roots().await;
 
@@ -212,6 +218,34 @@ impl UnifiedWatcher {
         }
     }
 
+    /// Register a handler root. macOS uses one recursive FSEvents root
+    /// instead of thousands of NonRecursive paths; other platforms retain the
+    /// existing per-directory strategy.
+    fn watch_handler_root(&mut self, root: &PathBuf) -> Result<(), WatchError> {
+        #[cfg(target_os = "macos")]
+        {
+            let watch_path = if root.is_absolute() {
+                root.clone()
+            } else {
+                self.workspace_root.join(root)
+            };
+            match self._watcher.watch(&watch_path, RecursiveMode::Recursive) {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    tracing::warn!(
+                        "[watcher] failed to watch recursive root {}: {e}",
+                        crate::parsing::paths::render_absolute_path(&watch_path).display()
+                    );
+                    Ok(())
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.watch_directory(root)
+        }
+    }
+
     /// Handle an incoming file event.
     async fn handle_event(&mut self, event: Event) {
         // Access events observe state; they never change it. inotify
@@ -307,7 +341,7 @@ impl UnifiedWatcher {
         }
         for root in &roots {
             if self.registry.add_watch_dir(root.clone()) {
-                if let Err(e) = self.watch_directory(root) {
+                if let Err(e) = self.watch_handler_root(root) {
                     tracing::warn!("[watcher] failed to watch root: {e}");
                 }
             }
@@ -335,9 +369,12 @@ impl UnifiedWatcher {
 
         for dir in dirs {
             if self.registry.add_watch_dir(dir.clone()) {
+                #[cfg(not(target_os = "macos"))]
                 if let Err(e) = self.watch_directory(&dir) {
                     tracing::warn!("[watcher] failed to watch created dir: {e}");
                 }
+                // macOS recursive handler-root watches already cover the new
+                // subtree; registry membership is still tracked for routing.
             }
         }
         if !files.is_empty() {
@@ -715,12 +752,16 @@ impl UnifiedWatcher {
             .cloned()
             .collect();
 
-        // Watch any new directories
+        // Watch any new directories. Recursive handler-root watches already
+        // cover them on macOS.
+        #[cfg(not(target_os = "macos"))]
         for dir in dirs_to_watch {
             if let Err(e) = self.watch_directory(&dir) {
                 tracing::warn!("[watcher] failed to watch new directory: {e}");
             }
         }
+        #[cfg(target_os = "macos")]
+        let _ = dirs_to_watch;
 
         // Config reload can add or drop roots; re-register them.
         self.register_handler_roots().await;
