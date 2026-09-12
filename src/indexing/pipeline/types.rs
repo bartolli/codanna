@@ -882,15 +882,17 @@ impl SymbolLookupCache {
         let count = index.document_count().unwrap_or(0) as usize;
         let cache = Self::with_capacity(count);
 
-        // Load all symbols from Tantivy
-        // Use a large limit to get all symbols
-        let symbols = index
-            .get_all_symbols(1_000_000)
+        // Visit every symbol row without a fixed result cap. `get_all_symbols`
+        // is a search-oriented API with a caller supplied limit; using it here
+        // silently truncated relationship resolution once an index crossed that
+        // limit. The visitor streams rows directly into the cache and avoids an
+        // intermediate Vec proportional to the whole index.
+        index
+            .for_each_symbol::<crate::storage::StorageError>(|symbol| {
+                cache.insert(symbol);
+                Ok(())
+            })
             .map_err(|e| PipelineError::Index(crate::IndexError::Storage(e)))?;
-
-        for symbol in symbols {
-            cache.insert(symbol);
-        }
 
         Ok(cache)
     }
