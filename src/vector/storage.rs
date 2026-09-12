@@ -1,8 +1,8 @@
 //! Memory-mapped vector storage for high-performance vector access.
 //!
 //! This module provides efficient storage and retrieval of embedding vectors
-//! using memory-mapped files. The implementation achieves <1μs vector access
-//! times by avoiding serialization overhead and leveraging OS page cache.
+//! using memory-mapped files. The implementation achieves <1μs access times
+//! by avoiding serialization overhead and leveraging OS page cache.
 //!
 //! # Storage Format
 //!
@@ -160,31 +160,29 @@ impl MmapVectorStorage {
 
     /// Writes a batch of vectors to storage.
     ///
-    /// This is more efficient than writing vectors one by one as it
-    /// minimizes file operations and can pre-allocate space.
+    /// The input vectors are already borrowed slices. Validate and stream those
+    /// slices directly instead of cloning every embedding into a second owned
+    /// batch. Semantic persistence can contain hundreds of thousands of vectors,
+    /// so an O(batch bytes) clone here materially increases peak RSS.
     pub fn write_batch(
         &mut self,
         vectors: &[(VectorId, &[f32])],
     ) -> Result<(), VectorStorageError> {
-        // Convert to owned for validation and writing
-        let owned_vectors: Vec<(VectorId, Vec<f32>)> = vectors
-            .iter()
-            .map(|(id, vec)| (*id, vec.to_vec()))
-            .collect();
-        self.validate_vectors(&owned_vectors)?;
+        self.validate_vectors(vectors)?;
         self.ensure_storage_ready()?;
         // Drop the map before any file write: mutating a mapped file is
         // undefined behavior per the memmap2 contract. The next read remaps.
         self.invalidate_cache();
-        self.append_vectors(&owned_vectors)?;
+        self.append_vectors(vectors)?;
         self.update_metadata(vectors.len())?;
         Ok(())
     }
 
-    /// Validates that all vectors have the correct dimension.
-    fn validate_vectors(&self, vectors: &[(VectorId, Vec<f32>)]) -> Result<(), VectorStorageError> {
-        for (_, vec) in vectors {
-            self.dimension.validate_vector(vec)?;
+    /// Validates that all vectors have the correct dimension without taking
+    /// ownership of their backing storage.
+    fn validate_vectors(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
+        for (_, vector) in vectors {
+            self.dimension.validate_vector(vector)?;
         }
         Ok(())
     }
@@ -197,8 +195,9 @@ impl MmapVectorStorage {
         Ok(())
     }
 
-    /// Appends vectors to the storage file.
-    fn append_vectors(&self, vectors: &[(VectorId, Vec<f32>)]) -> Result<(), VectorStorageError> {
+    /// Appends borrowed vectors to the storage file without materializing a
+    /// duplicate owned batch.
+    fn append_vectors(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
         debug_assert!(
             self.mmap.is_none(),
             "file must not be written while mapped (memmap2 UB)"
@@ -219,7 +218,7 @@ impl MmapVectorStorage {
             file.write_all(&id.to_bytes())?;
 
             // Write vector data
-            for &value in vector {
+            for &value in *vector {
                 file.write_all(&value.to_le_bytes())?;
             }
         }
@@ -242,7 +241,7 @@ impl MmapVectorStorage {
 
     /// Reads a vector by its ID.
     ///
-    /// Returns `None` if the vector is not found.
+    /// Returns `None` if the vector doesn't exist.
     /// This operation is extremely fast (<1μs) due to memory mapping.
     #[must_use]
     pub fn read_vector(&mut self, id: VectorId) -> Option<Vec<f32>> {
