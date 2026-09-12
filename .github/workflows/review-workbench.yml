@@ -3,10 +3,14 @@ name: Review workbench
 on:
   push:
     branches: [work/review-20260912]
-    paths: [.github/workflows/review-workbench.yml, review.patch.b64]
+    paths: [.github/workflows/review-workbench.yml]
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   baseline:
@@ -15,17 +19,73 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          persist-credentials: false
+      - name: Preserve reviewed source changes
+        run: cat review.patch.part*.b64 > "$RUNNER_TEMP/review.b64"
+      - uses: actions/checkout@v6
+        with:
           ref: 1b59d9b8a2f9d20204faea66671712dff66e6c75
           persist-credentials: false
+      - name: Apply hash-verified source changes
+        run: |
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          raw = gzip.decompress(base64.b64decode(Path(os.environ['RUNNER_TEMP'], 'review.b64').read_bytes()))
+          assert hashlib.sha256(raw).hexdigest() == '866ea79094bd2ceddf6e06c0d126ae3ef395b5c5d733016a8089e9c5bdd388c7'
+          prepared = []
+          for change in json.loads(raw):
+              path = Path(change['path'])
+              assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
+              old = path.read_bytes() if path.exists() else b''
+              if change['old'] is None:
+                  assert not path.exists()
+              else:
+                  assert hashlib.sha256(old).hexdigest() == change['old'], str(path)
+              lines = old.decode().splitlines(keepends=True)
+              for first, last, replacement in reversed(change['edits']):
+                  lines[first:last] = replacement.splitlines(keepends=True)
+              new = ''.join(lines).encode()
+              assert hashlib.sha256(new).hexdigest() == change['new'], str(path)
+              prepared.append((path, new))
+          for path, new in prepared:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(new)
+          Path(os.environ['RUNNER_TEMP'], 'changed-rust.txt').write_text('\n'.join(str(p) for p, _ in prepared if p.suffix == '.rs'))
+          print(f'Applied {len(prepared)} verified source changes')
+          PY
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-      - name: Compile all test targets without running providers
-        run: cargo test --locked --all-features --no-run 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Format only changed Rust files
+        run: |
+          xargs -d '\n' rustfmt --edition 2024 --config skip_children=true < "$RUNNER_TEMP/changed-rust.txt"
+          git add -N .
+          git diff --check
+      - name: Rust regressions (mock embeddings, no providers)
+        run: cargo test --locked --all-features hardening_review_ -- --nocapture 2>&1 | tee "$RUNNER_TEMP/rust-review.log"
+      - name: Real HTTP transport fixtures (semantic indexing disabled)
+        run: cargo test --locked --all-features --test cli_tests test_serve_http_sessionless -- --nocapture 2>&1 | tee "$RUNNER_TEMP/http-review.log"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Plugin security regressions (no package installs)
+        run: node --test tests/security/plugin-boundaries.test.cjs 2>&1 | tee "$RUNNER_TEMP/node-review.log"
+      - name: Export exact tested patch
+        if: always()
+        run: |
+          git add -N .
+          git diff --binary > "$RUNNER_TEMP/review-tested.patch"
+          git diff --stat > "$RUNNER_TEMP/review-stat.txt"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: baseline-build
-          path: ${{ runner.temp }}/build.log
-          retention-days: 1
+          name: review-validation
+          path: |
+            ${{ runner.temp }}/review-tested.patch
+            ${{ runner.temp }}/review-stat.txt
+            ${{ runner.temp }}/*review.log
+          retention-days: 3
