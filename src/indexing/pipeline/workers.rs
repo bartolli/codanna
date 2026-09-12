@@ -12,7 +12,7 @@ type ReadJoinHandle =
 
 /// Thread join handle type for PARSE workers (with timing).
 /// Returns (files, errors, symbols, input_wait, output_wait, wall_time,
-/// first parser-construction error).
+/// first fatal parse-stage error).
 type ParseJoinHandle = thread::JoinHandle<(
     usize,
     usize,
@@ -67,8 +67,12 @@ impl Pipeline {
     /// Join PARSE worker threads and aggregate results.
     ///
     /// Returns (files_parsed, errors, symbols, total_input_wait, total_output_wait, max_wall_time,
-    /// first parser-construction error across workers).
-    /// Panicked threads are logged and counted as errors.
+    /// first fatal parse-stage error across workers).
+    ///
+    /// Parser-construction failures and worker panics are surfaced through the
+    /// final error slot. `run_phase1` checks that slot after INDEX/COLLECT have
+    /// been joined and counters persisted, so a panicked parser can no longer
+    /// leave a silently truncated index while the command reports success.
     pub(super) fn join_parse_workers(
         &self,
         handles: Vec<ParseJoinHandle>,
@@ -87,7 +91,7 @@ impl Pipeline {
         let mut input_wait = Duration::ZERO;
         let mut output_wait = Duration::ZERO;
         let mut max_wall_time = Duration::ZERO;
-        let mut construction_error = None;
+        let mut fatal_error = None;
 
         for handle in handles {
             match handle.join() {
@@ -101,13 +105,18 @@ impl Pipeline {
                     if w > max_wall_time {
                         max_wall_time = w;
                     }
-                    if construction_error.is_none() {
-                        construction_error = c;
+                    if fatal_error.is_none() {
+                        fatal_error = c;
                     }
                 }
                 Err(_) => {
                     tracing::error!(target: "pipeline", "PARSE worker panicked");
                     errors += 1;
+                    if fatal_error.is_none() {
+                        fatal_error = Some(PipelineError::ChannelRecv(
+                            "PARSE worker panicked".to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -119,7 +128,30 @@ impl Pipeline {
             input_wait,
             output_wait,
             max_wall_time,
-            construction_error,
+            fatal_error,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Settings;
+    use std::sync::Arc;
+
+    #[test]
+    fn hardening_parse_worker_panic_is_reported_as_fatal_error() {
+        let pipeline = Pipeline::with_settings(Arc::new(Settings::default()));
+        let handle: ParseJoinHandle = thread::spawn(|| {
+            panic!("synthetic parser worker panic");
+        });
+
+        let (_, errors, _, _, _, _, fatal) = pipeline.join_parse_workers(vec![handle]);
+
+        assert_eq!(errors, 1);
+        assert!(matches!(
+            fatal,
+            Some(PipelineError::ChannelRecv(message)) if message == "PARSE worker panicked"
+        ));
     }
 }
