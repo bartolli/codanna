@@ -1,0 +1,94 @@
+name: Batch 5 vector generation replacement
+
+on:
+  push:
+    branches:
+      - hardening/vector-generation-replacement
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: hardening/vector-generation-replacement
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Implement atomic replacement semantics
+        shell: python
+        run: |
+          from pathlib import Path
+
+          storage = Path("src/vector/storage.rs")
+          s = storage.read_text()
+
+          marker = '''    /// Validates that all vectors have the correct dimension without taking\n    /// ownership of their backing storage.\n'''
+          replacement = '''    /// Replaces the complete vector generation in storage.\n    ///\n    /// The new generation is written to a sibling staging file and flushed before\n    /// it is atomically promoted over the active file. The previous generation is\n    /// therefore left intact if validation or staging fails.\n    pub fn replace_batch(\n        &mut self,\n        vectors: &[(VectorId, &[f32])],\n    ) -> Result<(), VectorStorageError> {\n        self.validate_vectors(vectors)?;\n        self.ensure_storage_ready()?;\n        self.invalidate_cache();\n\n        let file_name = self\n            .path\n            .file_name()\n            .and_then(|name| name.to_str())\n            .unwrap_or("segment.vec");\n        let staging_path = self.path.with_file_name(format!(".{file_name}.replace.tmp"));\n\n        let result = (|| -> Result<(), VectorStorageError> {\n            let file = OpenOptions::new()\n                .create(true)\n                .truncate(true)\n                .write(true)\n                .open(&staging_path)?;\n            let mut writer = BufWriter::new(file);\n\n            writer.write_all(MAGIC_BYTES)?;\n            writer.write_all(&STORAGE_VERSION.to_le_bytes())?;\n            writer.write_all(&(self.dimension.get() as u32).to_le_bytes())?;\n            let count = u32::try_from(vectors.len()).map_err(|_| {\n                VectorStorageError::InvalidFormat(\n                    "Vector count exceeds storage format capacity".to_string(),\n                )\n            })?;\n            writer.write_all(&count.to_le_bytes())?;\n\n            for (id, vector) in vectors {\n                writer.write_all(&id.to_bytes())?;\n                for &value in *vector {\n                    writer.write_all(&value.to_le_bytes())?;\n                }\n            }\n            writer.flush()?;\n            writer.get_ref().sync_all()?;\n            drop(writer);\n\n            std::fs::rename(&staging_path, &self.path)?;\n            self.vector_count = vectors.len();\n            Ok(())\n        })();\n\n        if result.is_err() {\n            let _ = std::fs::remove_file(&staging_path);\n        }\n        result\n    }\n\n'''
+          if "pub fn replace_batch(" not in s:
+              if marker not in s:
+                  raise SystemExit("storage insertion marker missing")
+              s = s.replace(marker, replacement + marker, 1)
+
+          wrapper_marker = '''    /// Writes a batch of vectors with exclusive access.\n    pub fn write_batch(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {\n'''
+          wrapper = '''    /// Replaces the complete vector generation with exclusive access.\n    pub fn replace_batch(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {\n        self.inner.write().replace_batch(vectors).map_err(|e| {\n            VectorStorageError::Io(io::Error::other(format!(\n                "Concurrent replacement failed for {} vectors: {}",\n                vectors.len(),\n                e\n            )))\n        })\n    }\n\n'''
+          if "Concurrent replacement failed" not in s:
+              if wrapper_marker not in s:
+                  raise SystemExit("concurrent wrapper marker missing")
+              s = s.replace(wrapper_marker, wrapper + wrapper_marker, 1)
+
+          test_marker = '''    #[test]\n    fn test_write_after_read_drops_map_before_writing() {\n'''
+          tests = '''    #[test]\n    fn hardening_replace_batch_replaces_previous_generation() {\n        let temp_dir = TempDir::new().unwrap();\n        let segment = SegmentOrdinal::new(0);\n        let dimension = VectorDimension::new(2).unwrap();\n        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();\n\n        let first = [\n            (VectorId::new(1).unwrap(), vec![1.0f32, 2.0]),\n            (VectorId::new(2).unwrap(), vec![3.0f32, 4.0]),\n        ];\n        let refs: Vec<_> = first.iter().map(|(id, v)| (*id, v.as_slice())).collect();\n        storage.replace_batch(&refs).unwrap();\n\n        let second = [(VectorId::new(2).unwrap(), vec![9.0f32, 8.0])];\n        let refs: Vec<_> = second.iter().map(|(id, v)| (*id, v.as_slice())).collect();\n        storage.replace_batch(&refs).unwrap();\n\n        assert_eq!(storage.vector_count(), 1);\n        assert!(storage.read_vector(VectorId::new(1).unwrap()).is_none());\n        assert_eq!(\n            storage.read_vector(VectorId::new(2).unwrap()).unwrap(),\n            vec![9.0f32, 8.0]\n        );\n        assert_eq!(storage.read_all_vectors().unwrap(), second);\n    }\n\n'''
+          if "hardening_replace_batch_replaces_previous_generation" not in s:
+              if test_marker not in s:
+                  raise SystemExit("storage test marker missing")
+              s = s.replace(test_marker, tests + test_marker, 1)
+
+          storage.write_text(s)
+
+          engine = Path("src/vector/engine.rs")
+          e = engine.read_text()
+
+          old = '''        // Store vectors using write_batch through concurrent storage\n        // Convert to borrowed slices for write_batch\n        let vector_refs: Vec<(VectorId, &[f32])> = vectors\n            .iter()\n            .map(|(id, vec)| (*id, vec.as_slice()))\n            .collect();\n        self.storage.write_batch(&vector_refs).map_err(|e| {\n            VectorError::Storage(std::io::Error::other(format!(\n                "Failed to store vectors: {e}. Check disk space and file permissions"\n            )))\n        })?;\n\n        // Extract just the vectors for clustering\n'''
+          new = '''        // Extract just the vectors for clustering before mutating persistent\n        // storage. A clustering failure must leave the previous generation intact.\n'''
+          if old in e:
+              e = e.replace(old, new, 1)
+          elif "Failed to store vectors" in e:
+              raise SystemExit("engine storage block shape changed")
+
+          commit_marker = '''        // Update internal state\n        self.centroids = clustering_result.centroids;\n'''
+          commit = '''        // Publish the complete replacement generation only after clustering\n        // has succeeded. This keeps on-disk storage aligned with the centroids and\n        // cluster assignments that replace the previous in-memory generation.\n        let vector_refs: Vec<(VectorId, &[f32])> = vectors\n            .iter()\n            .map(|(id, vec)| (*id, vec.as_slice()))\n            .collect();\n        self.storage.replace_batch(&vector_refs).map_err(|err| {\n            VectorError::Storage(std::io::Error::other(format!(\n                "Failed to replace vector generation: {err}. Check disk space and file permissions"\n            )))\n        })?;\n\n        // Update internal state\n        self.centroids = clustering_result.centroids;\n'''
+          if "Failed to replace vector generation" not in e:
+              if commit_marker not in e:
+                  raise SystemExit("engine commit marker missing")
+              e = e.replace(commit_marker, commit, 1)
+
+          engine_test_marker = '''    #[test]\n    fn test_empty_index_search() {\n'''
+          engine_tests = '''    #[test]\n    fn hardening_reindex_replaces_persisted_generation() {\n        let temp_dir = TempDir::new().unwrap();\n        let dimension = VectorDimension::new(4).unwrap();\n        let mut engine = VectorSearchEngine::new(temp_dir.path(), dimension).unwrap();\n\n        let first = vec![\n            (VectorId::new(1).unwrap(), vec![1.0, 0.0, 0.0, 0.0]),\n            (VectorId::new(2).unwrap(), vec![0.0, 1.0, 0.0, 0.0]),\n        ];\n        engine.index_vectors(&first).unwrap();\n\n        let second = vec![\n            (VectorId::new(2).unwrap(), vec![0.0, 0.0, 1.0, 0.0]),\n            (VectorId::new(3).unwrap(), vec![0.0, 0.0, 0.0, 1.0]),\n        ];\n        engine.index_vectors(&second).unwrap();\n\n        assert_eq!(engine.vector_count(), 2);\n        assert!(engine.get_cluster_for_vector(VectorId::new(1).unwrap()).is_none());\n        assert!(engine.get_cluster_for_vector(VectorId::new(2).unwrap()).is_some());\n        assert!(engine.get_cluster_for_vector(VectorId::new(3).unwrap()).is_some());\n\n        let mut storage = MmapVectorStorage::open(temp_dir.path(), SegmentOrdinal::new(0)).unwrap();\n        let persisted = storage.read_all_vectors().unwrap();\n        assert_eq!(persisted, second);\n        assert_eq!(storage.vector_count(), 2);\n    }\n\n'''
+          if "hardening_reindex_replaces_persisted_generation" not in e:
+              if engine_test_marker not in e:
+                  raise SystemExit("engine test marker missing")
+              e = e.replace(engine_test_marker, engine_tests + engine_test_marker, 1)
+
+          engine.write_text(e)
+
+      - name: Format and test replacement invariants
+        run: |
+          cargo fmt --all
+          cargo test vector::storage::tests::hardening_replace_batch --lib
+          cargo test vector::engine::tests::hardening_reindex --lib
+          cargo test vector::storage::tests --lib
+          cargo test vector::engine::tests --lib
+          cargo clippy --lib --all-features -- -D warnings
+
+      - name: Commit tested patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vector/storage.rs src/vector/engine.rs
+          git commit -m "hardening: replace vector generations atomically"
+          git push origin HEAD:hardening/vector-generation-replacement
