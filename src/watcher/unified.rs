@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::sync::{RwLock, mpsc};
@@ -31,6 +32,9 @@ pub struct UnifiedWatcher {
     debouncer: Debouncer,
     /// Channel for receiving file events.
     event_rx: mpsc::Receiver<notify::Result<Event>>,
+    /// Set by the native notify callback when the bounded queue is full.
+    /// The async lane converts this into a filesystem-truth reconciliation.
+    event_overflowed: Arc<AtomicBool>,
     /// The underlying file watcher.
     _watcher: notify::RecommendedWatcher,
     /// Notification broadcaster for MCP integration.
@@ -142,8 +146,13 @@ impl UnifiedWatcher {
                     }
                 }
 
-                // Process debounced changes
+                // Process debounced changes and recover queue overflow from
+                // filesystem truth. The native callback never blocks.
                 _ = drain.tick() => {
+                    if self.event_overflowed.swap(false, Ordering::AcqRel) {
+                        self.reconcile_event_overflow().await;
+                    }
+
                     if self.debouncer.has_pending_removals() {
                         // A removal may be one side of a rename. Hold the
                         // whole burst until every side is stable, then hand
@@ -328,7 +337,7 @@ impl UnifiedWatcher {
 
     /// Register handler watch roots: watched directly so directory
     /// creation at the top of a root is visible even when the root
-    /// holds no indexed file itself.
+    /// holds no indexed file directly.
     async fn register_handler_roots(&mut self) {
         let mut roots = Vec::new();
         let mut sync_roots = Vec::new();
@@ -389,6 +398,109 @@ impl UnifiedWatcher {
         for file in files {
             self.debouncer.record(file);
         }
+    }
+
+    /// Recover from a full native-event queue by deriving state from the
+    /// filesystem and handler snapshots instead of relying on dropped events.
+    async fn reconcile_event_overflow(&mut self) {
+        tracing::warn!(
+            "[watcher] event queue overflowed; reconciling watched state from filesystem truth"
+        );
+
+        // Code handlers already have a robust incremental directory lane. Run
+        // every covered root once; this observes creates, modifications,
+        // deletions and renames regardless of which individual events were lost.
+        let roots = self.batch_sync_roots.clone();
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        for root in &roots {
+            let mut indexer = self.facade.write().await;
+            match indexer.index_directory_deferred(root, false, &mut pending) {
+                Ok(stats) => {
+                    crate::log_event!(
+                        "watcher",
+                        "overflow sync",
+                        "{}: {} indexed, {} removed",
+                        crate::parsing::paths::render_absolute_path(root).display(),
+                        stats.files_indexed,
+                        stats.files_removed
+                    );
+                }
+                Err(e) if is_writer_lock_contention(&e) => {
+                    tracing::info!(
+                        "[watcher] overflow sync skipped: another serve process holds the index writer; hot-reload converges"
+                    );
+                }
+                Err(e) => tracing::error!("[watcher] overflow sync failed: {e}"),
+            }
+        }
+        if !roots.is_empty() {
+            let mut indexer = self.facade.write().await;
+            if let Err(e) = indexer.resolve_deferred(pending) {
+                if is_writer_lock_contention(&e) {
+                    tracing::info!(
+                        "[watcher] overflow resolution skipped: another serve process holds the index writer; hot-reload converges"
+                    );
+                } else {
+                    tracing::error!("[watcher] overflow resolution failed: {e}");
+                }
+            }
+        }
+
+        // Handlers outside the shared code batch lane (documents/config) need
+        // their own truth reconciliation. Compare tracked paths before/after
+        // refresh so missed removals remain observable, then replay current
+        // files through normal modify handling.
+        for handler in &self.handlers {
+            if handler.covered_by_batch_sync() {
+                continue;
+            }
+
+            let before = handler.tracked_paths().await;
+            if let Err(e) = handler.refresh_paths().await {
+                tracing::warn!(
+                    "[watcher] overflow refresh failed for {}: {e}",
+                    handler.name()
+                );
+                continue;
+            }
+            let after = handler.tracked_paths().await;
+            let before_set: HashSet<PathBuf> = before.into_iter().collect();
+            let after_set: HashSet<PathBuf> = after.into_iter().collect();
+
+            for path in before_set.difference(&after_set) {
+                match handler.on_delete(path).await {
+                    Ok(action) => {
+                        if let Err(e) = self.execute_action(action, handler.name()).await {
+                            tracing::error!(
+                                "[{}] overflow delete action error: {e}",
+                                handler.name()
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("[{}] overflow delete error: {e}", handler.name()),
+                }
+            }
+            for path in &after_set {
+                if !path.exists() {
+                    continue;
+                }
+                match handler.on_modify(path).await {
+                    Ok(action) => {
+                        if let Err(e) = self.execute_action(action, handler.name()).await {
+                            tracing::error!(
+                                "[{}] overflow modify action error: {e}",
+                                handler.name()
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("[{}] overflow modify error: {e}", handler.name()),
+                }
+            }
+        }
+
+        // Rebuild watcher registrations/caches after filesystem reconciliation.
+        self.handle_index_reloaded().await;
+        self.broadcaster.send(FileChangeEvent::IndexReloaded);
     }
 
     /// Process a debounced file modification.
@@ -869,12 +981,16 @@ impl UnifiedWatcherBuilder {
             .index_path
             .unwrap_or_else(|| workspace_root.join(".codanna/index"));
 
-        // Create channel for events
-        let (tx, rx) = mpsc::channel(100);
+        // Keep the callback queue bounded, but never block notify's native event
+        // thread. Blocking here can deadlock with watch registration on Linux.
+        let (tx, rx) = mpsc::channel(256);
+        let event_overflowed = Arc::new(AtomicBool::new(false));
+        let overflow_flag = Arc::clone(&event_overflowed);
 
-        // Create the notify watcher
+        // Create the notify watcher. Queue overflow is a recoverable condition:
+        // the async drain performs a full truth reconciliation on the next tick.
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            let _ = tx.blocking_send(res);
+            enqueue_watch_event(&tx, &overflow_flag, res);
         })?;
 
         Ok(UnifiedWatcher {
@@ -882,6 +998,7 @@ impl UnifiedWatcherBuilder {
             registry: PathRegistry::new(),
             debouncer: Debouncer::new(self.debounce_ms),
             event_rx: rx,
+            event_overflowed,
             _watcher: watcher,
             broadcaster,
             facade,
@@ -898,6 +1015,24 @@ impl UnifiedWatcherBuilder {
 impl Default for UnifiedWatcherBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Native notify callbacks must never block on the async consumer. When the
+/// bounded queue is full, latch a reconciliation request and return immediately.
+fn enqueue_watch_event(
+    tx: &mpsc::Sender<notify::Result<Event>>,
+    overflow_flag: &AtomicBool,
+    event: notify::Result<Event>,
+) {
+    match tx.try_send(event) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            overflow_flag.store(true, Ordering::Release);
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            // The watcher is shutting down; there is no consumer to recover.
+        }
     }
 }
 
@@ -937,6 +1072,28 @@ mod tests {
             .workspace_root(dir.to_path_buf())
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn hardening_watcher_full_queue_marks_reconciliation_without_blocking() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let overflow = AtomicBool::new(false);
+        let event = || {
+            Ok(Event {
+                kind: EventKind::Any,
+                paths: Vec::new(),
+                attrs: Default::default(),
+            })
+        };
+
+        enqueue_watch_event(&tx, &overflow, event());
+        assert!(!overflow.load(Ordering::Acquire));
+
+        // Queue is now full. The second send must return synchronously and mark
+        // filesystem reconciliation instead of blocking the notify thread.
+        enqueue_watch_event(&tx, &overflow, event());
+        assert!(overflow.load(Ordering::Acquire));
+        assert!(rx.try_recv().is_ok());
     }
 
     // A dir rename's from-side arrives as Modify(Name) on a path that no
