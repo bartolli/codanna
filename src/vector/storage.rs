@@ -133,6 +133,8 @@ impl MmapVectorStorage {
             .into());
         }
 
+        Self::validate_physical_layout(&mmap, dimension, vector_count)?;
+
         Ok(Self {
             path,
             mmap: Some(mmap),
@@ -151,7 +153,15 @@ impl MmapVectorStorage {
         let path = Self::segment_path(base_path.as_ref(), segment);
 
         if path.exists() {
-            Self::open(base_path, segment)
+            let storage = Self::open(base_path, segment)?;
+            if storage.dimension != dimension {
+                return Err(VectorError::DimensionMismatch {
+                    expected: dimension.get(),
+                    actual: storage.dimension.get(),
+                }
+                .into());
+            }
+            Ok(storage)
         } else {
             let mut storage = Self::new(base_path, segment, dimension)?;
             storage.initialize()?;
@@ -491,11 +501,60 @@ impl MmapVectorStorage {
             // before any file write, so a live map never aliases a mutation.
             let mmap = unsafe { MmapOptions::new().map(&file)? };
 
-            // Update vector count from file
-            let (_, _, count) = Self::read_header(&mmap)?;
+            // Update vector count from file only after verifying the header describes
+            // exactly the bytes that are physically present.
+            let (version, dimension, count) = Self::read_header(&mmap)?;
+            if version != STORAGE_VERSION {
+                return Err(VectorError::VersionMismatch {
+                    expected: STORAGE_VERSION,
+                    actual: version,
+                }
+                .into());
+            }
+            if dimension != self.dimension {
+                return Err(VectorStorageError::InvalidFormat(format!(
+                    "Vector dimension changed on disk: expected {}, found {}",
+                    self.dimension.get(),
+                    dimension.get()
+                )));
+            }
+            Self::validate_physical_layout(&mmap, dimension, count)?;
             self.vector_count = count;
             self.mmap = Some(mmap);
         }
+        Ok(())
+    }
+
+    fn validate_physical_layout(
+        mmap: &Mmap,
+        dimension: VectorDimension,
+        vector_count: usize,
+    ) -> Result<(), VectorStorageError> {
+        let payload_bytes = dimension
+            .get()
+            .checked_mul(BYTES_PER_F32)
+            .and_then(|bytes| bytes.checked_add(BYTES_PER_ID))
+            .ok_or_else(|| {
+                VectorStorageError::InvalidFormat(
+                    "Vector record size overflows address space".to_string(),
+                )
+            })?;
+        let expected = vector_count
+            .checked_mul(payload_bytes)
+            .and_then(|bytes| bytes.checked_add(HEADER_SIZE))
+            .ok_or_else(|| {
+                VectorStorageError::InvalidFormat(
+                    "Vector file size overflows address space".to_string(),
+                )
+            })?;
+
+        if mmap.len() != expected {
+            return Err(VectorStorageError::InvalidFormat(format!(
+                "Vector file is inconsistent: header expects {expected} bytes, file contains {} bytes",
+                mmap.len()
+            )));
+        }
+
         Ok(())
     }
 
@@ -610,6 +669,136 @@ mod tests {
 
         // Open existing storage should fail (not initialized)
         assert!(MmapVectorStorage::open(&temp_dir, segment).is_err());
+    }
+
+    #[test]
+    fn hardening_open_rejects_truncated_vector_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];
+        let refs: Vec<(VectorId, &[f32])> = data
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&refs).unwrap();
+        drop(storage);
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        let len = file.metadata().unwrap().len();
+        file.set_len(len - 1).unwrap();
+
+        let err = MmapVectorStorage::open(&temp_dir, segment)
+            .expect_err("truncated vector file must be rejected");
+        assert!(err.to_string().contains("inconsistent"));
+    }
+
+    #[test]
+    fn hardening_open_rejects_orphan_vector_tail() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];
+        let refs: Vec<(VectorId, &[f32])> = data
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&refs).unwrap();
+        drop(storage);
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let mut file = OpenOptions::new().append(true).open(path).unwrap();
+        file.write_all(&VectorId::new(2).unwrap().to_bytes())
+            .unwrap();
+        file.write_all(&3.0f32.to_le_bytes()).unwrap();
+        file.write_all(&4.0f32.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let err = MmapVectorStorage::open(&temp_dir, segment)
+            .expect_err("unpublished appended vector must be rejected");
+        assert!(err.to_string().contains("inconsistent"));
+    }
+
+    #[test]
+    fn hardening_open_rejects_header_count_beyond_file() {
+        use std::io::{Seek, SeekFrom};
+
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];
+        let refs: Vec<(VectorId, &[f32])> = data
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&refs).unwrap();
+        drop(storage);
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let mut file = OpenOptions::new().write(true).open(path).unwrap();
+        file.seek(SeekFrom::Start(12)).unwrap();
+        file.write_all(&u32::MAX.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let err = MmapVectorStorage::open(&temp_dir, segment)
+            .expect_err("impossible header count must be rejected");
+        assert!(err.to_string().contains("inconsistent"));
+    }
+
+    #[test]
+    fn hardening_open_or_create_rejects_dimension_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        drop(storage);
+
+        let err =
+            MmapVectorStorage::open_or_create(&temp_dir, segment, VectorDimension::new(3).unwrap())
+                .expect_err("existing storage dimension mismatch must fail");
+        assert!(matches!(
+            err,
+            VectorStorageError::Vector(VectorError::DimensionMismatch {
+                expected: 3,
+                actual: 2
+            })
+        ));
+    }
+
+    #[test]
+    fn hardening_remap_rejects_version_change() {
+        use std::io::{Seek, SeekFrom};
+
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+        let data = [(VectorId::new(1).unwrap(), vec![1.0f32, 2.0])];
+        let refs: Vec<(VectorId, &[f32])> = data
+            .iter()
+            .map(|(id, vector)| (*id, vector.as_slice()))
+            .collect();
+        storage.write_batch(&refs).unwrap();
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let mut file = OpenOptions::new().write(true).open(path).unwrap();
+        file.seek(SeekFrom::Start(4)).unwrap();
+        file.write_all(&(STORAGE_VERSION + 1).to_le_bytes())
+            .unwrap();
+        file.flush().unwrap();
+
+        let err = storage
+            .read_all_vectors()
+            .expect_err("remap must reject a changed storage version");
+        assert!(matches!(
+            err,
+            VectorStorageError::Vector(VectorError::VersionMismatch { expected, actual })
+                if expected == STORAGE_VERSION && actual == STORAGE_VERSION + 1
+        ));
     }
 
     #[test]
