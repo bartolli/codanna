@@ -1,0 +1,68 @@
+name: Batch 4 vector dedupe correction
+
+on:
+  push:
+    branches:
+      - perf/vector-batch-lookup
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: perf/vector-batch-lookup
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Preserve first-match semantics for duplicate IDs
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("src/vector/storage.rs")
+          s = path.read_text()
+          old = '''        let dimension = self.dimension.get();\n        let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;\n        let mut vectors = Vec::with_capacity(ids.len());\n        let mut offset = HEADER_SIZE;\n\n        while offset + vector_size <= mmap.len() {\n'''
+          new = '''        let dimension = self.dimension.get();\n        let vector_size = BYTES_PER_ID + dimension * BYTES_PER_F32;\n        let mut vectors = Vec::with_capacity(ids.len());\n        let mut remaining = ids.clone();\n        let mut offset = HEADER_SIZE;\n\n        while offset + vector_size <= mmap.len() {\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "let mut remaining = ids.clone();" not in s:
+              raise SystemExit("batch lookup setup marker missing")
+
+          old = '''            if ids.contains(&id) {\n                let mut vector = Vec::with_capacity(dimension);\n'''
+          new = '''            if remaining.remove(&id) {\n                let mut vector = Vec::with_capacity(dimension);\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif "if remaining.remove(&id)" not in s:
+              raise SystemExit("batch lookup membership marker missing")
+
+          s = s.replace(
+              '''                if vectors.len() == ids.len() {\n                    break;\n                }\n''',
+              '''                if remaining.is_empty() {\n                    break;\n                }\n''',
+              1,
+          )
+
+          marker = '''    #[test]\n    fn test_read_all_vectors() {\n'''
+          test = '''    #[test]\n    fn hardening_batch_lookup_returns_first_duplicate_only() {\n        let temp_dir = TempDir::new().unwrap();\n        let segment = SegmentOrdinal::new(0);\n        let dimension = VectorDimension::new(2).unwrap();\n        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();\n\n        let first = [\n            (VectorId::new(1).unwrap(), vec![1.0f32, 1.0]),\n            (VectorId::new(2).unwrap(), vec![2.0f32, 2.0]),\n        ];\n        let refs: Vec<(VectorId, &[f32])> = first\n            .iter()\n            .map(|(id, vector)| (*id, vector.as_slice()))\n            .collect();\n        storage.write_batch(&refs).unwrap();\n\n        let second = [\n            (VectorId::new(1).unwrap(), vec![10.0f32, 10.0]),\n            (VectorId::new(3).unwrap(), vec![3.0f32, 3.0]),\n        ];\n        let refs: Vec<(VectorId, &[f32])> = second\n            .iter()\n            .map(|(id, vector)| (*id, vector.as_slice()))\n            .collect();\n        storage.write_batch(&refs).unwrap();\n\n        let requested = [VectorId::new(1).unwrap(), VectorId::new(3).unwrap()]\n            .into_iter()\n            .collect::<HashSet<_>>();\n        let found = storage.read_vectors(&requested).unwrap();\n\n        assert_eq!(found.len(), 2);\n        assert_eq!(found[0], first[0]);\n        assert_eq!(found[1], second[1]);\n    }\n\n'''
+          if "hardening_batch_lookup_returns_first_duplicate_only" not in s:
+              if marker not in s:
+                  raise SystemExit("test insertion marker missing")
+              s = s.replace(marker, test + marker, 1)
+          path.write_text(s)
+      - name: Format and test
+        run: |
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test vector::storage::tests::hardening_batch_lookup --lib
+          cargo test vector::engine::tests --lib
+      - name: Commit correction
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/vector/storage.rs
+          git commit -m "fix: preserve first-match batch vector reads"
+          git push origin HEAD:perf/vector-batch-lookup
