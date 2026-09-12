@@ -7,6 +7,10 @@ use crate::vector::{MmapVectorStorage, SegmentOrdinal, VectorDimension, VectorId
 use crate::{SymbolId, semantic::SemanticSearchError};
 use std::path::Path;
 
+const VECTOR_HEADER_BYTES: u64 = 16;
+const VECTOR_ID_BYTES: u64 = 4;
+const F32_BYTES: u64 = 4;
+
 /// Wrapper around MmapVectorStorage specifically for semantic embeddings.
 ///
 /// Provides a semantic-search-specific API while reusing the efficient
@@ -59,6 +63,7 @@ impl SemanticVectorStorage {
             }
         })?;
 
+        validate_physical_layout(&storage)?;
         let dimension = storage.dimension();
         Ok(Self { storage, dimension })
     }
@@ -74,6 +79,7 @@ impl SemanticVectorStorage {
                 suggestion: "Check path permissions and disk space".to_string(),
             })?;
 
+        validate_physical_layout(&storage)?;
         Ok(Self { storage, dimension })
     }
 
@@ -134,10 +140,15 @@ impl SemanticVectorStorage {
                             .to_string(),
                 })?;
 
-        // Convert VectorId back to SymbolId
+        // Convert VectorId back to SymbolId without assuming on-disk IDs are valid.
         let mut result = Vec::with_capacity(vectors.len());
         for (vector_id, embedding) in vectors {
-            let symbol_id = SymbolId::new(vector_id.get()).unwrap();
+            let raw = vector_id.get();
+            let symbol_id = SymbolId::new(raw).ok_or_else(|| SemanticSearchError::InvalidId {
+                id: raw,
+                suggestion: "Semantic vector storage contains an invalid symbol ID; rebuild the semantic index"
+                    .to_string(),
+            })?;
             result.push((symbol_id, embedding));
         }
 
@@ -206,6 +217,53 @@ impl SemanticVectorStorage {
                 suggestion: "Check if the storage file exists".to_string(),
             })
     }
+}
+
+fn validate_physical_layout(storage: &MmapVectorStorage) -> Result<(), SemanticSearchError> {
+    let dimension_bytes = u64::try_from(storage.dimension().get())
+        .ok()
+        .and_then(|d| d.checked_mul(F32_BYTES))
+        .ok_or_else(|| SemanticSearchError::StorageError {
+            message: "Semantic vector dimension overflows storage size calculation".to_string(),
+            suggestion: "Rebuild the semantic index".to_string(),
+        })?;
+    let record_bytes = VECTOR_ID_BYTES
+        .checked_add(dimension_bytes)
+        .ok_or_else(|| SemanticSearchError::StorageError {
+            message: "Semantic vector record size overflow".to_string(),
+            suggestion: "Rebuild the semantic index".to_string(),
+        })?;
+    let count =
+        u64::try_from(storage.vector_count()).map_err(|_| SemanticSearchError::StorageError {
+            message: "Semantic vector count does not fit storage size calculation".to_string(),
+            suggestion: "Rebuild the semantic index".to_string(),
+        })?;
+    let expected = count
+        .checked_mul(record_bytes)
+        .and_then(|bytes| VECTOR_HEADER_BYTES.checked_add(bytes))
+        .ok_or_else(|| SemanticSearchError::StorageError {
+            message: "Semantic vector file size overflows expected layout".to_string(),
+            suggestion: "The vector header is corrupt; rebuild the semantic index".to_string(),
+        })?;
+    let actual = storage
+        .file_size()
+        .map_err(|e| SemanticSearchError::StorageError {
+            message: format!("Failed to inspect semantic vector storage: {e}"),
+            suggestion: "Check file permissions and rebuild the semantic index if needed"
+                .to_string(),
+        })?;
+
+    if actual != expected {
+        return Err(SemanticSearchError::StorageError {
+            message: format!(
+                "Semantic vector file is inconsistent: header expects {expected} bytes, file contains {actual} bytes"
+            ),
+            suggestion: "The semantic index is incomplete or corrupt; rebuild it before loading"
+                .to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -349,5 +407,50 @@ mod tests {
             let loaded = storage.load_embedding(SymbolId::new(42).unwrap()).unwrap();
             assert_eq!(loaded, vec![1.5, 2.5]);
         }
+    }
+
+    #[test]
+    fn hardening_semantic_storage_rejects_impossible_header_count() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let temp_dir = TempDir::new().unwrap();
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage =
+            SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
+        storage
+            .save_embedding(SymbolId::new(1).unwrap(), &[1.0, 2.0])
+            .unwrap();
+        drop(storage);
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let mut file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.seek(SeekFrom::Start(12)).unwrap();
+        file.write_all(&u32::MAX.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+
+        let err = SemanticVectorStorage::open(temp_dir.path())
+            .expect_err("corrupt count must fail before load_all allocation");
+        assert!(err.to_string().contains("inconsistent"));
+    }
+
+    #[test]
+    fn hardening_semantic_storage_rejects_truncated_generation() {
+        let temp_dir = TempDir::new().unwrap();
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage =
+            SemanticVectorStorage::open_or_create(temp_dir.path(), dimension).unwrap();
+        storage
+            .save_embedding(SymbolId::new(1).unwrap(), &[1.0, 2.0])
+            .unwrap();
+        drop(storage);
+
+        let path = temp_dir.path().join("segment_0.vec");
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        let len = file.metadata().unwrap().len();
+        file.set_len(len - 1).unwrap();
+
+        let err = SemanticVectorStorage::open(temp_dir.path())
+            .expect_err("truncated vector generation must be rejected");
+        assert!(err.to_string().contains("inconsistent"));
     }
 }
