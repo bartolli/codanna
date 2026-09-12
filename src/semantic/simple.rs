@@ -126,7 +126,7 @@ impl SimpleSemanticSearch {
         let mut text_model = TextEmbedding::try_new(
             InitOptions::new(model)
                 .with_cache_dir(cache_dir)
-                .with_show_download_progress(true),
+                .with_show_download_progress(true), // Always show progress, but with context from message above
         )
         .map_err(|e| {
             SemanticSearchError::ModelInitError(format!(
@@ -134,12 +134,18 @@ impl SimpleSemanticSearch {
             ))
         })?;
 
+        // Get dimensions by generating a test embedding
         let test_embedding = text_model
             .embed(vec!["test"], None)
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
         let dimensions = test_embedding.into_iter().next().unwrap().len();
 
-        let metadata = crate::semantic::SemanticMetadata::new(model_name.clone(), dimensions, 0);
+        // Create initial metadata
+        let metadata = crate::semantic::SemanticMetadata::new(
+            model_name.clone(),
+            dimensions,
+            0, // No embeddings yet
+        );
 
         Ok(Self {
             embeddings: HashMap::new(),
@@ -150,15 +156,18 @@ impl SimpleSemanticSearch {
         })
     }
 
+    /// Index a documentation comment for a symbol
     pub fn index_doc_comment(
         &mut self,
         symbol_id: SymbolId,
         doc: &str,
     ) -> Result<(), SemanticSearchError> {
+        // Skip empty docs
         if doc.trim().is_empty() {
             return Ok(());
         }
 
+        // Generate embedding — only available in local-model mode
         let model = self.model.as_ref().ok_or_else(|| {
             SemanticSearchError::ModelInitError(
                 "No local model — use EmbeddingBackend to generate embeddings in remote mode"
@@ -173,6 +182,7 @@ impl SimpleSemanticSearch {
 
         let embedding = embeddings.into_iter().next().unwrap();
 
+        // Validate dimensions
         if embedding.len() != self.dimensions {
             return Err(SemanticSearchError::EmbeddingError(format!(
                 "Embedding dimension mismatch: expected {}, got {}",
@@ -185,14 +195,17 @@ impl SimpleSemanticSearch {
         Ok(())
     }
 
+    /// Index a documentation comment for a symbol with language information
     pub fn index_doc_comment_with_language(
         &mut self,
         symbol_id: SymbolId,
         doc: &str,
         language: &str,
     ) -> Result<(), SemanticSearchError> {
+        // First index the doc comment normally
         self.index_doc_comment(symbol_id, doc)?;
 
+        // Then store the language mapping
         if self.embeddings.contains_key(&symbol_id) {
             self.symbol_languages
                 .insert(symbol_id, language.to_string());
@@ -215,6 +228,7 @@ impl SimpleSemanticSearch {
             }
         }
         if dropped > 0 {
+            // This typically means the backend dimension changed without a --force re-index.
             tracing::warn!(
                 target: "semantic",
                 "store_embeddings dropped {dropped} embeddings due to dimension mismatch \
@@ -225,6 +239,11 @@ impl SimpleSemanticSearch {
         count
     }
 
+    /// Search using a pre-computed query embedding vector.
+    ///
+    /// Use this in remote-embedding mode where the caller obtains the query
+    /// vector via `EmbeddingBackend::embed_one` before calling this method.
+    /// Returns symbol IDs with their similarity scores, sorted by score descending.
     pub fn search_with_embedding(
         &self,
         query_embedding: &[f32],
@@ -258,6 +277,11 @@ impl SimpleSemanticSearch {
         Ok(similarities)
     }
 
+    /// Search using a pre-computed query vector with optional language pre-filtering.
+    ///
+    /// Language filtering is applied before similarity ranking so the result slice
+    /// respects `limit` after filtering, matching the behaviour of `search_with_language`.
+    /// Convenience wrapper: delegates to `search_with_embedding` with the given threshold.
     pub fn search_with_embedding_threshold(
         &self,
         query_embedding: &[f32],
@@ -315,6 +339,7 @@ impl SimpleSemanticSearch {
             )
         })?;
 
+        // Generate query embedding
         let query_embeddings = model
             .lock()
             .unwrap()
@@ -322,6 +347,7 @@ impl SimpleSemanticSearch {
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
         let query_embedding = query_embeddings.into_iter().next().unwrap();
 
+        // Calculate similarities
         let mut similarities: Vec<(SymbolId, f32)> = self
             .embeddings
             .iter()
@@ -331,11 +357,18 @@ impl SimpleSemanticSearch {
             })
             .collect();
 
+        // Sort by similarity descending
         similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        // Return top results
         similarities.truncate(limit);
         Ok(similarities)
     }
 
+    /// Search for similar documentation with language filtering
+    ///
+    /// This filters BEFORE computing similarity, ensuring we only compute
+    /// similarity for symbols in the requested language.
     pub fn search_with_language(
         &self,
         query: &str,
@@ -352,6 +385,7 @@ impl SimpleSemanticSearch {
             )
         })?;
 
+        // Generate query embedding
         let query_embeddings = model
             .lock()
             .unwrap()
@@ -359,6 +393,7 @@ impl SimpleSemanticSearch {
             .map_err(|e| SemanticSearchError::EmbeddingError(e.to_string()))?;
         let query_embedding = query_embeddings.into_iter().next().unwrap();
 
+        // Filter embeddings by language BEFORE computing similarity
         let filtered_embeddings: Vec<(&SymbolId, &Vec<f32>)> = if let Some(lang) = language {
             self.embeddings
                 .iter()
@@ -372,6 +407,7 @@ impl SimpleSemanticSearch {
             self.embeddings.iter().collect()
         };
 
+        // Calculate similarities only for filtered embeddings
         let mut similarities: Vec<(SymbolId, f32)> = filtered_embeddings
             .into_iter()
             .map(|(id, embedding)| {
@@ -380,11 +416,19 @@ impl SimpleSemanticSearch {
             })
             .collect();
 
+        // Sort by similarity descending
         similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        // Return top results
         similarities.truncate(limit);
         Ok(similarities)
     }
 
+    /// Search with a similarity threshold.
+    ///
+    /// Requires a local embedding model. In remote-embedding mode, use the
+    /// facade's `semantic_search_docs_with_threshold` which handles backend
+    /// dispatch, or call `search_with_embedding` with a pre-computed vector.
     pub fn search_with_threshold(
         &self,
         query: &str,
@@ -398,14 +442,19 @@ impl SimpleSemanticSearch {
             .collect())
     }
 
+    /// Get the number of indexed embeddings
+    /// Returns true when a local fastembed model is available for query embedding.
+    /// Returns false for remote-mode instances that require an external backend.
     pub fn has_local_model(&self) -> bool {
         self.model.is_some()
     }
 
+    /// Output dimension of embeddings stored in this index.
     pub fn dimensions(&self) -> usize {
         self.dimensions
     }
 
+    /// Returns true when this index was built with a remote embedding backend.
     pub fn is_remote_index(&self) -> bool {
         self.metadata.as_ref().is_some_and(|m| m.is_remote())
     }
@@ -414,11 +463,16 @@ impl SimpleSemanticSearch {
         self.embeddings.len()
     }
 
+    /// Clear all embeddings
     pub fn clear(&mut self) {
         self.embeddings.clear();
         self.symbol_languages.clear();
     }
 
+    /// Remove embeddings for specific symbols
+    ///
+    /// This is used when re-indexing files to remove embeddings for symbols
+    /// that no longer exist.
     pub fn remove_embeddings(&mut self, symbol_ids: &[SymbolId]) {
         for id in symbol_ids {
             self.embeddings.remove(id);
@@ -426,14 +480,20 @@ impl SimpleSemanticSearch {
         }
     }
 
+    /// Get the metadata if available
     pub fn metadata(&self) -> Option<&crate::semantic::SemanticMetadata> {
         self.metadata.as_ref()
     }
 
+    /// Save embeddings to disk using the efficient vector storage
+    ///
+    /// # Arguments
+    /// * `path` - Path where semantic data should be stored
     pub fn save(&self, path: &Path) -> Result<(), SemanticSearchError> {
         use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
         use crate::vector::VectorDimension;
 
+        // Ensure the directory exists
         std::fs::create_dir_all(path).map_err(|e| SemanticSearchError::StorageError {
             message: format!("Failed to create semantic directory: {e}"),
             suggestion: "Check directory permissions".to_string(),
@@ -442,6 +502,7 @@ impl SimpleSemanticSearch {
         let (model_name, is_remote_backend) = if let Some(ref meta) = self.metadata {
             (meta.model_name.clone(), meta.is_remote())
         } else {
+            // Legacy instance without metadata — infer from model field presence
             ("AllMiniLML6V2".to_string(), self.model.is_none())
         };
 
@@ -451,6 +512,7 @@ impl SimpleSemanticSearch {
             SemanticMetadata::new(model_name, self.dimensions, self.embeddings.len())
         };
 
+        // Create storage with our dimension
         let dimension = VectorDimension::new(self.dimensions).map_err(|e| {
             SemanticSearchError::StorageError {
                 message: format!("Invalid dimension: {e}"),
@@ -458,6 +520,16 @@ impl SimpleSemanticSearch {
             }
         })?;
 
+        // Stage the vector file, then rename over the live one: a crash at
+        // any point leaves the previous generation loadable instead of the
+        // delete-then-rewrite window destroying all persisted embeddings.
+        // The staging dir is unique per save invocation: concurrent savers
+        // exist across processes (two serve processes watching one
+        // workspace) AND within one process (serve modes hold more than one
+        // facade). A shared staging path lets one saver yank another's
+        // in-flight directory (ENOENT mid-batch) or promote another's
+        // half-written file. Each save promotes only a file it wrote and
+        // synced itself; the live-file rename stays last-wins-atomic.
         clear_stale_staging(path);
         static STAGING_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let staging_dir = path.join(format!(
@@ -471,15 +543,20 @@ impl SimpleSemanticSearch {
         })?;
 
         let mut storage = SemanticVectorStorage::new(&staging_dir, dimension)?;
+
+        // Convert HashMap to Vec for batch save
         let embeddings: Vec<(SymbolId, Vec<f32>)> = self
             .embeddings
             .iter()
             .map(|(id, embedding)| (*id, embedding.clone()))
             .collect();
+
+        // Save all embeddings
         storage.save_batch(&embeddings)?;
         drop(storage);
 
         let staged_vec = staging_dir.join("segment_0.vec");
+        // write(true): Windows FlushFileBuffers requires GENERIC_WRITE
         std::fs::OpenOptions::new()
             .write(true)
             .open(&staged_vec)
@@ -495,8 +572,13 @@ impl SimpleSemanticSearch {
             }
         })?;
 
+        // Metadata is written only after the vector file is in place, so it
+        // never claims embeddings that are not durably on disk. Its temp
+        // file stages in this save's own dir for the same collision-freedom
+        // as the vector file.
         metadata.save_staged(&staging_dir, path)?;
 
+        // Save language mappings as a JSON file (convert SymbolId to u32 for serialization)
         let languages_path = path.join("languages.json");
         let languages_map: HashMap<u32, String> = self
             .symbol_languages
@@ -523,10 +605,18 @@ impl SimpleSemanticSearch {
             }
         })?;
 
+        // Bytes only, never correctness: every artifact this save produced
+        // has been renamed out already.
         let _ = std::fs::remove_dir_all(&staging_dir);
+
         Ok(())
     }
 
+    /// Create an empty semantic search instance for remote-embedding mode.
+    ///
+    /// `model_name` should identify the remote model (e.g. "bge-large-en-v1.5")
+    /// so it is preserved in saved metadata and visible in status output.
+    /// No local fastembed model is loaded. Queries must use `search_with_embedding`.
     pub fn new_empty(dimensions: usize, model_name: &str) -> Self {
         let metadata =
             crate::semantic::SemanticMetadata::new_remote(model_name.to_string(), dimensions, 0);
@@ -539,6 +629,7 @@ impl SimpleSemanticSearch {
         }
     }
 
+    /// Load symbol-to-language mappings from `languages.json`.
     fn load_symbol_languages(
         path: &Path,
     ) -> Result<HashMap<SymbolId, String>, SemanticSearchError> {
@@ -565,12 +656,17 @@ impl SimpleSemanticSearch {
             .collect())
     }
 
+    /// Load an existing semantic index without initialising a local embedding model.
+    ///
+    /// Used in remote-embedding mode: stored vectors are loaded for similarity
+    /// search but query embedding is handled externally via `search_with_embedding`.
     pub fn load_remote(path: &Path) -> Result<Self, SemanticSearchError> {
         use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
 
         let metadata = SemanticMetadata::load(path)?;
         let mut storage = SemanticVectorStorage::open(path)?;
 
+        // Verify storage dimension matches metadata to catch corrupted indexes.
         if storage.dimension().get() != metadata.dimension {
             return Err(SemanticSearchError::DimensionMismatch {
                 expected: metadata.dimension,
@@ -603,11 +699,17 @@ impl SimpleSemanticSearch {
     pub fn load(path: &Path) -> Result<Self, SemanticSearchError> {
         use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
 
+        // Load metadata first
         let metadata = SemanticMetadata::load(path)?;
+
+        // Delegate to load_remote for indexes explicitly built with a remote backend.
+        // The backend field defaults to Local for old metadata without this field,
+        // preserving backward compatibility.
         if metadata.is_remote() {
             return Self::load_remote(path);
         }
 
+        // Parse model name from metadata
         let model = crate::vector::parse_embedding_model(&metadata.model_name)
             .map_err(|e| SemanticSearchError::StorageError {
                 message: format!("Invalid model in metadata: {e}"),
@@ -617,7 +719,10 @@ impl SimpleSemanticSearch {
                 ),
             })?;
 
+        // Open existing storage
         let mut storage = SemanticVectorStorage::open(path)?;
+
+        // Verify dimension matches
         if storage.dimension().get() != metadata.dimension {
             return Err(SemanticSearchError::DimensionMismatch {
                 expected: metadata.dimension,
@@ -629,7 +734,10 @@ impl SimpleSemanticSearch {
             });
         }
 
+        // Load all embeddings
         let embeddings_vec = storage.load_all()?;
+
+        // Verify count matches metadata
         if embeddings_vec.len() != metadata.embedding_count {
             eprintln!(
                 "WARNING: Expected {} embeddings but found {}",
@@ -638,11 +746,13 @@ impl SimpleSemanticSearch {
             );
         }
 
+        // Convert to HashMap
         let mut embeddings = HashMap::with_capacity(embeddings_vec.len());
         for (id, embedding) in embeddings_vec {
             embeddings.insert(id, embedding);
         }
 
+        // Create new instance with model from metadata
         let text_model = TextEmbedding::try_new(
             InitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())
@@ -690,6 +800,12 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if score.is_finite() { score } else { 0.0 }
 }
 
+/// Remove leftover staging directories owned by no live process: the
+/// legacy fixed `.staging` name, and `.staging-<pid>-<seq>` dirs whose
+/// pid is dead (a crashed save). A live pid keeps its dirs — those are
+/// in-flight saves, whether a co-run process's or another facade's in
+/// this one. Best-effort: a leftover dir costs bytes, not correctness,
+/// so removal failures are ignored.
 fn clear_stale_staging(path: &Path) {
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
@@ -721,6 +837,10 @@ fn clear_stale_staging(path: &Path) {
 mod tests {
     use super::*;
 
+    /// Two savers on one semantic directory (the serve co-run shape:
+    /// two --watch processes on one workspace) must not destroy each
+    /// other's in-flight staging: every save succeeds and the promoted
+    /// generation is a complete one.
     #[test]
     fn concurrent_saves_do_not_destroy_each_other() {
         let dir = tempfile::tempdir().unwrap();
@@ -763,7 +883,11 @@ mod tests {
         );
 
         let loaded = SimpleSemanticSearch::load(&path).unwrap();
-        assert_eq!(loaded.embedding_count(), 16, "the promoted generation is complete");
+        assert_eq!(
+            loaded.embedding_count(),
+            16,
+            "the promoted generation is complete"
+        );
     }
 
     #[test]
@@ -771,14 +895,24 @@ mod tests {
     fn test_save_survives_stale_staging_and_reloads() {
         let dir = tempfile::tempdir().unwrap();
         let mut search = SimpleSemanticSearch::new().unwrap();
-        search.index_doc_comment(SymbolId::new(1).unwrap(), "Parse JSON data").unwrap();
+        search
+            .index_doc_comment(SymbolId::new(1).unwrap(), "Parse JSON data")
+            .unwrap();
         search.save(dir.path()).unwrap();
+
+        // Simulated crash: staging dir left behind by an interrupted save
         let staging = dir.path().join(".staging");
         std::fs::create_dir_all(&staging).unwrap();
         std::fs::write(staging.join("segment_0.vec"), b"garbage from a dead save").unwrap();
+
+        // Old generation still loads
         let loaded = SimpleSemanticSearch::load(dir.path()).unwrap();
         assert_eq!(loaded.embedding_count(), 1);
-        search.index_doc_comment(SymbolId::new(2).unwrap(), "Connect to database").unwrap();
+
+        // Next save clears stale staging and swaps in the new generation
+        search
+            .index_doc_comment(SymbolId::new(2).unwrap(), "Connect to database")
+            .unwrap();
         search.save(dir.path()).unwrap();
         assert!(!staging.exists());
         let reloaded = SimpleSemanticSearch::load(dir.path()).unwrap();
@@ -789,29 +923,59 @@ mod tests {
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_remove_embeddings() {
         let mut search = SimpleSemanticSearch::new().unwrap();
+
+        // Add some embeddings with distinct content
         let id1 = SymbolId::new(1).unwrap();
         let id2 = SymbolId::new(2).unwrap();
         let id3 = SymbolId::new(3).unwrap();
-        search.index_doc_comment(id1, "Parse JSON data from file").unwrap();
-        search.index_doc_comment(id2, "Connect to database server").unwrap();
-        search.index_doc_comment(id3, "Calculate hash of string").unwrap();
+
+        search
+            .index_doc_comment(id1, "Parse JSON data from file")
+            .unwrap();
+        search
+            .index_doc_comment(id2, "Connect to database server")
+            .unwrap();
+        search
+            .index_doc_comment(id3, "Calculate hash of string")
+            .unwrap();
+
         assert_eq!(search.embedding_count(), 3);
+
+        // Remove specific embeddings
         search.remove_embeddings(&[id1, id3]);
+
         assert_eq!(search.embedding_count(), 1);
+
+        // Verify correct embedding was kept - search for database content
         let results = search.search("database connection", 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, id2);
+
+        // Verify we can't find removed content with good similarity
         let json_results = search.search_with_threshold("parse JSON", 10, 0.6).unwrap();
-        assert!(json_results.is_empty(), "Should not find removed JSON parsing doc");
-        let hash_results = search.search_with_threshold("calculate hash", 10, 0.6).unwrap();
-        assert!(hash_results.is_empty(), "Should not find removed hash doc");
+        assert!(
+            json_results.is_empty(),
+            "Should not find removed JSON parsing doc"
+        );
+
+        let hash_results = search
+            .search_with_threshold("calculate hash", 10, 0.6)
+            .unwrap();
+        assert!(
+            hash_results.is_empty(),
+            "Should not find removed hash calculation doc"
+        );
     }
 
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_save_and_load() {
         use tempfile::TempDir;
+
         let temp_dir = TempDir::new().unwrap();
+
+        // Create and populate search instance
+        // Skip test if model is not available
         let mut search = match SimpleSemanticSearch::new() {
             Ok(s) => s,
             Err(_) => {
@@ -819,22 +983,47 @@ mod tests {
                 return;
             }
         };
-        search.index_doc_comment(SymbolId::new(1).unwrap(), "This function parses JSON data").unwrap();
-        search.index_doc_comment(SymbolId::new(2).unwrap(), "Authenticates a user with credentials").unwrap();
+
+        // Index some test data
+        search
+            .index_doc_comment(SymbolId::new(1).unwrap(), "This function parses JSON data")
+            .unwrap();
+
+        search
+            .index_doc_comment(
+                SymbolId::new(2).unwrap(),
+                "Authenticates a user with credentials",
+            )
+            .unwrap();
+
         let original_count = search.embedding_count();
+
+        // Save to disk
         search.save(temp_dir.path()).unwrap();
+
+        // Load from disk
         let loaded = SimpleSemanticSearch::load(temp_dir.path()).unwrap();
+
+        // Verify same number of embeddings
         assert_eq!(loaded.embedding_count(), original_count);
+
+        // Verify search still works
         let results = loaded.search("parse JSON", 10).unwrap();
         assert!(!results.is_empty());
+
+        // The first result should be our JSON parsing function
         assert_eq!(results[0].0, SymbolId::new(1).unwrap());
     }
 
     #[test]
     fn test_load_missing_file() {
         use tempfile::TempDir;
+
         let temp_dir = TempDir::new().unwrap();
+
+        // Try to load from non-existent path
         let result = SimpleSemanticSearch::load(temp_dir.path());
+
         assert!(result.is_err());
         match result.unwrap_err() {
             SemanticSearchError::StorageError { .. } => {}
@@ -845,6 +1034,7 @@ mod tests {
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_semantic_search_basic() {
+        // Skip test if model is not available
         let mut search = match SimpleSemanticSearch::new() {
             Ok(s) => s,
             Err(_) => {
@@ -852,22 +1042,38 @@ mod tests {
                 return;
             }
         };
+
+        // Index some doc comments
         let id1 = SymbolId::new(1).unwrap();
         let id2 = SymbolId::new(2).unwrap();
         let id3 = SymbolId::new(3).unwrap();
-        search.index_doc_comment(id1, "Parse JSON data from a string").unwrap();
-        search.index_doc_comment(id2, "Serialize data structure to JSON").unwrap();
-        search.index_doc_comment(id3, "Calculate factorial of a number").unwrap();
+
+        search
+            .index_doc_comment(id1, "Parse JSON data from a string")
+            .unwrap();
+        search
+            .index_doc_comment(id2, "Serialize data structure to JSON")
+            .unwrap();
+        search
+            .index_doc_comment(id3, "Calculate factorial of a number")
+            .unwrap();
+
+        // Search for JSON-related functions
         let results = search.search("parse JSON", 3).unwrap();
-        assert!(results[0].1 > 0.7);
-        assert!(results[1].1 > 0.5);
-        assert!(results[2].1 < 0.3);
+
+        // First two should be JSON-related
+        assert!(results[0].1 > 0.7); // High similarity
+        assert!(results[1].1 > 0.5); // Moderate similarity
+        assert!(results[2].1 < 0.3); // Low similarity (factorial)
+
+        // The parse function should be most similar
         assert_eq!(results[0].0, id1);
     }
 
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_similarity_threshold() {
+        // Skip test if model is not available
         let mut search = match SimpleSemanticSearch::new() {
             Ok(s) => s,
             Err(_) => {
@@ -875,10 +1081,27 @@ mod tests {
                 return;
             }
         };
-        search.index_doc_comment(SymbolId::new(1).unwrap(), "Authentication and authorization").unwrap();
-        search.index_doc_comment(SymbolId::new(2).unwrap(), "User login and authentication").unwrap();
-        search.index_doc_comment(SymbolId::new(3).unwrap(), "Matrix multiplication algorithm").unwrap();
-        let results = search.search_with_threshold("user authentication", 10, 0.5).unwrap();
+
+        // Index test data
+        search
+            .index_doc_comment(
+                SymbolId::new(1).unwrap(),
+                "Authentication and authorization",
+            )
+            .unwrap();
+        search
+            .index_doc_comment(SymbolId::new(2).unwrap(), "User login and authentication")
+            .unwrap();
+        search
+            .index_doc_comment(SymbolId::new(3).unwrap(), "Matrix multiplication algorithm")
+            .unwrap();
+
+        // Search with threshold
+        let results = search
+            .search_with_threshold("user authentication", 10, 0.5)
+            .unwrap();
+
+        // Should only return auth-related results
         assert_eq!(results.len(), 2);
         for (_, score) in &results {
             assert!(*score >= 0.5);
@@ -887,11 +1110,16 @@ mod tests {
 
     #[test]
     fn test_cosine_similarity() {
+        // Identical vectors
         let v1 = vec![1.0, 0.0, 0.0];
         let v2 = vec![1.0, 0.0, 0.0];
         assert!((cosine_similarity(&v1, &v2) - 1.0).abs() < 0.001);
+
+        // Orthogonal vectors
         let v3 = vec![0.0, 1.0, 0.0];
         assert!((cosine_similarity(&v1, &v3) - 0.0).abs() < 0.001);
+
+        // Opposite vectors
         let v4 = vec![-1.0, 0.0, 0.0];
         assert!((cosine_similarity(&v1, &v4) - (-1.0)).abs() < 0.001);
     }
@@ -899,7 +1127,11 @@ mod tests {
     #[test]
     fn hardening_cosine_similarity_never_returns_nonfinite_score() {
         let finite = [1.0, 0.0];
-        for malformed in [[f32::NAN, 1.0], [f32::INFINITY, 1.0], [f32::NEG_INFINITY, 1.0]] {
+        for malformed in [
+            [f32::NAN, 1.0],
+            [f32::INFINITY, 1.0],
+            [f32::NEG_INFINITY, 1.0],
+        ] {
             let score = cosine_similarity(&finite, &malformed);
             assert!(score.is_finite());
             assert_eq!(score, 0.0);
