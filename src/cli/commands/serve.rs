@@ -290,6 +290,11 @@ async fn run_stdio_server(
         server
     };
 
+    // Stdio-owned background work must end with the transport. Detached
+    // watcher tasks can otherwise survive an EOF long enough to keep the
+    // notify backend busy and retain serve.lock during event bursts.
+    let mut background_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
     // If watch mode is enabled, start the hot-reload watcher
     if watch {
         use crate::watcher::HotReloadWatcher;
@@ -302,10 +307,10 @@ async fn run_stdio_server(
             Duration::from_secs(actual_watch_interval),
         );
 
-        // Spawn watcher in background
-        tokio::spawn(async move {
+        // Spawn watcher in background, owned by the stdio session.
+        background_tasks.push(tokio::spawn(async move {
             watcher.watch().await;
-        });
+        }));
 
         eprintln!("Hot-reload watcher started");
     }
@@ -364,22 +369,22 @@ async fn run_stdio_server(
         // Build and start the unified watcher
         match builder.build() {
             Ok(unified_watcher) => {
-                tokio::spawn(async move {
+                background_tasks.push(tokio::spawn(async move {
                     if let Err(e) = unified_watcher.watch().await {
                         eprintln!("Unified watcher error: {e}");
                     }
-                });
+                }));
                 eprintln!(
                     "Unified watcher started (debounce: {debounce_ms}ms, config: {})",
                     crate::parsing::paths::render_absolute_path(&settings_path).display()
                 );
 
                 // Start notification listener to forward events to MCP client
-                tokio::spawn(async move {
+                background_tasks.push(tokio::spawn(async move {
                     notification_server
                         .start_notification_listener(notification_receiver)
                         .await;
-                });
+                }));
             }
             Err(e) => {
                 eprintln!("Failed to start unified watcher: {e}");
@@ -403,8 +408,19 @@ async fn run_stdio_server(
         }
     };
 
-    // Wait for server to complete
-    if let Err(e) = service.waiting().await {
+    // Wait for the stdio transport, then synchronously tear down all work
+    // owned by that session before releasing serve.lock. `abort` is sufficient
+    // for these async loops because the native notify watcher is owned inside
+    // the task and drops when the future is cancelled.
+    let service_result = service.waiting().await;
+    for task in &background_tasks {
+        task.abort();
+    }
+    for task in background_tasks {
+        let _ = task.await;
+    }
+
+    if let Err(e) = service_result {
         eprintln!("MCP server error: {e}");
         drop(serve_lock);
         std::process::exit(1);
