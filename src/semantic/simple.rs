@@ -272,8 +272,7 @@ impl SimpleSemanticSearch {
                 }
             })
             .collect();
-        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
-        similarities.truncate(limit);
+        retain_top_k(&mut similarities, limit);
         Ok(similarities)
     }
 
@@ -319,8 +318,7 @@ impl SimpleSemanticSearch {
             .into_iter()
             .map(|(id, emb)| (*id, cosine_similarity(query_embedding, emb)))
             .collect();
-        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
-        similarities.truncate(limit);
+        retain_top_k(&mut similarities, limit);
         Ok(similarities)
     }
 
@@ -357,11 +355,7 @@ impl SimpleSemanticSearch {
             })
             .collect();
 
-        // Sort by similarity descending
-        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
-
-        // Return top results
-        similarities.truncate(limit);
+        retain_top_k(&mut similarities, limit);
         Ok(similarities)
     }
 
@@ -416,11 +410,7 @@ impl SimpleSemanticSearch {
             })
             .collect();
 
-        // Sort by similarity descending
-        similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
-
-        // Return top results
-        similarities.truncate(limit);
+        retain_top_k(&mut similarities, limit);
         Ok(similarities)
     }
 
@@ -777,6 +767,24 @@ impl SimpleSemanticSearch {
     }
 }
 
+/// Retains only the highest-scoring results without fully sorting the entire corpus.
+///
+/// Semantic search commonly asks for a small `limit` from a large embedding set.
+/// Partitioning first keeps selection O(n), then only the retained prefix is sorted.
+fn retain_top_k(similarities: &mut Vec<(SymbolId, f32)>, limit: usize) {
+    if limit == 0 {
+        similarities.clear();
+        return;
+    }
+
+    if similarities.len() > limit {
+        similarities.select_nth_unstable_by(limit, |a, b| b.1.total_cmp(&a.1));
+        similarities.truncate(limit);
+    }
+
+    similarities.sort_by(|a, b| b.1.total_cmp(&a.1));
+}
+
 /// Calculate cosine similarity between two vectors.
 ///
 /// Semantic ranking must never emit a non-orderable score. Malformed direct
@@ -1106,6 +1114,33 @@ mod tests {
         for (_, score) in &results {
             assert!(*score >= 0.5);
         }
+    }
+
+    #[test]
+    fn hardening_top_k_selection_matches_full_sort() {
+        let mut results: Vec<(SymbolId, f32)> = (1..=200u32)
+            .map(|id| {
+                let score = ((id * 37) % 101) as f32 / 100.0;
+                (SymbolId::new(id).unwrap(), score)
+            })
+            .collect();
+        let mut expected = results.clone();
+        expected.sort_by(|a, b| b.1.total_cmp(&a.1));
+        expected.truncate(10);
+
+        retain_top_k(&mut results, 10);
+
+        assert_eq!(results.len(), 10);
+        let actual_scores: Vec<_> = results.iter().map(|(_, score)| *score).collect();
+        let expected_scores: Vec<_> = expected.iter().map(|(_, score)| *score).collect();
+        assert_eq!(actual_scores, expected_scores);
+    }
+
+    #[test]
+    fn hardening_top_k_zero_limit_returns_no_results() {
+        let mut results = vec![(SymbolId::new(1).unwrap(), 0.9)];
+        retain_top_k(&mut results, 0);
+        assert!(results.is_empty());
     }
 
     #[test]
