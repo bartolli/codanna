@@ -12,6 +12,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 
+/// Hard upper bound for a single source file read into memory.
+/// This protects the pipeline from generated/binary artifacts and accidental
+/// giant files until a configurable byte-budget is introduced.
+const MAX_SOURCE_FILE_BYTES: u64 = 32 * 1024 * 1024;
+
 /// Read stage for file content loading.
 pub struct ReadStage {
     threads: usize,
@@ -149,10 +154,55 @@ impl ReadStage {
 
 /// Read a single file and compute its SHA256 hash.
 fn read_file(path: &PathBuf) -> PipelineResult<FileContent> {
+    let metadata = fs::metadata(path).map_err(|e| PipelineError::FileRead {
+        path: path.clone(),
+        source: e,
+    })?;
+
+    if !metadata.file_type().is_file() {
+        return Err(PipelineError::FileRead {
+            path: path.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to read non-regular filesystem entry",
+            ),
+        });
+    }
+
+    if metadata.len() > MAX_SOURCE_FILE_BYTES {
+        return Err(PipelineError::FileRead {
+            path: path.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "source file is {} bytes; maximum supported size is {} bytes",
+                    metadata.len(),
+                    MAX_SOURCE_FILE_BYTES
+                ),
+            ),
+        });
+    }
+
     let content = fs::read_to_string(path).map_err(|e| PipelineError::FileRead {
         path: path.clone(),
         source: e,
     })?;
+
+    // The file may have grown between metadata() and read_to_string(). Bound the
+    // post-read size as well so the preflight check cannot be raced into an
+    // unbounded retained allocation.
+    if content.len() as u64 > MAX_SOURCE_FILE_BYTES {
+        return Err(PipelineError::FileRead {
+            path: path.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "source file grew beyond the {} byte limit while being read",
+                    MAX_SOURCE_FILE_BYTES
+                ),
+            ),
+        });
+    }
 
     let hash = calculate_hash(&content);
 
@@ -269,6 +319,30 @@ mod tests {
         assert_eq!(read, 0, "No files should be read");
         assert_eq!(failed, 2, "Both files should fail");
         assert!(contents.is_empty(), "No content should be produced");
+    }
+
+    #[test]
+    fn hardening_read_rejects_oversized_source_before_loading() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("huge.rs");
+        let file = fs::File::create(&file_path).unwrap();
+        file.set_len(MAX_SOURCE_FILE_BYTES + 1).unwrap();
+
+        let err = read_file(&file_path).expect_err("oversized source must be rejected");
+        assert!(err.to_string().contains("maximum supported size"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardening_read_rejects_non_regular_entries_without_blocking() {
+        use std::os::unix::net::UnixListener;
+
+        let temp = TempDir::new().unwrap();
+        let socket_path = temp.path().join("looks_like_source.rs");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+
+        let err = read_file(&socket_path).expect_err("unix socket must not be read as source");
+        assert!(err.to_string().contains("non-regular"));
     }
 
     #[test]
