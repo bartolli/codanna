@@ -82,9 +82,8 @@ impl Pipeline {
     /// Sequencing contract lives in the architecture spec (Phase 1 orchestration):
     /// counters bracket the run, every stage handle joins before result
     /// inspection, results inspect source -> INDEX -> COLLECT -> counter save ->
-    /// parser-construction check (fatal) -> EMBED (soft-fail), metrics return
-    /// for deferred logging, and the orchestrator ends at Phase 1 (no
-    /// resolution, no embeddings save).
+    /// fatal READ/PARSE checks -> EMBED (soft-fail), metrics return for deferred
+    /// logging, and the orchestrator ends at Phase 1 (no resolution, no embeddings save).
     pub(super) fn run_phase1(
         &self,
         source: FileSource,
@@ -391,8 +390,14 @@ impl Pipeline {
         // bars complete on error paths too. Channel closure cascades shutdown,
         // so all joins terminate regardless of individual stage failures.
         let source_join = source_handle.join();
-        let (read_files, read_errors, read_input_wait, read_output_wait, read_wall_time) =
-            self.join_read_workers(read_handles);
+        let (
+            read_files,
+            read_errors,
+            read_input_wait,
+            read_output_wait,
+            read_wall_time,
+            read_fatal_error,
+        ) = self.join_read_workers(read_handles);
         let (
             parsed_files,
             parse_errors,
@@ -472,10 +477,18 @@ impl Pipeline {
             m.add_stage(cm);
         }
 
-        // CRITICAL: Save counters NOW, before checking EMBED.
+        // CRITICAL: Save counters NOW, before checking fatal worker errors.
         // INDEX succeeded, so we MUST persist the new ID pointers to prevent
         // duplicate IDs on the next run.
         self.save_final_counters(&index_for_metadata, final_file_count, final_symbol_count)?;
+
+        // A READ worker-level error or panic can abandon undispatched paths.
+        // Fail only after all stage joins and counter persistence so the
+        // partially committed index remains internally consistent and safely
+        // re-indexable instead of being reported as a complete success.
+        if let Some(e) = read_fatal_error {
+            return Err(e);
+        }
 
         // Parser-construction failure is a config error: every file of the
         // language was skipped, so reporting success would present a

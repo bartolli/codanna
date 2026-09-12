@@ -26,17 +26,30 @@ type ParseJoinHandle = thread::JoinHandle<(
 impl Pipeline {
     /// Join READ worker threads and aggregate results.
     ///
-    /// Returns (files_read, errors, total_input_wait, total_output_wait).
-    /// Panicked threads are logged and counted as errors.
+    /// Returns (files_read, errors, total_input_wait, total_output_wait,
+    /// max_wall_time, first fatal READ-stage infrastructure error).
+    ///
+    /// Ordinary per-file read failures remain recoverable and are counted in
+    /// the error total. A worker-level error or panic is fatal because the
+    /// channel may have been abandoned with unread paths, which would make a
+    /// successful Phase 1 result silently incomplete.
     pub(super) fn join_read_workers(
         &self,
         handles: Vec<ReadJoinHandle>,
-    ) -> (usize, usize, Duration, Duration, Duration) {
+    ) -> (
+        usize,
+        usize,
+        Duration,
+        Duration,
+        Duration,
+        Option<PipelineError>,
+    ) {
         let mut files = 0;
         let mut errors = 0;
         let mut input_wait = Duration::ZERO;
         let mut output_wait = Duration::ZERO;
         let mut max_wall_time = Duration::ZERO;
+        let mut fatal_error = None;
 
         for handle in handles {
             match handle.join() {
@@ -53,15 +66,30 @@ impl Pipeline {
                 Ok(Err(e)) => {
                     tracing::error!(target: "pipeline", "READ worker error: {e}");
                     errors += 1;
+                    if fatal_error.is_none() {
+                        fatal_error = Some(e);
+                    }
                 }
                 Err(_) => {
                     tracing::error!(target: "pipeline", "READ worker panicked");
                     errors += 1;
+                    if fatal_error.is_none() {
+                        fatal_error = Some(PipelineError::ChannelRecv(
+                            "READ worker panicked".to_string(),
+                        ));
+                    }
                 }
             }
         }
 
-        (files, errors, input_wait, output_wait, max_wall_time)
+        (
+            files,
+            errors,
+            input_wait,
+            output_wait,
+            max_wall_time,
+            fatal_error,
+        )
     }
 
     /// Join PARSE worker threads and aggregate results.
@@ -138,6 +166,22 @@ mod tests {
     use super::*;
     use crate::Settings;
     use std::sync::Arc;
+
+    #[test]
+    fn hardening_read_worker_panic_is_reported_as_fatal_error() {
+        let pipeline = Pipeline::with_settings(Arc::new(Settings::default()));
+        let handle: ReadJoinHandle = thread::spawn(|| {
+            panic!("synthetic read worker panic");
+        });
+
+        let (_, errors, _, _, _, fatal) = pipeline.join_read_workers(vec![handle]);
+
+        assert_eq!(errors, 1);
+        assert!(matches!(
+            fatal,
+            Some(PipelineError::ChannelRecv(message)) if message == "READ worker panicked"
+        ));
+    }
 
     #[test]
     fn hardening_parse_worker_panic_is_reported_as_fatal_error() {
