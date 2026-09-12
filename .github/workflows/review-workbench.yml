@@ -3,24 +3,29 @@ name: Review workbench
 on:
   push:
     branches: [work/review-20260912]
-    paths: [.github/workflows/review-workbench.yml]
+    paths: [.github/workflows/review-workbench.yml, review.patch.b64]
 
 permissions:
   contents: read
 
 jobs:
-  source:
+  baseline:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: 1b59d9b8a2f9d20204faea66671712dff66e6c75
           persist-credentials: false
-      - name: Export exact reviewed source (no git credentials)
-        run: git archive --format=tar.gz --output=review-source.tar.gz HEAD
-      - uses: actions/upload-artifact@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: review-source
-          path: review-source.tar.gz
+          cache-on-failure: true
+      - name: Compile all test targets without running providers
+        run: cargo test --locked --all-features --no-run 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: baseline-build
+          path: ${{ runner.temp }}/build.log
           retention-days: 1
-          if-no-files-found: error
