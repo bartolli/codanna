@@ -23,14 +23,9 @@ where
 {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => {
-            // block_in_place is valid only on multi-thread schedulers.
-            // Detect single-thread by attempting a spawn; if it would block,
-            // we have a multi-thread runtime and can use block_in_place.
             if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
                 tokio::task::block_in_place(|| handle.block_on(f))
             } else {
-                // Current-thread runtime: we cannot block_in_place.
-                // Spawn a sibling thread with its own runtime instead.
                 std::thread::scope(|s| {
                     s.spawn(|| {
                         tokio::runtime::Builder::new_current_thread()
@@ -55,8 +50,6 @@ use serde::{Deserialize, Serialize};
 
 use super::SemanticSearchError;
 
-// ── Request / Response types ───────────────────────────────────────────────
-
 #[derive(Serialize)]
 struct EmbedRequest<'a> {
     model: &'a str,
@@ -73,8 +66,6 @@ struct EmbedData {
     index: usize,
     embedding: Vec<f32>,
 }
-
-// ── RemoteEmbedder ─────────────────────────────────────────────────────────
 
 /// Embedding client for an OpenAI-compatible HTTP server.
 ///
@@ -111,7 +102,6 @@ impl RemoteEmbedder {
 
         let url = format!("{}/v1/embeddings", base_url.trim_end_matches('/'));
 
-        // Probe with a single text to determine / validate dimension
         let probe = Self::request(
             &client,
             &url,
@@ -158,7 +148,6 @@ impl RemoteEmbedder {
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, SemanticSearchError> {
         let mut results: Vec<(usize, Vec<f32>)> = Vec::with_capacity(texts.len());
 
-        // Truncate by char count, not bytes, to avoid splitting multi-byte codepoints.
         let truncated: Vec<String> = texts
             .iter()
             .map(|t| {
@@ -201,7 +190,6 @@ impl RemoteEmbedder {
             }
         }
 
-        // Sort by original index and return in order
         results.sort_by_key(|(i, _)| *i);
         Ok(results.into_iter().map(|(_, emb)| emb).collect())
     }
@@ -239,7 +227,6 @@ impl RemoteEmbedder {
             SemanticSearchError::EmbeddingError(format!("Failed to parse embed response: {e}"))
         })?;
 
-        // Sort by index and validate contiguous range [0, len)
         let mut data = parsed.data;
         data.sort_by_key(|d| d.index);
 
@@ -250,8 +237,43 @@ impl RemoteEmbedder {
                     d.index
                 )));
             }
+            validate_finite_embedding(d.index, &d.embedding)?;
         }
 
         Ok(data.into_iter().map(|d| d.embedding).collect())
+    }
+}
+
+fn validate_finite_embedding(index: usize, embedding: &[f32]) -> Result<(), SemanticSearchError> {
+    if let Some((component, value)) = embedding
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(_, value)| !value.is_finite())
+    {
+        return Err(SemanticSearchError::EmbeddingError(format!(
+            "Remote embedding at index {index} contains non-finite value {value} at component {component}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hardening_remote_embedding_rejects_non_finite_values() {
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let error = validate_finite_embedding(3, &[0.1, bad, 0.2]).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("non-finite"));
+            assert!(message.contains("component 1"));
+        }
+    }
+
+    #[test]
+    fn finite_remote_embedding_is_accepted() {
+        validate_finite_embedding(0, &[0.1, -0.5, 1.0]).unwrap();
     }
 }

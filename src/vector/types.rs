@@ -257,13 +257,23 @@ impl VectorDimension {
         self.0
     }
 
-    /// Validates that a vector has the expected dimension.
+    /// Validates that a vector has the expected dimension and contains only
+    /// finite values. NaN and infinities make cosine similarity non-orderable
+    /// and can otherwise panic ranking code that assumes valid embeddings.
     pub fn validate_vector(&self, vector: &[f32]) -> Result<(), VectorError> {
         if vector.len() != self.0 {
             return Err(VectorError::DimensionMismatch {
                 expected: self.0,
                 actual: vector.len(),
             });
+        }
+        if let Some((index, value)) = vector
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            return Err(VectorError::NonFiniteValue { index, value });
         }
         Ok(())
     }
@@ -284,6 +294,11 @@ pub enum VectorError {
         dimension: usize,
         reason: &'static str,
     },
+
+    #[error(
+        "Non-finite vector value at component {index}: {value}\nSuggestion: Regenerate the embedding; vectors must contain only finite values"
+    )]
+    NonFiniteValue { index: usize, value: f32 },
 
     #[error("Invalid score value: {value}\nReason: {reason}")]
     InvalidScore { value: f32, reason: &'static str },
@@ -333,14 +348,9 @@ mod tests {
 
     #[test]
     fn test_vector_id_construction() {
-        // Valid construction
         let id = VectorId::new(42).unwrap();
         assert_eq!(id.get(), 42);
-
-        // Invalid construction (zero)
         assert!(VectorId::new(0).is_none());
-
-        // Unchecked construction
         let id = VectorId::new_unchecked(100);
         assert_eq!(id.get(), 100);
     }
@@ -361,11 +371,8 @@ mod tests {
 
     #[test]
     fn test_cluster_id_construction() {
-        // Valid construction
         let id = ClusterId::new(1).unwrap();
         assert_eq!(id.get(), 1);
-
-        // Invalid construction (zero)
         assert!(ClusterId::new(0).is_none());
     }
 
@@ -373,27 +380,19 @@ mod tests {
     fn test_segment_ordinal() {
         let seg = SegmentOrdinal::new(0);
         assert_eq!(seg.get(), 0);
-
         let seg2 = SegmentOrdinal::new(42);
         assert_eq!(seg2.get(), 42);
-
-        // Test ordering
         assert!(seg < seg2);
     }
 
     #[test]
     fn test_score_validation() {
-        // Valid scores
         let score = Score::new(0.5).unwrap();
         assert_eq!(score.get(), 0.5);
-
         let zero = Score::zero();
         assert_eq!(zero.get(), 0.0);
-
         let one = Score::one();
         assert_eq!(one.get(), 1.0);
-
-        // Invalid scores
         assert!(Score::new(-0.1).is_err());
         assert!(Score::new(1.1).is_err());
         assert!(Score::new(f32::NAN).is_err());
@@ -403,7 +402,6 @@ mod tests {
     fn test_score_combining() {
         let score1 = Score::new(0.8).unwrap();
         let score2 = Score::new(0.6).unwrap();
-
         let combined = score1.weighted_combine(score2, 0.7).unwrap();
         assert!((combined.get() - 0.74).abs() < f32::EPSILON);
     }
@@ -412,18 +410,24 @@ mod tests {
     fn test_vector_dimension() {
         let dim = VectorDimension::new(384).unwrap();
         assert_eq!(dim.get(), 384);
-
         let standard = VectorDimension::dimension_384();
         assert_eq!(standard.get(), 384);
-
-        // Invalid dimension
         assert!(VectorDimension::new(0).is_err());
-
-        // Validation
         let vec = vec![0.1; 384];
         assert!(dim.validate_vector(&vec).is_ok());
-
         let wrong_vec = vec![0.1; 100];
         assert!(dim.validate_vector(&wrong_vec).is_err());
+    }
+
+    #[test]
+    fn hardening_vector_dimension_rejects_non_finite_values() {
+        let dim = VectorDimension::new(3).unwrap();
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let err = dim.validate_vector(&[0.1, bad, 0.3]).unwrap_err();
+            assert!(matches!(
+                err,
+                VectorError::NonFiniteValue { index: 1, value } if !value.is_finite()
+            ));
+        }
     }
 }
