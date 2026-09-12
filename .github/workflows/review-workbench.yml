@@ -1,0 +1,26 @@
+name: Review workbench
+
+on:
+  push:
+    branches: [work/review-20260912]
+    paths: [.github/workflows/review-workbench.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Export exact reviewed source (no git credentials)
+        run: git archive --format=tar.gz --output=review-source.tar.gz HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: review-source
+          path: review-source.tar.gz
+          retention-days: 1
+          if-no-files-found: error
