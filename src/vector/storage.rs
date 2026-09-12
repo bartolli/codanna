@@ -17,7 +17,7 @@
 //! - Startup time: <1ms (mmap is lazy-loaded by OS)
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -212,18 +212,17 @@ impl MmapVectorStorage {
             self.write_header(&mut file)?;
         }
 
-        // Write vectors
+        // Buffer payload writes. A 384-dimensional vector otherwise turns
+        // into 385 small write_all calls. Flush before update_metadata() can
+        // publish the new header count, preserving the existing crash ordering.
+        let mut writer = BufWriter::new(file);
         for (id, vector) in vectors {
-            // Write vector ID
-            file.write_all(&id.to_bytes())?;
-
-            // Write vector data
+            writer.write_all(&id.to_bytes())?;
             for &value in *vector {
-                file.write_all(&value.to_le_bytes())?;
+                writer.write_all(&value.to_le_bytes())?;
             }
         }
-
-        file.flush()?;
+        writer.flush()?;
         Ok(())
     }
 
