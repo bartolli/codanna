@@ -189,6 +189,67 @@ impl MmapVectorStorage {
         Ok(())
     }
 
+    /// Replaces the complete vector generation in storage.
+    ///
+    /// The new generation is written to a sibling staging file and flushed before
+    /// it is atomically promoted over the active file. The previous generation is
+    /// therefore left intact if validation or staging fails.
+    pub fn replace_batch(
+        &mut self,
+        vectors: &[(VectorId, &[f32])],
+    ) -> Result<(), VectorStorageError> {
+        self.validate_vectors(vectors)?;
+        self.ensure_storage_ready()?;
+        self.invalidate_cache();
+
+        let file_name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("segment.vec");
+        let staging_path = self
+            .path
+            .with_file_name(format!(".{file_name}.replace.tmp"));
+
+        let result = (|| -> Result<(), VectorStorageError> {
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&staging_path)?;
+            let mut writer = BufWriter::new(file);
+
+            writer.write_all(MAGIC_BYTES)?;
+            writer.write_all(&STORAGE_VERSION.to_le_bytes())?;
+            writer.write_all(&(self.dimension.get() as u32).to_le_bytes())?;
+            let count = u32::try_from(vectors.len()).map_err(|_| {
+                VectorStorageError::InvalidFormat(
+                    "Vector count exceeds storage format capacity".to_string(),
+                )
+            })?;
+            writer.write_all(&count.to_le_bytes())?;
+
+            for (id, vector) in vectors {
+                writer.write_all(&id.to_bytes())?;
+                for &value in *vector {
+                    writer.write_all(&value.to_le_bytes())?;
+                }
+            }
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+            drop(writer);
+
+            std::fs::rename(&staging_path, &self.path)?;
+            self.vector_count = vectors.len();
+            Ok(())
+        })();
+
+        if result.is_err() {
+            let _ = std::fs::remove_file(&staging_path);
+        }
+        result
+    }
+
     /// Validates that all vectors have the correct dimension without taking
     /// ownership of their backing storage.
     fn validate_vectors(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
@@ -608,6 +669,17 @@ impl ConcurrentVectorStorage {
         self.inner.write().read_vectors(ids)
     }
 
+    /// Replaces the complete vector generation with exclusive access.
+    pub fn replace_batch(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
+        self.inner.write().replace_batch(vectors).map_err(|e| {
+            VectorStorageError::Io(io::Error::other(format!(
+                "Concurrent replacement failed for {} vectors: {}",
+                vectors.len(),
+                e
+            )))
+        })
+    }
+
     /// Writes a batch of vectors with exclusive access.
     pub fn write_batch(&self, vectors: &[(VectorId, &[f32])]) -> Result<(), VectorStorageError> {
         self.inner.write().write_batch(vectors).map_err(|e| {
@@ -799,6 +871,33 @@ mod tests {
             VectorStorageError::Vector(VectorError::VersionMismatch { expected, actual })
                 if expected == STORAGE_VERSION && actual == STORAGE_VERSION + 1
         ));
+    }
+
+    #[test]
+    fn hardening_replace_batch_replaces_previous_generation() {
+        let temp_dir = TempDir::new().unwrap();
+        let segment = SegmentOrdinal::new(0);
+        let dimension = VectorDimension::new(2).unwrap();
+        let mut storage = MmapVectorStorage::open_or_create(&temp_dir, segment, dimension).unwrap();
+
+        let first = [
+            (VectorId::new(1).unwrap(), vec![1.0f32, 2.0]),
+            (VectorId::new(2).unwrap(), vec![3.0f32, 4.0]),
+        ];
+        let refs: Vec<_> = first.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        storage.replace_batch(&refs).unwrap();
+
+        let second = [(VectorId::new(2).unwrap(), vec![9.0f32, 8.0])];
+        let refs: Vec<_> = second.iter().map(|(id, v)| (*id, v.as_slice())).collect();
+        storage.replace_batch(&refs).unwrap();
+
+        assert_eq!(storage.vector_count(), 1);
+        assert!(storage.read_vector(VectorId::new(1).unwrap()).is_none());
+        assert_eq!(
+            storage.read_vector(VectorId::new(2).unwrap()).unwrap(),
+            vec![9.0f32, 8.0]
+        );
+        assert_eq!(storage.read_all_vectors().unwrap(), second);
     }
 
     #[test]
