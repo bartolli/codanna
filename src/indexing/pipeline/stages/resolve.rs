@@ -208,6 +208,19 @@ impl ResolveStage {
             }
         }
 
+        // A recorded unresolved relative import is negative evidence:
+        // the source explicitly names a local module, so falling through to
+        // global same-name candidates can fabricate a cross-repository edge.
+        if context
+            .scope
+            .import_binding(&unresolved.to_name)
+            .is_some_and(|binding| {
+                binding.resolved_symbol.is_none() && binding.import.path.starts_with('.')
+            })
+        {
+            return None;
+        }
+
         // Inheritance witness for bare calls inside a class body, only
         // where the language vouches that a bare name can dispatch to an
         // instance member. Runs after the scope lookup — file-local and
