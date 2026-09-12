@@ -16,8 +16,8 @@ use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Discover stage for parallel file walking.
 pub struct DiscoverStage {
@@ -69,10 +69,12 @@ impl DiscoverStage {
 
     /// Run the discover stage, sending paths to the provided channel.
     ///
-    /// Returns the number of files discovered.
+    /// Returns the number of files discovered. Any filesystem traversal error
+    /// fails the run: a partial walk must never be reported as a complete index.
     pub fn run(&self, sender: Sender<PathBuf>) -> PipelineResult<usize> {
         let extensions = get_supported_extensions()?;
         let count = Arc::new(AtomicUsize::new(0));
+        let walk_error = Arc::new(Mutex::new(None::<String>));
 
         let mut builder = WalkBuilder::new(&self.root);
         builder
@@ -91,20 +93,30 @@ impl DiscoverStage {
 
         let count_clone = count.clone();
         let extensions = Arc::new(extensions);
+        let walk_error_for_workers = Arc::clone(&walk_error);
 
         walker.run(|| {
             let sender = sender.clone();
             let extensions = extensions.clone();
             let count = count_clone.clone();
+            let walk_error = Arc::clone(&walk_error_for_workers);
 
             Box::new(move |entry| {
                 let entry = match entry {
                     Ok(e) => e,
-                    Err(_) => return ignore::WalkState::Continue,
+                    Err(e) => {
+                        if let Ok(mut slot) = walk_error.lock() {
+                            if slot.is_none() {
+                                *slot = Some(e.to_string());
+                            }
+                        }
+                        return ignore::WalkState::Quit;
+                    }
                 };
 
-                // Skip directories
-                if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+                // Only regular files are valid source candidates. This keeps
+                // sockets/FIFOs/devices out of the READ stage entirely.
+                if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                     return ignore::WalkState::Continue;
                 }
 
@@ -135,6 +147,15 @@ impl DiscoverStage {
             })
         });
 
+        if let Ok(mut slot) = walk_error.lock() {
+            if let Some(reason) = slot.take() {
+                return Err(PipelineError::Parse {
+                    path: self.root.clone(),
+                    reason: format!("Filesystem discovery incomplete: {reason}"),
+                });
+            }
+        }
+
         Ok(count.load(Ordering::Relaxed))
     }
 
@@ -148,7 +169,9 @@ impl DiscoverStage {
             reason: "Incremental mode requires an index".to_string(),
         })?;
 
-        // Step 1: Collect all current files on disk, normalized to relative paths
+        // Step 1: Collect all current files on disk, normalized to relative paths.
+        // collect_all_files is authoritative-or-fail: deletion inference is unsafe
+        // if any part of the filesystem snapshot could not be traversed.
         let disk_files = self.collect_all_files()?;
         let disk_set: HashSet<PathBuf> = disk_files
             .into_iter()
@@ -183,7 +206,8 @@ impl DiscoverStage {
             }
         }
 
-        // Deleted files: in index but not on disk
+        // Deleted files: in index but not on disk. Safe only because the disk
+        // snapshot above completed without traversal errors.
         for path in &indexed_set {
             if !disk_set.contains(path) {
                 result.deleted_files.push(path.clone());
@@ -250,6 +274,9 @@ impl DiscoverStage {
     }
 
     /// Collect all files on disk (synchronous, for incremental comparison).
+    ///
+    /// This method is deliberately fail-closed. A partial snapshot cannot be
+    /// used to infer deletions from the persistent index.
     fn collect_all_files(&self) -> PipelineResult<Vec<PathBuf>> {
         let extensions = get_supported_extensions()?;
         let mut files = Vec::new();
@@ -269,8 +296,13 @@ impl DiscoverStage {
 
         let walker = builder.build();
 
-        for entry in walker.flatten() {
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+        for entry in walker {
+            let entry = entry.map_err(|e| PipelineError::Parse {
+                path: self.root.clone(),
+                reason: format!("Filesystem discovery incomplete: {e}"),
+            })?;
+
+            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                 continue;
             }
 
@@ -458,6 +490,24 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn hardening_discovery_missing_root_fails_instead_of_returning_empty_snapshot() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let missing = temp.path().join("missing-root");
+        let stage = DiscoverStage::new(&missing, 2);
+
+        let (sender, _receiver) = bounded(8);
+        let err = stage
+            .run(sender)
+            .expect_err("full discovery must fail on an unreadable/missing root");
+        assert!(err.to_string().contains("incomplete"));
+
+        let err = stage
+            .collect_all_files()
+            .expect_err("incremental snapshot must fail on an unreadable/missing root");
+        assert!(err.to_string().contains("incomplete"));
     }
 
     // Pinning locks for the relocation pairing gate: a pair needs a hash
