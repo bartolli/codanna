@@ -88,19 +88,8 @@ impl VectorSearchEngine {
             self.dimension.validate_vector(vec)?;
         }
 
-        // Store vectors using write_batch through concurrent storage
-        // Convert to borrowed slices for write_batch
-        let vector_refs: Vec<(VectorId, &[f32])> = vectors
-            .iter()
-            .map(|(id, vec)| (*id, vec.as_slice()))
-            .collect();
-        self.storage.write_batch(&vector_refs).map_err(|e| {
-            VectorError::Storage(std::io::Error::other(format!(
-                "Failed to store vectors: {e}. Check disk space and file permissions"
-            )))
-        })?;
-
-        // Extract just the vectors for clustering
+        // Extract just the vectors for clustering before mutating persistent
+        // storage. A clustering failure must leave the previous generation intact.
         // TODO: Future optimization - clustering algorithm should accept &[&[f32]] to avoid clones
         let vecs: Vec<Vec<f32>> = vectors.iter().map(|(_, v)| v.clone()).collect();
 
@@ -111,6 +100,19 @@ impl VectorSearchEngine {
         // Run K-means clustering
         let clustering_result = kmeans_clustering(&vecs, k)
             .map_err(|e| VectorError::ClusteringFailed(e.to_string()))?;
+
+        // Publish the complete replacement generation only after clustering
+        // has succeeded. This keeps on-disk storage aligned with the centroids and
+        // cluster assignments that replace the previous in-memory generation.
+        let vector_refs: Vec<(VectorId, &[f32])> = vectors
+            .iter()
+            .map(|(id, vec)| (*id, vec.as_slice()))
+            .collect();
+        self.storage.replace_batch(&vector_refs).map_err(|err| {
+            VectorError::Storage(std::io::Error::other(format!(
+                "Failed to replace vector generation: {err}. Check disk space and file permissions"
+            )))
+        })?;
 
         // Update internal state
         self.centroids = clustering_result.centroids;
@@ -305,6 +307,47 @@ mod tests {
                 "Results should be sorted by score"
             );
         }
+    }
+
+    #[test]
+    fn hardening_reindex_replaces_persisted_generation() {
+        let temp_dir = TempDir::new().unwrap();
+        let dimension = VectorDimension::new(4).unwrap();
+        let mut engine = VectorSearchEngine::new(temp_dir.path(), dimension).unwrap();
+
+        let first = vec![
+            (VectorId::new(1).unwrap(), vec![1.0, 0.0, 0.0, 0.0]),
+            (VectorId::new(2).unwrap(), vec![0.0, 1.0, 0.0, 0.0]),
+        ];
+        engine.index_vectors(&first).unwrap();
+
+        let second = vec![
+            (VectorId::new(2).unwrap(), vec![0.0, 0.0, 1.0, 0.0]),
+            (VectorId::new(3).unwrap(), vec![0.0, 0.0, 0.0, 1.0]),
+        ];
+        engine.index_vectors(&second).unwrap();
+
+        assert_eq!(engine.vector_count(), 2);
+        assert!(
+            engine
+                .get_cluster_for_vector(VectorId::new(1).unwrap())
+                .is_none()
+        );
+        assert!(
+            engine
+                .get_cluster_for_vector(VectorId::new(2).unwrap())
+                .is_some()
+        );
+        assert!(
+            engine
+                .get_cluster_for_vector(VectorId::new(3).unwrap())
+                .is_some()
+        );
+
+        let mut storage = MmapVectorStorage::open(temp_dir.path(), SegmentOrdinal::new(0)).unwrap();
+        let persisted = storage.read_all_vectors().unwrap();
+        assert_eq!(persisted, second);
+        assert_eq!(storage.vector_count(), 2);
     }
 
     #[test]
