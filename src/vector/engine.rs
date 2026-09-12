@@ -153,18 +153,28 @@ impl VectorSearchEngine {
         let centroid_refs: Vec<&[f32]> = self.centroids.iter().map(|c| c.as_slice()).collect();
         let nearest_cluster = assign_to_nearest_centroid(query, &centroid_refs);
 
-        // Collect all vectors in the nearest cluster
-        let mut candidates = Vec::new();
-        for (vector_id, cluster_id) in &self.cluster_assignments {
-            if *cluster_id == nearest_cluster {
-                // Get vector from storage
-                if let Some(vector) = self.storage.read_vector(*vector_id) {
-                    let similarity = cosine_similarity(query, &vector);
-                    // Convert similarity to score (already in [0, 1] range)
-                    if let Ok(score) = Score::new(similarity) {
-                        candidates.push((*vector_id, score));
-                    }
-                }
+        // Collect candidate IDs first, then fetch the whole cluster in one mmap scan.
+        // The old point-lookup loop scanned the vector file from the beginning for
+        // every candidate, making a search roughly O(cluster_size * total_vectors).
+        let candidate_ids = self
+            .cluster_assignments
+            .iter()
+            .filter_map(|(vector_id, cluster_id)| {
+                (*cluster_id == nearest_cluster).then_some(*vector_id)
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        let vectors = self.storage.read_vectors(&candidate_ids).map_err(|e| {
+            VectorError::Storage(std::io::Error::other(format!(
+                "Failed to read search candidates: {e}"
+            )))
+        })?;
+
+        let mut candidates = Vec::with_capacity(vectors.len());
+        for (vector_id, vector) in vectors {
+            let similarity = cosine_similarity(query, &vector);
+            if let Ok(score) = Score::new(similarity) {
+                candidates.push((vector_id, score));
             }
         }
 
