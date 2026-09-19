@@ -898,6 +898,70 @@ mod tests {
             .unwrap()
     }
 
+    #[tokio::test]
+    async fn unchanged_code_events_do_not_notify_but_edits_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("a.py");
+        std::fs::write(&source, "def alpha():\n    pass\n").unwrap();
+        let watcher = watcher_over(dir.path(), &root).await;
+        let mut events = watcher.broadcaster.subscribe();
+
+        watcher
+            .execute_action(
+                WatchAction::ReindexCode {
+                    path: source.clone(),
+                    created: true,
+                },
+                "code",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            FileChangeEvent::FileCreated { path } if path == source
+        ));
+
+        // Duplicate observations must take the cached branch, which skips
+        // both the semantic snapshot save and the reindex notification.
+        for _ in 0..2 {
+            watcher
+                .execute_action(
+                    WatchAction::ReindexCode {
+                        path: source.clone(),
+                        created: false,
+                    },
+                    "code",
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ));
+        }
+
+        std::fs::write(&source, "def beta():\n    pass\n").unwrap();
+        watcher
+            .execute_action(
+                WatchAction::ReindexCode {
+                    path: source.clone(),
+                    created: false,
+                },
+                "code",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            FileChangeEvent::FileReindexed { path } if path == source
+        ));
+        let facade = watcher.facade.read().await;
+        assert!(facade.find_symbols_by_name("alpha", None).is_empty());
+        assert_eq!(facade.find_symbols_by_name("beta", None).len(), 1);
+    }
+
     // A dir rename's from-side arrives as Modify(Name) on a path that no
     // longer exists, and no per-file events follow. A vanished path that
     // prefixes watched directories is a directory removal observation:

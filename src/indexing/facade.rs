@@ -1050,9 +1050,6 @@ impl IndexFacade {
     // Mutation Methods (delegate to Pipeline)
     // =========================================================================
 
-    /// Index a single file using the parallel pipeline.
-    ///
-    /// Returns `IndexingResult::Indexed` with the file ID on success.
     /// File records key off path text: an uncanonical root or file path
     /// (`./src`, `x/../x`) addresses a key space disjoint from the
     /// registered indexed_paths walks, re-indexing every file as new and
@@ -1108,6 +1105,7 @@ impl IndexFacade {
             .collect()
     }
 
+    /// Index a single file, returning `Cached` when its content hash is unchanged.
     pub fn index_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
@@ -1125,7 +1123,11 @@ impl IndexFacade {
             self.embedding_pool.clone(),
         )?;
 
-        Ok(crate::IndexingResult::Indexed(stats.file_id))
+        if stats.cached {
+            Ok(crate::IndexingResult::Cached(stats.file_id))
+        } else {
+            Ok(crate::IndexingResult::Indexed(stats.file_id))
+        }
     }
 
     /// Index a single file with optional force re-indexing.
