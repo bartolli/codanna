@@ -1,6 +1,7 @@
 //! Unified file watcher that routes events to pluggable handlers.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -53,6 +54,24 @@ pub struct UnifiedWatcher {
     /// lane. Removal waves batch-sync these so the shared discovery can
     /// pair renames (remove + create of identical content).
     batch_sync_roots: Vec<PathBuf>,
+    /// Watch topology. FSEvents stops delivering once one stream holds
+    /// more than 4,096 paths, so on macOS roots register recursively and
+    /// the directories under them do not register natively. Every other
+    /// backend registers one non-recursive watch per directory.
+    recursive_roots: bool,
+    /// Roots registered recursively. Survives `PathRegistry::rebuild`, so
+    /// an index reload never registers a root twice.
+    native_roots: Vec<PathBuf>,
+    /// Recursive topology only: every directory offered for registration,
+    /// natively registered or covered by a root. It stands in for the
+    /// per-directory watch set when gating events, so it is not cleared
+    /// on index reload; vanished directories are pruned from it. Ordered
+    /// so a prefix lookup is a range query, not a scan.
+    admitted_dirs: BTreeSet<PathBuf>,
+    /// Nearest surviving ancestors of pruned directories. They admit a
+    /// direct-child directory event and nothing else, so a recreated
+    /// directory reaches discovery.
+    recreation_ancestors: HashSet<PathBuf>,
 }
 
 impl UnifiedWatcher {
@@ -100,9 +119,7 @@ impl UnifiedWatcher {
             );
         }
 
-        self.watch_directories(&new_dirs);
-
-        self.register_handler_roots().await;
+        self.register_watch_set(&new_dirs).await;
 
         // Subscribe to broadcaster for IndexReloaded events
         let mut broadcast_rx = self.broadcaster.subscribe();
@@ -177,7 +194,20 @@ impl UnifiedWatcher {
         }
     }
 
-    fn watch_directories(&mut self, dirs: &[PathBuf]) -> Vec<PathBuf> {
+    /// Register the watch set in the order the topology needs: recursive
+    /// roots first, so a new root covers its directories before they are
+    /// offered; per-directory keeps directories first.
+    async fn register_watch_set(&mut self, dirs: &[PathBuf]) {
+        if self.recursive_roots {
+            self.register_handler_roots().await;
+            self.watch_directories(dirs);
+        } else {
+            self.watch_directories(dirs);
+            self.register_handler_roots().await;
+        }
+    }
+
+    fn normalized(&self, dirs: &[PathBuf]) -> Vec<PathBuf> {
         let mut watch_paths: Vec<_> = dirs
             .iter()
             .map(|dir| {
@@ -190,6 +220,41 @@ impl UnifiedWatcher {
             .collect();
         watch_paths.sort();
         watch_paths.dedup();
+        watch_paths
+    }
+
+    fn watch_directories(&mut self, dirs: &[PathBuf]) -> Vec<PathBuf> {
+        let mut watch_paths = self.normalized(dirs);
+        if self.recursive_roots {
+            self.admitted_dirs.extend(watch_paths.iter().cloned());
+            watch_paths.retain(|path| !self.native_roots.iter().any(|r| path.starts_with(r)));
+        }
+        self.register_native(watch_paths, RecursiveMode::NonRecursive)
+    }
+
+    fn watch_roots(&mut self, roots: &[PathBuf]) -> Vec<PathBuf> {
+        if !self.recursive_roots {
+            return self.watch_directories(roots);
+        }
+        let mut new_roots: Vec<PathBuf> = Vec::new();
+        for root in self.normalized(roots) {
+            self.admitted_dirs.insert(root.clone());
+            let covered = self
+                .native_roots
+                .iter()
+                .chain(&new_roots)
+                .any(|r| root.starts_with(r));
+            if !covered {
+                new_roots.push(root);
+            }
+        }
+        let failed = self.register_native(new_roots.clone(), RecursiveMode::Recursive);
+        self.native_roots
+            .extend(new_roots.into_iter().filter(|r| !failed.contains(r)));
+        failed
+    }
+
+    fn register_native(&mut self, watch_paths: Vec<PathBuf>, mode: RecursiveMode) -> Vec<PathBuf> {
         if watch_paths.is_empty() {
             return Vec::new();
         }
@@ -197,7 +262,7 @@ impl UnifiedWatcher {
         let mut failed = Vec::new();
         let mut paths = self._watcher.paths_mut();
         for path in &watch_paths {
-            match paths.add(path, RecursiveMode::NonRecursive) {
+            match paths.add(path, mode) {
                 Ok(()) => {
                     crate::debug_event!(
                         "watcher",
@@ -222,6 +287,29 @@ impl UnifiedWatcher {
         failed
     }
 
+    /// Whether a per-directory watch set would have delivered `path`: an
+    /// admitted directory, one of its direct children, or a vanished
+    /// ancestor of one (a directory removal observation). A recursive
+    /// root also reports ignored subtrees; the code handler refuses those
+    /// files only after a whole-root discovery walk per path, so they are
+    /// dropped here first. Under a remembered ancestor of a vanished
+    /// directory only a directory is admitted: its files stay out, since
+    /// ignore rules may have changed along with the removal.
+    fn admits(&self, path: &Path) -> bool {
+        let parent = path.parent();
+        self.admitted_dirs.contains(path)
+            || parent.is_some_and(|parent| self.admitted_dirs.contains(parent))
+            || (self.admitted_under(path).next().is_some() && !path.exists())
+            || (parent.is_some_and(|parent| self.recreation_ancestors.contains(parent))
+                && path.is_dir())
+    }
+
+    fn admitted_under<'a>(&'a self, path: &'a Path) -> impl Iterator<Item = &'a PathBuf> {
+        self.admitted_dirs
+            .range::<Path, _>((Bound::Included(path), Bound::Unbounded))
+            .take_while(move |dir| dir.starts_with(path))
+    }
+
     /// Handle an incoming file event.
     async fn handle_event(&mut self, event: Event) {
         // Access events observe state; they never change it. inotify
@@ -242,6 +330,36 @@ impl UnifiedWatcher {
                 event.kind,
                 crate::parsing::paths::render_absolute_path(&path).display()
             );
+            if self.recursive_roots {
+                if !self.admits(&path) {
+                    crate::trace_event!(
+                        "watcher",
+                        "gated",
+                        "{}",
+                        crate::parsing::paths::render_absolute_path(&path).display()
+                    );
+                    continue;
+                }
+                // FSEvents watches by path: a directory recreated here
+                // would keep its old admission, ignore rules notwithstanding.
+                // The nearest surviving ancestor is remembered so the
+                // recreation is recognized; discovery then decides what is
+                // admitted again.
+                if !path.exists() {
+                    let vanished: Vec<PathBuf> = self.admitted_under(&path).cloned().collect();
+                    for dir in &vanished {
+                        self.admitted_dirs.remove(dir);
+                    }
+                    if !vanished.is_empty() {
+                        if let Some(ancestor) = path.ancestors().skip(1).find(|a| a.exists()) {
+                            if !self.admitted_dirs.contains(ancestor) {
+                                self.recreation_ancestors.insert(ancestor.to_path_buf());
+                            }
+                        }
+                    }
+                }
+            }
+
             // A directory never matches a file handler (extension gate);
             // it is the watcher's own concern: extend the watch set and
             // catch up files that landed before the watch existed. Disk
@@ -315,12 +433,15 @@ impl UnifiedWatcher {
             }
             roots.extend(handler_roots);
         }
+        // Recursive roots are offered every time: `native_roots` decides
+        // what registers, not registry membership, which a root that is
+        // also a tracked-file parent already holds.
         let new_roots: Vec<_> = roots
             .iter()
-            .filter(|root| self.registry.add_watch_dir((*root).clone()))
+            .filter(|root| self.registry.add_watch_dir((*root).clone()) || self.recursive_roots)
             .cloned()
             .collect();
-        self.watch_directories(&new_roots);
+        self.watch_roots(&new_roots);
         self.handler_roots = roots;
         self.batch_sync_roots = sync_roots;
     }
@@ -342,9 +463,14 @@ impl UnifiedWatcher {
             )
         };
 
+        // A pruned directory keeps its registry entry, so a recreated one
+        // is offered again on admission, not on registry novelty.
         let new_dirs: Vec<_> = dirs
             .into_iter()
-            .filter(|dir| self.registry.add_watch_dir(dir.clone()))
+            .filter(|dir| {
+                self.registry.add_watch_dir(dir.clone())
+                    || (self.recursive_roots && !self.admitted_dirs.contains(dir))
+            })
             .collect();
         self.watch_directories(&new_dirs);
         if !files.is_empty() {
@@ -722,10 +848,8 @@ impl UnifiedWatcher {
             .cloned()
             .collect();
 
-        self.watch_directories(&dirs_to_watch);
-
         // Config reload can add or drop roots; re-register them.
-        self.register_handler_roots().await;
+        self.register_watch_set(&dirs_to_watch).await;
 
         crate::log_event!(
             "watcher",
@@ -852,6 +976,10 @@ impl UnifiedWatcherBuilder {
             workspace_root,
             handler_roots: Vec::new(),
             batch_sync_roots: Vec::new(),
+            recursive_roots: cfg!(target_os = "macos"),
+            native_roots: Vec::new(),
+            admitted_dirs: BTreeSet::new(),
+            recreation_ancestors: HashSet::new(),
         })
     }
 }
@@ -888,6 +1016,8 @@ mod tests {
         commits: usize,
         fail_add: Option<PathBuf>,
         fail_commit: bool,
+        allow_recursive: bool,
+        recursive: Vec<PathBuf>,
     }
 
     struct RecordingWatcher(Arc<Mutex<RegistrationLog>>);
@@ -926,8 +1056,11 @@ mod tests {
 
     impl notify::PathsMut for RecordingBatch {
         fn add(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
-            assert_eq!(mode, RecursiveMode::NonRecursive);
             let mut log = self.0.lock().unwrap();
+            if mode == RecursiveMode::Recursive {
+                assert!(log.allow_recursive, "recursive watch on {path:?}");
+                log.recursive.push(path.to_path_buf());
+            }
             log.batches.last_mut().unwrap().push(path.to_path_buf());
             if log.fail_add.as_deref() == Some(path) {
                 return Err(notify::Error::generic("registration rejected"));
@@ -1287,6 +1420,243 @@ mod tests {
         );
     }
 
+    fn record_recursive(watcher: &mut UnifiedWatcher) -> Arc<Mutex<RegistrationLog>> {
+        watcher.recursive_roots = true;
+        let log = record_registrations(watcher);
+        log.lock().unwrap().allow_recursive = true;
+        log
+    }
+
+    #[tokio::test]
+    async fn recursive_roots_register_natively_without_their_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().canonicalize().unwrap();
+        let root = workspace.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut watcher = watcher_over(&workspace, &root).await;
+        watcher.handlers = vec![Box::new(TrackedPaths {
+            files: vec![
+                root.join("one/a.rs"),
+                root.join("two/b.rs"),
+                workspace.join("conf/settings.toml"),
+            ],
+            roots: vec![root.clone()],
+        })];
+        let log = record_recursive(&mut watcher);
+
+        let mut running = Box::pin(watcher.watch());
+        std::future::poll_fn(|cx| {
+            assert!(running.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+
+        let log = log.lock().unwrap();
+        assert_eq!(log.recursive, vec![root.clone()]);
+        assert_eq!(
+            log.registered,
+            HashSet::from([root, workspace.join("conf")])
+        );
+    }
+
+    fn created(path: &Path) -> Event {
+        Event {
+            kind: EventKind::Create(notify::event::CreateKind::Any),
+            paths: vec![path.to_path_buf()],
+            attrs: Default::default(),
+        }
+    }
+
+    // Per-directory watching never delivers events from an ignored tree
+    // because the tree is never registered. A recursive root delivers
+    // them; `on_modify` would refuse each file, but only after a
+    // whole-root discovery walk, so the gate keeps them out of the
+    // debouncer.
+    #[tokio::test]
+    async fn recursive_roots_drop_events_outside_admitted_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let src = root.join("src");
+        let ignored = root.join("target/debug");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&ignored).unwrap();
+        std::fs::write(src.join("a.py"), "def a():\n    pass\n").unwrap();
+        std::fs::write(ignored.join("gen.py"), "def gen():\n    pass\n").unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let _log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        watcher.watch_directories(std::slice::from_ref(&src));
+
+        watcher.handle_event(created(&ignored.join("gen.py"))).await;
+        watcher.handle_event(created(&ignored)).await;
+        assert!(!watcher.debouncer.has_pending());
+        assert!(!watcher.admitted_dirs.contains(&ignored));
+
+        watcher.handle_event(created(&src.join("a.py"))).await;
+        assert!(watcher.debouncer.has_pending());
+    }
+
+    #[tokio::test]
+    async fn recursive_roots_admit_a_created_subtree_without_native_watches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        let subtree = root.join("new");
+        let nested = subtree.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(subtree.join("a.py"), "def a():\n    pass\n").unwrap();
+
+        watcher.handle_event(created(&subtree)).await;
+
+        assert!(watcher.admitted_dirs.contains(&subtree));
+        assert!(watcher.admits(&nested.join("later.py")));
+        assert!(watcher.debouncer.has_pending());
+        assert_eq!(log.lock().unwrap().registered, HashSet::from([root]));
+    }
+
+    #[tokio::test]
+    async fn recursive_roots_prune_a_vanished_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let pkg = root.join("pkg");
+        let deep = root.join("x/y/z");
+        std::fs::create_dir_all(pkg.join("sub")).unwrap();
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let _log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        for dir in [pkg.clone(), pkg.join("sub"), deep.clone()] {
+            watcher.registry.add_watch_dir(dir.clone());
+            watcher.watch_directories(&[dir]);
+        }
+
+        std::fs::remove_dir_all(&pkg).unwrap();
+        watcher.handle_event(created(&pkg)).await;
+        assert!(watcher.debouncer.has_pending_removals());
+        assert!(!watcher.admitted_dirs.contains(&pkg));
+        assert!(!watcher.admitted_dirs.contains(&pkg.join("sub")));
+
+        // Recreated at the same path under an ignore rule: membership
+        // from before the removal must not admit it.
+        std::fs::write(root.join(".codannaignore"), "pkg/\n").unwrap();
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("a.py"), "def a():\n    pass\n").unwrap();
+        watcher.handle_event(created(&pkg)).await;
+        assert!(!watcher.admitted_dirs.contains(&pkg));
+        assert!(!watcher.admits(&pkg.join("a.py")));
+
+        // A vanished ancestor of an admitted directory is a removal
+        // observation even though neither it nor its parent is admitted.
+        std::fs::remove_dir_all(root.join("x/y")).unwrap();
+        assert!(watcher.admits(&root.join("x/y")));
+        assert!(!watcher.admits(&root.join("x/other")));
+    }
+
+    // Pruning leaves the registry entry behind, so re-admission cannot
+    // hang on `add_watch_dir` reporting the directory as new.
+    #[tokio::test]
+    async fn recursive_roots_readmit_a_recreated_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let pkg = root.join("pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let _log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        watcher.handle_event(created(&pkg)).await;
+        assert!(watcher.admits(&pkg.join("a.py")));
+
+        std::fs::remove_dir_all(&pkg).unwrap();
+        watcher.handle_event(created(&pkg)).await;
+        assert!(!watcher.admitted_dirs.contains(&pkg));
+
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(pkg.join("a.py"), "def a():\n    pass\n").unwrap();
+        watcher.handle_event(created(&pkg)).await;
+        watcher.handle_index_reloaded().await;
+
+        assert!(watcher.admits(&pkg.join("a.py")));
+    }
+
+    // Startup admits tracked-file parents only, so in `x/y/z` neither `x`
+    // nor `x/y` is admitted. When `y` is removed and recreated (a branch
+    // switch over a package-per-directory tree), the recreation is
+    // observed only if an existing ancestor took over the admission.
+    #[tokio::test]
+    async fn recursive_roots_readmit_a_recreated_deep_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let deep = root.join("x/y/z");
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let _log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        watcher.registry.add_watch_dir(deep.clone());
+        watcher.watch_directories(std::slice::from_ref(&deep));
+
+        std::fs::remove_dir_all(root.join("x/y")).unwrap();
+        watcher.handle_event(created(&deep)).await;
+        watcher.handle_event(created(&root.join("x/y"))).await;
+
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("a.py"), "def a():\n    pass\n").unwrap();
+        watcher.handle_event(created(&root.join("x/y"))).await;
+
+        assert!(watcher.admits(&deep.join("a.py")));
+    }
+
+    // The surviving ancestor only recognizes a recreated directory. Ignore
+    // rules can change with the removal (a branch switch that also ignores
+    // `x/`), so it must not admit its direct-child files.
+    #[tokio::test]
+    async fn recursive_roots_surviving_ancestor_admits_no_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let deep = root.join("x/y/z");
+        std::fs::create_dir_all(&deep).unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let _log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        watcher.registry.add_watch_dir(deep.clone());
+        watcher.watch_directories(std::slice::from_ref(&deep));
+
+        std::fs::write(root.join(".codannaignore"), "x/\n").unwrap();
+        std::fs::remove_dir_all(root.join("x/y")).unwrap();
+        watcher.handle_event(created(&deep)).await;
+        std::fs::write(root.join("x/generated.py"), "def g():\n    pass\n").unwrap();
+        assert!(!watcher.admits(&root.join("x/generated.py")));
+
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("a.py"), "def a():\n    pass\n").unwrap();
+        watcher.handle_event(created(&root.join("x/y"))).await;
+        assert!(!watcher.admits(&deep.join("a.py")));
+    }
+
+    // `PathRegistry::rebuild` clears membership on every reload. The root
+    // must not register again (FSEvents appends duplicates toward its
+    // path limit), and a discovered directory with no indexed file must
+    // stay admitted.
+    #[tokio::test]
+    async fn recursive_roots_survive_index_reloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        let log = record_recursive(&mut watcher);
+        watcher.register_handler_roots().await;
+        watcher.handle_event(created(&empty)).await;
+
+        for _ in 0..3 {
+            watcher.handle_index_reloaded().await;
+        }
+
+        assert_eq!(log.lock().unwrap().recursive, vec![root]);
+        assert!(watcher.admits(&empty.join("first.py")));
+    }
+
     async fn watcher_over(dir: &Path, root: &Path) -> UnifiedWatcher {
         let mut settings = Settings {
             index_path: dir.join("index"),
@@ -1299,13 +1669,17 @@ mod tests {
         let facade = Arc::new(RwLock::new(IndexFacade::new(Arc::new(settings)).unwrap()));
         let handler = CodeFileHandler::new(Arc::clone(&facade), dir.to_path_buf());
         handler.init_cache().await;
-        UnifiedWatcher::builder()
+        let mut watcher = UnifiedWatcher::builder()
             .handler(handler)
             .broadcaster(Arc::new(NotificationBroadcaster::new(16)))
             .indexer(facade)
             .workspace_root(dir.to_path_buf())
             .build()
-            .unwrap()
+            .unwrap();
+        // Tests pick the topology; the platform default would make the
+        // per-directory tests pass or fail by host.
+        watcher.recursive_roots = false;
+        watcher
     }
 
     // A dir rename's from-side arrives as Modify(Name) on a path that no
