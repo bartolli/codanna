@@ -133,7 +133,29 @@ struct ServeSession {
 }
 
 fn spawn_serve_watch(workspace: &Path) -> ServeSession {
-    spawn_serve_with_args(workspace, &["serve", "--watch"])
+    let mut session = spawn_serve_with_args(workspace, &["serve", "--watch"]);
+    let stderr = session.child.stderr.take().expect("child stderr");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let stderr_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let line = line.expect("read serve stderr");
+            eprintln!("{line}");
+            if line.contains("[watcher] started") {
+                ready_tx.send(()).expect("report watcher readiness");
+            }
+        }
+    });
+
+    // The transport handshake can finish before native watches register.
+    if let Err(error) = ready_rx.recv_timeout(Duration::from_secs(10)) {
+        let kill = session.child.kill();
+        let exit = session.child.wait();
+        let stderr_joined = stderr_reader.join().is_ok();
+        panic!(
+            "watcher did not become ready: {error}; kill: {kill:?}; exit: {exit:?}; stderr reader joined: {stderr_joined}"
+        );
+    }
+    session
 }
 
 fn spawn_serve(workspace: &Path) -> ServeSession {
@@ -148,6 +170,7 @@ fn spawn_serve_with_args(workspace: &Path, args: &[&str]) -> ServeSession {
         .args(args)
         .current_dir(workspace)
         .env("HOME", &test_home)
+        .env("RUST_LOG", "warn,codanna::watcher::unified=info")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
