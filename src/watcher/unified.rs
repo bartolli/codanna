@@ -32,7 +32,7 @@ pub struct UnifiedWatcher {
     /// Channel for receiving file events.
     event_rx: mpsc::Receiver<notify::Result<Event>>,
     /// The underlying file watcher.
-    _watcher: notify::RecommendedWatcher,
+    _watcher: Box<dyn Watcher + Send + Sync>,
     /// Notification broadcaster for MCP integration.
     broadcaster: Arc<NotificationBroadcaster>,
     /// Shared facade for executing code actions.
@@ -100,10 +100,7 @@ impl UnifiedWatcher {
             );
         }
 
-        // Watch all directories
-        for dir in new_dirs {
-            self.watch_directory(&dir)?;
-        }
+        self.watch_directories(&new_dirs);
 
         self.register_handler_roots().await;
 
@@ -180,36 +177,49 @@ impl UnifiedWatcher {
         }
     }
 
-    /// Watch a directory for changes.
-    fn watch_directory(&mut self, dir: &PathBuf) -> Result<(), WatchError> {
-        let watch_path = if dir.is_absolute() {
-            dir.clone()
-        } else {
-            self.workspace_root.join(dir)
-        };
+    fn watch_directories(&mut self, dirs: &[PathBuf]) -> Vec<PathBuf> {
+        let mut watch_paths: Vec<_> = dirs
+            .iter()
+            .map(|dir| {
+                if dir.is_absolute() {
+                    dir.clone()
+                } else {
+                    self.workspace_root.join(dir)
+                }
+            })
+            .collect();
+        watch_paths.sort();
+        watch_paths.dedup();
+        if watch_paths.is_empty() {
+            return Vec::new();
+        }
 
-        match self
-            ._watcher
-            .watch(&watch_path, RecursiveMode::NonRecursive)
-        {
-            Ok(_) => {
-                crate::debug_event!(
-                    "watcher",
-                    "watching",
-                    "{}",
-                    crate::parsing::paths::render_absolute_path(&watch_path).display()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[watcher] failed to watch {}: {e}",
-                    crate::parsing::paths::render_absolute_path(&watch_path).display()
-                );
-                // Continue - don't fail completely
-                Ok(())
+        let mut failed = Vec::new();
+        let mut paths = self._watcher.paths_mut();
+        for path in &watch_paths {
+            match paths.add(path, RecursiveMode::NonRecursive) {
+                Ok(()) => {
+                    crate::debug_event!(
+                        "watcher",
+                        "watching",
+                        "{}",
+                        crate::parsing::paths::render_absolute_path(path).display()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[watcher] failed to watch {}: {e}",
+                        crate::parsing::paths::render_absolute_path(path).display()
+                    );
+                    failed.push(path.clone());
+                }
             }
         }
+        if let Err(e) = paths.commit() {
+            tracing::warn!("[watcher] failed to commit watch registrations: {e}");
+            return watch_paths;
+        }
+        failed
     }
 
     /// Handle an incoming file event.
@@ -305,13 +315,12 @@ impl UnifiedWatcher {
             }
             roots.extend(handler_roots);
         }
-        for root in &roots {
-            if self.registry.add_watch_dir(root.clone()) {
-                if let Err(e) = self.watch_directory(root) {
-                    tracing::warn!("[watcher] failed to watch root: {e}");
-                }
-            }
-        }
+        let new_roots: Vec<_> = roots
+            .iter()
+            .filter(|root| self.registry.add_watch_dir((*root).clone()))
+            .cloned()
+            .collect();
+        self.watch_directories(&new_roots);
         self.handler_roots = roots;
         self.batch_sync_roots = sync_roots;
     }
@@ -333,13 +342,11 @@ impl UnifiedWatcher {
             )
         };
 
-        for dir in dirs {
-            if self.registry.add_watch_dir(dir.clone()) {
-                if let Err(e) = self.watch_directory(&dir) {
-                    tracing::warn!("[watcher] failed to watch created dir: {e}");
-                }
-            }
-        }
+        let new_dirs: Vec<_> = dirs
+            .into_iter()
+            .filter(|dir| self.registry.add_watch_dir(dir.clone()))
+            .collect();
+        self.watch_directories(&new_dirs);
         if !files.is_empty() {
             crate::log_event!(
                 "watcher",
@@ -715,12 +722,7 @@ impl UnifiedWatcher {
             .cloned()
             .collect();
 
-        // Watch any new directories
-        for dir in dirs_to_watch {
-            if let Err(e) = self.watch_directory(&dir) {
-                tracing::warn!("[watcher] failed to watch new directory: {e}");
-            }
-        }
+        self.watch_directories(&dirs_to_watch);
 
         // Config reload can add or drop roots; re-register them.
         self.register_handler_roots().await;
@@ -841,7 +843,7 @@ impl UnifiedWatcherBuilder {
             registry: PathRegistry::new(),
             debouncer: Debouncer::new(self.debounce_ms),
             event_rx: rx,
-            _watcher: watcher,
+            _watcher: Box::new(watcher),
             broadcaster,
             facade,
             document_store: self.document_store,
@@ -876,6 +878,414 @@ mod tests {
     use crate::watcher::handlers::CodeFileHandler;
     use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
     use std::path::Path;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RegistrationLog {
+        individual: Vec<PathBuf>,
+        batches: Vec<Vec<PathBuf>>,
+        registered: HashSet<PathBuf>,
+        commits: usize,
+        fail_add: Option<PathBuf>,
+        fail_commit: bool,
+    }
+
+    struct RecordingWatcher(Arc<Mutex<RegistrationLog>>);
+
+    impl Watcher for RecordingWatcher {
+        fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+            Ok(Self(Arc::new(Mutex::new(RegistrationLog::default()))))
+        }
+
+        fn watch(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
+            assert_eq!(mode, RecursiveMode::NonRecursive);
+            let mut log = self.0.lock().unwrap();
+            log.individual.push(path.to_path_buf());
+            if log.fail_add.as_deref() == Some(path) {
+                return Err(notify::Error::generic("registration rejected"));
+            }
+            log.registered.insert(path.to_path_buf());
+            Ok(())
+        }
+
+        fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+
+        fn paths_mut(&mut self) -> Box<dyn notify::PathsMut + '_> {
+            self.0.lock().unwrap().batches.push(Vec::new());
+            Box::new(RecordingBatch(Arc::clone(&self.0)))
+        }
+
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    struct RecordingBatch(Arc<Mutex<RegistrationLog>>);
+
+    impl notify::PathsMut for RecordingBatch {
+        fn add(&mut self, path: &Path, mode: RecursiveMode) -> notify::Result<()> {
+            assert_eq!(mode, RecursiveMode::NonRecursive);
+            let mut log = self.0.lock().unwrap();
+            log.batches.last_mut().unwrap().push(path.to_path_buf());
+            if log.fail_add.as_deref() == Some(path) {
+                return Err(notify::Error::generic("registration rejected"));
+            }
+            log.registered.insert(path.to_path_buf());
+            Ok(())
+        }
+
+        fn remove(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+
+        fn commit(self: Box<Self>) -> notify::Result<()> {
+            let mut log = self.0.lock().unwrap();
+            log.commits += 1;
+            if log.fail_commit {
+                return Err(notify::Error::generic("commit rejected"));
+            }
+            Ok(())
+        }
+    }
+
+    struct TrackedPaths {
+        files: Vec<PathBuf>,
+        roots: Vec<PathBuf>,
+    }
+
+    #[async_trait::async_trait]
+    impl WatchHandler for TrackedPaths {
+        fn name(&self) -> &str {
+            "registration"
+        }
+
+        fn matches(&self, _: &Path) -> bool {
+            false
+        }
+
+        async fn tracked_paths(&self) -> Vec<PathBuf> {
+            self.files.clone()
+        }
+
+        async fn watch_roots(&self) -> Vec<PathBuf> {
+            self.roots.clone()
+        }
+
+        async fn on_modify(&self, _: &Path) -> Result<WatchAction, WatchError> {
+            Ok(WatchAction::None)
+        }
+
+        async fn on_delete(&self, _: &Path) -> Result<WatchAction, WatchError> {
+            Ok(WatchAction::None)
+        }
+    }
+
+    fn record_registrations(watcher: &mut UnifiedWatcher) -> Arc<Mutex<RegistrationLog>> {
+        let log = Arc::new(Mutex::new(RegistrationLog::default()));
+        watcher._watcher = Box::new(RecordingWatcher(Arc::clone(&log)));
+        log
+    }
+
+    #[tokio::test]
+    async fn startup_registers_new_directories_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut watcher = watcher_over(dir.path(), dir.path()).await;
+        watcher.handlers = vec![Box::new(TrackedPaths {
+            files: vec![PathBuf::from("one/a.rs"), PathBuf::from("two/b.rs")],
+            roots: Vec::new(),
+        })];
+        let log = record_registrations(&mut watcher);
+        let mut running = Box::pin(watcher.watch());
+        std::future::poll_fn(|cx| {
+            assert!(running.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+
+        let log = log.lock().unwrap();
+        assert_eq!(
+            log.batches.len(),
+            1,
+            "individual calls: {:?}",
+            log.individual
+        );
+        assert_eq!(log.commits, 1);
+        assert!(log.individual.is_empty());
+        assert_eq!(
+            log.batches[0].iter().cloned().collect::<HashSet<_>>(),
+            [dir.path().join("one"), dir.path().join("two")].into()
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_roots_register_new_directories_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut watcher = watcher_over(dir.path(), dir.path()).await;
+        let roots = vec![
+            dir.path().join("old"),
+            dir.path().join("one"),
+            dir.path().join("two"),
+        ];
+        watcher.registry.add_watch_dir(roots[0].clone());
+        watcher.handlers = vec![Box::new(TrackedPaths {
+            files: Vec::new(),
+            roots: roots.clone(),
+        })];
+        let log = record_registrations(&mut watcher);
+
+        watcher.register_handler_roots().await;
+        watcher.register_handler_roots().await;
+
+        let log = log.lock().unwrap();
+        assert_eq!(
+            log.batches.len(),
+            1,
+            "individual calls: {:?}",
+            log.individual
+        );
+        assert_eq!(log.commits, 1);
+        assert!(log.individual.is_empty());
+        assert_eq!(
+            log.batches[0].iter().cloned().collect::<HashSet<_>>(),
+            roots[1..].iter().cloned().collect()
+        );
+        assert_eq!(watcher.handler_roots, roots);
+    }
+
+    #[tokio::test]
+    async fn created_subtree_registers_new_directories_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let subtree = root.join("new");
+        std::fs::create_dir_all(subtree.join("nested")).unwrap();
+        std::fs::write(subtree.join("a.py"), "def a():\n    pass\n").unwrap();
+        std::fs::write(subtree.join("nested/b.py"), "def b():\n    pass\n").unwrap();
+        let mut watcher = watcher_over(&root, &root).await;
+        watcher.handler_roots = vec![root];
+        let log = record_registrations(&mut watcher);
+
+        watcher.handle_created_directory(&subtree).await;
+
+        let log = log.lock().unwrap();
+        assert_eq!(
+            log.batches.len(),
+            1,
+            "individual calls: {:?}",
+            log.individual
+        );
+        assert_eq!(log.commits, 1);
+        assert!(log.individual.is_empty());
+        assert_eq!(
+            log.batches[0].iter().cloned().collect::<HashSet<_>>(),
+            [subtree.clone(), subtree.join("nested")].into()
+        );
+        assert!(watcher.debouncer.has_pending());
+    }
+
+    #[tokio::test]
+    async fn index_reload_registers_new_directories_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut watcher = watcher_over(dir.path(), dir.path()).await;
+        watcher.registry.add_paths([PathBuf::from("old/a.rs")]);
+        let roots = vec![dir.path().join("root_one"), dir.path().join("root_two")];
+        watcher.handlers = vec![Box::new(TrackedPaths {
+            files: vec![
+                PathBuf::from("old/a.rs"),
+                PathBuf::from("one/b.rs"),
+                PathBuf::from("two/c.rs"),
+            ],
+            roots: roots.clone(),
+        })];
+        let log = record_registrations(&mut watcher);
+
+        watcher.handle_index_reloaded().await;
+
+        let log = log.lock().unwrap();
+        assert_eq!(
+            log.batches.len(),
+            2,
+            "individual calls: {:?}",
+            log.individual
+        );
+        assert_eq!(log.commits, 2);
+        assert!(log.individual.is_empty());
+        assert_eq!(
+            log.batches[0].iter().cloned().collect::<HashSet<_>>(),
+            [dir.path().join("one"), dir.path().join("two")].into()
+        );
+        assert_eq!(
+            log.batches[1].iter().cloned().collect::<HashSet<_>>(),
+            roots.into_iter().collect()
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn registration_sites_preserve_paths_and_continue_after_bad_path() {
+        for site in [
+            "startup",
+            "handler_roots",
+            "created_subtree",
+            "index_reload",
+        ] {
+            for fail in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let workspace = dir.path().canonicalize().unwrap();
+                let root = workspace.join("root");
+                let one = root.join("one");
+                let two = root.join("two");
+                std::fs::create_dir_all(&one).unwrap();
+                std::fs::create_dir_all(&two).unwrap();
+                std::fs::write(one.join("a.py"), "def a():\n    pass\n").unwrap();
+                std::fs::write(two.join("b.py"), "def b():\n    pass\n").unwrap();
+                let mut watcher = watcher_over(&workspace, &root).await;
+                watcher.handlers = vec![Box::new(TrackedPaths {
+                    files: vec![PathBuf::from("root/one/a.py"), two.join("b.py")],
+                    roots: if site == "handler_roots" {
+                        vec![PathBuf::from("root/one"), two.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                })];
+                watcher.handler_roots = vec![root.clone()];
+                watcher.registry.add_watch_dir(root.clone());
+                let log = record_registrations(&mut watcher);
+                log.lock().unwrap().fail_add = fail.then(|| one.clone());
+                let output = LogBuffer::default();
+                let writer = output.clone();
+                let _guard = tracing::subscriber::set_default(
+                    tracing_subscriber::fmt()
+                        .with_ansi(false)
+                        .without_time()
+                        .with_max_level(tracing::Level::WARN)
+                        .with_writer(move || writer.clone())
+                        .finish(),
+                );
+
+                match site {
+                    "startup" => {
+                        let mut running = Box::pin(watcher.watch());
+                        std::future::poll_fn(|cx| {
+                            assert!(running.as_mut().poll(cx).is_pending());
+                            std::task::Poll::Ready(())
+                        })
+                        .await;
+                    }
+                    "handler_roots" => watcher.register_handler_roots().await,
+                    "created_subtree" => watcher.handle_created_directory(&root).await,
+                    "index_reload" => watcher.handle_index_reloaded().await,
+                    _ => unreachable!(),
+                }
+
+                let expected = if fail {
+                    HashSet::from([two])
+                } else {
+                    HashSet::from([one.clone(), two])
+                };
+                assert_eq!(log.lock().unwrap().registered, expected, "{site}");
+                let output = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
+                if fail {
+                    let path = crate::parsing::paths::render_absolute_path(&one);
+                    assert!(
+                        output.contains(&format!(
+                            "[watcher] failed to watch {}: registration rejected",
+                            path.display()
+                        )),
+                        "{site}: {output}"
+                    );
+                } else {
+                    assert!(output.is_empty(), "{site}: {output}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn registration_reports_failed_paths_without_duplicate_or_empty_batches() {
+        for fail_commit in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut watcher = watcher_over(dir.path(), dir.path()).await;
+            let one = dir.path().join("one");
+            let two = dir.path().join("two");
+            let log = record_registrations(&mut watcher);
+            {
+                let mut log = log.lock().unwrap();
+                log.fail_add = Some(one.clone());
+                log.fail_commit = fail_commit;
+            }
+
+            let failed =
+                watcher.watch_directories(&[PathBuf::from("one"), one.clone(), two.clone()]);
+
+            let expected = if fail_commit {
+                HashSet::from([one.clone(), two.clone()])
+            } else {
+                HashSet::from([one.clone()])
+            };
+            assert_eq!(failed.iter().cloned().collect::<HashSet<_>>(), expected);
+            assert_eq!(failed.len(), expected.len());
+            assert!(watcher.watch_directories(&[]).is_empty());
+            let log = log.lock().unwrap();
+            assert_eq!(log.batches.len(), 1);
+            assert_eq!(log.commits, 1);
+            assert_eq!(log.batches[0].len(), 2);
+            assert_eq!(
+                log.batches[0].iter().cloned().collect::<HashSet<_>>(),
+                [one, two].into()
+            );
+        }
+    }
+
+    // The site tests observe a recording double. This one drives the
+    // builder-constructed watcher: a `paths_mut` that falls back to
+    // notify's per-path default restarts the FSEvents stream once per
+    // directory and loses the ratio. Other backends register per path in
+    // both shapes, so the ratio exists only on macOS.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn production_watcher_batches_fsevents_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let dirs: Vec<PathBuf> = (0..12).map(|i| root.join(format!("d{i}"))).collect();
+        for d in &dirs {
+            std::fs::create_dir(d).unwrap();
+        }
+
+        let mut per_path = watcher_over(&root, &root).await;
+        let start = std::time::Instant::now();
+        for d in &dirs {
+            per_path
+                ._watcher
+                .watch(d, RecursiveMode::NonRecursive)
+                .unwrap();
+        }
+        let per_path_elapsed = start.elapsed();
+
+        let mut batched = watcher_over(&root, &root).await;
+        let start = std::time::Instant::now();
+        assert!(batched.watch_directories(&dirs).is_empty());
+        let batched_elapsed = start.elapsed();
+
+        assert!(
+            batched_elapsed * 4 < per_path_elapsed,
+            "per-path {per_path_elapsed:?}, batched {batched_elapsed:?}"
+        );
+    }
 
     async fn watcher_over(dir: &Path, root: &Path) -> UnifiedWatcher {
         let mut settings = Settings {
