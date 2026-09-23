@@ -4569,4 +4569,40 @@ mod tests {
             .unwrap();
         assert_cross_root_edge(&facade, "post-edit");
     }
+
+    // Lock for the pipeline's cached result: a second index of unchanged
+    // content is `Cached`; an edit is `Indexed` again and replaces the
+    // symbols.
+    #[test]
+    fn index_file_returns_cached_for_unchanged_content_and_indexed_for_an_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("src");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("a.py");
+        std::fs::write(&file, "def alpha():\n    pass\n").unwrap();
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(root.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let first = facade.index_file(&file).unwrap();
+        let crate::IndexingResult::Indexed(file_id) = first else {
+            panic!("first index: expected Indexed, got {first:?}");
+        };
+        assert_eq!(
+            facade.index_file(&file).unwrap(),
+            crate::IndexingResult::Cached(file_id)
+        );
+
+        std::fs::write(&file, "def beta():\n    pass\n").unwrap();
+        assert!(matches!(
+            facade.index_file(&file).unwrap(),
+            crate::IndexingResult::Indexed(_)
+        ));
+        assert!(facade.find_symbols_by_name("alpha", None).is_empty());
+        assert_eq!(facade.find_symbols_by_name("beta", None).len(), 1);
+    }
 }

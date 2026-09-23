@@ -923,8 +923,9 @@ mod tests {
             FileChangeEvent::FileCreated { path } if path == source
         ));
 
-        // Duplicate observations must take the cached branch, which skips
-        // both the semantic snapshot save and the reindex notification.
+        // Duplicate observations take the cached branch and emit no reindex
+        // notification. This facade has no semantic search, so the snapshot
+        // save that the cached branch also skips is not exercised here.
         for _ in 0..2 {
             watcher
                 .execute_action(
