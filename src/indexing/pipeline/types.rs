@@ -1576,4 +1576,119 @@ mod tests {
         assert!(!segment_suffix_match("myapp.core", "app.core"));
         assert!(!segment_suffix_match("app.core.util", "app.core"));
     }
+
+    fn index_with_generated_symbols(
+        count: u32,
+    ) -> (tempfile::TempDir, crate::storage::DocumentIndex) {
+        let dir = tempfile::tempdir().unwrap();
+        let index =
+            crate::storage::DocumentIndex::new(dir.path(), &crate::config::Settings::default())
+                .unwrap();
+        index.start_batch().unwrap();
+        for id in 1..=count {
+            let symbol = Symbol::new(
+                SymbolId::new(id).unwrap(),
+                "generated",
+                SymbolKind::Function,
+                FileId::new(1).unwrap(),
+                Range::new(id, 0, id, 1),
+            );
+            index.add_document(&symbol, "generated.rs").unwrap();
+        }
+        index.commit_batch().unwrap();
+        (dir, index)
+    }
+
+    fn assert_cache_holds_every_generated_symbol(count: u32) {
+        let (_dir, index) = index_with_generated_symbols(count);
+        let cache = SymbolLookupCache::from_index(&index).unwrap();
+        assert_eq!(cache.len(), count as usize);
+        for id in 1..=count {
+            assert!(cache.get_ref(SymbolId::new(id).unwrap()).is_some());
+        }
+    }
+
+    // Locks the zero-count early return: tantivy's `TopDocs::with_limit(0)`
+    // panics, so an empty index must not reach the load.
+    #[test]
+    fn cache_from_an_empty_index_is_empty() {
+        assert_cache_holds_every_generated_symbol(0);
+    }
+
+    // Preservation coverage below the former cap: passes with a fixed
+    // one-million limit and with the count-sized load alike.
+    #[test]
+    fn cache_contains_every_persisted_symbol() {
+        assert_cache_holds_every_generated_symbol(7);
+    }
+
+    #[test]
+    #[ignore = "writes one million synthetic symbols; run explicitly for the former cache limit"]
+    fn cache_exceeds_one_million_symbols() {
+        assert_cache_holds_every_generated_symbol(1_000_001);
+    }
+
+    // Count and load agree on the symbol filter across symbol, relationship,
+    // file-registration, and import documents, and after one file's
+    // documents are removed. Preservation coverage: it passes below one
+    // million symbols with a fixed limit too; it does not lock the cap.
+    #[test]
+    fn cache_matches_count_symbols_across_doc_types_and_deletions() {
+        let dir = tempfile::tempdir().unwrap();
+        let index =
+            crate::storage::DocumentIndex::new(dir.path(), &crate::config::Settings::default())
+                .unwrap();
+        index.start_batch().unwrap();
+        let mut live = std::collections::HashSet::new();
+        for (file, file_id, ids, kept) in [
+            ("kept.rs", FileId::new(1).unwrap(), 1..=3u32, true),
+            ("dropped.rs", FileId::new(2).unwrap(), 4..=6u32, false),
+        ] {
+            for id in ids {
+                let symbol = Symbol::new(
+                    SymbolId::new(id).unwrap(),
+                    "generated",
+                    SymbolKind::Function,
+                    file_id,
+                    Range::new(id, 0, id, 1),
+                );
+                index.add_document(&symbol, file).unwrap();
+                if kept {
+                    live.insert(symbol.id);
+                }
+            }
+            index
+                .store_file_registration(&FileRegistration {
+                    path: PathBuf::from(file),
+                    file_id,
+                    content_hash: "hash".to_string(),
+                    language_id: LanguageId::new("rust"),
+                    timestamp: 0,
+                    mtime: 0,
+                })
+                .unwrap();
+            index
+                .store_import(&Import {
+                    path: "std::fmt".to_string(),
+                    alias: None,
+                    file_id,
+                    is_glob: false,
+                    is_type_only: false,
+                })
+                .unwrap();
+        }
+        let rel = crate::Relationship::new(RelationKind::Calls);
+        index
+            .store_relationship(SymbolId::new(1).unwrap(), SymbolId::new(2).unwrap(), &rel)
+            .unwrap();
+        index.remove_file_documents("dropped.rs").unwrap();
+        index.commit_batch().unwrap();
+
+        let cache = SymbolLookupCache::from_index(&index).unwrap();
+        assert_eq!(cache.len(), index.count_symbols().unwrap());
+        assert_eq!(cache.len(), live.len());
+        for id in &live {
+            assert!(cache.get_ref(*id).is_some(), "{id:?}");
+        }
+    }
 }
