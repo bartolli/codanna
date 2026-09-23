@@ -578,6 +578,12 @@ impl UnifiedWatcher {
             let mut indexer = self.facade.write().await;
             match indexer.resolve_deferred(&pending) {
                 Ok(()) => {}
+                Err(e) if e.is_writer_unavailable() => {
+                    tracing::error!(
+                        "[watcher] batch sync resolution failed: index writer could not start: {e}; run 'codanna index --force' to re-derive edges under {}",
+                        render_roots(&roots)
+                    );
+                }
                 Err(e) if is_writer_lock_contention(&e) => {
                     tracing::info!(
                         "[watcher] batch sync resolution skipped: another serve process holds the index writer; hot-reload converges"
@@ -779,8 +785,17 @@ impl UnifiedWatcher {
                             }
                         }
                     }
-                    if let Err(e) = indexer.resolve_deferred(&pending) {
-                        tracing::error!("  resolution failed: {e}");
+                    match indexer.resolve_deferred(&pending) {
+                        Ok(()) => {}
+                        Err(e) if e.is_writer_unavailable() => {
+                            tracing::error!(
+                                "  resolution failed: index writer could not start: {e}; run 'codanna index --force' to re-derive edges under {}",
+                                render_roots(&added)
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("  resolution failed: {e}");
+                        }
                     }
                     // The next command's startup sync reads the roots
                     // from the metadata; a root missing there is indexed
@@ -1013,10 +1028,24 @@ fn is_writer_lock_contention(e: &crate::IndexError) -> bool {
     e.to_string().contains("Failed to acquire Lockfile")
 }
 
+fn render_roots(roots: &[PathBuf]) -> String {
+    roots
+        .iter()
+        .map(|root| {
+            crate::parsing::paths::render_absolute_path(root)
+                .display()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RelationKind;
     use crate::config::Settings;
+    use crate::storage::DocumentIndex;
     use crate::watcher::handlers::CodeFileHandler;
     use notify::event::{AccessKind, AccessMode, ModifyKind, RenameMode};
     use std::path::Path;
@@ -1889,5 +1918,96 @@ mod tests {
         }
         producer.join().expect("producer thread completes");
         assert_eq!(rx.len(), 1000);
+    }
+
+    // Two-file python fixture under `root`: `caller` in use_mod.py calls
+    // `callee` in pkg/mod.py. Returns the caller path the wave receives.
+    fn write_call_fixture(root: &Path) -> PathBuf {
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/__init__.py"), "").unwrap();
+        std::fs::write(root.join("pkg/mod.py"), "def callee():\n    return 42\n").unwrap();
+        let caller = root.join("use_mod.py");
+        std::fs::write(
+            &caller,
+            "from pkg.mod import callee\n\ndef caller():\n    return callee()\n",
+        )
+        .unwrap();
+        caller
+    }
+
+    fn caller_calls(facade: &IndexFacade) -> Vec<String> {
+        let callers = facade.find_symbols_by_name("caller", None);
+        assert_eq!(callers.len(), 1, "one caller symbol expected");
+        facade
+            .document_index()
+            .get_relationships_from(callers[0].id, RelationKind::Calls)
+            .unwrap()
+            .into_iter()
+            .map(|(_, to, _)| facade.get_symbol(to).unwrap().name.to_string())
+            .collect()
+    }
+
+    // A writer that cannot start at resolution is reported once, naming
+    // the root and the re-derive command, and the wave still returns.
+    // The second handle takes the batch in the wave's gap between Phase 1
+    // and resolution: both tasks queue behind the test's guard in spawn
+    // order and the facade lock is FIFO. It holds the batch until the
+    // wave has returned.
+    #[tokio::test]
+    async fn removal_wave_reports_a_writer_that_cannot_start_at_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().canonicalize().unwrap();
+        let root = workspace.join("root");
+        let caller = write_call_fixture(&root);
+        let mut watcher = watcher_over(&workspace, &root).await;
+        watcher.batch_sync_roots = vec![root.clone()];
+        let facade = Arc::clone(&watcher.facade);
+        let settings = Arc::clone(facade.read().await.settings());
+        let other = DocumentIndex::new(workspace.join("index").join("tantivy"), &settings).unwrap();
+        let output = LogBuffer::default();
+        let writer = output.clone();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .without_time()
+                .with_max_level(tracing::Level::ERROR)
+                .with_writer(move || writer.clone())
+                .finish(),
+        );
+
+        let gate = facade.write().await;
+        let wave = tokio::spawn(async move {
+            watcher.process_removal_wave(Vec::new(), vec![caller]).await;
+            watcher
+        });
+        tokio::task::yield_now().await;
+        let holder_facade = Arc::clone(&facade);
+        let holder = tokio::spawn(async move {
+            let indexer = holder_facade.write().await;
+            assert_eq!(
+                indexer.find_symbols_by_name("caller", None).len(),
+                1,
+                "Phase 1 must have committed before the batch is taken"
+            );
+            other.start_batch().unwrap();
+            other
+        });
+        tokio::task::yield_now().await;
+        drop(gate);
+
+        let watcher = wave.await.unwrap();
+        let other = holder.await.unwrap();
+        other.rollback_batch().unwrap();
+
+        assert!(caller_calls(&*watcher.facade.read().await).is_empty());
+        let text = String::from_utf8(output.0.lock().unwrap().clone()).unwrap();
+        let rendered = crate::parsing::paths::render_absolute_path(&root)
+            .display()
+            .to_string();
+        let reported = text
+            .lines()
+            .filter(|line| line.contains(&rendered) && line.contains("codanna index --force"))
+            .count();
+        assert_eq!(reported, 1, "log: {text}");
     }
 }
