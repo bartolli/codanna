@@ -1004,6 +1004,11 @@ impl DocumentIndex {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 
+            let name = doc
+                .get_first(self.schema.import_name)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             let is_glob = doc
                 .get_first(self.schema.import_is_glob)
                 .and_then(|v| v.as_u64())
@@ -1019,6 +1024,7 @@ impl DocumentIndex {
             imports.push(crate::parsing::Import {
                 path: import_path,
                 alias,
+                name,
                 file_id,
                 is_glob,
                 is_type_only,
@@ -2300,6 +2306,7 @@ mod tests {
             // Store external imports (the data we're testing persistence for)
             let import1 = crate::parsing::Import {
                 path: "indicatif::ProgressBar".to_string(),
+                name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -2309,6 +2316,7 @@ mod tests {
             let import2 = crate::parsing::Import {
                 path: "serde::Serialize".to_string(),
                 alias: Some("SerTrait".to_string()),
+                name: Some("Serialize".to_string()),
                 file_id,
                 is_glob: false,
                 is_type_only: false,
@@ -2339,6 +2347,7 @@ mod tests {
                 .find(|i| i.path == "indicatif::ProgressBar")
                 .unwrap();
             assert_eq!(import1.alias, None);
+            assert_eq!(import1.name, None);
             assert!(!import1.is_glob);
             assert!(!import1.is_type_only);
 
@@ -2348,6 +2357,7 @@ mod tests {
                 .find(|i| i.path == "serde::Serialize")
                 .unwrap();
             assert_eq!(import2.alias.as_deref(), Some("SerTrait"));
+            assert_eq!(import2.name.as_deref(), Some("Serialize"));
             assert!(!import2.is_glob);
             assert!(!import2.is_type_only);
         }
@@ -2378,6 +2388,7 @@ mod tests {
 
         let import = crate::parsing::Import {
             path: "std::collections::HashMap".to_string(),
+            name: None,
             alias: None,
             file_id,
             is_glob: false,
@@ -2685,6 +2696,7 @@ mod tests {
             index
                 .store_import(&crate::parsing::Import {
                     path: format!("dep::module_{i}"),
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,

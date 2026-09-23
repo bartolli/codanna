@@ -39,6 +39,7 @@ fn test_external_import_detection_prevents_local_resolution() {
     // Step 1: Add external import metadata
     let external_import = Import {
         path: "indicatif::ProgressBar".to_string(),
+        name: None,
         alias: None,
         file_id,
         is_glob: false,
@@ -109,6 +110,7 @@ fn test_internal_import_not_flagged_as_external() {
     // Internal import (crate::utils::helper)
     let internal_import = Import {
         path: "crate::utils::helper".to_string(),
+        name: None,
         alias: None,
         file_id,
         is_glob: false,
@@ -168,6 +170,7 @@ fn test_aliased_external_import_detection() {
     // use indicatif::ProgressBar as PBar;
     let aliased_import = Import {
         path: "indicatif::ProgressBar".to_string(),
+        name: None,
         alias: Some("PBar".to_string()),
         file_id,
         is_glob: false,
@@ -235,6 +238,7 @@ fn test_multiple_external_imports() {
     let imports = vec![
         Import {
             path: "indicatif::ProgressBar".to_string(),
+            name: None,
             alias: None,
             file_id,
             is_glob: false,
@@ -242,6 +246,7 @@ fn test_multiple_external_imports() {
         },
         Import {
             path: "serde::Serialize".to_string(),
+            name: None,
             alias: None,
             file_id,
             is_glob: false,
@@ -249,6 +254,7 @@ fn test_multiple_external_imports() {
         },
         Import {
             path: "tokio::sync::Mutex".to_string(),
+            name: None,
             alias: None,
             file_id,
             is_glob: false,
@@ -326,6 +332,7 @@ fn test_external_import_same_name_as_local_symbol() {
     // Step 1: Add external import
     let external_import = Import {
         path: "indicatif::ProgressBar".to_string(),
+        name: None,
         alias: None,
         file_id,
         is_glob: false,

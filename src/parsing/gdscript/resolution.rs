@@ -359,6 +359,7 @@ mod tests {
         let import = crate::parsing::Import {
             path: "res://addons/vendor/logger.gd".to_string(),
             file_id,
+            name: None,
             alias: None,
             is_glob: false,
             is_type_only: false,

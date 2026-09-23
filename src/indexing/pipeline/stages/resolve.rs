@@ -2677,6 +2677,7 @@ mod tests {
             );
             context.imports = vec![Import {
                 path: "app::util::helper".to_string(),
+                name: None,
                 alias: None,
                 file_id: FileId::new(1).unwrap(),
                 is_glob: false,

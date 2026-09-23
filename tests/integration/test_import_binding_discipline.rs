@@ -47,6 +47,7 @@ fn import(path: &str, alias: Option<&str>, file: u32) -> Import {
     Import {
         path: path.into(),
         file_id: FileId::new(file).unwrap(),
+        name: None,
         alias: alias.map(String::from),
         is_glob: false,
         is_type_only: false,

@@ -691,6 +691,7 @@ impl ClojureParser {
                 let ns = &code[node.byte_range()];
                 imports.push(Import {
                     path: ns.to_string(),
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,
@@ -737,6 +738,7 @@ impl ClojureParser {
                 if let Some(ns) = ns_name {
                     imports.push(Import {
                         path: ns,
+                        name: None,
                         alias,
                         file_id,
                         is_glob: is_refer_all,

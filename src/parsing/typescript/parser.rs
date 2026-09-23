@@ -1536,17 +1536,27 @@ impl TypeScriptParser {
                         let mut nc = child.walk();
                         for ni in child.children(&mut nc) {
                             if ni.kind() == "import_specifier" {
-                                let mut sp = ni.walk();
-                                let mut local: Option<String> = None;
-                                // Prefer the aliased local name if present
-                                for part in ni.children(&mut sp) {
-                                    if part.kind() == "identifier" {
-                                        local = Some(code[part.byte_range()].to_string());
+                                let alias = ni
+                                    .child_by_field_name("alias")
+                                    .map(|n| code[n.byte_range()].to_string());
+                                let name_node = ni.child_by_field_name("name");
+                                let name = name_node.map(|n| code[n.byte_range()].to_string());
+                                // Only an identifier member names a symbol to
+                                // look up; `default` and string-literal members
+                                // keep the local binding alone.
+                                let (local, member) = match alias {
+                                    Some(alias)
+                                        if name_node.is_some_and(|n| n.kind() == "identifier") =>
+                                    {
+                                        (Some(alias), name)
                                     }
-                                }
+                                    Some(alias) => (Some(alias), None),
+                                    None => (name, None),
+                                };
                                 imports.push(Import {
                                     path: source_path.to_string(),
                                     alias: local,
+                                    name: member,
                                     file_id,
                                     is_glob: false,
                                     is_type_only,
@@ -1579,6 +1589,7 @@ impl TypeScriptParser {
                 // Namespace import: import * as utils from './utils'
                 imports.push(Import {
                     path: source_path.to_string(),
+                    name: None,
                     alias: namespace_name,
                     file_id,
                     is_glob: true,
@@ -1589,6 +1600,7 @@ impl TypeScriptParser {
                 // We create one import with the default as alias
                 imports.push(Import {
                     path: source_path.to_string(),
+                    name: None,
                     alias: default_name,
                     file_id,
                     is_glob: false,
@@ -1601,6 +1613,7 @@ impl TypeScriptParser {
                 );
                 imports.push(Import {
                     path: source_path.to_string(),
+                    name: None,
                     alias: default_name,
                     file_id,
                     is_glob: false,
@@ -1613,6 +1626,7 @@ impl TypeScriptParser {
             // Side-effect import (no import clause)
             imports.push(Import {
                 path: source_path.to_string(),
+                name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -1647,6 +1661,7 @@ impl TypeScriptParser {
             // export * from './module'
             imports.push(Import {
                 path: source_path.to_string(),
+                name: None,
                 alias: None,
                 file_id,
                 is_glob: true,
@@ -1656,6 +1671,7 @@ impl TypeScriptParser {
             // Named re-exports - just track the module being imported from
             imports.push(Import {
                 path: source_path.to_string(),
+                name: None,
                 alias: None,
                 file_id,
                 is_glob: false,
@@ -3016,6 +3032,43 @@ export * from './common';
         assert!(imports.iter().any(|i| i.path == "./common" && i.is_glob));
 
         println!("\n✅ Import extraction test passed");
+    }
+
+    #[test]
+    fn test_aliased_named_import_carries_member_name() {
+        let mut parser = TypeScriptParser::new().unwrap();
+        let file_id = FileId::new(1).unwrap();
+
+        let code = r#"
+import { sharedTarget as renamed } from './target';
+import { sharedTarget } from './target';
+import type { Kind as Alias } from './kinds';
+"#;
+
+        let imports = parser.find_imports(code, file_id);
+
+        let renamed = imports
+            .iter()
+            .find(|i| i.alias.as_deref() == Some("renamed"))
+            .expect("aliased specifier");
+        assert_eq!(renamed.path, "./target");
+        assert_eq!(renamed.name.as_deref(), Some("sharedTarget"));
+        assert!(!renamed.is_type_only);
+
+        let plain = imports
+            .iter()
+            .find(|i| i.alias.as_deref() == Some("sharedTarget"))
+            .expect("plain specifier");
+        assert_eq!(plain.path, "./target");
+        assert_eq!(plain.name, None);
+
+        let kind = imports
+            .iter()
+            .find(|i| i.alias.as_deref() == Some("Alias"))
+            .expect("type-only aliased specifier");
+        assert_eq!(kind.path, "./kinds");
+        assert_eq!(kind.name.as_deref(), Some("Kind"));
+        assert!(kind.is_type_only);
     }
 
     #[test]

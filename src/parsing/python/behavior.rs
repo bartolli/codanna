@@ -538,6 +538,7 @@ impl LanguageBehavior for PythonBehavior {
             enhanced_imports.push(crate::parsing::Import {
                 path: effective_path.clone(),
                 file_id: import.file_id,
+                name: None,
                 alias: import.alias.clone(),
                 is_glob: import.is_glob,
                 is_type_only: import.is_type_only,

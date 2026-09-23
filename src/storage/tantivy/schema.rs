@@ -57,6 +57,7 @@ pub struct IndexSchema {
     pub import_file_id: Field,      // Which file has this import
     pub import_path: Field,         // Full import path (e.g., "indicatif::ProgressBar")
     pub import_alias: Field,        // Optional alias
+    pub import_name: Field,         // Optional imported member name when it differs from the alias
     pub import_is_glob: Field,      // Boolean (0/1) for glob imports
     pub import_is_type_only: Field, // Boolean (0/1) for type-only imports (TypeScript)
 }
@@ -150,6 +151,9 @@ impl IndexSchema {
         let import_alias = builder.add_text_field("import_alias", STRING | STORED);
         let import_is_glob = builder.add_u64_field("import_is_glob", STORED);
         let import_is_type_only = builder.add_u64_field("import_is_type_only", STORED);
+        // Appended after every pre-existing field: field ids are positional,
+        // so inserting earlier would shift the ids an older index stored.
+        let import_name = builder.add_text_field("import_name", STRING | STORED);
 
         let schema = builder.build();
         let index_schema = IndexSchema {
@@ -191,6 +195,7 @@ impl IndexSchema {
             import_file_id,
             import_path,
             import_alias,
+            import_name,
             import_is_glob,
             import_is_type_only,
         };

@@ -199,6 +199,7 @@ fn test_typescript_behavior_add_import() {
     // Create an import with an alias
     let import = Import {
         path: "@/components/Button".to_string(),
+        name: None,
         alias: Some("Button".to_string()),
         is_glob: false,
         is_type_only: false,

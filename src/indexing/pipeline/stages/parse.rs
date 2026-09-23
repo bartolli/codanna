@@ -237,6 +237,9 @@ fn parse_with_parser(
             if let Some(alias) = imp.alias {
                 raw = raw.with_alias(alias);
             }
+            if let Some(name) = imp.name {
+                raw = raw.with_name(name);
+            }
             if imp.is_glob {
                 raw = raw.as_glob();
             }

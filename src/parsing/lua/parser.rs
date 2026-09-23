@@ -910,6 +910,7 @@ fn try_extract_require_call(
             if !module_path.is_empty() {
                 return Some(Import {
                     path: module_path,
+                    name: None,
                     alias,
                     file_id,
                     is_glob: false,

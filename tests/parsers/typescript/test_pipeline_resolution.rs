@@ -249,6 +249,7 @@ fn test_pipeline_cache_import_resolution() {
     let imports = vec![Import {
         file_id: test_file,
         path: "./components/Button".to_string(), // Enhanced path
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,
@@ -365,6 +366,7 @@ fn test_behavior_pipeline_cache_isolated() {
     let imports = vec![Import {
         file_id: app_file,
         path: "@components/Button".to_string(),
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,

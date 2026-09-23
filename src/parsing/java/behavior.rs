@@ -404,6 +404,7 @@ impl LanguageBehavior for JavaBehavior {
             enhanced_imports.push(crate::parsing::Import {
                 path: target_module.clone(),
                 file_id: import.file_id,
+                name: None,
                 alias: import.alias.clone(),
                 is_glob: import.is_glob,
                 is_type_only: import.is_type_only,

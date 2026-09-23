@@ -336,11 +336,15 @@ impl LanguageBehavior for JavaScriptBehavior {
                     .to_string()
             });
 
+            // The target is searched by the member's exported name; an
+            // aliased specifier binds it locally under a different one.
+            let lookup_name = import.name.as_deref().unwrap_or(&local_name);
+
             // Path-domain arm first: relative specifiers resolve by file
             // identity (trait default). Module-string normalization cannot
             // represent the navigation when stems contain dots.
             let file_resolved = importing_file.as_deref().and_then(|f| {
-                self.resolve_relative_import(cache, &local_name, &import.path, f, extensions)
+                self.resolve_relative_import(cache, lookup_name, &import.path, f, extensions)
             });
             let file_resolved_module = file_resolved
                 .and_then(|id| cache.get(id))
@@ -376,6 +380,7 @@ impl LanguageBehavior for JavaScriptBehavior {
                 path: target_module.clone(),
                 file_id: import.file_id,
                 alias: import.alias.clone(),
+                name: import.name.clone(),
                 is_glob: import.is_glob,
                 is_type_only: import.is_type_only,
             });
@@ -388,7 +393,7 @@ impl LanguageBehavior for JavaScriptBehavior {
             let mut resolved_symbol: Option<SymbolId> = file_resolved;
             let mut suffix_matches: Vec<SymbolId> = Vec::new();
             if resolved_symbol.is_none() {
-                for id in cache.lookup_candidates(&local_name) {
+                for id in cache.lookup_candidates(lookup_name) {
                     if let Some(symbol) = cache.get(id) {
                         if let Some(module) = symbol.module_path.as_deref() {
                             if module == target_module {

@@ -591,6 +591,7 @@ mod tests {
         let imports = vec![
             Import {
                 path: "com.example.MyClass".to_string(),
+                name: None,
                 alias: None,
                 file_id: FileId(1),
                 is_glob: false,
@@ -598,6 +599,7 @@ mod tests {
             },
             Import {
                 path: "com.example.utils.Helper".to_string(),
+                name: None,
                 alias: None,
                 file_id: FileId(1),
                 is_glob: false,
@@ -623,6 +625,7 @@ mod tests {
 
         let imports = vec![Import {
             path: "com.example.LongClassName".to_string(),
+            name: None,
             alias: Some("Short".to_string()),
             file_id: FileId(1),
             is_glob: false,
@@ -648,6 +651,7 @@ mod tests {
 
         let imports = vec![Import {
             path: "com.example.*".to_string(),
+            name: None,
             alias: None,
             file_id: FileId(1),
             is_glob: true,
@@ -669,6 +673,7 @@ mod tests {
         let imports = vec![
             Import {
                 path: "java.util.List".to_string(),
+                name: None,
                 alias: None,
                 file_id: FileId(1),
                 is_glob: false,
@@ -676,6 +681,7 @@ mod tests {
             },
             Import {
                 path: "java.util.ArrayList".to_string(),
+                name: None,
                 alias: Some("AL".to_string()),
                 file_id: FileId(1),
                 is_glob: false,
@@ -683,6 +689,7 @@ mod tests {
             },
             Import {
                 path: "java.util.*".to_string(),
+                name: None,
                 alias: None,
                 file_id: FileId(1),
                 is_glob: true,

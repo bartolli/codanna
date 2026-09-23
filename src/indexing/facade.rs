@@ -4352,6 +4352,105 @@ mod tests {
         );
     }
 
+    // Aliased named import: the local binding (`renamed`) is not the
+    // imported member's name (`sharedTarget`). A builder that searches the
+    // target file by the local binding finds nothing, marks the binding
+    // External, installs no scope entry, and the call through the alias
+    // never gets a Calls edge. force: the full lane resolves on the
+    // run-scoped cache (see the out-of-tree lock above).
+    #[test]
+    fn ts_aliased_named_import_call_resolves_to_imported_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("lib");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("target.ts"),
+            "export function sharedTarget(): number {\n  return 1;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("caller.ts"),
+            "import { sharedTarget as renamed } from './target';\n\n\
+             export function entry(): number {\n  return renamed();\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, true).unwrap();
+
+        let entry = facade
+            .find_symbols_by_name("entry", None)
+            .into_iter()
+            .next()
+            .expect("entry indexed");
+        let callees = facade.get_called_functions(entry.id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "entry must resolve the call through the import alias: {callees:?}"
+        );
+        assert_eq!(&*callees[0].name, "sharedTarget");
+        assert!(
+            callees[0].file_path.ends_with("target.ts"),
+            "the edge must target the imported member's file, got {}",
+            callees[0].file_path
+        );
+    }
+
+    // JavaScript twin of the aliased named import lock.
+    #[test]
+    fn js_aliased_named_import_call_resolves_to_imported_member() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("lib");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("target.js"),
+            "export function sharedTarget() {\n  return 1;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("caller.js"),
+            "import { sharedTarget as renamed } from './target';\n\n\
+             export function entry() {\n  return renamed();\n}\n",
+        )
+        .unwrap();
+
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(src.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        facade.index_directory(&src, true).unwrap();
+
+        let entry = facade
+            .find_symbols_by_name("entry", None)
+            .into_iter()
+            .next()
+            .expect("entry indexed");
+        let callees = facade.get_called_functions(entry.id);
+        assert_eq!(
+            callees.len(),
+            1,
+            "entry must resolve the call through the import alias: {callees:?}"
+        );
+        assert_eq!(&*callees[0].name, "sharedTarget");
+        assert!(
+            callees[0].file_path.ends_with("target.js"),
+            "the edge must target the imported member's file, got {}",
+            callees[0].file_path
+        );
+    }
+
     fn inbound_edge_names(facade: &IndexFacade, name: &str) -> Vec<String> {
         let targets = facade.find_symbols_by_name(name, None);
         assert_eq!(targets.len(), 1, "fixture expects exactly one `{name}`");

@@ -146,6 +146,7 @@ fn wildcard_import(path: &str, file: u32) -> codanna::parsing::Import {
     codanna::parsing::Import {
         path: path.into(),
         file_id: FileId::new(file).unwrap(),
+        name: None,
         alias: None,
         is_glob: true,
         is_type_only: false,

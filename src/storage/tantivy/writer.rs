@@ -362,6 +362,9 @@ impl DocumentIndex {
         if let Some(alias) = &import.alias {
             doc.add_text(self.schema.import_alias, alias);
         }
+        if let Some(name) = &import.name {
+            doc.add_text(self.schema.import_name, name);
+        }
 
         doc.add_u64(
             self.schema.import_is_glob,

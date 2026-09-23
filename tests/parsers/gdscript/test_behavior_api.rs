@@ -162,6 +162,7 @@ fn test_add_import() {
     let import = Import {
         file_id,
         path: "res://scripts/enemy.gd".to_string(),
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,
@@ -195,6 +196,7 @@ fn test_multiple_imports_same_file() {
     let import1 = Import {
         file_id,
         path: "res://scripts/enemy.gd".to_string(),
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,
@@ -202,6 +204,7 @@ fn test_multiple_imports_same_file() {
     let import2 = Import {
         file_id,
         path: "res://scripts/weapon.gd".to_string(),
+        name: None,
         alias: Some("Gun".to_string()),
         is_glob: false,
         is_type_only: false,
@@ -224,6 +227,7 @@ fn test_imports_isolated_by_file() {
     let import1 = Import {
         file_id: file1,
         path: "res://scripts/enemy.gd".to_string(),
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,
@@ -231,6 +235,7 @@ fn test_imports_isolated_by_file() {
     let import2 = Import {
         file_id: file2,
         path: "res://scripts/weapon.gd".to_string(),
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,
@@ -409,6 +414,7 @@ fn test_gdscript_class_name_import() {
     let import = Import {
         file_id,
         path: "Player".to_string(), // class_name Player
+        name: None,
         alias: None,
         is_glob: true, // Global visibility
         is_type_only: false,
@@ -430,6 +436,7 @@ fn test_gdscript_extends_import() {
     let import = Import {
         file_id,
         path: "res://scripts/parent.gd".to_string(),
+        name: None,
         alias: None,
         is_glob: false,
         is_type_only: false,
@@ -451,6 +458,7 @@ fn test_gdscript_preload_import() {
     let import = Import {
         file_id,
         path: "res://scenes/enemy.tscn".to_string(),
+        name: None,
         alias: Some("EnemyScene".to_string()),
         is_glob: false,
         is_type_only: false,

@@ -1124,6 +1124,7 @@ impl SwiftParser {
                     let path = self.trimmed_text(code, child).to_string();
                     imports.push(Import {
                         path,
+                        name: None,
                         alias: None,
                         file_id,
                         is_glob: false,

@@ -64,6 +64,7 @@ impl CParser {
                 let clean_path = path_text.trim_matches(|c| c == '"' || c == '<' || c == '>');
                 imports.push(Import {
                     path: clean_path.to_string(),
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,

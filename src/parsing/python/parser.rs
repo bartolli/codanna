@@ -971,6 +971,7 @@ impl PythonParser {
                 let module_path = &code[child.byte_range()];
                 imports.push(Import {
                     path: module_path.to_string(),
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,
@@ -995,6 +996,7 @@ impl PythonParser {
             if self.has_wildcard_import(node, code) {
                 imports.push(Import {
                     path: base_path.to_string(),
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: true,
@@ -1068,6 +1070,7 @@ impl PythonParser {
                     let full_path = Self::join_from_import(base_path, name);
                     imports.push(Import {
                         path: full_path,
+                        name: None,
                         alias: None,
                         file_id,
                         is_glob: false,
@@ -1102,6 +1105,7 @@ impl PythonParser {
             let full_path = Self::join_from_import(base_path, import_name);
             imports.push(Import {
                 path: full_path,
+                name: None,
                 alias: alias.map(|s| s.to_string()),
                 file_id,
                 is_glob: false,

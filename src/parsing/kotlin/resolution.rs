@@ -469,6 +469,7 @@ mod tests {
         let import = crate::parsing::Import {
             path: "external.thirdparty.Logger".to_string(),
             file_id: FileId(1),
+            name: None,
             alias: None,
             is_glob: false,
             is_type_only: false,

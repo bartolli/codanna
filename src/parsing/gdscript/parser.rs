@@ -186,6 +186,7 @@ impl GdscriptParser {
                         imports.push(Import {
                             file_id,
                             path,
+                            name: None,
                             alias: None,
                             is_glob: false,
                             is_type_only: false,
@@ -202,6 +203,7 @@ impl GdscriptParser {
                             imports.push(Import {
                                 file_id,
                                 path,
+                                name: None,
                                 alias: None,
                                 is_glob: false,
                                 is_type_only: false,
@@ -218,6 +220,7 @@ impl GdscriptParser {
                         imports.push(Import {
                             file_id,
                             path: class_name,
+                            name: None,
                             alias: None,
                             is_glob: true, // Globally visible
                             is_type_only: false,
@@ -252,6 +255,7 @@ impl GdscriptParser {
                                             imports.push(Import {
                                                 file_id,
                                                 path,
+                                                name: None,
                                                 alias: None,
                                                 is_glob: false,
                                                 is_type_only: false,

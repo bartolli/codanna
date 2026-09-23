@@ -347,6 +347,7 @@ impl LanguageBehavior for SwiftBehavior {
             enhanced_imports.push(crate::parsing::Import {
                 path: import.path.clone(),
                 file_id: import.file_id,
+                name: None,
                 alias: import.alias.clone(),
                 is_glob: import.is_glob,
                 is_type_only: import.is_type_only,

@@ -138,6 +138,7 @@ impl RustParser {
                 let path = code[node.byte_range()].to_string();
                 imports.push(Import {
                     path,
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,
@@ -149,6 +150,7 @@ impl RustParser {
                 let path = code[node.byte_range()].to_string();
                 imports.push(Import {
                     path,
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,
@@ -163,6 +165,7 @@ impl RustParser {
                         let alias = code[alias_node.byte_range()].to_string();
                         imports.push(Import {
                             path,
+                            name: None,
                             alias: Some(alias),
                             file_id,
                             is_glob: false,
@@ -179,6 +182,7 @@ impl RustParser {
                         let path = code[child.byte_range()].to_string();
                         imports.push(Import {
                             path,
+                            name: None,
                             alias: None,
                             file_id,
                             is_glob: true,
@@ -239,6 +243,7 @@ impl RustParser {
                 };
                 imports.push(Import {
                     path,
+                    name: None,
                     alias: None,
                     file_id,
                     is_glob: false,
@@ -257,6 +262,7 @@ impl RustParser {
                         let alias = code[alias_node.byte_range()].to_string();
                         imports.push(Import {
                             path,
+                            name: None,
                             alias: Some(alias),
                             file_id,
                             is_glob: false,
