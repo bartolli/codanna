@@ -1407,10 +1407,12 @@ impl IndexFacade {
             }
         }
 
-        // Index new directories with progress if enabled.
-        // Use force=true since these are new directories being indexed for
-        // the first time; resolution is deferred until every new root has
-        // walked so cross-root imports bind regardless of add order.
+        // Index new directories with progress if enabled. Discovery diffs
+        // each root against the index: a root missing from the stored paths
+        // may already be indexed (serve's settings reload does not persist
+        // them), and the force lane would add its files a second time.
+        // Resolution is deferred until every new root has walked so
+        // cross-root imports bind regardless of add order.
         let mut pending = crate::indexing::pipeline::PendingResolution::default();
         for path in &to_add {
             // Visual separator and directory label (stderr syncs with progress bars)
@@ -1434,7 +1436,7 @@ impl IndexFacade {
                 Arc::clone(&self.document_index),
                 self.semantic_search.clone(),
                 self.embedding_pool.clone(),
-                true, // force: new directories should be fully indexed
+                false,
                 progress,
                 file_count,
                 &mut pending,
@@ -4475,7 +4477,7 @@ mod tests {
         facade.index_directory(&src, false).unwrap();
 
         // Second session: tests added to config; sync indexes the new
-        // root through its force lane.
+        // root through incremental discovery.
         facade
             .sync_with_config(
                 Some(vec![src.clone()]),
@@ -4484,6 +4486,40 @@ mod tests {
             )
             .unwrap();
         assert_cross_root_edge(&facade, "sync-added root");
+    }
+
+    // A root indexed outside the CLI (serve's settings reload) is absent
+    // from the stored paths the next start diffs against. Sync must diff
+    // that root against the index; indexing it as new duplicates every
+    // symbol and edge under it.
+    #[test]
+    fn sync_of_an_already_indexed_root_duplicates_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (src, tests) = write_two_root_python_fixture(dir.path());
+        let src = src.canonicalize().unwrap();
+        let tests = tests.canonicalize().unwrap();
+        let mut facade = two_root_facade(dir.path(), &src, &tests);
+        facade.index_directory(&src, false).unwrap();
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        facade
+            .index_directory_deferred(&tests, false, &mut pending)
+            .unwrap();
+        facade.resolve_deferred(pending).unwrap();
+        let (symbols, relationships) = (facade.symbol_count(), facade.relationship_count());
+
+        facade
+            .sync_with_config(
+                Some(vec![src.clone()]),
+                &[src.clone(), tests.clone()],
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(
+            (facade.symbol_count(), facade.relationship_count()),
+            (symbols, relationships)
+        );
+        assert_cross_root_edge(&facade, "sync over an indexed root");
     }
 
     // Serve-lane shape: a settled burst creates the importing and the
