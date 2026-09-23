@@ -1050,9 +1050,6 @@ impl IndexFacade {
     // Mutation Methods (delegate to Pipeline)
     // =========================================================================
 
-    /// Index a single file using the parallel pipeline.
-    ///
-    /// Returns `IndexingResult::Indexed` with the file ID on success.
     /// File records key off path text: an uncanonical root or file path
     /// (`./src`, `x/../x`) addresses a key space disjoint from the
     /// registered indexed_paths walks, re-indexing every file as new and
@@ -1108,6 +1105,7 @@ impl IndexFacade {
             .collect()
     }
 
+    /// Index a single file, returning `Cached` when its content hash is unchanged.
     pub fn index_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
@@ -1125,7 +1123,11 @@ impl IndexFacade {
             self.embedding_pool.clone(),
         )?;
 
-        Ok(crate::IndexingResult::Indexed(stats.file_id))
+        if stats.cached {
+            Ok(crate::IndexingResult::Cached(stats.file_id))
+        } else {
+            Ok(crate::IndexingResult::Indexed(stats.file_id))
+        }
     }
 
     /// Index a single file with optional force re-indexing.
@@ -4602,5 +4604,41 @@ mod tests {
             .index_directories_with_options(&dirs, false, false, false, None)
             .unwrap();
         assert_cross_root_edge(&facade, "post-edit");
+    }
+
+    // Lock for the pipeline's cached result: a second index of unchanged
+    // content is `Cached`; an edit is `Indexed` again and replaces the
+    // symbols.
+    #[test]
+    fn index_file_returns_cached_for_unchanged_content_and_indexed_for_an_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("src");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("a.py");
+        std::fs::write(&file, "def alpha():\n    pass\n").unwrap();
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(root.clone()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+
+        let first = facade.index_file(&file).unwrap();
+        let crate::IndexingResult::Indexed(file_id) = first else {
+            panic!("first index: expected Indexed, got {first:?}");
+        };
+        assert_eq!(
+            facade.index_file(&file).unwrap(),
+            crate::IndexingResult::Cached(file_id)
+        );
+
+        std::fs::write(&file, "def beta():\n    pass\n").unwrap();
+        assert!(matches!(
+            facade.index_file(&file).unwrap(),
+            crate::IndexingResult::Indexed(_)
+        ));
+        assert!(facade.find_symbols_by_name("alpha", None).is_empty());
+        assert_eq!(facade.find_symbols_by_name("beta", None).len(), 1);
     }
 }
