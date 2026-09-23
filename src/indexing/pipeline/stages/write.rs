@@ -25,6 +25,8 @@ pub struct WriteStage {
     commit_threshold: usize,
     /// Whether a batch is currently active
     batch_started: bool,
+    /// Whether any commit has happened on this stage
+    committed: bool,
 }
 
 /// Statistics from write operations.
@@ -46,6 +48,7 @@ impl WriteStage {
             pending: Vec::new(),
             commit_threshold: 10_000, // Commit every 10K relationships
             batch_started: false,
+            committed: false,
         }
     }
 
@@ -56,6 +59,7 @@ impl WriteStage {
             pending: Vec::new(),
             commit_threshold: threshold,
             batch_started: false,
+            committed: false,
         }
     }
 
@@ -71,15 +75,15 @@ impl WriteStage {
     /// Write a batch of resolved relationships.
     ///
     /// Accumulates in memory and commits when threshold reached.
-    pub fn write(&mut self, batch: ResolvedBatch) -> WriteStats {
+    /// A batch that cannot start is an error: nothing from `batch` is
+    /// staged. Per-relationship store failures are logged and counted.
+    pub fn write(
+        &mut self,
+        batch: ResolvedBatch,
+    ) -> Result<WriteStats, crate::storage::StorageError> {
         let mut stats = WriteStats::default();
 
-        // Ensure batch is started before writing
-        if let Err(e) = self.ensure_batch_started() {
-            tracing::warn!(target: "pipeline", "Failed to start batch: {e}");
-            stats.failed = batch.relationships.len();
-            return stats;
-        }
+        self.ensure_batch_started()?;
 
         for resolved in batch.relationships {
             // Convert to Relationship struct (clone metadata to avoid partial move)
@@ -115,7 +119,7 @@ impl WriteStage {
             }
         }
 
-        stats
+        Ok(stats)
     }
 
     /// Write a single resolved relationship.
@@ -158,6 +162,7 @@ impl WriteStage {
     fn commit_internal(&mut self) -> Result<(), crate::storage::StorageError> {
         self.index.commit_batch()?;
         self.pending.clear();
+        self.committed = true;
         // Start new batch for subsequent writes
         self.index.start_batch()?;
         Ok(())
@@ -173,6 +178,7 @@ impl WriteStage {
             self.index.commit_batch()?;
             self.pending.clear();
             self.batch_started = false;
+            self.committed = true;
         }
         Ok(WriteStats {
             written,
@@ -184,6 +190,12 @@ impl WriteStage {
     /// Get count of pending (uncommitted) relationships.
     pub fn pending_count(&self) -> usize {
         self.pending.len()
+    }
+
+    /// Whether any commit has happened on this stage. False after a
+    /// failed write means nothing reached the index.
+    pub fn has_committed(&self) -> bool {
+        self.committed
     }
 }
 
@@ -213,7 +225,7 @@ mod tests {
         let mut stage = WriteStage::new(index);
         let batch = ResolvedBatch::new();
 
-        let stats = stage.write(batch);
+        let stats = stage.write(batch).unwrap();
 
         assert_eq!(stats.written, 0);
         assert_eq!(stats.failed, 0);
@@ -232,7 +244,7 @@ mod tests {
         batch.push(make_resolved(1, 2, RelationKind::Calls));
         batch.push(make_resolved(2, 3, RelationKind::Defines));
 
-        let stats = stage.write(batch);
+        let stats = stage.write(batch).unwrap();
 
         assert_eq!(stats.written, 2);
         assert_eq!(stage.pending_count(), 2);
@@ -250,7 +262,7 @@ mod tests {
         let mut batch = ResolvedBatch::new();
         batch.push(make_resolved(1, 2, RelationKind::Calls));
 
-        stage.write(batch);
+        stage.write(batch).unwrap();
         assert_eq!(stage.pending_count(), 1);
 
         let count = stage.commit().unwrap();
@@ -272,7 +284,7 @@ mod tests {
         batch.push(make_resolved(2, 3, RelationKind::Defines));
         batch.push(make_resolved(3, 4, RelationKind::Calls));
 
-        let stats = stage.write(batch);
+        let stats = stage.write(batch).unwrap();
 
         // 3 written, 1 commit triggered at threshold
         assert_eq!(stats.written, 3);
@@ -292,12 +304,41 @@ mod tests {
         let mut batch = ResolvedBatch::new();
         batch.push(make_resolved(1, 2, RelationKind::Calls));
 
-        stage.write(batch);
+        stage.write(batch).unwrap();
         assert_eq!(stage.pending_count(), 1);
 
         let flush_stats = stage.flush().unwrap();
         assert_eq!(flush_stats.written, 1);
         assert_eq!(flush_stats.commits, 1);
         assert_eq!(stage.pending_count(), 0);
+    }
+
+    // A batch that cannot start (writer held by another handle) is an
+    // error, never a counted drop.
+    #[test]
+    fn write_with_writer_held_elsewhere_fails_then_succeeds_after_release() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+        let other = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        other.start_batch().unwrap();
+
+        let mut stage = WriteStage::new(Arc::clone(&index));
+        let mut batch = ResolvedBatch::new();
+        batch.push(make_resolved(1, 2, RelationKind::Calls));
+        assert!(stage.write(batch).is_err());
+        assert!(!stage.has_committed());
+        assert_eq!(stage.pending_count(), 0);
+
+        other.rollback_batch().unwrap();
+        let mut batch = ResolvedBatch::new();
+        batch.push(make_resolved(1, 2, RelationKind::Calls));
+        let stats = stage.write(batch).unwrap();
+        assert_eq!(stats.written, 1);
+        assert_eq!(stats.failed, 0);
+        assert_eq!(stage.pending_count(), 1);
+        let flushed = stage.flush().unwrap();
+        assert_eq!(flushed.written, 1);
+        assert!(stage.has_committed());
     }
 }

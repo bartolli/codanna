@@ -328,7 +328,7 @@ impl CodeIntelligenceServer {
                     }
                 }
             }
-            if let Err(e) = indexer.resolve_deferred(pending) {
+            if let Err(e) = indexer.resolve_deferred(&pending) {
                 tracing::warn!("Reindex resolution failed: {e}");
             }
             (total_reindexed, indexer.symbol_count())
@@ -348,7 +348,7 @@ impl CodeIntelligenceServer {
                     }
                 }
             }
-            if let Err(e) = indexer.resolve_deferred(pending) {
+            if let Err(e) = indexer.resolve_deferred(&pending) {
                 tracing::warn!("Reindex resolution failed: {e}");
             }
             (total_reindexed, indexer.symbol_count())

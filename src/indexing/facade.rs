@@ -1250,9 +1250,13 @@ impl IndexFacade {
     }
 
     /// Resolve everything accumulated by `index_directory_deferred` calls.
+    ///
+    /// Borrows `pending`: after an `Err` for which
+    /// `IndexError::is_writer_unavailable` holds, nothing was written and
+    /// the same value may be passed again.
     pub fn resolve_deferred(
         &mut self,
-        pending: crate::indexing::pipeline::PendingResolution,
+        pending: &crate::indexing::pipeline::PendingResolution,
     ) -> FacadeResult<()> {
         self.pipeline.resolve_pending(
             pending,
@@ -1374,7 +1378,7 @@ impl IndexFacade {
 
         if !dry_run {
             self.pipeline.resolve_pending(
-                pending,
+                &pending,
                 Arc::clone(&self.document_index),
                 self.semantic_search.clone(),
                 progress,
@@ -1450,7 +1454,7 @@ impl IndexFacade {
             stats.symbols_found += result.index_stats.symbols_found;
         }
         self.pipeline.resolve_pending(
-            pending,
+            &pending,
             Arc::clone(&self.document_index),
             self.semantic_search.clone(),
             progress,
@@ -4506,7 +4510,7 @@ mod tests {
         facade
             .index_directory_deferred(&tests, false, &mut pending)
             .unwrap();
-        facade.resolve_deferred(pending).unwrap();
+        facade.resolve_deferred(&pending).unwrap();
         let (symbols, relationships) = (facade.symbol_count(), facade.relationship_count());
 
         facade
@@ -4568,7 +4572,7 @@ mod tests {
         facade
             .index_directory_deferred(&src, false, &mut pending)
             .unwrap();
-        facade.resolve_deferred(pending).unwrap();
+        facade.resolve_deferred(&pending).unwrap();
         assert_cross_root_edge(&facade, "deferred burst sync, tests root first");
     }
 
@@ -4640,5 +4644,78 @@ mod tests {
         ));
         assert!(facade.find_symbols_by_name("alpha", None).is_empty());
         assert_eq!(facade.find_symbols_by_name("beta", None).len(), 1);
+    }
+
+    // S4: with the index writer held by another handle, a deferred
+    // resolution must report failure, not success with zero rows.
+    #[test]
+    fn deferred_resolution_with_writer_held_elsewhere_is_an_error_and_retries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("src");
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(root.join("pkg/__init__.py"), "").unwrap();
+        std::fs::write(root.join("pkg/mod.py"), "def callee():\n    return 42\n").unwrap();
+        std::fs::write(
+            root.join("use_mod.py"),
+            "from pkg.mod import callee\n\ndef caller():\n    return callee()\n",
+        )
+        .unwrap();
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(root.clone()).unwrap();
+        let settings = std::sync::Arc::new(settings);
+        let mut facade = IndexFacade::new(std::sync::Arc::clone(&settings)).unwrap();
+
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        facade
+            .index_directory_deferred(&root, false, &mut pending)
+            .unwrap();
+
+        let other =
+            DocumentIndex::new(dir.path().join("index").join("tantivy"), &settings).unwrap();
+        other.start_batch().unwrap();
+
+        let err = match facade.resolve_deferred(&pending) {
+            Ok(()) => {
+                other.rollback_batch().unwrap();
+                panic!(
+                    "resolution with the writer held elsewhere must fail, got Ok with {} relationship rows",
+                    facade.relationship_count()
+                );
+            }
+            Err(e) => e,
+        };
+        assert!(
+            err.is_writer_unavailable(),
+            "expected the nothing-written error, got: {err}"
+        );
+        // The storage source rides along in the message; the watcher
+        // classifies lock contention from it.
+        assert!(
+            err.to_string().contains("Failed to acquire Lockfile"),
+            "source not carried: {err}"
+        );
+        let callers = facade.find_symbols_by_name("caller", None);
+        assert_eq!(callers.len(), 1, "one caller symbol expected");
+        let caller_id = callers[0].id;
+        let rows_before = facade
+            .document_index()
+            .get_relationships_from(caller_id, RelationKind::Calls)
+            .unwrap();
+        assert!(rows_before.is_empty(), "nothing written: {rows_before:?}");
+
+        // The value is still held; the retry succeeds once the writer is free.
+        other.rollback_batch().unwrap();
+        facade.resolve_deferred(&pending).unwrap();
+        let rows = facade
+            .document_index()
+            .get_relationships_from(caller_id, RelationKind::Calls)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "exactly one Calls row expected: {rows:?}");
+        let callee = facade.get_symbol(rows[0].1).unwrap();
+        assert_eq!(callee.name.as_ref(), "callee");
     }
 }

@@ -576,7 +576,7 @@ impl UnifiedWatcher {
         }
         {
             let mut indexer = self.facade.write().await;
-            match indexer.resolve_deferred(pending) {
+            match indexer.resolve_deferred(&pending) {
                 Ok(()) => {}
                 Err(e) if is_writer_lock_contention(&e) => {
                     tracing::info!(
@@ -779,7 +779,7 @@ impl UnifiedWatcher {
                             }
                         }
                     }
-                    if let Err(e) = indexer.resolve_deferred(pending) {
+                    if let Err(e) = indexer.resolve_deferred(&pending) {
                         tracing::error!("  resolution failed: {e}");
                     }
                     // The next command's startup sync reads the roots

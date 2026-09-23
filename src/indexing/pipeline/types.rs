@@ -1203,6 +1203,14 @@ pub enum PipelineError {
     /// [PIPELINE API] Uses storage::StorageError with proper `#[from]` conversion.
     #[error("Storage error: {0}")]
     Storage(#[from] crate::storage::StorageError),
+
+    /// Phase 2 could not start its first batch, so no relationship was
+    /// committed. The caller's `PendingResolution` is intact and the call
+    /// may be repeated once the writer is free.
+    #[error("index writer unavailable, nothing written: {source}")]
+    WriterUnavailable {
+        source: crate::storage::StorageError,
+    },
 }
 
 /// Result type for pipeline operations.

@@ -117,6 +117,20 @@ impl IndexError {
     pub fn lock_error() -> Self {
         Self::LockError("mutex poisoned".to_string())
     }
+
+    /// True when deferred resolution failed before its first commit:
+    /// nothing was written and the caller's `PendingResolution` may be
+    /// passed to `resolve_deferred` again.
+    pub fn is_writer_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::Pipeline(inner)
+                if matches!(
+                    **inner,
+                    crate::indexing::pipeline::PipelineError::WriterUnavailable { .. }
+                )
+        )
+    }
 }
 
 impl From<std::io::Error> for IndexError {

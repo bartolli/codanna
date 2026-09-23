@@ -368,7 +368,7 @@ impl Pipeline {
             total_files,
             &mut pending,
         )?;
-        stats.phase2_stats = self.resolve_pending(pending, index, semantic, show_progress)?;
+        stats.phase2_stats = self.resolve_pending(&pending, index, semantic, show_progress)?;
         Ok(stats)
     }
 
@@ -689,9 +689,15 @@ impl Pipeline {
     /// files' symbols and re-export aliases), run Phase 2 once, re-point
     /// captured inbound edges at the committed replacements, persist
     /// embeddings. A `pending` from all-cached runs is a no-op.
+    ///
+    /// Borrows `pending` and clones its unresolved relationships,
+    /// bindings, and barriers once (one extra copy of Phase 1's output,
+    /// alive for the duration of Phase 2), so the caller keeps the value.
+    /// Repeating the call is safe only after `WriterUnavailable`: after
+    /// `Ok` or any other error, committed rows would be written again.
     pub fn resolve_pending(
         &self,
-        pending: PendingResolution,
+        pending: &PendingResolution,
         index: Arc<DocumentIndex>,
         semantic: Option<Arc<Mutex<SimpleSemanticSearch>>>,
         show_progress: bool,
@@ -703,9 +709,9 @@ impl Pipeline {
 
         let symbol_cache = Arc::new(SymbolLookupCache::from_index(&index)?);
         let phase2_stats = self.run_phase2_maybe_bar(
-            pending.unresolved,
-            pending.variable_bindings,
-            pending.this_barriers,
+            pending.unresolved.clone(),
+            pending.variable_bindings.clone(),
+            pending.this_barriers.clone(),
             symbol_cache,
             Arc::clone(&index),
             show_progress,
