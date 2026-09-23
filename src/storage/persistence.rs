@@ -170,10 +170,9 @@ impl IndexPersistence {
         Ok(facade)
     }
 
-    /// Save metadata for an IndexFacade
-    #[must_use = "Save errors should be handled to ensure data is persisted"]
-    pub fn save_facade(&self, facade: &IndexFacade) -> IndexResult<()> {
-        // Update metadata
+    /// Persist the index metadata: counts, stamps, tracked paths. The
+    /// semantic snapshot is left alone.
+    pub fn save_metadata(&self, facade: &IndexFacade) -> IndexResult<()> {
         let mut metadata =
             IndexMetadata::load(&self.base_path).unwrap_or_else(|_| IndexMetadata::new());
 
@@ -200,7 +199,14 @@ impl IndexPersistence {
             timestamp: crate::indexing::get_utc_timestamp(),
         };
 
-        self.persist_metadata(&metadata)?;
+        self.persist_metadata(&metadata)
+    }
+
+    /// Persist the index metadata and, when the facade carries semantic
+    /// search, the semantic snapshot.
+    #[must_use = "Save errors should be handled to ensure data is persisted"]
+    pub fn save_facade(&self, facade: &IndexFacade) -> IndexResult<()> {
+        self.save_metadata(facade)?;
 
         // Save semantic search if enabled
         if facade.has_semantic_search() {

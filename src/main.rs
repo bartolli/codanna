@@ -671,57 +671,75 @@ async fn main() {
                 Ok(metadata) => {
                     let stored_paths = metadata.indexed_paths.clone();
 
-                    // Sync with current config (settings.toml is source of truth)
-                    match idx.sync_with_config(
-                        stored_paths,
-                        &config.indexing.indexed_paths,
-                        show_progress,
-                    ) {
-                        Ok(stats) => {
-                            if stats.has_changes() {
-                                sync_made_changes = Some(true);
-                                if stats.added_dirs > 0 {
-                                    tracing::info!(
-                                        target: "sync",
-                                        "indexed {} directories ({} files, {} symbols)",
-                                        stats.added_dirs, stats.files_indexed, stats.symbols_found
-                                    );
-                                }
-                                if stats.removed_dirs > 0 {
-                                    tracing::info!(
-                                        target: "sync",
-                                        "removed {} directories from index",
-                                        stats.removed_dirs
-                                    );
-                                }
-                                if stats.files_modified > 0 || stats.files_added > 0 {
-                                    tracing::info!(
-                                        target: "sync",
-                                        "synced {} modified, {} new files",
-                                        stats.files_modified, stats.files_added
-                                    );
-                                }
+                    // A root indexed while no embedder is loaded gets its
+                    // hashes stored and no embeddings, and every later
+                    // sync reads it as cached. Leave such roots to
+                    // `codanna index`, which loads the embedder.
+                    let stored_set: std::collections::HashSet<&PathBuf> =
+                        stored_paths.iter().flatten().collect();
+                    let config_set: std::collections::HashSet<&PathBuf> =
+                        config.indexing.indexed_paths.iter().collect();
+                    let awaiting_index = config_set.difference(&stored_set).count();
+                    if awaiting_index > 0
+                        && config.semantic_search.enabled
+                        && !needs_semantic_search
+                    {
+                        eprintln!(
+                            "{awaiting_index} configured root(s) not yet indexed; run 'codanna index' to index them"
+                        );
+                    } else {
+                        // Sync with current config (settings.toml is source of truth)
+                        match idx.sync_with_config(
+                            stored_paths,
+                            &config.indexing.indexed_paths,
+                            show_progress,
+                        ) {
+                            Ok(stats) => {
+                                if stats.has_changes() {
+                                    sync_made_changes = Some(true);
+                                    if stats.added_dirs > 0 {
+                                        tracing::info!(
+                                            target: "sync",
+                                            "indexed {} directories ({} files, {} symbols)",
+                                            stats.added_dirs, stats.files_indexed, stats.symbols_found
+                                        );
+                                    }
+                                    if stats.removed_dirs > 0 {
+                                        tracing::info!(
+                                            target: "sync",
+                                            "removed {} directories from index",
+                                            stats.removed_dirs
+                                        );
+                                    }
+                                    if stats.files_modified > 0 || stats.files_added > 0 {
+                                        tracing::info!(
+                                            target: "sync",
+                                            "synced {} modified, {} new files",
+                                            stats.files_modified, stats.files_added
+                                        );
+                                    }
 
-                                // Save updated index
-                                if let Err(e) = persistence.save_facade(idx) {
-                                    tracing::warn!(target: "sync", "failed to save updated index: {e}");
-                                }
-                            } else {
-                                sync_made_changes = Some(false);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("\nFailed to sync indexed paths: {e}");
-                            let suggestions = e.recovery_suggestions();
-                            if !suggestions.is_empty() {
-                                eprintln!("\nRecovery steps:");
-                                for suggestion in suggestions {
-                                    eprintln!("  - {suggestion}");
+                                    // Save updated index
+                                    if let Err(e) = persistence.save_facade(idx) {
+                                        tracing::warn!(target: "sync", "failed to save updated index: {e}");
+                                    }
+                                } else {
+                                    sync_made_changes = Some(false);
                                 }
                             }
-                            use codanna::io::ExitCode;
-                            let exit_code = ExitCode::from_error(&e);
-                            std::process::exit(exit_code as i32);
+                            Err(e) => {
+                                eprintln!("\nFailed to sync indexed paths: {e}");
+                                let suggestions = e.recovery_suggestions();
+                                if !suggestions.is_empty() {
+                                    eprintln!("\nRecovery steps:");
+                                    for suggestion in suggestions {
+                                        eprintln!("  - {suggestion}");
+                                    }
+                                }
+                                use codanna::io::ExitCode;
+                                let exit_code = ExitCode::from_error(&e);
+                                std::process::exit(exit_code as i32);
+                            }
                         }
                     }
                 }

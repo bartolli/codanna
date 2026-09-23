@@ -156,18 +156,42 @@ pub mod fixture {
     .expect("write fixture source");
 }
 
+fn write_extra_source(dir: &Path) {
+    std::fs::create_dir_all(dir).expect("create extra dir");
+    std::fs::write(
+        dir.join("extra.rs"),
+        r#"
+/// Second-root fixture.
+pub fn extra_root_function(value: i32) -> i32 {
+    value * 2
+}
+"#,
+    )
+    .expect("write extra source");
+}
+
 fn write_settings(workspace: &Path, base_url: &str) {
+    write_settings_with_roots(workspace, base_url, &["src"]);
+}
+
+fn write_settings_with_roots(workspace: &Path, base_url: &str, roots: &[&str]) {
     let codanna_dir = workspace.join(".codanna");
     std::fs::create_dir_all(&codanna_dir).expect("create .codanna");
 
     // Use canonicalized absolute paths so metadata persisted by `index`
     // matches what settings.toml declares -- avoids sync mismatch on status reads.
     // On macOS, TempDir returns /var/... but canonicalize resolves to /private/var/...
-    let src_abs = workspace
-        .join("src")
-        .canonicalize()
-        .expect("src dir should exist and be resolvable");
-    let src_path = crate::common::toml_path_literal(&src_abs);
+    let src_path = roots
+        .iter()
+        .map(|root| {
+            let abs = workspace
+                .join(root)
+                .canonicalize()
+                .expect("root dir should exist and be resolvable");
+            crate::common::toml_path_literal(&abs)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let settings = format!(
         r#"
@@ -267,4 +291,68 @@ fn mcp_get_index_info_reports_remote_semantic_status_and_model() {
         .as_u64()
         .expect("semantic embeddings count should be present");
     assert!(embeddings > 0, "expected persisted embeddings count > 0");
+}
+
+fn embedding_count(workspace: &Path) -> u64 {
+    let (code, stdout, stderr) = run_cli(workspace, &["mcp", "get_index_info", "--json"]);
+    assert_eq!(
+        code, 0,
+        "get_index_info\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let payload: Value = serde_json::from_str(&stdout).expect("parse get_index_info JSON");
+    payload["data"]["semantic_search"]["embeddings"]
+        .as_u64()
+        .expect("semantic embeddings count should be present")
+}
+
+/// A root added to the config is normally indexed by the next command's
+/// startup sync. A command that loads no embedder would store the root's
+/// hashes without embeddings, and no later sync embeds it; the sync
+/// leaves such roots to `codanna index` and says so.
+#[test]
+fn non_semantic_command_leaves_an_added_root_for_codanna_index() {
+    let workspace = TempDir::new().expect("temp dir");
+    write_fixture_source(&workspace.path().join("src"));
+    write_extra_source(&workspace.path().join("extra"));
+    let base_url = spawn_embedding_server(64, 4);
+    write_settings(workspace.path(), &base_url);
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["index", "src", "--force", "--no-progress"],
+    );
+    assert_eq!(code, 0, "index\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    let before = embedding_count(workspace.path());
+    assert!(before > 0, "fixture root should be embedded");
+
+    write_settings_with_roots(workspace.path(), &base_url, &["src", "extra"]);
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["dump", "--symbols"]);
+    assert_eq!(code, 0, "dump\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    let hint = "1 configured root(s) not yet indexed; run 'codanna index' to index them";
+    assert_eq!(
+        stderr.lines().filter(|line| line.contains(hint)).count(),
+        1,
+        "exactly one hint line\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("extra_root_function"),
+        "a non-semantic command must not index the added root\nstdout:\n{stdout}"
+    );
+    assert_eq!(
+        embedding_count(workspace.path()),
+        before,
+        "embedding count unchanged after the non-semantic command"
+    );
+
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["index", "--no-progress"]);
+    assert_eq!(code, 0, "index\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["dump", "--symbols"]);
+    assert_eq!(code, 0, "dump\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stdout.contains("extra_root_function"),
+        "codanna index indexes the added root\nstdout:\n{stdout}"
+    );
+    assert!(
+        embedding_count(workspace.path()) > before,
+        "codanna index embeds the added root"
+    );
 }

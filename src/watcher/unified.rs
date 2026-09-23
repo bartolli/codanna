@@ -31,7 +31,7 @@ pub struct UnifiedWatcher {
     /// Shared debouncer for all file events.
     debouncer: Debouncer,
     /// Channel for receiving file events.
-    event_rx: mpsc::Receiver<notify::Result<Event>>,
+    event_rx: mpsc::UnboundedReceiver<notify::Result<Event>>,
     /// The underlying file watcher.
     _watcher: Box<dyn Watcher + Send + Sync>,
     /// Notification broadcaster for MCP integration.
@@ -664,16 +664,6 @@ impl UnifiedWatcher {
                             IndexingResult::Indexed(_) => {
                                 crate::log_event!(handler_name, "reindexed");
 
-                                // Save semantic search
-                                if indexer.has_semantic_search() {
-                                    let semantic_path = self.index_path.join("semantic");
-                                    if let Err(e) = indexer.save_semantic_search(&semantic_path) {
-                                        tracing::warn!(
-                                            "[{handler_name}] failed to save semantic search: {e}"
-                                        );
-                                    }
-                                }
-
                                 // A first-time file grew the resource list;
                                 // the lanes map FileCreated to list_changed
                                 // and FileReindexed to a URI-filtered update.
@@ -792,6 +782,17 @@ impl UnifiedWatcher {
                     if let Err(e) = indexer.resolve_deferred(pending) {
                         tracing::error!("  resolution failed: {e}");
                     }
+                    // The next command's startup sync reads the roots
+                    // from the metadata; a root missing there is indexed
+                    // again. The deferred index above already persisted
+                    // the semantic snapshot.
+                    let persistence = crate::IndexPersistence::new(self.index_path.clone());
+                    if let Err(e) = persistence.save_metadata(&indexer) {
+                        tracing::warn!("  failed to save index metadata: {e}");
+                    }
+                    tracing::info!(
+                        "  files and directories created under an added root are not watched until serve restarts"
+                    );
                 }
 
                 if !removed.is_empty() {
@@ -955,11 +956,11 @@ impl UnifiedWatcherBuilder {
             .unwrap_or_else(|| workspace_root.join(".codanna/index"));
 
         // Create channel for events
-        let (tx, rx) = mpsc::channel(100);
+        let (tx, rx) = mpsc::unbounded_channel();
 
         // Create the notify watcher
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            let _ = tx.blocking_send(res);
+            deliver_event(&tx, res);
         })?;
 
         Ok(UnifiedWatcher {
@@ -988,6 +989,19 @@ impl Default for UnifiedWatcherBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Hands a notify event to the consumer from notify's callback thread.
+/// The send must never park: registering a watch on FSEvents stops the
+/// stream and spins until this callback returns, and the task doing the
+/// registration is the channel's only drainer.
+pub(crate) fn deliver_event(
+    tx: &mpsc::UnboundedSender<notify::Result<Event>>,
+    res: notify::Result<Event>,
+) {
+    // A closed receiver means the watcher task is gone; nothing is left
+    // to deliver to.
+    let _ = tx.send(res);
 }
 
 /// Another serve process holds the Tantivy index writer for this
@@ -1855,5 +1869,25 @@ mod tests {
 
         let unrelated = crate::IndexError::General("Pipeline error: parse failed".to_string());
         assert!(!is_writer_lock_contention(&unrelated));
+    }
+
+    #[test]
+    fn deliver_event_returns_without_a_drainer() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let producer = std::thread::spawn(move || {
+            for _ in 0..1000 {
+                deliver_event(&tx, Ok(Event::new(EventKind::Any)));
+            }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !producer.is_finished() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "a send parked with no drainer on the channel"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        producer.join().expect("producer thread completes");
+        assert_eq!(rx.len(), 1000);
     }
 }
