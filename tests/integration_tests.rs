@@ -87,3 +87,6 @@ mod test_resolve_shadowed_instance_call;
 
 #[path = "integration/test_resolve_php_binding_receiver.rs"]
 mod test_resolve_php_binding_receiver;
+
+#[path = "integration/test_dangling_relative_import.rs"]
+mod test_dangling_relative_import;

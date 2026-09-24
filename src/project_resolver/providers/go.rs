@@ -147,6 +147,8 @@ impl GoProvider {
         Ok(ResolutionRules {
             base_url: go_mod_info.module_name,
             paths,
+
+            relative_specifiers_redirected: false,
         })
     }
 }

@@ -1,0 +1,5 @@
+Calls	run	Method	repo_a/child.ts	3	greet	Method	repo_a/base.ts	2	3	17	this	false	-
+Defines	Base	Class	repo_a/base.ts	1	greet	Method	repo_a/base.ts	2	-	-	-	-	-
+Defines	Base	Class	repo_b/base.ts	1	greet	Method	repo_b/base.ts	2	-	-	-	-	-
+Defines	Child	Class	repo_a/child.ts	2	run	Method	repo_a/child.ts	3	-	-	-	-	-
+Extends	Child	Class	repo_a/child.ts	2	Base	Class	repo_a/base.ts	1	-	-	-	-	-

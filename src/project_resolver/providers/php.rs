@@ -217,6 +217,8 @@ impl PhpProvider {
         Ok(ResolutionRules {
             base_url: None, // PHP doesn't have a single base URL
             paths,
+
+            relative_specifiers_redirected: false,
         })
     }
 }

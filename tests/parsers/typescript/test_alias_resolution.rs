@@ -8,7 +8,9 @@ use codanna::parsing::resolution::ProjectResolutionEnhancer;
 use codanna::parsing::typescript::behavior::TypeScriptBehavior;
 use codanna::parsing::typescript::resolution::TypeScriptProjectEnhancer;
 use codanna::parsing::{Import, LanguageBehavior};
-use codanna::project_resolver::persist::{ResolutionPersistence, ResolutionRules};
+use codanna::project_resolver::persist::{
+    RESOLUTION_INDEX_VERSION, ResolutionPersistence, ResolutionRules,
+};
 use codanna::project_resolver::providers::typescript::TypeScriptProvider;
 use std::path::Path;
 
@@ -27,6 +29,8 @@ fn test_import_enhancement_with_aliases() {
         ]
         .into_iter()
         .collect(),
+
+        relative_specifiers_redirected: false,
     };
 
     // Create enhancer with the rules
@@ -145,7 +149,7 @@ fn test_typescript_behavior_add_import() {
     // Create resolution rules that match our test fixture
     let test_rules = format!(
         r#"{{
-        "version": "1.0",
+        "version": "{RESOLUTION_INDEX_VERSION}",
         "hashes": {{
             "{}": "test-hash"
         }},

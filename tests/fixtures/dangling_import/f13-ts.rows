@@ -1,0 +1,4 @@
+Calls	build	Function	repo_a/caller.ts	2	create	Method	repo_b/widget.ts	3	5	9	Widget	true	-
+Calls	build	Function	repo_a/caller.ts	2	render	Method	repo_b/widget.ts	2	4	2	w	false	-
+Defines	Widget	Class	repo_b/widget.ts	1	create	Method	repo_b/widget.ts	3	-	-	-	-	-
+Defines	Widget	Class	repo_b/widget.ts	1	render	Method	repo_b/widget.ts	2	-	-	-	-	-

@@ -19,7 +19,7 @@ use crate::indexing::pipeline::types::{
     CallerContext, ResolutionContext, ResolvedBatch, ResolvedRelationship, SymbolLookupCache,
     UnresolvedRelationship,
 };
-use crate::parsing::resolution::{GenericInheritanceResolver, InheritanceResolver};
+use crate::parsing::resolution::{GenericInheritanceResolver, ImportOrigin, InheritanceResolver};
 use crate::parsing::{Import, LanguageBehavior, LanguageId};
 use crate::types::{FileId, SymbolId};
 use crate::{RelationKind, Symbol};
@@ -224,6 +224,21 @@ impl ResolveStage {
             {
                 return Some(resolved);
             }
+        }
+
+        // A dangling import owns its name: the builder proved the target
+        // file absent from the index, so a same-name symbol anywhere else
+        // is not this reference's target. Receiver-less rows of every kind
+        // fail closed here, after the file's own definitions (scope hit)
+        // and the inheritance witness, before any name-keyed tier.
+        // Receiver-bearing rows carry their own evidence and keep it.
+        if Self::is_receiver_less(unresolved)
+            && context
+                .scope
+                .import_binding(&unresolved.to_name)
+                .is_some_and(|binding| binding.origin == ImportOrigin::Dangling)
+        {
+            return None;
         }
 
         // For qualified static calls (`Type::method` / `Type.method`), the
@@ -953,6 +968,14 @@ impl ResolveStage {
                     parent_file,
                 )
             })
+    }
+
+    /// A row of any kind whose emitted metadata names no receiver.
+    fn is_receiver_less(unresolved: &UnresolvedRelationship) -> bool {
+        unresolved
+            .metadata
+            .as_ref()
+            .is_none_or(|m| m.receiver.is_none())
     }
 
     /// A Calls row with no receiver metadata and no static flag.

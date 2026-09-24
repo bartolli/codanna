@@ -4,6 +4,7 @@
 //! Key design principle: Parse stage produces "raw" types without IDs,
 //! Collect stage assigns IDs and produces final types.
 
+use crate::parsing::resolution::FilePresence;
 use crate::parsing::{Import, LanguageId, PipelineSymbolCache, ResolveResult};
 use crate::relationship::RelationshipMetadata;
 use crate::symbol::ScopeContext;
@@ -462,6 +463,40 @@ pub struct SymbolLookupCache {
     /// Re-exported paths: "pkg.helper" -> the symbol defined at "pkg.a.helper"
     /// when pkg's namespace imports it. Populated by the Phase 2 pre-pass.
     module_aliases: dashmap::DashMap<Box<str>, crate::types::SymbolId>,
+    /// Every file row in the index, in the decoded path form symbols
+    /// carry. `Some` only for a cache built from the persisted index:
+    /// a walk-scoped cache sees its own run's files and cannot prove a
+    /// path absent.
+    indexed_files: Option<IndexedFileView>,
+}
+
+/// Every file row in the index, projected three ways for the negative
+/// evidence a dangling relative import needs: the paths themselves, the
+/// `(directory, first-dot stem)` pairs extension-substituted siblings
+/// share, and every ancestor directory.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct IndexedFileView {
+    paths: std::collections::HashSet<PathBuf>,
+    stems: std::collections::HashSet<(PathBuf, String)>,
+    dirs: std::collections::HashSet<PathBuf>,
+}
+
+impl IndexedFileView {
+    fn from_paths(files: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut view = Self::default();
+        for path in files {
+            if let Some(stem) = crate::parsing::paths::dir_and_first_dot_stem(&path) {
+                view.stems.insert(stem);
+            }
+            for dir in path.ancestors().skip(1) {
+                if !dir.as_os_str().is_empty() {
+                    view.dirs.insert(dir.to_path_buf());
+                }
+            }
+            view.paths.insert(path);
+        }
+        view
+    }
 }
 
 impl Default for SymbolLookupCache {
@@ -478,6 +513,7 @@ impl SymbolLookupCache {
             by_name: dashmap::DashMap::new(),
             by_file_id: dashmap::DashMap::new(),
             module_aliases: dashmap::DashMap::new(),
+            indexed_files: None,
         }
     }
 
@@ -488,7 +524,22 @@ impl SymbolLookupCache {
             by_name: dashmap::DashMap::with_capacity(symbols / 10), // Fewer unique names
             by_file_id: dashmap::DashMap::with_capacity(symbols / 50), // ~50 symbols/file avg
             module_aliases: dashmap::DashMap::new(),
+            indexed_files: None,
         }
+    }
+
+    /// Create an empty cache that knows the complete set of indexed file
+    /// paths, so the presence queries can answer `Absent`.
+    pub fn with_indexed_files(files: impl IntoIterator<Item = PathBuf>) -> Self {
+        let mut cache = Self::new();
+        cache.indexed_files = Some(IndexedFileView::from_paths(files));
+        cache
+    }
+
+    /// The complete file view, when this cache was built from the index.
+    #[cfg(test)]
+    pub(crate) fn indexed_files(&self) -> Option<&IndexedFileView> {
+        self.indexed_files.as_ref()
     }
 
     /// Insert a symbol into the cache.
@@ -875,6 +926,32 @@ impl PipelineSymbolCache for SymbolLookupCache {
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId> {
         SymbolLookupCache::lookup_candidates(self, name)
     }
+
+    fn file_presence(&self, path: &std::path::Path) -> FilePresence {
+        match &self.indexed_files {
+            None => FilePresence::Unknown,
+            Some(view) if view.paths.contains(path) => FilePresence::Present,
+            Some(_) => FilePresence::Absent,
+        }
+    }
+
+    fn sibling_stem_present(&self, path: &std::path::Path) -> FilePresence {
+        let Some(view) = &self.indexed_files else {
+            return FilePresence::Unknown;
+        };
+        match crate::parsing::paths::dir_and_first_dot_stem(path) {
+            Some(stem) if view.stems.contains(&stem) => FilePresence::Present,
+            _ => FilePresence::Absent,
+        }
+    }
+
+    fn directory_present(&self, path: &std::path::Path) -> FilePresence {
+        match &self.indexed_files {
+            None => FilePresence::Unknown,
+            Some(view) if view.dirs.contains(path) => FilePresence::Present,
+            Some(_) => FilePresence::Absent,
+        }
+    }
 }
 
 impl SymbolLookupCache {
@@ -890,7 +967,21 @@ impl SymbolLookupCache {
         let count = index
             .count_symbols()
             .map_err(|e| PipelineError::Index(crate::IndexError::Storage(e)))?;
-        let cache = Self::with_capacity(count);
+        let mut cache = Self::with_capacity(count);
+
+        // File rows decode through the same portable-path boundary as the
+        // symbols they are compared against. The visitor is uncapped, so
+        // the view is complete at every index size.
+        let mut files: Vec<PathBuf> = Vec::new();
+        index.for_each_file_path(|stored| -> Result<(), PipelineError> {
+            files.push(match index.to_portable_file_path(&stored) {
+                Some(portable) => PathBuf::from(portable),
+                None => PathBuf::from(stored),
+            });
+            Ok(())
+        })?;
+        cache.indexed_files = Some(IndexedFileView::from_paths(files));
+
         if count == 0 {
             return Ok(cache);
         }

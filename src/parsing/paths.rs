@@ -178,6 +178,17 @@ pub fn strip_extension<'a>(path_str: &'a str, extensions: &[&str]) -> &'a str {
     path_str
 }
 
+/// The directory and first-dot stem of a file path: `(repo_a, dep)` for
+/// `repo_a/dep.js`, `repo_a/dep.d.ts`, and `repo_a/dep.test.ts` alike,
+/// which extension substitution leaves unchanged. `None` when the path
+/// has no file name.
+pub fn dir_and_first_dot_stem(path: &Path) -> Option<(PathBuf, String)> {
+    let name = path.file_name()?.to_string_lossy();
+    let stem = name.split('.').next().unwrap_or_default().to_string();
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    Some((dir, stem))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

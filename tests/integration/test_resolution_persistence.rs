@@ -35,6 +35,8 @@ mod tests {
                     ),
                     ("@utils/*".to_string(), vec!["src/utils/*".to_string()]),
                 ]),
+
+                relative_specifiers_redirected: false,
             },
         );
 

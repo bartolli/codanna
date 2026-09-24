@@ -594,6 +594,8 @@ impl InheritanceResolver for JavaScriptInheritanceResolver {
 /// Applies jsconfig.json path mappings to transform import paths.
 /// Mirrors TypeScript's TypeScriptProjectEnhancer architecture.
 pub struct JavaScriptProjectEnhancer {
+    /// The governing config redirects relative specifiers
+    redirects_relative_specifiers: bool,
     /// Compiled path alias resolver (built from the resolution rules)
     resolver: Option<crate::parsing::javascript::jsconfig::PathAliasResolver>,
 }
@@ -601,6 +603,7 @@ pub struct JavaScriptProjectEnhancer {
 impl JavaScriptProjectEnhancer {
     /// Create a new enhancer from resolution rules
     pub fn new(rules: crate::project_resolver::persist::ResolutionRules) -> Self {
+        let redirects_relative_specifiers = rules.relative_specifiers_redirected;
         // Build the PathAliasResolver from rules
         let resolver = if !rules.paths.is_empty() || rules.base_url.is_some() {
             // Create a minimal JsConfig to use from_jsconfig
@@ -609,6 +612,9 @@ impl JavaScriptProjectEnhancer {
                 compilerOptions: crate::parsing::javascript::jsconfig::CompilerOptions {
                     baseUrl: rules.base_url.clone(),
                     paths: rules.paths.clone(),
+
+                    moduleSuffixes: None,
+                    rootDirs: None,
                 },
             };
 
@@ -618,7 +624,16 @@ impl JavaScriptProjectEnhancer {
             None
         };
 
-        Self { resolver }
+        Self {
+            redirects_relative_specifiers,
+            resolver,
+        }
+    }
+
+    /// Whether the governing config redirects relative specifiers
+    /// (`moduleSuffixes`, `rootDirs`).
+    pub fn redirects_relative_specifiers(&self) -> bool {
+        self.redirects_relative_specifiers
     }
 }
 

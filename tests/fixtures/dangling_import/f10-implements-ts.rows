@@ -1,0 +1,5 @@
+Defines	Shape	Interface	repo_a/shape.ts	1	area	Method	repo_a/square.ts	3	-	-	-	-	-
+Defines	Shape	Interface	repo_b/shape.ts	1	area	Method	repo_a/square.ts	3	-	-	-	-	-
+Defines	Square	Class	repo_a/square.ts	2	area	Method	repo_a/square.ts	3	-	-	-	-	-
+Implements	Square	Class	repo_a/square.ts	2	Shape	Interface	repo_a/shape.ts	1	-	-	-	-	-
+Uses	Square	Class	repo_a/square.ts	2	Shape	Interface	repo_a/shape.ts	1	-	-	-	-	-

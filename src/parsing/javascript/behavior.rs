@@ -3,7 +3,7 @@
 use crate::parsing::LanguageBehavior;
 use crate::parsing::behavior_state::{BehaviorState, StatefulBehavior};
 use crate::parsing::paths::strip_extension;
-use crate::parsing::resolution::{InheritanceResolver, ResolutionScope};
+use crate::parsing::resolution::{InheritanceResolver, RelativeImportLookup, ResolutionScope};
 use crate::project_resolver::persist::ResolutionPersistence;
 use crate::types::FileId;
 use crate::{SymbolId, Visibility};
@@ -343,9 +343,27 @@ impl LanguageBehavior for JavaScriptBehavior {
             // Path-domain arm first: relative specifiers resolve by file
             // identity (trait default). Module-string normalization cannot
             // represent the navigation when stems contain dots.
-            let file_resolved = importing_file.as_deref().and_then(|f| {
-                self.resolve_relative_import(cache, lookup_name, &import.path, f, extensions)
-            });
+            let lookup = importing_file
+                .as_deref()
+                .map_or(RelativeImportLookup::Unknown, |f| {
+                    self.resolve_relative_import(cache, lookup_name, &import.path, f, extensions)
+                });
+            // Boundary stated at the TypeScript builder: configured
+            // redirection withholds negative evidence.
+            let lookup = if lookup == RelativeImportLookup::NoIndexedFile
+                && maybe_enhancer
+                    .as_ref()
+                    .is_some_and(|e| e.redirects_relative_specifiers())
+            {
+                RelativeImportLookup::Unknown
+            } else {
+                lookup
+            };
+            let (file_resolved, dangling) = match lookup {
+                RelativeImportLookup::Bound(id) => (Some(id), false),
+                RelativeImportLookup::NoIndexedFile => (None, true),
+                RelativeImportLookup::Unknown => (None, false),
+            };
             let file_resolved_module = file_resolved
                 .and_then(|id| cache.get(id))
                 .and_then(|s| s.module_path.map(String::from));
@@ -389,10 +407,12 @@ impl LanguageBehavior for JavaScriptBehavior {
             // module_path. Exact match wins outright; segment-boundary
             // suffix matches bind only an exactly-one survivor (candidate
             // order is file-processing order, not identity; raw ends_with
-            // also admitted mid-segment captures).
+            // also admitted mid-segment captures). A dangling import's
+            // target file is provably absent, so no module-string match
+            // can be it.
             let mut resolved_symbol: Option<SymbolId> = file_resolved;
             let mut suffix_matches: Vec<SymbolId> = Vec::new();
-            if resolved_symbol.is_none() {
+            if resolved_symbol.is_none() && !dangling {
                 for id in cache.lookup_candidates(lookup_name) {
                     if let Some(symbol) = cache.get(id) {
                         if let Some(module) = symbol.module_path.as_deref() {
@@ -417,7 +437,9 @@ impl LanguageBehavior for JavaScriptBehavior {
             }
 
             // Determine origin
-            let origin = if resolved_symbol.is_some() {
+            let origin = if dangling {
+                ImportOrigin::Dangling
+            } else if resolved_symbol.is_some() {
                 ImportOrigin::Internal
             } else {
                 ImportOrigin::External

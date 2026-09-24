@@ -122,6 +122,8 @@ fn test_provider_initialization_with_valid_config() {
         ]
         .into_iter()
         .collect(),
+
+        relative_specifiers_redirected: false,
     };
     index.set_rules(&tsconfig_path, rules.clone());
 

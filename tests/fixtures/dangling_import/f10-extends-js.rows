@@ -1,0 +1,2 @@
+Calls	run	Method	repo_a/child.js	3	greet	Method	repo_a/base.js	2	3	17	this	false	-
+Extends	Child	Class	repo_a/child.js	2	Base	Class	repo_a/base.js	1	-	-	-	-	-

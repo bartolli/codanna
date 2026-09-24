@@ -1,0 +1,2 @@
+Calls	build	Function	repo_a/caller.js	2	create	Method	repo_b/widget.js	3	5	9	Widget	true	-
+Calls	build	Function	repo_a/caller.js	2	render	Method	repo_b/widget.js	2	4	2	w	false	-

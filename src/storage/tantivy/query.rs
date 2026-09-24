@@ -525,6 +525,34 @@ impl DocumentIndex {
         Ok(())
     }
 
+    /// Visit every file row's stored path once. Uncapped, unlike
+    /// `get_all_indexed_paths`. No ordering guarantee.
+    pub fn for_each_file_path<E: From<StorageError>>(
+        &self,
+        mut visit: impl FnMut(String) -> Result<(), E>,
+    ) -> Result<(), E> {
+        let searcher = self.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(self.schema.doc_type, "file_info"),
+            IndexRecordOption::Basic,
+        );
+        let addresses = searcher
+            .search(&query, &DocSetCollector)
+            .map_err(StorageError::from)?;
+        for address in addresses {
+            let doc = searcher
+                .doc::<Document>(address)
+                .map_err(StorageError::from)?;
+            if let Some(path) = doc
+                .get_first(self.schema.file_path)
+                .and_then(|v| v.as_str())
+            {
+                visit(path.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
     /// Visit every relationship row once as `(from, to, relationship)` with
     /// its persisted metadata. Rows with an unknown stored kind are skipped.
     /// No ordering guarantee.
@@ -1137,6 +1165,55 @@ mod tests {
     use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    // The file view feeding dangling-import evidence enumerates every file
+    // row without a limit: the visitor yields all N registrations, and the
+    // cache built from the index equals one built from that enumeration.
+    #[test]
+    fn for_each_file_path_yields_every_file_row_and_feeds_the_cache_view() {
+        use crate::indexing::pipeline::SymbolLookupCache;
+        use std::collections::HashSet;
+
+        let temp_dir = TempDir::new().unwrap();
+        let settings = crate::config::Settings::default();
+        let index = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        index.start_batch().unwrap();
+        let stored: HashSet<String> = (1..=25u32)
+            .map(|n| format!("src/dir{}/file{n}.rs", n % 4))
+            .collect();
+        for (n, path) in stored.iter().enumerate() {
+            index
+                .store_file_registration(&FileRegistration {
+                    path: PathBuf::from(path),
+                    file_id: FileId::new(n as u32 + 1).unwrap(),
+                    content_hash: "hash".to_string(),
+                    language_id: LanguageId::new("rust"),
+                    timestamp: 0,
+                    mtime: 0,
+                })
+                .unwrap();
+        }
+        index.commit_batch().unwrap();
+
+        let mut visited: Vec<String> = Vec::new();
+        index
+            .for_each_file_path(|path| -> StorageResult<()> {
+                visited.push(path);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(visited.len(), stored.len());
+        assert_eq!(visited.iter().cloned().collect::<HashSet<_>>(), stored);
+
+        let from_index = SymbolLookupCache::from_index(&index).unwrap();
+        let from_visit = SymbolLookupCache::with_indexed_files(visited.iter().map(|p| {
+            index
+                .to_portable_file_path(p)
+                .map_or_else(|| PathBuf::from(p), PathBuf::from)
+        }));
+        assert!(from_index.indexed_files().is_some());
+        assert_eq!(from_index.indexed_files(), from_visit.indexed_files());
+    }
 
     #[test]
     fn test_add_and_search_document() {

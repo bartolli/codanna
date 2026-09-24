@@ -8,7 +8,7 @@ use codanna::indexing::pipeline::types::{CallerContext, SymbolLookupCache};
 use codanna::parsing::resolution::ProjectResolutionEnhancer;
 use codanna::parsing::typescript::resolution::TypeScriptProjectEnhancer;
 use codanna::parsing::{Import, LanguageId, ParserFactory, PipelineSymbolCache};
-use codanna::project_resolver::persist::ResolutionPersistence;
+use codanna::project_resolver::persist::{RESOLUTION_INDEX_VERSION, ResolutionPersistence};
 use codanna::project_resolver::provider::ProjectResolutionProvider;
 use codanna::project_resolver::providers::typescript::TypeScriptProvider;
 use codanna::types::{FileId, Range, SymbolId};
@@ -37,7 +37,7 @@ fn resolution_rules_json(tsconfig: &Path, mapping_root: &Path) -> String {
         }),
     );
     serde_json::to_string_pretty(&serde_json::json!({
-        "version": "1.0",
+        "version": RESOLUTION_INDEX_VERSION,
         "hashes": hashes,
         "mappings": mappings,
         "rules": rules,
@@ -165,6 +165,8 @@ fn test_path_alias_enhancement() {
         ]
         .into_iter()
         .collect(),
+
+        relative_specifiers_redirected: false,
     };
 
     let enhancer = TypeScriptProjectEnhancer::new(rules);
@@ -388,6 +390,119 @@ fn test_behavior_pipeline_cache_isolated() {
         resolved.is_some(),
         "Button should resolve via @components/Button path alias"
     );
+}
+
+/// Config-derived boundary: rules whose `relativeSpecifiersRedirected` is
+/// true withhold negative evidence, so a relative import with no indexed
+/// target keeps its pre-existing origin and scope state instead of
+/// `Dangling`; rules without the flag leave the evidence in force.
+#[test]
+fn test_redirecting_config_withholds_dangling_evidence() {
+    use codanna::parsing::javascript::JavaScriptBehavior;
+    use codanna::parsing::resolution::ImportOrigin;
+    use codanna::parsing::typescript::behavior::TypeScriptBehavior;
+    use codanna::parsing::{LanguageBehavior, PipelineSymbolCache};
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    let _cwd_guard = CWD_LOCK.lock().unwrap();
+
+    for redirected in [true, false] {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let temp_path = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let resolvers = temp_path.join(".codanna/index/resolvers");
+        fs::create_dir_all(&resolvers).expect("create resolvers dir");
+        for (lang, config) in [
+            ("typescript", "tsconfig.json"),
+            ("javascript", "jsconfig.json"),
+        ] {
+            let config_path = temp_path.join(config);
+            fs::write(&config_path, "{}").expect("write config");
+            let config_str = config_path.to_string_lossy().to_string();
+            let rules = serde_json::json!({
+                "version": RESOLUTION_INDEX_VERSION,
+                "hashes": { config_str.clone(): "test" },
+                "mappings": { format!("{}/**/*", temp_path.display()): config_str.clone() },
+                "rules": { config_str: {
+                    "baseUrl": null,
+                    "paths": {},
+                    "relativeSpecifiersRedirected": redirected,
+                } },
+            });
+            fs::write(
+                resolvers.join(format!("{lang}_resolution.json")),
+                serde_json::to_string_pretty(&rules).expect("serialize rules"),
+            )
+            .expect("write rules");
+        }
+
+        let original_dir = env::current_dir().expect("cwd");
+        env::set_current_dir(&temp_path).expect("chdir to temp");
+        // The behaviors cache loaded rules per thread for one second; a
+        // fresh thread reads the files written above.
+        let outcome = std::thread::spawn(|| {
+            let mut out = Vec::new();
+            for (lang, ext, exts, behavior) in [
+                (
+                    "typescript",
+                    "ts",
+                    &["ts", "tsx", "mts", "cts"][..],
+                    Box::new(TypeScriptBehavior::new()) as Box<dyn LanguageBehavior>,
+                ),
+                (
+                    "javascript",
+                    "js",
+                    &["js", "jsx", "mjs", "cjs"][..],
+                    Box::new(JavaScriptBehavior::new()) as Box<dyn LanguageBehavior>,
+                ),
+            ] {
+                let caller_path = format!("src/caller.{ext}");
+                let cache = SymbolLookupCache::with_indexed_files([PathBuf::from(&caller_path)]);
+                let file_id = FileId::new(1).unwrap();
+                let mut caller = Symbol::new(
+                    SymbolId::new(1).unwrap(),
+                    "entry",
+                    SymbolKind::Function,
+                    file_id,
+                    Range::new(1, 0, 3, 1),
+                );
+                caller.file_path = caller_path.into();
+                caller.language_id = Some(LanguageId::new(lang));
+                caller.visibility = Visibility::Public;
+                cache.insert(caller);
+                let imports = vec![Import {
+                    path: "./dep".to_string(),
+                    file_id,
+                    name: None,
+                    alias: Some("f".to_string()),
+                    is_glob: false,
+                    is_type_only: false,
+                }];
+                let (scope, _) = behavior.build_resolution_context_with_pipeline_cache(
+                    file_id,
+                    &imports,
+                    &cache as &dyn PipelineSymbolCache,
+                    exts,
+                );
+                let binding = scope.import_binding("f").expect("binding registered");
+                out.push((lang, binding.origin, scope.resolve("f").is_some()));
+            }
+            out
+        })
+        .join();
+        env::set_current_dir(original_dir).expect("restore cwd");
+
+        for (lang, origin, installed) in outcome.expect("builder thread") {
+            if redirected {
+                assert_eq!(origin, ImportOrigin::External, "{lang}: redirected config");
+            } else {
+                assert_eq!(origin, ImportOrigin::Dangling, "{lang}: plain config");
+            }
+            assert!(!installed, "{lang}: nothing to install either way");
+        }
+    }
 }
 
 /// Out-of-tree regression: module_path_from_file must resolve when the

@@ -156,6 +156,8 @@ impl SwiftProvider {
         Ok(ResolutionRules {
             base_url: None,
             paths,
+
+            relative_specifiers_redirected: false,
         })
     }
 }

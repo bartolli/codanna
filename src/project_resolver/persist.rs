@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::{ResolutionError, ResolutionResult, Sha256Hash};
 
 /// Version of the resolution index schema
-pub const RESOLUTION_INDEX_VERSION: &str = "1.0";
+pub const RESOLUTION_INDEX_VERSION: &str = "1.1";
 
 /// Resolution index schema v1 for TypeScript
 ///
@@ -40,6 +40,13 @@ pub struct ResolutionRules {
 
     /// Path alias mappings (e.g., "@app/*" -> ["src/app/*"])
     pub paths: HashMap<String, Vec<String>>,
+
+    /// The config redirects relative specifiers (`moduleSuffixes` with a
+    /// non-empty suffix, or `rootDirs`): a `./x` may resolve to a file
+    /// its own path does not name. Absent from caches written before the
+    /// field existed, which the index version bump retires.
+    #[serde(default)]
+    pub relative_specifiers_redirected: bool,
 }
 
 impl Default for ResolutionIndex {
@@ -283,6 +290,8 @@ mod tests {
                 ResolutionRules {
                     base_url: config.compilerOptions.baseUrl,
                     paths: config.compilerOptions.paths,
+
+                    relative_specifiers_redirected: false,
                 },
             );
         }
@@ -335,6 +344,8 @@ mod tests {
             ResolutionRules {
                 base_url: config.compilerOptions.baseUrl,
                 paths: config.compilerOptions.paths,
+
+                relative_specifiers_redirected: false,
             },
         );
 

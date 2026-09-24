@@ -197,6 +197,8 @@ impl CSharpProvider {
         Ok(ResolutionRules {
             base_url: Some(root_namespace),
             paths,
+
+            relative_specifiers_redirected: false,
         })
     }
 }

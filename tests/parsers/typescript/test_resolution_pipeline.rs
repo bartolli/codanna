@@ -216,6 +216,8 @@ fn test_resolution_without_config() {
     let rules = ResolutionRules {
         base_url: None,
         paths: std::collections::HashMap::new(),
+
+        relative_specifiers_redirected: false,
     };
 
     let enhancer = TypeScriptProjectEnhancer::new(rules);

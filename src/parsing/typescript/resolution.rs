@@ -851,6 +851,8 @@ impl TypeScriptInheritanceResolver {
 ///
 /// Applies tsconfig.json path mappings to transform import paths
 pub struct TypeScriptProjectEnhancer {
+    /// The governing config redirects relative specifiers
+    redirects_relative_specifiers: bool,
     /// Compiled path alias resolver (built from the resolution rules)
     resolver: Option<crate::parsing::typescript::tsconfig::PathAliasResolver>,
 }
@@ -858,6 +860,7 @@ pub struct TypeScriptProjectEnhancer {
 impl TypeScriptProjectEnhancer {
     /// Create a new enhancer from resolution rules
     pub fn new(rules: ResolutionRules) -> Self {
+        let redirects_relative_specifiers = rules.relative_specifiers_redirected;
         // Build the PathAliasResolver from rules
         let resolver = if !rules.paths.is_empty() || rules.base_url.is_some() {
             // Create a minimal TsConfig to use from_tsconfig
@@ -866,6 +869,9 @@ impl TypeScriptProjectEnhancer {
                 compilerOptions: crate::parsing::typescript::tsconfig::CompilerOptions {
                     baseUrl: rules.base_url.clone(),
                     paths: rules.paths.clone(),
+
+                    moduleSuffixes: None,
+                    rootDirs: None,
                 },
             };
 
@@ -875,7 +881,16 @@ impl TypeScriptProjectEnhancer {
             None
         };
 
-        Self { resolver }
+        Self {
+            redirects_relative_specifiers,
+            resolver,
+        }
+    }
+
+    /// Whether the governing config redirects relative specifiers
+    /// (`moduleSuffixes`, `rootDirs`).
+    pub fn redirects_relative_specifiers(&self) -> bool {
+        self.redirects_relative_specifiers
     }
 }
 

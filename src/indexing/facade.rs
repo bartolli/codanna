@@ -4817,4 +4817,586 @@ mod tests {
         let callee = facade.get_symbol(rows[0].1).unwrap();
         assert_eq!(callee.name.as_ref(), "callee");
     }
+
+    // Dangling relative import locks: each fixture's expected row set is a
+    // golden captured from the release binary of the tree before typed
+    // negative evidence landed, normalized to the relationship multiset
+    // (session-scoped ids stripped, endpoints identified by
+    // `<root>/<file>`, every metadata field kept, no dedup). Equality
+    // proves the fix moved no row these fixtures cover.
+
+    /// The relationship multiset of `facade`, one tab-separated row per
+    /// relationship, sorted. Mirrors the golden normalization exactly.
+    fn normalized_edges(facade: &IndexFacade) -> String {
+        use crate::dump::{DumpFilter, DumpStamp, Rows, write_dump};
+
+        let mut buf = Vec::new();
+        let filter = DumpFilter {
+            rows: Rows::Relationships,
+            ..Default::default()
+        };
+        let summary = write_dump(facade, DumpStamp::default(), &filter, &mut buf).unwrap();
+        assert_eq!(summary.orphan_edges_dropped, 0, "dump dropped orphan edges");
+        assert_eq!(summary.duplicate_symbol_ids, 0, "dump saw duplicate ids");
+
+        fn cell(value: &serde_json::Value) -> String {
+            match value {
+                serde_json::Value::Null => "-".to_string(),
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            }
+        }
+        fn ident(value: &serde_json::Value) -> String {
+            let path = value.as_str().unwrap_or("-").replace('\\', "/");
+            let parts: Vec<&str> = path.rsplit('/').take(2).collect();
+            parts.into_iter().rev().collect::<Vec<_>>().join("/")
+        }
+
+        let mut rows: Vec<String> = std::str::from_utf8(&buf)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|env| env["type"] == "result" && env["meta"]["entity_type"] == "relationship")
+            .map(|env| {
+                let d = &env["data"];
+                let m = &d["metadata"];
+                let meta_cell = |key: &str| {
+                    if m.is_null() {
+                        "-".to_string()
+                    } else {
+                        cell(&m[key])
+                    }
+                };
+                [
+                    cell(&d["relation"]),
+                    cell(&d["from"]["name"]),
+                    cell(&d["from"]["kind"]),
+                    ident(&d["from"]["file_path"]),
+                    cell(&d["from"]["line"]),
+                    cell(&d["to"]["name"]),
+                    cell(&d["to"]["kind"]),
+                    ident(&d["to"]["file_path"]),
+                    cell(&d["to"]["line"]),
+                    meta_cell("line"),
+                    meta_cell("column"),
+                    meta_cell("receiver"),
+                    meta_cell("static_call"),
+                    meta_cell("context"),
+                ]
+                .join("\t")
+            })
+            .collect();
+        rows.sort();
+        rows.into_iter().map(|r| r + "\n").collect()
+    }
+
+    /// Index `lib` on the force lane and return its relationship multiset.
+    fn force_indexed_edges(dir: &Path, lib: &Path) -> String {
+        let mut settings = Settings {
+            index_path: dir.join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(lib.to_path_buf()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_directory(lib, true).unwrap();
+        normalized_edges(&facade)
+    }
+
+    fn write_lib(dir: &Path, files: &[(&str, &str)]) -> PathBuf {
+        let lib = dir.join("lib");
+        for (rel, content) in files {
+            let path = lib.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        lib
+    }
+
+    const SHARED_TARGET: &str = "export function sharedTarget() { return 42; }\n";
+    const CALL_SHARED_TARGET: &str = "import { sharedTarget } from './target';\nexport function entry() { return sharedTarget(); }\n";
+
+    /// One `f` at `<dep>` and a caller importing it through `<specifier>`,
+    /// indexed on the force lane: the relationship multiset.
+    fn single_import_edges(dep: &str, dep_source: &str, caller: &str, specifier: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                (dep, dep_source),
+                (
+                    caller,
+                    &format!(
+                        "import {{ f }} from '{specifier}';\nexport function entry() {{ return f(); }}\n"
+                    ),
+                ),
+            ],
+        );
+        force_indexed_edges(dir.path(), &lib)
+    }
+
+    // A specifier naming a sibling the path generator does not model
+    // (`./dep.js` for `dep.ts`, `dep.jsx`, `dep.tsx`, `dep.d.ts`) shares
+    // the file's first-dot stem with it, so absence of the literal path
+    // is not evidence and main's row survives.
+    #[test]
+    fn ts_substituted_extension_specifier_rows_equal_golden() {
+        assert_eq!(
+            single_import_edges(
+                "repo_a/dep.ts",
+                "export function f() { return 1; }\n",
+                "repo_a/caller.ts",
+                "./dep.js"
+            ),
+            include_str!("../../tests/fixtures/dangling_import/f5-ts.rows")
+        );
+    }
+
+    #[test]
+    fn js_specifier_with_jsx_sibling_rows_equal_golden() {
+        assert_eq!(
+            single_import_edges(
+                "repo_a/dep.jsx",
+                "export function f() { return 1; }\n",
+                "repo_a/caller.js",
+                "./dep.js"
+            ),
+            include_str!("../../tests/fixtures/dangling_import/f5b-js-jsx.rows")
+        );
+    }
+
+    #[test]
+    fn ts_jsx_specifier_with_tsx_sibling_rows_equal_golden() {
+        assert_eq!(
+            single_import_edges(
+                "repo_a/dep.tsx",
+                "export function f() { return 1; }\n",
+                "repo_a/caller.ts",
+                "./dep.jsx"
+            ),
+            include_str!("../../tests/fixtures/dangling_import/f5b-ts-jsx-tsx.rows")
+        );
+    }
+
+    #[test]
+    fn ts_js_specifier_with_declaration_sibling_rows_equal_golden() {
+        assert_eq!(
+            single_import_edges(
+                "repo_a/dep.d.ts",
+                "export declare const f: () => number;\n",
+                "repo_a/caller.ts",
+                "./dep.js"
+            ),
+            include_str!("../../tests/fixtures/dangling_import/f5b-ts-dts.rows")
+        );
+    }
+
+    // A barrel: `./index` is present but does not define `f`, so the
+    // lookup is `Unknown` and main's row through the ladder survives.
+    #[test]
+    fn ts_barrel_reexport_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/impl.ts", "export function f() { return 1; }\n"),
+                ("repo_a/index.ts", "export { f } from './impl';\n"),
+                (
+                    "repo_a/caller.ts",
+                    "import { f } from './index';\nexport function entry() { return f(); }\n",
+                ),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f6-ts.rows")
+        );
+    }
+
+    #[test]
+    fn js_barrel_reexport_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/impl.js", "export function f() { return 1; }\n"),
+                ("repo_a/index.js", "export { f } from './impl';\n"),
+                (
+                    "repo_a/caller.js",
+                    "import { f } from './index';\nexport function entry() { return f(); }\n",
+                ),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f6-js.rows")
+        );
+    }
+
+    // A package specifier is not relative: `Unknown`, and main's row
+    // through the ladder survives.
+    #[test]
+    fn ts_package_specifier_rows_equal_golden() {
+        assert_eq!(
+            single_import_edges(
+                "repo_b/somepkg.ts",
+                "export function f() { return 1; }\n",
+                "repo_a/caller.ts",
+                "somepkg"
+            ),
+            include_str!("../../tests/fixtures/dangling_import/f8-pkg-ts.rows")
+        );
+    }
+
+    #[test]
+    fn js_package_specifier_rows_equal_golden() {
+        assert_eq!(
+            single_import_edges(
+                "repo_b/somepkg.js",
+                "export function f() { return 1; }\n",
+                "repo_a/caller.js",
+                "somepkg"
+            ),
+            include_str!("../../tests/fixtures/dangling_import/f8-pkg-js.rows")
+        );
+    }
+
+    /// Seed `lib` on the force lane and require the golden (positive
+    /// control), delete `deleted` under `lib`, then re-index on the
+    /// incremental lane and on the force lane: after each, no `kind` row
+    /// targets `foreign`.
+    fn assert_deletion_kills_kind_rows(
+        dir: &Path,
+        lib: &Path,
+        golden: &str,
+        deleted: &str,
+        kind: &str,
+        foreign: &str,
+    ) {
+        let mut settings = Settings {
+            index_path: dir.join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(lib.to_path_buf()).unwrap();
+        let mut facade = IndexFacade::new(std::sync::Arc::new(settings)).unwrap();
+        facade.index_directory(lib, true).unwrap();
+        assert_eq!(normalized_edges(&facade), golden, "positive control");
+
+        std::fs::remove_file(lib.join(deleted)).unwrap();
+        let mut wrong: Vec<String> = Vec::new();
+        for (lane, force) in [("incremental", false), ("force", true)] {
+            facade.index_directory(lib, force).unwrap();
+            let rows = normalized_edges(&facade);
+            let hits: Vec<&str> = rows
+                .lines()
+                .filter(|row| {
+                    row.starts_with(&format!("{kind}\t")) && row.contains(&format!("\t{foreign}\t"))
+                })
+                .collect();
+            if !hits.is_empty() {
+                wrong.push(format!("{lane}:\n{}\n", hits.join("\n")));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{kind} rows into {foreign} after deleting {deleted}:\n{}",
+            wrong.join("")
+        );
+    }
+
+    const BASE_CLASS: &str = "export class Base {\n  greet() { return 1; }\n}\n";
+    const FOREIGN_BASE_CLASS: &str = "export class Base {\n  greet() { return 2; }\n}\n";
+    const CHILD_CLASS: &str = "import { Base } from './base';\nexport class Child extends Base {\n  run() { return this.greet(); }\n}\n";
+    const SHAPE_INTERFACE: &str = "export interface Shape {\n  area(): number;\n}\n";
+
+    // Every relation kind honors the negative evidence: after the
+    // imported file is deleted, no Extends / Implements / Uses row lands
+    // on the foreign namesake.
+    #[test]
+    fn ts_extends_into_deleted_import_binds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/base.ts", BASE_CLASS),
+                ("repo_b/base.ts", FOREIGN_BASE_CLASS),
+                ("repo_a/child.ts", CHILD_CLASS),
+            ],
+        );
+        assert_deletion_kills_kind_rows(
+            dir.path(),
+            &lib,
+            include_str!("../../tests/fixtures/dangling_import/f10-extends-ts.rows"),
+            "repo_a/base.ts",
+            "Extends",
+            "repo_b/base.ts",
+        );
+    }
+
+    #[test]
+    fn js_extends_into_deleted_import_binds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/base.js", BASE_CLASS),
+                ("repo_b/base.js", FOREIGN_BASE_CLASS),
+                ("repo_a/child.js", CHILD_CLASS),
+            ],
+        );
+        assert_deletion_kills_kind_rows(
+            dir.path(),
+            &lib,
+            include_str!("../../tests/fixtures/dangling_import/f10-extends-js.rows"),
+            "repo_a/base.js",
+            "Extends",
+            "repo_b/base.js",
+        );
+    }
+
+    #[test]
+    fn ts_implements_into_deleted_import_binds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/shape.ts", SHAPE_INTERFACE),
+                ("repo_b/shape.ts", SHAPE_INTERFACE),
+                (
+                    "repo_a/square.ts",
+                    "import { Shape } from './shape';\nexport class Square implements Shape {\n  area() { return 4; }\n}\n",
+                ),
+            ],
+        );
+        assert_deletion_kills_kind_rows(
+            dir.path(),
+            &lib,
+            include_str!("../../tests/fixtures/dangling_import/f10-implements-ts.rows"),
+            "repo_a/shape.ts",
+            "Implements",
+            "repo_b/shape.ts",
+        );
+    }
+
+    #[test]
+    fn ts_uses_into_deleted_import_binds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/shape.ts", SHAPE_INTERFACE),
+                ("repo_b/shape.ts", SHAPE_INTERFACE),
+                (
+                    "repo_a/measure.ts",
+                    "import { Shape } from './shape';\nexport function measure(s: Shape): number {\n  return s.area();\n}\n",
+                ),
+            ],
+        );
+        assert_deletion_kills_kind_rows(
+            dir.path(),
+            &lib,
+            include_str!("../../tests/fixtures/dangling_import/f10-uses-ts.rows"),
+            "repo_a/shape.ts",
+            "Uses",
+            "repo_b/shape.ts",
+        );
+    }
+
+    // `./target.js` with no `target.*` sibling indexed and a foreign
+    // namesake: no same-stem file a substitution could name, so the
+    // specifier is dangling and the namesake must not bind. The shape has
+    // no positive control (binding through the substitution is out of
+    // scope); the sibling-present cases are the goldens above.
+    #[test]
+    fn ts_substituted_specifier_with_no_twin_binds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_b/target.ts", SHARED_TARGET),
+                (
+                    "repo_a/caller.ts",
+                    "import { sharedTarget } from './target.js';\nexport function entry() { return sharedTarget(); }\n",
+                ),
+            ],
+        );
+        let rows = force_indexed_edges(dir.path(), &lib);
+        assert!(
+            !rows.lines().any(|row| row.starts_with("Calls\tentry\t")),
+            "a dangling substituted specifier must not bind the foreign namesake:\n{rows}"
+        );
+    }
+
+    // An indexed target with zero symbols is present: file rows, not
+    // symbols, decide presence, so the import is not dangling.
+    #[test]
+    fn ts_empty_target_file_is_present_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/target.ts", ""),
+                ("repo_b/target.ts", SHARED_TARGET),
+                ("repo_a/caller.ts", CALL_SHARED_TARGET),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f7-ts.rows")
+        );
+    }
+
+    #[test]
+    fn js_empty_target_file_is_present_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/target.js", ""),
+                ("repo_b/target.js", SHARED_TARGET),
+                ("repo_a/caller.js", CALL_SHARED_TARGET),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f7-js.rows")
+        );
+    }
+
+    // A dangling import and a same-name function in the caller file: the
+    // scope hit on the file's own definition is independent evidence.
+    #[test]
+    fn ts_local_definition_wins_over_dangling_import_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                (
+                    "repo_b/helper.ts",
+                    "export function helper() { return 2; }\n",
+                ),
+                (
+                    "repo_a/caller.ts",
+                    "import { helper } from './missing';\nfunction helper() { return 1; }\nexport function entry() { return helper(); }\n",
+                ),
+            ],
+        );
+        let rows = force_indexed_edges(dir.path(), &lib);
+        assert_eq!(
+            rows,
+            include_str!("../../tests/fixtures/dangling_import/f9-ts.rows")
+        );
+        assert!(
+            rows.contains("\thelper\tFunction\trepo_a/caller.ts\t"),
+            "the call resolves to the local function: {rows}"
+        );
+    }
+
+    #[test]
+    fn js_local_definition_wins_over_dangling_import_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                (
+                    "repo_b/helper.js",
+                    "export function helper() { return 2; }\n",
+                ),
+                (
+                    "repo_a/caller.js",
+                    "import { helper } from './missing';\nfunction helper() { return 1; }\nexport function entry() { return helper(); }\n",
+                ),
+            ],
+        );
+        let rows = force_indexed_edges(dir.path(), &lib);
+        assert_eq!(
+            rows,
+            include_str!("../../tests/fixtures/dangling_import/f9-js.rows")
+        );
+        assert!(
+            rows.contains("\thelper\tFunction\trepo_a/caller.js\t"),
+            "the call resolves to the local function: {rows}"
+        );
+    }
+
+    // Aliased named import with the target indexed: the lookup keys on the
+    // member name and the file is present, never dangling.
+    #[test]
+    fn ts_aliased_named_import_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/dep.ts", "export function f() { return 1; }\n"),
+                ("repo_b/dep.ts", "export function f() { return 2; }\n"),
+                (
+                    "repo_a/caller.ts",
+                    "import { f as g } from './dep';\nexport function entry() { return g(); }\n",
+                ),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f12-ts.rows")
+        );
+    }
+
+    #[test]
+    fn js_aliased_named_import_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_a/dep.js", "export function f() { return 1; }\n"),
+                ("repo_b/dep.js", "export function f() { return 2; }\n"),
+                (
+                    "repo_a/caller.js",
+                    "import { f as g } from './dep';\nexport function entry() { return g(); }\n",
+                ),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f12-js.rows")
+        );
+    }
+
+    // Receiver-bearing calls (static and typed receiver) whose receiver
+    // type names a dangling import keep the pre-existing rows: the gate
+    // classifies by emitted metadata, and these rows carry a receiver.
+    const WIDGET: &str = "export class Widget {\n  render() { return 1; }\n  static create() { return new Widget(); }\n}\n";
+    const CALL_WIDGET: &str = "import { Widget } from './widget';\nexport function build() {\n  const w = new Widget();\n  w.render();\n  return Widget.create();\n}\n";
+
+    #[test]
+    fn ts_receiver_bearing_calls_on_dangling_import_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_b/widget.ts", WIDGET),
+                ("repo_a/caller.ts", CALL_WIDGET),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f13-ts.rows")
+        );
+    }
+
+    #[test]
+    fn js_receiver_bearing_calls_on_dangling_import_rows_equal_golden() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = write_lib(
+            dir.path(),
+            &[
+                ("repo_b/widget.js", WIDGET),
+                ("repo_a/caller.js", CALL_WIDGET),
+            ],
+        );
+        assert_eq!(
+            force_indexed_edges(dir.path(), &lib),
+            include_str!("../../tests/fixtures/dangling_import/f13-js.rows")
+        );
+    }
 }

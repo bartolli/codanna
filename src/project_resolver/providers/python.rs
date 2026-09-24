@@ -638,6 +638,8 @@ impl PythonProvider {
         Ok(ResolutionRules {
             base_url: None,
             paths,
+
+            relative_specifiers_redirected: false,
         })
     }
 }

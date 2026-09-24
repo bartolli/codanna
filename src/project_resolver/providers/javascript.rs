@@ -152,13 +152,7 @@ impl ProjectResolutionProvider for JavaScriptProvider {
                     index.update_sha(config_path, &sha);
 
                     // Set resolution rules from jsconfig
-                    index.set_rules(
-                        config_path,
-                        ResolutionRules {
-                            base_url: jsconfig.compilerOptions.baseUrl,
-                            paths: jsconfig.compilerOptions.paths,
-                        },
-                    );
+                    index.set_rules(config_path, resolution_rules(jsconfig));
 
                     // Add file mappings for JavaScript files
                     if let Some(parent) = config_path.parent() {
@@ -206,9 +200,85 @@ impl ProjectResolutionProvider for JavaScriptProvider {
     }
 }
 
+/// Rules for one effective config. `relative_specifiers_redirected` is
+/// true when `moduleSuffixes` lists a non-empty suffix or `rootDirs` is
+/// non-empty: either lets a relative specifier resolve to a file its own
+/// path does not name.
+pub(crate) fn resolution_rules(
+    config: crate::parsing::javascript::jsconfig::JsConfig,
+) -> ResolutionRules {
+    let options = config.compilerOptions;
+    let relative_specifiers_redirected = options
+        .moduleSuffixes
+        .as_ref()
+        .is_some_and(|suffixes| suffixes.iter().any(|suffix| !suffix.is_empty()))
+        || options
+            .rootDirs
+            .as_ref()
+            .is_some_and(|roots| !roots.is_empty());
+    ResolutionRules {
+        base_url: options.baseUrl,
+        paths: options.paths,
+        relative_specifiers_redirected,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rules_for(config: &str) -> ResolutionRules {
+        resolution_rules(
+            crate::parsing::javascript::jsconfig::parse_jsonc_jsconfig(config).unwrap(),
+        )
+    }
+
+    #[test]
+    fn module_suffixes_redirect_relative_specifiers() {
+        let rules = rules_for(r#"{"compilerOptions": {"moduleSuffixes": ["_native", ""]}}"#);
+        assert!(rules.relative_specifiers_redirected);
+    }
+
+    #[test]
+    fn root_dirs_redirect_relative_specifiers() {
+        let rules = rules_for(r#"{"compilerOptions": {"rootDirs": ["src", "generated"]}}"#);
+        assert!(rules.relative_specifiers_redirected);
+    }
+
+    #[test]
+    fn empty_module_suffix_alone_does_not_redirect() {
+        let rules = rules_for(r#"{"compilerOptions": {"moduleSuffixes": [""]}}"#);
+        assert!(!rules.relative_specifiers_redirected);
+    }
+
+    #[test]
+    fn plain_config_does_not_redirect() {
+        let rules = rules_for(r#"{"compilerOptions": {"baseUrl": "."}}"#);
+        assert!(!rules.relative_specifiers_redirected);
+        assert_eq!(rules.base_url.as_deref(), Some("."));
+    }
+
+    #[test]
+    fn persisted_rules_keep_the_redirection_flag() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let persistence = ResolutionPersistence::new(temp_dir.path());
+        let config_path = PathBuf::from("jsconfig.json");
+        let mut index = ResolutionIndex::new();
+        index.set_rules(
+            &config_path,
+            rules_for(r#"{"compilerOptions": {"rootDirs": ["src", "generated"]}}"#),
+        );
+        persistence.save("javascript", &index).unwrap();
+        let loaded = persistence.load("javascript").unwrap();
+        assert!(loaded.rules[&config_path].relative_specifiers_redirected);
+    }
+
+    #[test]
+    fn rules_without_the_flag_deserialize_as_not_redirected() {
+        let rules: ResolutionRules =
+            serde_json::from_str(r#"{"baseUrl": null, "paths": {}}"#).unwrap();
+        assert!(!rules.relative_specifiers_redirected);
+    }
     use crate::config::LanguageConfig;
 
     fn create_test_settings_with_js_config(config_files: Vec<PathBuf>) -> Settings {

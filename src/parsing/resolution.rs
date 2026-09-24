@@ -31,6 +31,38 @@ pub enum ImportOrigin {
     External,
     /// The origin could not be determined
     Unknown,
+    /// A relative import whose target file has no row in the index. The
+    /// binding owns its name as negative evidence: a same-name symbol
+    /// elsewhere is not the import's target.
+    Dangling,
+}
+
+/// Whether a file path has a file row in the index, as far as a cache can
+/// tell. Only a cache built from every persisted row can answer `Absent`;
+/// a walk-scoped cache holds its own run's files and answers `Unknown`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilePresence {
+    Present,
+    Absent,
+    Unknown,
+}
+
+/// Outcome of resolving a relative specifier (`./x`, `../y`) by file
+/// identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelativeImportLookup {
+    /// Exactly one name match at a resolved candidate path.
+    Bound(SymbolId),
+    /// The resolved path has no indexed file at any modeled candidate,
+    /// no indexed sibling sharing its first-dot stem, and no indexed
+    /// file below it. The only negative evidence; answerable from a
+    /// complete cache alone.
+    NoIndexedFile,
+    /// No evidence either way: non-relative specifier, more than one
+    /// match, a candidate file present without the name, a sibling or
+    /// directory a substitution could name, or a cache that cannot
+    /// prove absence.
+    Unknown,
 }
 
 /// Binding information for an import exposed to a file
@@ -178,7 +210,7 @@ pub trait ResolutionScope: Send + Sync {
     fn is_external_import(&self, name: &str) -> bool {
         if let Some(binding) = self.import_binding(name) {
             match binding.origin {
-                ImportOrigin::External => true,
+                ImportOrigin::External | ImportOrigin::Dangling => true,
                 ImportOrigin::Internal => binding.resolved_symbol.is_none(),
                 ImportOrigin::Unknown => binding.resolved_symbol.is_none(),
             }
@@ -739,6 +771,25 @@ pub trait PipelineSymbolCache: Send + Sync {
     ///
     /// Returns all symbols with the given name for module path matching.
     fn lookup_candidates(&self, name: &str) -> Vec<SymbolId>;
+
+    /// Whether the index holds a file row at `path`, in the same path form
+    /// the cache's symbols carry in `file_path`. File rows, not symbols:
+    /// an indexed file with zero symbols is present. `Absent` is negative
+    /// evidence and only a cache built from every persisted row may
+    /// answer it; a partial cache answers `Unknown`.
+    fn file_presence(&self, path: &std::path::Path) -> FilePresence;
+
+    /// Whether any indexed file in `path`'s directory shares its first-dot
+    /// stem (`dep` for `dep.js`, `dep.jsx`, `dep.d.ts`, `dep.test.ts`):
+    /// the siblings extension substitution names. Configured redirection
+    /// (`moduleSuffixes`, `rootDirs`) is the builders' boundary, not this
+    /// query's. Same completeness rule as `file_presence`.
+    fn sibling_stem_present(&self, path: &std::path::Path) -> FilePresence;
+
+    /// Whether any indexed file lies below `path` as a directory (a
+    /// `./widgets` naming `widgets/index.vue`). Same completeness rule as
+    /// `file_presence`.
+    fn directory_present(&self, path: &std::path::Path) -> FilePresence;
 
     /// Resolve a re-exported path ("pkg.helper") to the defining symbol.
     ///

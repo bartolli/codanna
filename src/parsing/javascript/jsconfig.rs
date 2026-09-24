@@ -44,6 +44,15 @@ pub struct CompilerOptions {
     /// Path mapping for module resolution
     #[serde(default)]
     pub paths: HashMap<String, Vec<String>>,
+
+    /// `moduleSuffixes`: a relative specifier may resolve to a suffixed
+    /// sibling (`./dep` naming `dep_native.ts`)
+    #[serde(default, rename = "moduleSuffixes")]
+    pub moduleSuffixes: Option<Vec<String>>,
+
+    /// `rootDirs`: a relative specifier may resolve across the listed roots
+    #[serde(default, rename = "rootDirs")]
+    pub rootDirs: Option<Vec<String>>,
 }
 
 /// Minimal jsconfig.json representation for path resolution
@@ -153,6 +162,14 @@ fn merge_jsconfig(parent: JsConfig, child: JsConfig) -> JsConfig {
                 merged.extend(child.compilerOptions.paths);
                 merged
             },
+            moduleSuffixes: child
+                .compilerOptions
+                .moduleSuffixes
+                .or(parent.compilerOptions.moduleSuffixes),
+            rootDirs: child
+                .compilerOptions
+                .rootDirs
+                .or(parent.compilerOptions.rootDirs),
         },
     }
 }
@@ -349,6 +366,9 @@ mod tests {
                     ("@parent/*".to_string(), vec!["parent/*".to_string()]),
                     ("@common/*".to_string(), vec!["parent/common/*".to_string()]),
                 ]),
+
+                moduleSuffixes: None,
+                rootDirs: None,
             },
         };
 
@@ -360,6 +380,9 @@ mod tests {
                     ("@child/*".to_string(), vec!["child/*".to_string()]),
                     ("@common/*".to_string(), vec!["child/common/*".to_string()]),
                 ]),
+
+                moduleSuffixes: None,
+                rootDirs: None,
             },
         };
 
@@ -407,6 +430,9 @@ mod tests {
             compilerOptions: CompilerOptions {
                 baseUrl: Some("./src".to_string()),
                 paths: HashMap::from([("@/*".to_string(), vec!["*".to_string()])]),
+
+                moduleSuffixes: None,
+                rootDirs: None,
             },
         };
 
