@@ -244,11 +244,13 @@ impl Pipeline {
     }
 }
 
-/// A write that fails before the stage's first commit staged nothing: the
-/// caller's pending value is intact and the call can be repeated. After a
-/// commit, rows may be durable, so the error carries no such claim.
+/// A write that fails before the stage's first commit attempt left nothing
+/// durable: the batch was rolled back, the caller's pending value is intact
+/// and the call can be repeated. Once a commit has been attempted, rows may
+/// be durable even when that commit returned an error (the reader reload
+/// after a successful commit can fail), so the error carries no such claim.
 fn classify_write_error(stage: &WriteStage, source: StorageError) -> PipelineError {
-    if stage.has_committed() {
+    if stage.commit_attempted() {
         PipelineError::Storage(source)
     } else {
         PipelineError::WriterUnavailable { source }
