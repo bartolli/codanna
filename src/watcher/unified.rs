@@ -752,6 +752,11 @@ impl UnifiedWatcher {
             }
 
             WatchAction::ReloadConfig { added, removed } => {
+                if added.is_empty() && removed.is_empty() {
+                    return Ok(());
+                }
+                let mut indexer = self.facade.write().await;
+                let persistence = crate::IndexPersistence::new(self.index_path.clone());
                 if !added.is_empty() {
                     crate::log_event!("config", "adding directories", "{}", added.len());
                     for path in &added {
@@ -761,7 +766,6 @@ impl UnifiedWatcher {
                         );
                     }
 
-                    let mut indexer = self.facade.write().await;
                     // Resolution defers across the added dirs so one new
                     // root's imports into another bind regardless of order.
                     let mut pending = crate::indexing::pipeline::PendingResolution::default();
@@ -801,13 +805,9 @@ impl UnifiedWatcher {
                     // from the metadata; a root missing there is indexed
                     // again. The deferred index above already persisted
                     // the semantic snapshot.
-                    let persistence = crate::IndexPersistence::new(self.index_path.clone());
                     if let Err(e) = persistence.save_metadata(&indexer) {
                         tracing::warn!("  failed to save index metadata: {e}");
                     }
-                    tracing::info!(
-                        "  files and directories created under an added root are not watched until serve restarts"
-                    );
                 }
 
                 if !removed.is_empty() {
@@ -821,9 +821,33 @@ impl UnifiedWatcher {
                     tracing::info!("Run 'codanna clean' to remove symbols from these directories");
                 }
 
-                if !added.is_empty() || !removed.is_empty() {
-                    self.broadcaster.send(FileChangeEvent::IndexReloaded);
+                // The facade's settings are fixed at construction, and
+                // every consumer of indexed_paths_cache (eligibility
+                // roots, discoverable_*, the strip base) reads the
+                // reloaded list only through a facade built over merged
+                // settings. Loaded under the guard, like hot-reload, so
+                // no commit through the old facade is missing from it.
+                let mut merged = indexer.settings().as_ref().clone();
+                for path in &added {
+                    if let Err(e) = merged.add_indexed_path(path.clone()) {
+                        tracing::warn!("  settings merge: {e}");
+                    }
                 }
+                for path in &removed {
+                    if let Err(e) = merged.remove_indexed_path(path) {
+                        tracing::warn!("  settings merge: {e}");
+                    }
+                }
+                match persistence.load_facade(Arc::new(merged)) {
+                    Ok(facade) => *indexer = facade,
+                    Err(e) => {
+                        tracing::error!(
+                            "  failed to rebuild the index over the reloaded settings; keeping the previous roots: {e}"
+                        );
+                    }
+                }
+
+                self.broadcaster.send(FileChangeEvent::IndexReloaded);
             }
 
             WatchAction::None => {
@@ -1716,6 +1740,7 @@ mod tests {
             .handler(handler)
             .broadcaster(Arc::new(NotificationBroadcaster::new(16)))
             .indexer(facade)
+            .index_path(dir.join("index"))
             .workspace_root(dir.to_path_buf())
             .build()
             .unwrap();
@@ -2009,5 +2034,70 @@ mod tests {
             .filter(|line| line.contains(&rendered) && line.contains("codanna index --force"))
             .count();
         assert_eq!(reported, 1, "log: {text}");
+    }
+
+    // A root added by settings reload converges to the startup state:
+    // the facade's settings, the eligibility roots, and the batch-sync
+    // roots hold it, so files and directories created under it
+    // afterwards are discovered.
+    #[tokio::test]
+    async fn settings_reload_added_root_is_eligible_and_watched() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().canonicalize().unwrap();
+        let root_a = workspace.join("a");
+        let root_b = workspace.join("b");
+        std::fs::create_dir_all(&root_a).unwrap();
+        std::fs::create_dir_all(&root_b).unwrap();
+        std::fs::write(root_a.join("a1.py"), "def a1():\n    pass\n").unwrap();
+        std::fs::write(root_b.join("b1.py"), "def b1():\n    pass\n").unwrap();
+        let mut watcher = watcher_over(&workspace, &root_a).await;
+        let _log = record_registrations(&mut watcher);
+
+        watcher
+            .execute_action(
+                WatchAction::ReloadConfig {
+                    added: vec![root_b.clone()],
+                    removed: Vec::new(),
+                },
+                "config",
+            )
+            .await
+            .unwrap();
+        watcher.handle_index_reloaded().await;
+
+        {
+            let facade = watcher.facade.read().await;
+            assert!(
+                facade.settings().indexed_paths_cache.contains(&root_b),
+                "facade settings lack the added root: {:?}",
+                facade.settings().indexed_paths_cache
+            );
+            assert_eq!(facade.find_symbols_by_name("b1", None).len(), 1);
+        }
+        assert!(
+            watcher.handler_roots.contains(&root_b),
+            "handler roots: {:?}",
+            watcher.handler_roots
+        );
+        assert!(
+            watcher.batch_sync_roots.contains(&root_b),
+            "batch sync roots: {:?}",
+            watcher.batch_sync_roots
+        );
+
+        let created_file = root_b.join("b2.py");
+        std::fs::write(&created_file, "def b2():\n    pass\n").unwrap();
+        let handler = &watcher.handlers[0];
+        assert!(handler.matches(&created_file));
+        assert!(matches!(
+            handler.on_modify(&created_file).await.unwrap(),
+            WatchAction::ReindexCode { created: true, .. }
+        ));
+
+        let sub = root_b.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("b3.py"), "def b3():\n    pass\n").unwrap();
+        watcher.handle_created_directory(&sub).await;
+        assert!(watcher.debouncer.has_pending());
     }
 }

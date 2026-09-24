@@ -221,3 +221,90 @@ fn settings_reload_records_the_added_root_in_index_metadata() {
     );
     drop(serve);
 }
+
+// Native watcher legs for the added root: a created file is reindexed, a
+// created directory enters catch-up, and a rename runs the batch sync
+// lane. Platform watcher events under a runtime-added root are not
+// reproducible on the CI runner; this is the local release e2e. The
+// in-process mechanism tests live in src/watcher (unified.rs and
+// hot_reload.rs). The reload's registration summary is not a CI-safe
+// substitute: it counts tracked files, which main already indexes.
+#[test]
+#[ignore = "native watcher e2e; run locally: cargo test --release --test cli_tests settings_reload_watches_the_added_root -- --ignored"]
+fn settings_reload_watches_the_added_root() {
+    let workspace = TempDir::new().expect("temp dir");
+    write_root(&workspace.path().join("alpha"), &["alpha_one"]);
+    write_root(&workspace.path().join("beta"), &["beta_one", "beta_two"]);
+    write_settings(workspace.path(), &["alpha"]);
+    let (code, stdout, stderr) = run_cli(workspace.path(), &["index", "--no-progress"]);
+    assert_eq!(code, 0, "seed index\nstdout:\n{stdout}\nstderr:\n{stderr}");
+
+    let serve = spawn_serve_watch(workspace.path());
+    write_settings(workspace.path(), &["alpha", "beta"]);
+    assert!(
+        wait_for_line(
+            &serve.stderr,
+            "index reloaded, refreshing",
+            Duration::from_secs(30)
+        ),
+        "settings reload not observed on serve stderr"
+    );
+    // The refresh registers the added root's watch after its first log
+    // line; the summary line marks the registration done.
+    assert!(
+        wait_for_line(
+            &serve.stderr,
+            "[watcher] watching:",
+            Duration::from_secs(30)
+        ),
+        "watch registration after the reload not observed on serve stderr"
+    );
+    let beta = workspace
+        .path()
+        .join("beta")
+        .canonicalize()
+        .expect("beta exists");
+
+    write_root(&beta, &["beta_three"]);
+    assert!(
+        wait_for_line(&serve.stderr, "[code] reindexed", Duration::from_secs(30)),
+        "file created under the added root was not reindexed"
+    );
+
+    // Moved in whole so the directory event finds its file.
+    let staged = workspace.path().join("staged").join("sub");
+    write_root(&staged, &["beta_sub_one"]);
+    std::fs::rename(&staged, beta.join("sub")).expect("move subdirectory under beta");
+    assert!(
+        wait_for_line(
+            &serve.stderr,
+            "[watcher] created dir",
+            Duration::from_secs(30)
+        ),
+        "directory created under the added root did not enter catch-up"
+    );
+
+    std::fs::rename(beta.join("beta_one.rs"), beta.join("beta_moved.rs")).expect("rename");
+    assert!(
+        wait_for_line(
+            &serve.stderr,
+            "[watcher] batch synced",
+            Duration::from_secs(30)
+        ),
+        "rename under the added root did not run the batch sync lane"
+    );
+
+    // A fresh reader cannot index the file itself: its startup sync walks
+    // only roots absent from the stored metadata, and the reload stored
+    // beta.
+    let (code, stdout, stderr) = run_cli(
+        workspace.path(),
+        &["mcp", "find_symbol", "name:beta_three", "--json"],
+    );
+    assert_eq!(
+        code, 0,
+        "beta_three missing from the index\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(stdout.contains("beta_three"), "stdout:\n{stdout}");
+    drop(serve);
+}
