@@ -547,6 +547,13 @@ elif seed_with "$PREV_BIN" "$ROOT/c4-prev"; then
     else
         fail "previous-release server" "expected exit 0 with tool output against $PREV_VERSION, got $C4P_RC (see $C4P)"
     fi
+    # The client cell measures client compatibility, not index
+    # compatibility: when the binary under test carries a newer emission
+    # version than the previous release, it refuses the seeded index with
+    # the zero-tool handshake (covered by the stale cells above), so the
+    # workspace is rebuilt by the binary under test first.
+    (cd "$ROOT/c4-prev" && "$BIN" index --force --no-progress > /dev/null 2>&1) \
+        || { echo "rebuild with the binary under test failed: $ROOT/c4-prev" >&2; exit 2; }
     C4Q="$ROOT/c4-prev-client.out"
     (cd "$ROOT/c4-prev" && timeout 30 "$PREV_BIN" mcp-test --server-binary "$BIN" > "$C4Q" 2>&1)
     C4Q_RC=$?

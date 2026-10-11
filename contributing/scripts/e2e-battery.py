@@ -615,8 +615,25 @@ def relocation_leg(
     return not dropped and not gained
 
 
+def ignore_chain_owner(out: Path):
+    """The nearest ancestor of out (inclusive) carrying an ignore file."""
+    for ancestor in [out, *out.parents]:
+        for name in (".codannaignore", ".gitignore"):
+            if (ancestor / name).is_file():
+                return ancestor / name
+    return None
+
+
 def cmd_run(args):
     out = Path(args.out).resolve()
+    owner = ignore_chain_owner(out)
+    if owner is not None and not args.in_ignore_chain:
+        raise SystemExit(
+            f"--out {out} is under {owner}: leg workspaces inherit that ignore chain, "
+            "so the corpus is read with another tree's exclusions (witnessed: gin -23 rows "
+            "from *.pb.go, three.js -18851 rows from build/). Use /private/tmp/battery-<label>, "
+            "or pass --in-ignore-chain for a deliberate in-chain pair that is not an anchor."
+        )
     binary = Path(args.binary).resolve()
     dump = Path(args.dump).resolve() if args.dump else None
     for p, what in [(binary, "--binary"), (dump, "--dump")]:
@@ -760,6 +777,12 @@ def main():
         help="NAME=FIXTURE_PATH@PIN (repeatable)",
     )
     r.add_argument("--out", required=True, help="battery output root")
+    r.add_argument(
+        "--in-ignore-chain",
+        action="store_true",
+        help="allow --out under a tree carrying .codannaignore or .gitignore; the legs then "
+        "inherit that chain and are comparable only to other in-chain legs, never anchors",
+    )
     r.add_argument("--runs", type=int, default=1, help="runs per leg (2 for scatter corpora)")
     r.add_argument("--semantic", choices=["on", "off"], default="off")
     r.add_argument(
