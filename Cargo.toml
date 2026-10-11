@@ -22,10 +22,6 @@ bin-dir = "{ name }-{ version }-{ target-family }/{ bin }{ binary-ext }"
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-linux-x64.tar.xz"
 bin-dir = "{ name }-{ version }-linux-x64/{ bin }"
 
-[package.metadata.binstall.overrides.x86_64-apple-darwin]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-macos-x64.tar.xz"
-bin-dir = "{ name }-{ version }-macos-x64/{ bin }"
-
 [package.metadata.binstall.overrides.aarch64-apple-darwin]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ version }-macos-arm64.tar.xz"
 bin-dir = "{ name }-{ version }-macos-arm64/{ bin }"

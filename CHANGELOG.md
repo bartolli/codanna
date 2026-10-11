@@ -23,6 +23,7 @@ Dependency release: local embedding runs on ONNX Runtime 1.28 through fastembed 
 
 ### Removed
 
+- macOS x86_64 (Intel) release binaries and the cargo-binstall override for that target. ONNX Runtime 1.28 has no Intel macOS build, in Microsoft's releases or in the ort crate's prebuilt binaries, so neither the release binary nor `cargo install` can target it. Release binaries are Apple Silicon only; 0.17.0 is the last release for Intel Macs.
 - The `brew-update.yml` workflow and the tap `bartolli/homebrew-codanna`. Homebrew installs come from homebrew-core (`brew install codanna`).
 
 ## [0.17.0] - 2026-10-11

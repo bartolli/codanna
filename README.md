@@ -206,6 +206,7 @@ Add codanna to any MCP-compatible client. Project-scoped `.mcp.json` (Claude Cod
 ## Requirements
 
 - ~150MB for embedding model (downloaded on first use)
+- **macOS:** Apple Silicon. ONNX Runtime 1.28 has no Intel macOS build, so 0.17.1 and later do not target Intel Macs; 0.17.0 is the last release that does
 - **Linux:** glibc 2.38+ and libstdc++ from GCC 13+ for `cargo install` (the prebuilt ONNX Runtime binaries); the release binaries are built on Ubuntu 24.04 (glibc 2.39)
 - **Build from source:** Rust 1.85+ and `pkg-config`
 - Windows support is experimental
