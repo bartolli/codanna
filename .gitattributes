@@ -1,0 +1,2 @@
+# Golden fixtures are compared byte for byte against include_str!; keep LF on every checkout.
+*.rows text eol=lf

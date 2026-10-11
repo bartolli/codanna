@@ -161,7 +161,9 @@ mod tests {
             for (i, line) in text.lines().enumerate() {
                 if line.contains(needle) {
                     let rel = entry.path().strip_prefix(&src).unwrap().to_path_buf();
-                    hits.push(format!("{}:{}", rel.display(), i + 1));
+                    // Forward slashes on every host: the assertion below names the path.
+                    let rel = rel.display().to_string().replace('\\', "/");
+                    hits.push(format!("{rel}:{}", i + 1));
                 }
             }
         }
