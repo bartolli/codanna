@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-10-11
+
+Watcher, indexing-pipeline, resolution, and local-embedding fixes from the contributor PR batch and reported issues. Emission semantics version 4: existing indexes are rebuilt once (see the note at the end of this section).
+
+### Changed
+
+- `semantic_search.embedding_threads` also sizes one process-wide ONNX Runtime thread pool shared by every local embedding session: about `2N-1` busy threads at peak, clamped to `1..=logical CPUs`, fixed at the first embedding in a process. Before, each of the N sessions ran its own pool sized to every logical CPU with spin-waiting on, so a reindex kept `N x CPUs` threads busy whatever `indexing.parallelism` said. Embedding batches are length-sorted and 8 texts per call (was 64, unsorted) in symbol indexing and in the document store, which bounds the ONNX arena by the batch instead of the corpus mix. Embeddings and search scores are unchanged. (GH #138)
+- TypeScript and JavaScript `import { member as local }` records the imported member name; calls through the alias resolve to the member. Emission semantics version 4.
+- macOS watcher: each handler root registers one recursive FSEvents watch, once per process, instead of one watch per directory; FSEvents stopped delivering events above 4,096 registered paths. Other platforms keep one non-recursive watch per directory, registered in one batch per site.
+
+### Fixed
+
+- TypeScript and JavaScript relative imports whose target file is absent from the index are negative evidence: a name imported through such a path no longer resolves by name to an unrelated symbol, including symbols in other languages. Files governed by a tsconfig or jsconfig with `moduleSuffixes` or `rootDirs` are exempt.
+- The resolution cache loaded at most 1,000,000 symbols; larger indexes lost cross-file edges. Every symbol loads. (PR #125)
+- A watch event for an unchanged file rewrote the semantic snapshot and sent a notification; the cached result is preserved. (PR #137)
+- Vector payload writes are buffered; one write syscall per `f32` before. (PR #131)
+- Watcher event delivery never blocks the FSEvents thread; a full channel could wedge the watcher and keep a stdio server from exiting.
+- `serve --watch`: a settings reload watches the roots it adds and records them in index metadata, so the next command does not re-index them (GH #129); hot reload holds the facade write guard across the load, so a commit cannot land between the load and the swap.
+- `codanna index` beside a busy index writer fails with the error instead of reporting success with zero relationships; the watcher reports the affected roots and the heal.
+- A failed relationship store or commit in Phase 2 is an error and nothing from that batch is reported written. Phase 2 releases the Tantivy writer when it returns; a reindex that resolved only definitions used to hold the lockfile, and `codanna index` beside `serve --watch` failed with `LockBusy`.
+
+### Added
+
+- `contributing/scripts/resource-profile.py`: wall, CPU, peak RSS, and running-thread profile of one `codanna index` run in a fresh workspace.
+
+Indexes written by 0.16.0 or earlier carry emission version 3. Every command except `codanna index` refuses them with exit code 7 and the rebuild instruction; an MCP server started on one serves no tools and names the rebuild. Run `codanna index` once per workspace: it rebuilds from scratch, and workspaces with semantic search enabled re-embed.
+
 ## [0.16.0] - 2026-08-29
 
 Receiver-typed call resolution reaches seven more languages: local and parameter declarations now supply receiver types for PHP, Java, Kotlin, Go, Swift, GDScript, and C#. Index format and emission semantics are unchanged (v3); receiver bindings are resolved in memory and never persisted.
