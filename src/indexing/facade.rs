@@ -208,7 +208,10 @@ impl IndexFacade {
             )
         } else {
             let model = &self.settings.semantic_search.model;
-            SimpleSemanticSearch::from_model_name(model)?
+            SimpleSemanticSearch::from_model_name(
+                model,
+                self.settings.semantic_search.embedding_threads,
+            )?
         };
 
         self.semantic_search = Some(Arc::new(Mutex::new(semantic)));
@@ -249,7 +252,7 @@ impl IndexFacade {
             let load_result = if is_remote {
                 SimpleSemanticSearch::load_remote(path)
             } else {
-                SimpleSemanticSearch::load(path)
+                SimpleSemanticSearch::load(path, self.settings.semantic_search.embedding_threads)
             };
             match load_result {
                 Ok(semantic) => {

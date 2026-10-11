@@ -34,7 +34,7 @@ pub fn run(action: DocumentAction, config: &Settings, cli_config: Option<&PathBu
             .map_err(|e| format!("Failed to open document store: {e}"))?;
 
         if config.semantic_search.enabled {
-            let generator = FastEmbedGenerator::new()
+            let generator = FastEmbedGenerator::new(config.semantic_search.embedding_threads)
                 .map_err(|e| format!("Failed to create embedding generator: {e}"))?;
             store
                 .with_embeddings(Box::new(generator))

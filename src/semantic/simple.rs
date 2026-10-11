@@ -79,8 +79,8 @@ impl SimpleSemanticSearch {
     /// Create a new semantic search instance using default model (AllMiniLML6V2).
     ///
     /// For multilingual support, use `from_model_name` with "MultilingualE5Small".
-    pub fn new() -> Result<Self, SemanticSearchError> {
-        Self::with_model(EmbeddingModel::AllMiniLML6V2)
+    pub fn new(embedding_threads: usize) -> Result<Self, SemanticSearchError> {
+        Self::with_model(EmbeddingModel::AllMiniLML6V2, embedding_threads)
     }
 
     /// Create a semantic search instance from a model name string.
@@ -97,16 +97,22 @@ impl SimpleSemanticSearch {
     ///
     /// # Example
     /// ```ignore
-    /// let search = SimpleSemanticSearch::from_model_name("MultilingualE5Small")?;
+    /// let search = SimpleSemanticSearch::from_model_name("MultilingualE5Small", 3)?;
     /// ```
-    pub fn from_model_name(model_name: &str) -> Result<Self, SemanticSearchError> {
+    pub fn from_model_name(
+        model_name: &str,
+        embedding_threads: usize,
+    ) -> Result<Self, SemanticSearchError> {
         let model = crate::vector::parse_embedding_model(model_name)
             .map_err(|e| SemanticSearchError::ModelInitError(format!("Invalid model name: {e}")))?;
-        Self::with_model(model)
+        Self::with_model(model, embedding_threads)
     }
 
     /// Create with a specific model enum.
-    pub fn with_model(model: EmbeddingModel) -> Result<Self, SemanticSearchError> {
+    pub fn with_model(
+        model: EmbeddingModel,
+        embedding_threads: usize,
+    ) -> Result<Self, SemanticSearchError> {
         let cache_dir = crate::init::models_dir();
         let model_name = crate::vector::model_to_string(&model);
 
@@ -123,10 +129,11 @@ impl SimpleSemanticSearch {
             eprintln!("Downloading embedding model '{model_name}' (first time only)...");
         }
 
-        let mut text_model = TextEmbedding::try_new(
+        let mut text_model = super::new_text_embedding(
             InitOptions::new(model)
                 .with_cache_dir(cache_dir)
                 .with_show_download_progress(true), // Always show progress, but with context from message above
+            embedding_threads,
         )
         .map_err(|e| {
             SemanticSearchError::ModelInitError(format!(
@@ -696,7 +703,7 @@ impl SimpleSemanticSearch {
         })
     }
 
-    pub fn load(path: &Path) -> Result<Self, SemanticSearchError> {
+    pub fn load(path: &Path, embedding_threads: usize) -> Result<Self, SemanticSearchError> {
         use crate::semantic::{SemanticMetadata, SemanticVectorStorage};
 
         // Load metadata first
@@ -753,10 +760,11 @@ impl SimpleSemanticSearch {
         }
 
         // Create new instance with model from metadata
-        let text_model = TextEmbedding::try_new(
+        let text_model = super::new_text_embedding(
             InitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())
                 .with_show_download_progress(false),
+            embedding_threads,
         )
         .map_err(|e| {
             SemanticSearchError::ModelInitError(format!(
@@ -872,7 +880,7 @@ mod tests {
             "concurrent saves must not destroy each other's staging:\n{all_errors:#?}"
         );
 
-        let loaded = SimpleSemanticSearch::load(&path).unwrap();
+        let loaded = SimpleSemanticSearch::load(&path, 1).unwrap();
         assert_eq!(
             loaded.embedding_count(),
             16,
@@ -884,7 +892,7 @@ mod tests {
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_save_survives_stale_staging_and_reloads() {
         let dir = tempfile::tempdir().unwrap();
-        let mut search = SimpleSemanticSearch::new().unwrap();
+        let mut search = SimpleSemanticSearch::new(1).unwrap();
         search
             .index_doc_comment(SymbolId::new(1).unwrap(), "Parse JSON data")
             .unwrap();
@@ -896,7 +904,7 @@ mod tests {
         std::fs::write(staging.join("segment_0.vec"), b"garbage from a dead save").unwrap();
 
         // Old generation still loads
-        let loaded = SimpleSemanticSearch::load(dir.path()).unwrap();
+        let loaded = SimpleSemanticSearch::load(dir.path(), 1).unwrap();
         assert_eq!(loaded.embedding_count(), 1);
 
         // Next save clears stale staging and swaps in the new generation
@@ -905,14 +913,14 @@ mod tests {
             .unwrap();
         search.save(dir.path()).unwrap();
         assert!(!staging.exists());
-        let reloaded = SimpleSemanticSearch::load(dir.path()).unwrap();
+        let reloaded = SimpleSemanticSearch::load(dir.path(), 1).unwrap();
         assert_eq!(reloaded.embedding_count(), 2);
     }
 
     #[test]
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_remove_embeddings() {
-        let mut search = SimpleSemanticSearch::new().unwrap();
+        let mut search = SimpleSemanticSearch::new(1).unwrap();
 
         // Add some embeddings with distinct content
         let id1 = SymbolId::new(1).unwrap();
@@ -966,7 +974,7 @@ mod tests {
 
         // Create and populate search instance
         // Skip test if model is not available
-        let mut search = match SimpleSemanticSearch::new() {
+        let mut search = match SimpleSemanticSearch::new(1) {
             Ok(s) => s,
             Err(_) => {
                 eprintln!("Skipping test: FastEmbed model not available");
@@ -992,7 +1000,7 @@ mod tests {
         search.save(temp_dir.path()).unwrap();
 
         // Load from disk
-        let loaded = SimpleSemanticSearch::load(temp_dir.path()).unwrap();
+        let loaded = SimpleSemanticSearch::load(temp_dir.path(), 1).unwrap();
 
         // Verify same number of embeddings
         assert_eq!(loaded.embedding_count(), original_count);
@@ -1012,7 +1020,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // Try to load from non-existent path
-        let result = SimpleSemanticSearch::load(temp_dir.path());
+        let result = SimpleSemanticSearch::load(temp_dir.path(), 1);
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -1025,7 +1033,7 @@ mod tests {
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_semantic_search_basic() {
         // Skip test if model is not available
-        let mut search = match SimpleSemanticSearch::new() {
+        let mut search = match SimpleSemanticSearch::new(1) {
             Ok(s) => s,
             Err(_) => {
                 eprintln!("Skipping test: FastEmbed model not available");
@@ -1064,7 +1072,7 @@ mod tests {
     #[ignore = "Downloads 86MB model - run with --ignored for semantic tests"]
     fn test_similarity_threshold() {
         // Skip test if model is not available
-        let mut search = match SimpleSemanticSearch::new() {
+        let mut search = match SimpleSemanticSearch::new(1) {
             Ok(s) => s,
             Err(_) => {
                 eprintln!("Skipping test: FastEmbed model not available");

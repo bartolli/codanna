@@ -18,9 +18,9 @@ pub enum IndexProgress<'a> {
     GeneratingEmbeddings { current: usize, total: usize },
 }
 
-/// Default batch size for embedding generation.
-/// Smaller batches reduce memory pressure and provide smoother progress.
-const EMBEDDING_BATCH_SIZE: usize = 64;
+/// Texts per embedding call. fastembed pads a batch to its longest text and
+/// the ONNX arena keeps the peak, so batches are small and length-sorted.
+const EMBEDDING_BATCH_SIZE: usize = 8;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -1052,32 +1052,39 @@ impl DocumentStore {
         };
 
         let total_chunks = chunks.len();
-        let mut all_embeddings: Vec<Vec<f32>> = Vec::with_capacity(total_chunks);
+        // Embeddings are scattered back into chunk order: clustering zips
+        // them with `chunks` by index.
+        let mut all_embeddings: Vec<Vec<f32>> = vec![Vec::new(); total_chunks];
         let mut processed = 0;
 
-        // Process in batches
-        for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
-            // Extract texts for this batch
-            let texts: Vec<&str> = batch.iter().map(|(_, text)| text.as_str()).collect();
+        for batch in longest_first(chunks).chunks(EMBEDDING_BATCH_SIZE) {
+            let texts: Vec<&str> = batch.iter().map(|&i| chunks[i].1.as_str()).collect();
 
-            // Generate embeddings for batch
             let embeddings = generator
                 .generate_embeddings(&texts)
                 .map_err(|e| DocumentStoreError::Embedding(e.to_string()))?;
+            if embeddings.len() != texts.len() {
+                return Err(DocumentStoreError::Embedding(format!(
+                    "generator returned {} embeddings for {} texts",
+                    embeddings.len(),
+                    texts.len()
+                )));
+            }
 
             // Store vectors immediately (releases memory pressure)
             let vector_pairs: Vec<(VectorId, &[f32])> = batch
                 .iter()
                 .zip(embeddings.iter())
-                .filter_map(|((chunk_id, _), embedding)| {
-                    VectorId::new(chunk_id.get()).map(|vid| (vid, embedding.as_slice()))
+                .filter_map(|(&i, embedding)| {
+                    VectorId::new(chunks[i].0.get()).map(|vid| (vid, embedding.as_slice()))
                 })
                 .collect();
 
             vector_storage.write_batch(&vector_pairs)?;
 
-            // Keep embeddings for clustering
-            all_embeddings.extend(embeddings);
+            for (&i, embedding) in batch.iter().zip(embeddings) {
+                all_embeddings[i] = embedding;
+            }
 
             processed += batch.len();
 
@@ -1425,10 +1432,29 @@ struct ClusterData {
     assignments: HashMap<u32, u32>,
 }
 
+/// Chunk indices ordered longest text first; ties keep chunk order.
+fn longest_first(chunks: &[(ChunkId, String)]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..chunks.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(chunks[i].1.len()));
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn longest_first_orders_indices_by_text_length_and_keeps_ties_stable() {
+        let id = |n: u32| ChunkId::new(std::num::NonZeroU32::new(n).unwrap());
+        let chunks = vec![
+            (id(1), "medium text".to_string()),
+            (id(2), "s".to_string()),
+            (id(3), "the longest text of all".to_string()),
+            (id(4), "medium text".to_string()),
+        ];
+        assert_eq!(longest_first(&chunks), vec![2, 0, 3, 1]);
+    }
 
     fn test_dimension() -> VectorDimension {
         VectorDimension::new(4).unwrap()

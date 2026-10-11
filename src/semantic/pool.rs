@@ -223,7 +223,7 @@ impl EmbeddingPool {
     ///
     /// Each model instance uses ~86MB of memory for AllMiniLML6V2.
     pub fn new(pool_size: usize, model: EmbeddingModel) -> Result<Self, SemanticSearchError> {
-        let pool_size = pool_size.max(1);
+        let pool_size = super::clamp_embedding_threads(pool_size);
 
         let cache_dir = crate::init::models_dir();
         let model_name = crate::vector::model_to_string(&model);
@@ -239,10 +239,11 @@ impl EmbeddingPool {
         let mut models = Vec::with_capacity(pool_size);
 
         for i in 0..pool_size {
-            let mut text_model = TextEmbedding::try_new(
+            let mut text_model = super::new_text_embedding(
                 InitOptions::new(model.clone())
                     .with_cache_dir(cache_dir.clone())
                     .with_show_download_progress(i == 0),
+                pool_size,
             )
             .map_err(|e| {
                 SemanticSearchError::ModelInitError(format!(
@@ -356,20 +357,20 @@ impl EmbeddingPool {
 
     /// Generate embeddings for multiple items in parallel using rayon.
     ///
-    /// Uses batched embedding (64 docs per model call) for throughput.
-    /// Failed embeddings are logged and skipped.
+    /// Items are embedded longest-first in batches of 8: fastembed pads a
+    /// batch to its longest text, so mixed-length batches spend most of
+    /// their compute and attention memory on padding, and the ORT arena
+    /// keeps the peak for the process lifetime. Failed embeddings are
+    /// logged and skipped.
     pub fn embed_parallel(
         &self,
         items: &[(SymbolId, &str, &str)],
     ) -> Result<Vec<(SymbolId, Vec<f32>, String)>, SemanticSearchError> {
         use rayon::prelude::*;
 
-        const BATCH_SIZE: usize = 64;
+        const BATCH_SIZE: usize = 8;
 
-        let valid_items: Vec<_> = items
-            .iter()
-            .filter(|(_, doc, _)| !doc.trim().is_empty())
-            .collect();
+        let valid_items = sorted_valid_items(items);
 
         if valid_items.is_empty() {
             return Ok(Vec::new());
@@ -421,10 +422,43 @@ impl EmbeddingPool {
     }
 }
 
+/// Drop blank docs and order the rest longest-first. Results carry their
+/// `SymbolId` and `par_bridge` never preserved order, so the sort changes
+/// batch composition only. Longest-first schedules the slowest batches
+/// before the tail.
+fn sorted_valid_items<'a>(
+    items: &'a [(SymbolId, &'a str, &'a str)],
+) -> Vec<&'a (SymbolId, &'a str, &'a str)> {
+    let mut valid_items: Vec<_> = items
+        .iter()
+        .filter(|(_, doc, _)| !doc.trim().is_empty())
+        .collect();
+    valid_items.sort_by_key(|(_, doc, _)| std::cmp::Reverse(doc.len()));
+    valid_items
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn sorted_valid_items_drops_blanks_and_orders_longest_first() {
+        let a = SymbolId::new(1).unwrap();
+        let b = SymbolId::new(2).unwrap();
+        let c = SymbolId::new(3).unwrap();
+        let items = [
+            (a, "short", "rust"),
+            (b, "   ", "rust"),
+            (c, "a much longer document", "go"),
+        ];
+
+        let sorted = sorted_valid_items(&items);
+
+        assert_eq!(sorted.len(), 2);
+        assert_eq!(*sorted[0], (c, "a much longer document", "go"));
+        assert_eq!(*sorted[1], (a, "short", "rust"));
+    }
 
     #[test]
     fn test_acquire_times_out_when_all_instances_checked_out() {
