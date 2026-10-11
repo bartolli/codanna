@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] - 2026-10-11
+
+Dependency release: local embedding runs on ONNX Runtime 1.28 through fastembed 7.1.1, OpenSSL leaves the dependency graph on every platform, and the lockfile moves past the open advisories in the HTTP stack. No index or emission change; existing indexes keep working without a rebuild.
+
+### Changed
+
+- fastembed `=7.1.1` and ort `=2.0.0-rc.13` (ONNX Runtime 1.28). The thread cap from 0.17.0 now also applies per session: when the shared pool cannot be committed, each session runs `embedding_threads` intra-op threads with spin-waiting off instead of every CPU.
+- Every network path uses rustls: model downloads, the ONNX Runtime binary download at build time, and remote embedding. `openssl-sys` is absent from the dependency graph; building from source no longer needs `libssl-dev`.
+- Lockfile refreshed within semver: h2 0.4.20, quinn-proto 0.11.19, rustls-webpki 0.103.15 (past RUSTSEC-2026-0258, RUSTSEC-2026-0185, RUSTSEC-2026-0049 and their siblings), rmcp 3.5.1, tantivy 0.26.2, tokenizers 0.23.2.
+- Linux floor for `cargo install`: glibc 2.38+ and libstdc++ from GCC 13+, set by the prebuilt ONNX Runtime binaries (Ubuntu 24.04, Debian 13, Fedora 39 and later). The release binaries are built on Ubuntu 24.04 (glibc 2.39). README states both.
+- Search results on an index embedded by 0.17.0 or earlier are unchanged: the same ranking, scores within 1e-6. Indexing with semantic search uses about 40 percent less CPU on the reference machine than 0.17.0.
+
+### Added
+
+- `contributing/scripts/brew-formula-check.sh`: runs the homebrew-core formula through Homebrew's CI shape (`brew style`, from-source install with the fetch hook and `cargo install --offline`, `brew test`, `brew audit --strict`) in the `ghcr.io/homebrew/brew` image before a pull request.
+
+### Removed
+
+- The `brew-update.yml` workflow and the tap `bartolli/homebrew-codanna`. Homebrew installs come from homebrew-core (`brew install codanna`).
+
 ## [0.17.0] - 2026-10-11
 
 Watcher, indexing-pipeline, resolution, and local-embedding fixes from the contributor PR batch and reported issues. Emission semantics version 4: existing indexes are rebuilt once (see the note at the end of this section).
