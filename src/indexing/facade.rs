@@ -4818,6 +4818,51 @@ mod tests {
         assert_eq!(callee.name.as_ref(), "callee");
     }
 
+    // S1 (story 10): a Defines-only resolution releases the writer. The
+    // Defines row is durable and a second handle on the same directory
+    // can start a batch once resolve_deferred returns.
+    #[test]
+    fn deferred_resolution_of_defines_only_set_releases_the_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("src");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("decl.py"),
+            "class Widget:\n    def alpha(self):\n        pass\n",
+        )
+        .unwrap();
+        let mut settings = Settings {
+            index_path: dir.path().join("index"),
+            workspace_root: None,
+            ..Default::default()
+        };
+        settings.add_indexed_path(root.clone()).unwrap();
+        let settings = std::sync::Arc::new(settings);
+        let mut facade = IndexFacade::new(std::sync::Arc::clone(&settings)).unwrap();
+
+        let mut pending = crate::indexing::pipeline::PendingResolution::default();
+        facade
+            .index_directory_deferred(&root, false, &mut pending)
+            .unwrap();
+        facade.resolve_deferred(&pending).unwrap();
+
+        let classes = facade.find_symbols_by_name("Widget", None);
+        assert_eq!(classes.len(), 1, "one class symbol expected");
+        let rows = facade
+            .document_index()
+            .get_relationships_from(classes[0].id, RelationKind::Defines)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "exactly one Defines row expected: {rows:?}");
+        assert_eq!(facade.get_symbol(rows[0].1).unwrap().name.as_ref(), "alpha");
+
+        let other =
+            DocumentIndex::new(dir.path().join("index").join("tantivy"), &settings).unwrap();
+        other
+            .start_batch()
+            .expect("writer must be released after a Defines-only resolution");
+        other.rollback_batch().unwrap();
+    }
+
     // Dangling relative import locks: each fixture's expected row set is a
     // golden captured from the release binary of the tree before typed
     // negative evidence landed, normalized to the relationship multiset

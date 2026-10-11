@@ -61,7 +61,7 @@ impl WriteStage {
         }
     }
 
-    /// Ensure a batch is started before writing.
+    /// Start a batch if none is active.
     fn ensure_batch_started(&mut self) -> Result<(), crate::storage::StorageError> {
         if !self.batch_started {
             self.index.start_batch()?;
@@ -72,7 +72,8 @@ impl WriteStage {
 
     /// Write a batch of resolved relationships.
     ///
-    /// Accumulates in memory and commits when threshold reached.
+    /// Accumulates in memory and commits when threshold reached. The
+    /// batch is acquired per store, so an empty `batch` opens nothing.
     /// A batch that cannot start, a store that fails, or a threshold
     /// commit that fails is an error: the active batch is rolled back and
     /// nothing from `batch` is reported written.
@@ -81,8 +82,6 @@ impl WriteStage {
         batch: ResolvedBatch,
     ) -> Result<WriteStats, crate::storage::StorageError> {
         let mut stats = WriteStats::default();
-
-        self.ensure_batch_started()?;
 
         for resolved in batch.relationships {
             if self.stage(resolved)? {
@@ -99,13 +98,13 @@ impl WriteStage {
         &mut self,
         resolved: ResolvedRelationship,
     ) -> Result<(), crate::storage::StorageError> {
-        self.ensure_batch_started()?;
         self.stage(resolved)?;
         Ok(())
     }
 
-    /// Stage one relationship and commit at the threshold. Returns whether
-    /// a commit ran. Any failure abandons the active batch.
+    /// Acquire the batch, stage one relationship, and commit at the
+    /// threshold. Returns whether a commit ran. A store or commit failure
+    /// abandons the active batch.
     fn stage(
         &mut self,
         resolved: ResolvedRelationship,
@@ -117,6 +116,7 @@ impl WriteStage {
             metadata: resolved.metadata.clone(),
         };
 
+        self.ensure_batch_started()?;
         if let Err(e) =
             self.index
                 .store_relationship(resolved.from_id, resolved.to_id, &relationship)
@@ -143,22 +143,21 @@ impl WriteStage {
         Ok(count)
     }
 
-    /// Internal commit - clears pending buffer and restarts batch. A
-    /// failure at either step abandons the batch.
+    /// Commit the active batch and release the writer; the next store
+    /// acquires a fresh batch. With no batch open there is nothing to
+    /// commit and no commit is attempted. A failure abandons the batch.
     fn commit_internal(&mut self) -> Result<(), crate::storage::StorageError> {
-        self.commit_attempted = true;
-        let result = self.commit_and_restart();
-        if result.is_err() {
-            self.abandon_batch();
+        if !self.batch_started {
+            return Ok(());
         }
-        result
-    }
-
-    fn commit_and_restart(&mut self) -> Result<(), crate::storage::StorageError> {
-        self.index.commit_batch()?;
+        self.commit_attempted = true;
+        if let Err(e) = self.index.commit_batch() {
+            self.abandon_batch();
+            return Err(e);
+        }
         self.pending.clear();
-        // Start new batch for subsequent writes
-        self.index.start_batch()
+        self.batch_started = false;
+        Ok(())
     }
 
     /// Discard the active batch after a failure: staged rows never reach
@@ -387,8 +386,8 @@ mod tests {
         let index = Arc::new(DocumentIndex::new(&index_dir, &settings).unwrap());
         let mut stage = WriteStage::with_commit_threshold(Arc::clone(&index), 2);
 
-        // The writer exists before the fault, as it does after
-        // commit_internal's eager restart in production.
+        // The writer exists before the fault, so the failure lands on the
+        // commit rather than on start_batch.
         index.start_batch().unwrap();
         std::fs::rename(&index_dir, &fault_dir).unwrap();
 
@@ -452,5 +451,58 @@ mod tests {
         let flushed = stage.flush().unwrap();
         assert_eq!(flushed.written, 1);
         assert_eq!(index.count_relationships().unwrap(), 1);
+    }
+
+    // S2: a write with no relationships opens no batch; after flush a
+    // second handle on the same directory can start one.
+    #[test]
+    fn empty_write_then_flush_leaves_no_batch_open() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+        let mut stage = WriteStage::new(Arc::clone(&index));
+
+        let stats = stage.write(ResolvedBatch::new()).unwrap();
+        assert_eq!(stats.written, 0);
+        let flushed = stage.flush().unwrap();
+        assert_eq!(flushed.written, 0);
+        assert_eq!(flushed.commits, 0);
+        assert_eq!(index.count_relationships().unwrap(), 0);
+
+        let other = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        other
+            .start_batch()
+            .expect("writer must be released after an empty write and flush");
+        other.rollback_batch().unwrap();
+    }
+
+    // S3: a threshold crossing inside one write reopens for the row after
+    // it; flush commits that row and releases the writer.
+    #[test]
+    fn threshold_crossing_inside_one_write_reopens_and_flush_releases() {
+        let temp_dir = TempDir::new().unwrap();
+        let settings = Settings::default();
+        let index = Arc::new(DocumentIndex::new(temp_dir.path(), &settings).unwrap());
+        let mut stage = WriteStage::with_commit_threshold(Arc::clone(&index), 2);
+
+        let mut batch = ResolvedBatch::new();
+        batch.push(make_resolved(1, 2, RelationKind::Calls));
+        batch.push(make_resolved(2, 3, RelationKind::Defines));
+        batch.push(make_resolved(3, 4, RelationKind::Calls));
+        let stats = stage.write(batch).unwrap();
+        assert_eq!(stats.written, 3);
+        assert_eq!(stats.commits, 1);
+        assert_eq!(stage.pending_count(), 1);
+
+        let flushed = stage.flush().unwrap();
+        assert_eq!(flushed.written, 1);
+        assert_eq!(flushed.commits, 1);
+        assert_eq!(index.count_relationships().unwrap(), 3);
+
+        let other = DocumentIndex::new(temp_dir.path(), &settings).unwrap();
+        other
+            .start_batch()
+            .expect("writer must be released after flush");
+        other.rollback_batch().unwrap();
     }
 }
