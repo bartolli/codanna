@@ -4,7 +4,7 @@
 //! for code documentation semantic search.
 
 use anyhow::Result;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::time::Instant;
 
 /// Get a unique cache directory for each test to avoid conflicts
@@ -137,7 +137,7 @@ fn evaluate_model(
 
     // Initialize model
     let mut model = TextEmbedding::try_new(
-        InitOptions::new(model_type)
+        TextInitOptions::new(model_type)
             .with_cache_dir(cache_dir.clone())
             .with_show_download_progress(true),
     )?;
@@ -249,7 +249,7 @@ fn test_code_specific_similarity() -> Result<()> {
 
     // Use the default model for now
     let mut model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+        TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
             .with_cache_dir(cache_dir)
             .with_show_download_progress(false),
     )?;
@@ -289,7 +289,7 @@ fn test_similarity_thresholds() -> Result<()> {
 
     // Test to find optimal similarity thresholds
     let mut model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+        TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
             .with_cache_dir(cache_dir)
             .with_show_download_progress(false),
     )?;

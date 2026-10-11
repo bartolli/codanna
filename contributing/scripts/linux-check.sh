@@ -6,11 +6,14 @@
 # exists. Gate rule: green before any `/log --tag`.
 #
 # Committed tree only (clones from the repo): commit before gating.
+# Image: rust:1-trixie (glibc 2.41, GCC 14). The prebuilt ONNX Runtime
+# binaries ort downloads need glibc 2.38+ and libstdc++ from GCC 13+; a
+# bookworm image (glibc 2.36, GCC 12) fails at link on both.
 # Cargo caches persist in named volumes; the first run compiles cold,
 # later runs are incremental. The target volume grows without bound
 # (debug artifacts accumulate per run) and can exhaust the container
 # VM's disk -- when disk-pressured:
-#   docker volume rm codanna-linux-target
+#   docker volume rm codanna-linux-target-trixie
 # (next run recompiles cold; the registry volume stays small).
 #
 # Parallel linking of the test binaries can exhaust the container
@@ -39,8 +42,8 @@ ARGS="${*:-test --all-features}"
 exec docker run --rm \
   -v "$REPO":/src:ro \
   -v codanna-linux-cargo:/cargo/registry \
-  -v codanna-linux-target:/tmp/target \
-  rust:latest \
+  -v codanna-linux-target-trixie:/tmp/target \
+  rust:1-trixie \
   bash -c "useradd -m runner \
     && mkdir -p /cargo/registry /tmp/target \
     && chown -R runner /cargo /tmp/target \

@@ -7,7 +7,7 @@
 
 use crate::SymbolId;
 use crossbeam_channel::{Receiver, Sender, bounded};
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -240,7 +240,7 @@ impl EmbeddingPool {
 
         for i in 0..pool_size {
             let mut text_model = super::new_text_embedding(
-                InitOptions::new(model.clone())
+                TextInitOptions::new(model.clone())
                     .with_cache_dir(cache_dir.clone())
                     .with_show_download_progress(i == 0),
                 pool_size,

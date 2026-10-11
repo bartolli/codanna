@@ -51,8 +51,8 @@ impl ServerHandler for StaleIndexServer {
         })
     }
 
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(
                 Implementation::new("codanna", env!("CARGO_PKG_VERSION"))
                     .with_title("Codanna Code Intelligence (stale index)")

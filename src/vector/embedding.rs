@@ -145,7 +145,7 @@
 //! 5. **Clean Separation**: Vector logic isolated in vector module
 
 use crate::vector::{VectorDimension, VectorError};
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::sync::Mutex;
 
 /// Parse a model name string into an EmbeddingModel enum.
@@ -339,7 +339,7 @@ impl FastEmbedGenerator {
         let model_name = model_to_string(&model);
 
         let mut text_model = crate::semantic::new_text_embedding(
-            InitOptions::new(model)
+            TextInitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())
                 .with_show_download_progress(show_progress),
             embedding_threads,

@@ -206,7 +206,8 @@ Add codanna to any MCP-compatible client. Project-scoped `.mcp.json` (Claude Cod
 ## Requirements
 
 - ~150MB for embedding model (downloaded on first use)
-- **Build from source:** Rust 1.85+, Linux needs `pkg-config libssl-dev`
+- **Linux:** glibc 2.38+ and libstdc++ from GCC 13+ for `cargo install` (the prebuilt ONNX Runtime binaries); the release binaries are built on Ubuntu 24.04 (glibc 2.39)
+- **Build from source:** Rust 1.85+ and `pkg-config`
 - Windows support is experimental
 
 ## Contributing

@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use fastembed::{
-    EmbeddingModel, InitOptions, RerankInitOptions, RerankerModel, TextEmbedding, TextRerank,
+    EmbeddingModel, RerankInitOptions, RerankerModel, TextEmbedding, TextInitOptions, TextRerank,
 };
 use std::time::Instant;
 
@@ -35,7 +35,7 @@ fn test_reranking_improves_results() -> Result<()> {
     println!("1. BGERerankerBase - General English/Chinese");
     println!("2. BGERerankerV2M3 - Multilingual general");
     println!("3. JINARerankerV1TurboEn - Fast English (code-focused)");
-    println!("4. JINARerankerV2BaseMultiligual - Multilingual (code-focused)");
+    println!("4. JINARerankerV2BaseMultilingual - Multilingual (code-focused)");
 
     // Realistic code documentation queries
     let test_cases = [
@@ -76,7 +76,7 @@ fn test_reranking_improves_results() -> Result<()> {
     // Initialize embedding model (cached)
     println!("Loading embedding model (AllMiniLML6V2)...");
     let mut embedding_model = TextEmbedding::try_new(
-        InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+        TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
             .with_cache_dir(cache_dir.clone())
             .with_show_download_progress(true),
     )?;
@@ -139,8 +139,8 @@ fn test_reranking_improves_results() -> Result<()> {
             "JINARerankerV1TurboEn",
         ),
         (
-            RerankerModel::JINARerankerV2BaseMultiligual,
-            "JINARerankerV2BaseMultiligual",
+            RerankerModel::JINARerankerV2BaseMultilingual,
+            "JINARerankerV2BaseMultilingual",
         ),
     ];
 

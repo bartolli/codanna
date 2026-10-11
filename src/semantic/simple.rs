@@ -1,7 +1,7 @@
 //! Simple semantic search implementation for documentation comments
 
 use crate::SymbolId;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -130,7 +130,7 @@ impl SimpleSemanticSearch {
         }
 
         let mut text_model = super::new_text_embedding(
-            InitOptions::new(model)
+            TextInitOptions::new(model)
                 .with_cache_dir(cache_dir)
                 .with_show_download_progress(true), // Always show progress, but with context from message above
             embedding_threads,
@@ -761,7 +761,7 @@ impl SimpleSemanticSearch {
 
         // Create new instance with model from metadata
         let text_model = super::new_text_embedding(
-            InitOptions::new(model)
+            TextInitOptions::new(model)
                 .with_cache_dir(crate::init::models_dir())
                 .with_show_download_progress(false),
             embedding_threads,

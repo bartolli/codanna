@@ -14,7 +14,7 @@
 
 use std::sync::OnceLock;
 
-use fastembed::{InitOptions, TextEmbedding};
+use fastembed::{TextEmbedding, TextInitOptions};
 use ort::environment::GlobalThreadPoolOptions;
 
 /// The intra-op cap the environment was committed with. Set once by the
@@ -55,7 +55,7 @@ pub(crate) fn clamp_embedding_threads(requested: usize) -> usize {
 /// created, or that ORT rejects, is logged at warn and the session is still
 /// built with the per-session pool ORT would have given it anyway.
 pub(crate) fn new_text_embedding(
-    options: InitOptions,
+    options: TextInitOptions,
     embedding_threads: usize,
 ) -> Result<TextEmbedding, fastembed::Error> {
     let cap = clamp_embedding_threads(embedding_threads);
@@ -69,7 +69,17 @@ pub(crate) fn new_text_embedding(
             "ONNX Runtime pool already committed with {committed} threads; {cap} requested, keeping {committed}"
         );
     }
-    TextEmbedding::try_new(options)
+    TextEmbedding::try_new(session_options(options, cap))
+}
+
+/// Per-session settings for the case the global pool did not apply (an
+/// environment committed elsewhere, or a commit ORT rejected): `cap`
+/// intra-op threads with spin-waiting off. With the global pool in place
+/// ORT disables per-session threads and these are inert.
+fn session_options(options: TextInitOptions, cap: usize) -> TextInitOptions {
+    options
+        .with_intra_threads(cap)
+        .with_session_config("session.intra_op.allow_spinning", "0")
 }
 
 fn commit_global_pool(intra_threads: usize) {
@@ -77,7 +87,7 @@ fn commit_global_pool(intra_threads: usize) {
         .with_intra_threads(intra_threads)
         .and_then(|o| o.with_inter_threads(1))
         .and_then(|o| o.with_spin_control(false))
-        .and_then(|o| ort::init().with_global_thread_pool(o).commit());
+        .map(|o| ort::init().with_global_thread_pool(o).commit());
     match committed {
         Ok(true) => tracing::debug!(
             target: "semantic",
@@ -85,11 +95,11 @@ fn commit_global_pool(intra_threads: usize) {
         ),
         Ok(false) => tracing::warn!(
             target: "semantic",
-            "ONNX Runtime environment already initialized; embedding thread cap {intra_threads} not applied, sessions keep per-session pools"
+            "ONNX Runtime environment already initialized; global pool of {intra_threads} not applied, sessions run capped per-session pools"
         ),
         Err(e) => tracing::warn!(
             target: "semantic",
-            "ONNX Runtime global thread pool not committed ({e}); sessions keep per-session pools"
+            "ONNX Runtime global thread pool not committed ({e}); sessions run capped per-session pools"
         ),
     }
 }
@@ -97,6 +107,21 @@ fn commit_global_pool(intra_threads: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_options_carry_the_cap_and_disable_spinning() {
+        let options = session_options(
+            TextInitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2),
+            3,
+        );
+        assert_eq!(options.intra_threads, Some(3));
+        assert!(
+            options
+                .session_config
+                .iter()
+                .any(|(k, v)| k == "session.intra_op.allow_spinning" && v == "0")
+        );
+    }
 
     #[test]
     fn clamp_raises_zero_to_one() {
