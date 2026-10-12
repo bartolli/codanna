@@ -1451,39 +1451,84 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    async fn event_under(
+        events: &mut mpsc::UnboundedReceiver<notify::Result<Event>>,
+        path: &Path,
+        within: Duration,
+    ) -> Option<Event> {
+        tokio::time::timeout(within, async {
+            loop {
+                match events.recv().await {
+                    Some(Ok(event)) if event.paths.iter().any(|p| p.starts_with(path)) => {
+                        return event;
+                    }
+                    Some(_) => {}
+                    None => panic!("notify dropped its sender"),
+                }
+            }
+        })
+        .await
+        .ok()
+    }
+
     // The site tests observe a recording double. This one drives the
-    // builder-constructed watcher: a `paths_mut` that falls back to
-    // notify's per-path default restarts the FSEvents stream once per
-    // directory and loses the ratio. Other backends register per path in
-    // both shapes, so the ratio exists only on macOS.
+    // builder-constructed watcher: FSEvents implements `paths_mut`
+    // natively, so a directory added through it is not live until
+    // `commit` restarts the stream, once per batch. notify's trait
+    // default calls `watch` inside `add`, which restarts the stream per
+    // directory and makes the path live before any commit. Other
+    // backends have no native `paths_mut`, so the deferral exists only
+    // on macOS. The control leg proves the harness observes events at
+    // all; the negative wait can only err toward green under load.
     #[cfg(target_os = "macos")]
     #[tokio::test]
-    async fn production_watcher_batches_fsevents_registration() {
+    async fn production_watcher_defers_fsevents_registration_to_commit() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let dirs: Vec<PathBuf> = (0..12).map(|i| root.join(format!("d{i}"))).collect();
-        for d in &dirs {
-            std::fs::create_dir(d).unwrap();
-        }
+        let d_ctrl = root.join("d_ctrl");
+        let d_lock = root.join("d_lock");
+        std::fs::create_dir(&d_ctrl).unwrap();
+        std::fs::create_dir(&d_lock).unwrap();
+        let settle = Duration::from_secs(5);
+        let silence = Duration::from_millis(500);
 
-        let mut per_path = watcher_over(&root, &root).await;
-        let start = std::time::Instant::now();
-        for d in &dirs {
-            per_path
+        {
+            let mut control = watcher_over(&root, &root).await;
+            control
                 ._watcher
-                .watch(d, RecursiveMode::NonRecursive)
+                .watch(&d_ctrl, RecursiveMode::NonRecursive)
                 .unwrap();
+            let file = d_ctrl.join("one.txt");
+            std::fs::write(&file, "x").unwrap();
+            assert!(
+                event_under(&mut control.event_rx, &file, settle)
+                    .await
+                    .is_some(),
+                "control: raw watch delivered no event for {}",
+                file.display()
+            );
         }
-        let per_path_elapsed = start.elapsed();
 
-        let mut batched = watcher_over(&root, &root).await;
-        let start = std::time::Instant::now();
-        assert!(batched.watch_directories(&dirs).is_empty());
-        let batched_elapsed = start.elapsed();
-
+        let mut watcher = watcher_over(&root, &root).await;
+        let mut paths = watcher._watcher.paths_mut();
+        paths.add(&d_lock, RecursiveMode::NonRecursive).unwrap();
+        std::fs::write(d_lock.join("before.txt"), "x").unwrap();
+        let early = event_under(&mut watcher.event_rx, &d_lock, silence).await;
         assert!(
-            batched_elapsed * 4 < per_path_elapsed,
-            "per-path {per_path_elapsed:?}, batched {batched_elapsed:?}"
+            early.is_none(),
+            "registration went live before commit: {early:?}"
+        );
+
+        paths.commit().unwrap();
+        let after = d_lock.join("after.txt");
+        std::fs::write(&after, "x").unwrap();
+        assert!(
+            event_under(&mut watcher.event_rx, &after, settle)
+                .await
+                .is_some(),
+            "commit did not make {} live",
+            after.display()
         );
     }
 
