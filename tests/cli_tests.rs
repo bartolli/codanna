@@ -51,3 +51,6 @@ mod test_version_stamp;
 /// `codanna dump` envelope stream and stale gate
 #[path = "cli/test_dump.rs"]
 mod test_dump;
+
+#[path = "cli/test_config_parse_failure_exit_code.rs"]
+mod test_config_parse_failure_exit_code;

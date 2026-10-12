@@ -219,25 +219,20 @@ async fn main() {
     let cli = Cli::parse();
 
     // For index command, auto-initialize if needed (but not when using --config)
-    if matches!(cli.command, Commands::Index { .. }) && cli.config.is_none() {
-        if Settings::check_init().is_err() {
-            // Auto-initialize for index command
-            eprintln!("Initializing project configuration...");
-            match Settings::init_config_file(false) {
-                Ok(path) => {
-                    eprintln!("Created configuration file at: {}", path.display());
-                }
-                Err(e) => {
-                    eprintln!("Warning: Could not create config file: {e}");
-                    eprintln!("Using default configuration.");
-                }
+    if matches!(cli.command, Commands::Index { .. })
+        && cli.config.is_none()
+        && Settings::check_init().is_err()
+    {
+        // Auto-initialize for index command
+        eprintln!("Initializing project configuration...");
+        match Settings::init_config_file(false) {
+            Ok(path) => {
+                eprintln!("Created configuration file at: {}", path.display());
             }
-        }
-    } else if !matches!(cli.command, Commands::Init { .. }) && cli.config.is_none() {
-        // For other commands without --config flag, just warn
-        if let Err(warning) = Settings::check_init() {
-            eprintln!("Warning: {warning}");
-            eprintln!("Using default configuration for now.");
+            Err(e) => {
+                eprintln!("Warning: Could not create config file: {e}");
+                eprintln!("Using default configuration.");
+            }
         }
     }
 
@@ -249,14 +244,30 @@ async fn main() {
                 config_path.display(),
                 e
             );
-            std::process::exit(1);
+            std::process::exit(codanna::io::ExitCode::ConfigError as i32);
         })
     } else {
         Settings::load().unwrap_or_else(|e| {
             eprintln!("Configuration error: {e}");
+            eprintln!("codanna init --force rewrites .codanna/settings.toml");
+            // A missing file loads as defaults, so Err means an existing file
+            // failed to parse. `init --force` is the recovery and runs after
+            // this load; it alone continues on defaults.
+            if !matches!(cli.command, Commands::Init { .. }) {
+                std::process::exit(codanna::io::ExitCode::ConfigError as i32);
+            }
             Settings::default()
         })
     };
+
+    // After a successful load, a check_init error can only be a missing file.
+    if cli.config.is_none()
+        && !matches!(cli.command, Commands::Init { .. } | Commands::Index { .. })
+        && let Err(warning) = Settings::check_init()
+    {
+        eprintln!("Warning: {warning}");
+        eprintln!("Using default configuration for now.");
+    }
 
     // Initialize logging with config (supports RUST_LOG env var override)
     // All logging goes to stderr to avoid polluting stdout (JSON output, piping)
