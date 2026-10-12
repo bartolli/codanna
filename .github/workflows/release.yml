@@ -38,7 +38,8 @@ jobs:
       matrix:
         include:
           - name: linux-x64
-            os: ubuntu-latest
+            # glibc 2.39 floor (README, CHANGELOG); ubuntu-latest moves to 26.04
+            os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
 
           - name: macos-arm64
