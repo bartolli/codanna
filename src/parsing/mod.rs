@@ -22,6 +22,7 @@ pub mod python;
 pub mod registry;
 pub mod resolution;
 pub mod rust;
+pub mod svelte;
 pub mod swift;
 pub mod typescript;
 
@@ -58,5 +59,6 @@ pub use resolution::{
     PipelineSymbolCache, ResolutionScope, ResolveResult, ScopeLevel,
 };
 pub use rust::{RustBehavior, RustParser};
+pub use svelte::{SvelteBehavior, SvelteParser};
 pub use swift::{SwiftBehavior, SwiftParser};
 pub use typescript::{TypeScriptBehavior, TypeScriptParser};

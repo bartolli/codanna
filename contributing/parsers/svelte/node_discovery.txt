@@ -1,0 +1,82 @@
+=== Svelte Language NODE MAPPING ===
+  Generated: 2026-05-22 19:33:09 UTC
+  ABI Version: 14
+  Node kind count: 53
+
+=== SCRIPT NODES ===
+  + script_element                      -> ID: 56
+  x style_element                       NOT FOUND
+  + start_tag                           -> ID: 58
+  + end_tag                             -> ID: 62
+  + raw_text                            -> ID: 47
+
+=== ATTRIBUTE NODES ===
+  + attribute                           -> ID: 64
+  + attribute_name                      -> ID: 9
+  + attribute_value                     -> ID: 10
+  + quoted_attribute_value              -> ID: 65
+
+=== ELEMENT NODES ===
+  + element                             -> ID: 55
+  + self_closing_tag                    -> ID: 61
+  + tag_name                            -> ID: 41
+  + text                                -> ID: 14
+  x doctype                             NOT FOUND
+
+=== EXPRESSION NODES ===
+  + expression                          -> ID: 105
+  + expression_tag                      -> ID: 107
+  + render_tag                          -> ID: 114
+  x html_tag                            NOT FOUND
+  x const_tag                           NOT FOUND
+  x debug_tag                           NOT FOUND
+  + svelte_raw_text                     -> ID: 49
+
+=== BLOCK NODES ===
+  + if_statement                        -> ID: 68
+  + each_statement                      -> ID: 79
+  x await_statement                     NOT FOUND
+  x key_statement                       NOT FOUND
+  + block_start_tag                     -> ID: 69
+  + block_end_tag                       -> ID: 77
+  + else_block                          -> ID: 76
+
+=== SNIPPET NODES ===
+  + snippet_statement                   -> ID: 100
+  + snippet_start                       -> ID: 102
+  + snippet_name                        -> ID: 32
+  + snippet_end                         -> ID: 104
+
+=== COMMENT NODES ===
+  + comment                             -> ID: 48
+
+=== UNCATEGORIZED NODES ===
+  + "                                   -> ID: 13
+  + #                                   -> ID: 17
+  + (                                   -> ID: 33
+  + )                                   -> ID: 34
+  + /                                   -> ID: 24
+  + />                                  -> ID: 6
+  + :                                   -> ID: 21
+  + <                                   -> ID: 5
+  + </                                  -> ID: 7
+  + =                                   -> ID: 8
+  + >                                   -> ID: 3
+  + @                                   -> ID: 36
+  + as                                  -> ID: 26
+  + block_tag                           -> ID: 71
+  + document                            -> ID: 52
+  + each                                -> ID: 25
+  + each_end                            -> ID: 83
+  + each_start                          -> ID: 81
+  + else                                -> ID: 23
+  + else_start                          -> ID: 75
+  + if                                  -> ID: 18
+  + if_end                              -> ID: 78
+  + if_start                            -> ID: 70
+  + render                              -> ID: 40
+  + snippet                             -> ID: 31
+  + {                                   -> ID: 19
+  + }                                   -> ID: 20
+
+Legend: + = found in file, o = in grammar but not in file, x = not in grammar
