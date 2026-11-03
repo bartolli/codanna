@@ -42,19 +42,21 @@
             rust
             rust-analyzer
             openssl
-            # Must match ort crate pin in Cargo.toml (ort =2.0.0-rc.10 -> ONNX Runtime 1.22).
+            # Must match ort crate pin in Cargo.toml (ort =2.0.0-rc.13 -> ONNX Runtime 1.23).
             # ABI mismatch causes silent runtime corruption. Verify after nixpkgs updates.
             onnxruntime
             pkg-config
           ];
           ORT_SKIP_DOWNLOAD = "1";
+          ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+          ORT_PREFER_DYNAMIC_LINK = "1";
         };
         packages.default = naersk'.buildPackage {
           pname = "codanna";
           src = ./.;
           buildInputs = [
             pkgs.openssl
-            # Must match ort crate pin in Cargo.toml (ort =2.0.0-rc.10 -> ONNX Runtime 1.22).
+            # Must match ort crate pin in Cargo.toml (ort =2.0.0-rc.13 -> ONNX Runtime 1.23).
             # ABI mismatch causes silent runtime corruption. Verify after nixpkgs updates.
             pkgs.onnxruntime
           ];
@@ -67,6 +69,8 @@
               "codanna"
             ];
           ORT_SKIP_DOWNLOAD = "1";
+          ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
+          ORT_PREFER_DYNAMIC_LINK = "1";
         };
       }
     );
