@@ -1,9 +1,9 @@
 # PHP Grammar Analysis
 
-*Generated: 2026-07-24 23:20:45 UTC*
+*Generated: 2026-11-20 19:56:13 UTC*
 
 ## Statistics
-- Total nodes in grammar JSON: 161
+- Total nodes in grammar JSON: 162
 - Nodes found in comprehensive.php: 177
 - Nodes handled by parser: 176
 - Symbol kinds extracted: 9
@@ -193,6 +193,7 @@ These nodes appear in comprehensive.php but aren't handled:
 
 ## Missing from Examples
 These grammar nodes aren't in comprehensive.php:
+- argument_placeholder
 - augmented_assignment_expression
 - break_statement
 - by_ref

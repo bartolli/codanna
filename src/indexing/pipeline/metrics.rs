@@ -147,7 +147,9 @@ pub struct MemorySnapshot {
 impl MemorySnapshot {
     /// Get current process memory usage.
     pub fn current() -> Self {
-        let mut sys = System::new();
+        let Ok(mut sys) = System::new() else {
+            return Self::default();
+        };
         let pid = Pid::from_u32(std::process::id());
         sys.refresh_processes_specifics(
             sysinfo::ProcessesToUpdate::Some(&[pid]),

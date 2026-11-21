@@ -5,7 +5,6 @@ authors = ["Angel Bartolli <bartolli@gmail.com>"]
 edition = "2024"
 description = "Local code intelligence MCP server and CLI for AI coding agents"
 documentation = "https://docs.codanna.sh"
-homepage = "https://docs.codanna.sh"
 repository = "https://github.com/bartolli/codanna"
 license = "Apache-2.0"
 readme = "README.md"
@@ -33,36 +32,36 @@ bin-dir = "{ name }-{ version }-windows-x64/{ bin }{ binary-ext }"
 
 [dependencies]
 anyhow = "1.0.104"
-bitflags = "2.13.1"
-clap = { version = "4.6.6", features = ["derive", "color", "env"] }
-crossbeam-channel = "0.5.16"
+bitflags = "2.13.2"
+clap = { version = "4.6.9", features = ["derive", "color", "env"] }
+crossbeam-channel = "0.5.17"
 dashmap = "6.2.1"
-dirs = "6.0.0"
+dirs = "7.0.0"
 figment = { version = "0.10.19", features = ["toml", "env"] }
-ignore = "0.4.33"
-memmap2 = "0.9.11"
-notify = "8.2.0"
+ignore = "0.4.34"
+memmap2 = "0.9.12"
+notify = "8.2.2"
 num_cpus = "1.17.0"
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 rayon = "1.12.0"
-rmcp = { version = "3.1.4", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
+rmcp = { version = "3.11.0", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server", "transport-worker"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.151"
-sha2 = "0.11.0"
-hex = "0.4"
-tantivy = "0.26.2"
-thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["full"] }
-toml = { version = "1.1.4", features = ["preserve_order"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+hex = "0.4.3"
+tantivy = "0.27.0"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+toml = { version = "1.2.1", features = ["preserve_order"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-tree-sitter = "0.26.13"
+tree-sitter = "0.27.2"
 tree-sitter-go = "0.25.0"
 tree-sitter-gdscript = "6.1.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-kotlin-codanna = "0.3.9"
-tree-sitter-php = "0.24.1"
+tree-sitter-php = "0.25.2"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
@@ -79,35 +78,34 @@ fastembed = { version = "=7.1.1", default-features = false, features = [
 # together, or the build links two ONNX runtimes. Used to commit the capped
 # global thread pool before fastembed creates its sessions.
 ort = { version = "=2.0.0-rc.13", default-features = false }
-rand = "0.10.2"
+rand = "0.10.4"
 indicatif = "0.18.6"
-comfy-table = "7.2.2"
-console = "0.16.4"
-owo-colors = "4.3.0"
+comfy-table = "8.0.1"
+console = "0.16.6"
+owo-colors = "4.4.0"
 axum = { version = "0.8.9", optional = true }
 tower = { version = "0.5.3", optional = true }
-tower-http = { version = "0.7.0", features = ["cors"], optional = true }
-serde_urlencoded = "0.7"
-tokio-util = "0.7.19"
-axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"], optional = true }
-rustls = { version = "0.23.43", default-features = false, features = ["ring"], optional = true }
-rcgen = { version = "0.14.9", optional = true }
+serde_urlencoded = "0.7.1"
+tokio-util = "0.7.20"
+axum-server = { version = "0.9.2", features = ["tls-rustls-no-provider"], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["ring"], optional = true }
+rcgen = { version = "0.14.10", optional = true }
 is-terminal = "0.4.17"
-regex = "1.13.1"
+regex = "1.13.2"
 tree-sitter-c = "0.24.2"
-tree-sitter-c-sharp = "0.23.5"
+tree-sitter-c-sharp = "0.24.0"
 tree-sitter-cpp = "0.23.4"
 chrono = "0.4.45"
 tempfile = "3.27.0"
 serde_json5 = "0.2.1"
-tree-sitter-swift = "0.7.3"
+tree-sitter-swift = "0.7.4"
 tree-sitter-lua = "0.5.0"
-tree-sitter-clojure-orchard = "0.2.8"
+tree-sitter-clojure-orchard = "0.2.9"
 glob = "0.3.4"
 async-trait = "0.1.92"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-sysinfo = "0.39.6"
-indexmap = { version = "2.14.0", features = ["serde"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+sysinfo = "0.40.4"
+indexmap = { version = "2.14.2", features = ["serde"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
@@ -116,11 +114,10 @@ thread-id = "5.1.0"
 
 [features]
 default = ["http-server"]
-http-server = ["axum", "tower", "tower-http"]
+http-server = ["axum", "tower"]
 https-server = ["http-server", "axum-server", "rustls", "rcgen"]
 axum = ["dep:axum"]
 tower = ["dep:tower"]
-tower-http = ["dep:tower-http"]
 axum-server = ["dep:axum-server"]
 rustls = ["dep:rustls"]
 rcgen = ["dep:rcgen"]

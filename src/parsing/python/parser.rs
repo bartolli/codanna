@@ -3014,7 +3014,7 @@ class Outer:
             }
 
             for i in 0..node.child_count() {
-                if let Some(child) = node.child(i as u32) {
+                if let Some(child) = node.child(i) {
                     print_node_with_fields(child, code, depth + 1);
                 }
             }
@@ -3068,7 +3068,7 @@ class Outer:
             }
 
             for i in 0..node.child_count() {
-                if let Some(child) = node.child(i as u32) {
+                if let Some(child) = node.child(i) {
                     print_node_with_fields(child, code, depth + 1);
                 }
             }

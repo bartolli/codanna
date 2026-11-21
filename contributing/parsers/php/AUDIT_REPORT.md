@@ -1,6 +1,6 @@
 # PHP Parser Coverage Report
 
-*Generated: 2026-07-24 23:20:45 UTC*
+*Generated: 2026-11-20 19:56:13 UTC*
 
 ## Summary
 - Key nodes: 21/21 (100%)
@@ -30,9 +30,9 @@
 | attribute_list | 357 | ✅ implemented |
 | attribute_group | 356 | ✅ implemented |
 | attribute | 358 | ✅ implemented |
-| function_call_expression | 338 | ✅ implemented |
+| function_call_expression | 337 | ✅ implemented |
 | member_call_expression | 347 | ✅ implemented |
-| scoped_call_expression | 340 | ✅ implemented |
+| scoped_call_expression | 339 | ✅ implemented |
 
 ## Legend
 

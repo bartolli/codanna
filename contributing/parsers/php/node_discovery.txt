@@ -1,5 +1,5 @@
 === PHP Language NODE MAPPING ===
-  Generated: 2026-07-01 23:18:07 UTC
+  Generated: 2026-11-20 19:56:13 UTC
   ABI Version: 15
   Node kind count: 177
 
@@ -63,7 +63,7 @@
   + primitive_type                      -> ID: 261
   + named_type                          -> ID: 256
   + optional_type                       -> ID: 257
-  + bottom_type                         -> ID: 46
+  + bottom_type                         -> ID: 51
   x void_type                           NOT FOUND
   x mixed_type                          NOT FOUND
   x never_type                          NOT FOUND
@@ -76,51 +76,51 @@
   + &                                   -> ID: 7
   + &&                                  -> ID: 161
   + '                                   -> ID: 143
-  + (                                   -> ID: 39
-  + )                                   -> ID: 40
+  + (                                   -> ID: 44
+  + )                                   -> ID: 45
   + *                                   -> ID: 177
   + +                                   -> ID: 104
   + ++                                  -> ID: 114
   + ,                                   -> ID: 9
   + ->                                  -> ID: 128
   + .                                   -> ID: 174
-  + ...                                 -> ID: 44
-  + :                                   -> ID: 24
+  + ...                                 -> ID: 49
+  + :                                   -> ID: 29
   + ::                                  -> ID: 110
   + ;                                   -> ID: 6
   + <                                   -> ID: 168
   + =                                   -> ID: 10
   + ===                                 -> ID: 166
-  + =>                                  -> ID: 33
+  + =>                                  -> ID: 38
   + >                                   -> ID: 169
   + >=                                  -> ID: 171
-  + ?                                   -> ID: 45
+  + ?                                   -> ID: 50
   + ?->                                 -> ID: 129
   + ??                                  -> ID: 155
   + [                                   -> ID: 131
   + \                                   -> ID: 17
   + ]                                   -> ID: 132
-  + abstract                            -> ID: 30
+  + abstract                            -> ID: 35
   + anonymous_class                     -> ID: 320
   + argument                            -> ID: 345
   + arguments                           -> ID: 344
-  + array                               -> ID: 48
+  + array                               -> ID: 53
   + array_creation_expression           -> ID: 355
   + array_element_initializer           -> ID: 386
   + as                                  -> ID: 14
-  + assignment_expression               -> ID: 324
+  + assignment_expression               -> ID: 323
   + binary_expression                   -> ID: 387
-  + bool                                -> ID: 49
+  + bool                                -> ID: 54
   + boolean                             -> ID: 376
-  + case                                -> ID: 27
+  + case                                -> ID: 32
   + catch                               -> ID: 81
   + catch_clause                        -> ID: 273
-  + class                               -> ID: 28
+  + class                               -> ID: 33
   + clone                               -> ID: 109
   + clone_expression                    -> ID: 311
   + comment                             -> ID: 184
   + compound_statement                  -> ID: 304
-  + conditional_expression              -> ID: 326
+  + conditional_expression              -> ID: 325
   + const                               -> ID: 16
   + declaration_list                    -> ID: 223
   + declare                             -> ID: 74
@@ -131,55 +131,55 @@
   + echo                                -> ID: 71
   + echo_statement                      -> ID: 266
   + encapsed_string                     -> ID: 367
-  + enum                                -> ID: 23
+  + enum                                -> ID: 28
   + enum_case                           -> ID: 221
   + enum_declaration_list               -> ID: 219
   + escape_sequence                     -> ID: 138
   + expression_statement                -> ID: 306
-  + extends                             -> ID: 22
-  + final                               -> ID: 29
+  + extends                             -> ID: 27
+  + final                               -> ID: 34
   + finally                             -> ID: 82
   + finally_clause                      -> ID: 275
-  + fn                                  -> ID: 43
+  + fn                                  -> ID: 48
   + for                                 -> ID: 92
   + for_statement                       -> ID: 283
   + function                            -> ID: 15
-  + function_call_expression            -> ID: 338
+  + function_call_expression            -> ID: 337
   + if                                  -> ID: 96
   + if_statement                        -> ID: 289
-  + implements                          -> ID: 32
-  + int                                 -> ID: 26
+  + implements                          -> ID: 37
+  + int                                 -> ID: 31
   + integer                             -> ID: 86
-  + interface                           -> ID: 21
-  + list_literal                        -> ID: 334
+  + interface                           -> ID: 26
+  + list_literal                        -> ID: 333
   + match                               -> ID: 100
   + match_block                         -> ID: 296
   + match_condition_list                -> ID: 297
   + match_conditional_expression        -> ID: 298
   + match_default_expression            -> ID: 299
   + match_expression                    -> ID: 295
-  + member_access_expression            -> ID: 329
+  + member_access_expression            -> ID: 328
   + member_call_expression              -> ID: 347
   + name                                -> ID: 1
   + namespace                           -> ID: 12
   + new                                 -> ID: 112
   + null                                -> ID: 377
   + nullsafe_member_call_expression     -> ID: 348
-  + object                              -> ID: 56
+  + object                              -> ID: 61
   + object_creation_expression          -> ID: 316
   + parent                              -> ID: 134
   + parenthesized_expression            -> ID: 313
   + php_tag                             -> ID: 2
-  + private                             -> ID: 38
+  + private                             -> ID: 43
   + program                             -> ID: 197
-  + protected                           -> ID: 37
-  + public                              -> ID: 36
+  + protected                           -> ID: 42
+  + public                              -> ID: 41
   + qualified_name                      -> ID: 209
-  + readonly                            -> ID: 31
-  + relative_scope                      -> ID: 342
+  + readonly                            -> ID: 36
+  + relative_scope                      -> ID: 341
   + return                              -> ID: 87
   + return_statement                    -> ID: 279
-  + scoped_call_expression              -> ID: 340
+  + scoped_call_expression              -> ID: 339
   + self                                -> ID: 133
   + static                              -> ID: 8
   + strict_types                        -> ID: 78
@@ -188,7 +188,7 @@
   + subscript_expression                -> ID: 351
   + throw                               -> ID: 88
   + throw_expression                    -> ID: 280
-  + trait                               -> ID: 20
+  + trait                               -> ID: 25
   + try                                 -> ID: 80
   + try_statement                       -> ID: 272
   + type_list                           -> ID: 274
@@ -199,13 +199,13 @@
   + use                                 -> ID: 13
   + use_declaration                     -> ID: 239
   + variable_name                       -> ID: 383
-  + variadic_placeholder                -> ID: 343
+  + variadic_placeholder                -> ID: 342
   + variadic_unpacking                  -> ID: 349
   + yield                               -> ID: 152
   + yield_expression                    -> ID: 385
-  + {                                   -> ID: 18
-  + |                                   -> ID: 47
+  + {                                   -> ID: 23
+  + |                                   -> ID: 52
   + ||                                  -> ID: 160
-  + }                                   -> ID: 19
+  + }                                   -> ID: 24
 
 Legend: + = found in file, o = in grammar but not in file, x = not in grammar

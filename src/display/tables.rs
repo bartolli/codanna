@@ -1,8 +1,6 @@
 //! Table formatting utilities for structured output.
 
-use comfy_table::{
-    Attribute, Cell, Color, Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL,
-};
+use comfy_table::{Attribute, Cell, Color, Table, presets::UTF8_FULL};
 
 /// Builder for creating formatted tables.
 pub struct TableBuilder {
@@ -19,9 +17,7 @@ impl TableBuilder {
     /// Create a new table builder.
     pub fn new() -> Self {
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL);
-        // Apply rounded corners
-        table.apply_modifier(UTF8_ROUND_CORNERS);
+        table.load_style(UTF8_FULL.with_rounded_corners());
         Self { table }
     }
 
@@ -56,9 +52,7 @@ pub fn create_benchmark_table(
     rate: f64,
 ) -> String {
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    // Apply rounded corners for a modern look
-    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.load_style(UTF8_FULL.with_rounded_corners());
 
     // Create the header
     table.set_header(vec![
@@ -110,9 +104,7 @@ pub fn create_summary_table(
     results: Vec<(String, usize, usize, std::time::Duration)>, // (language, files, symbols, time)
 ) -> String {
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
-    // Apply rounded corners for consistency
-    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.load_style(UTF8_FULL.with_rounded_corners());
 
     // Header
     table.set_header(vec![
