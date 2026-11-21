@@ -247,11 +247,7 @@ impl LanguageBehavior for LuaBehavior {
         // Convert require path to module path format
         // require("foo.bar") should match module path "foo.bar"
         let normalized_import = import_path.replace(['/', '\\'], ".");
-        if normalized_import == symbol_module_path {
-            return true;
-        }
-
-        false
+        normalized_import == symbol_module_path
     }
 }
 
