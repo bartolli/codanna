@@ -5,21 +5,24 @@
 //! `embedding_threads` pool instances that is `embedding_threads x ncpu`
 //! busy threads during embedding, whatever `indexing.parallelism` says.
 //!
-//! ort disables per-session pools for every session created after an
-//! environment with a global pool is committed, and the environment is
-//! one-shot per process: a commit that arrives after the first session
-//! changes nothing. `new_text_embedding` is therefore the only session
-//! constructor in this crate. It commits the pool first, so a new
+//! ort disables per-session pools for every session created in an
+//! environment that carries a global pool, and a process holds one
+//! environment: building a second is an error. `new_text_embedding` is
+//! therefore the only session constructor in this crate. It builds the
+//! environment first and passes it to each session, so a new
 //! session-creation site cannot skip the cap.
 
 use std::sync::OnceLock;
 
 use fastembed::{TextEmbedding, TextInitOptions};
-use ort::environment::GlobalThreadPoolOptions;
+use ort::environment::{Environment, GlobalThreadPoolOptions};
+use ort::session::builder::AutoDevicePolicy;
 
-/// The intra-op cap the environment was committed with. Set once by the
-/// first session; later callers with a different cap keep this one.
-static COMMITTED_CAP: OnceLock<usize> = OnceLock::new();
+/// The intra-op cap of the first session and the environment built with it,
+/// `None` when ORT rejected the build. Later callers with a different cap
+/// keep this one. The handle lives here for the life of the process: ort
+/// tracks the environment weakly.
+static POOL: OnceLock<(usize, Option<Environment>)> = OnceLock::new();
 
 fn thread_ceiling() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get())
@@ -46,61 +49,68 @@ pub(crate) fn clamp_embedding_threads(requested: usize) -> usize {
 
 /// Create a fastembed text session inside the shared, capped ONNX pool.
 ///
-/// The first call in a process commits the environment: `embedding_threads`
+/// The first call in a process builds the environment: `embedding_threads`
 /// (clamped) intra-op threads, one inter-op thread, spin-waiting off. The
 /// pool is shared by every session, so about `2N-1` threads are busy at
 /// peak: `N-1` pool threads plus the `N` workers calling into it.
 ///
-/// Degrades, never fails: a commit that finds the environment already
-/// created, or that ORT rejects, is logged at warn and the session is still
-/// built with the per-session pool ORT would have given it anyway.
+/// Degrades when ORT rejects the environment: logged at warn, and the
+/// session is built in fastembed's default environment with the
+/// per-session cap. Fails when an environment exists that neither this
+/// module nor fastembed built: ort allows one per process.
 pub(crate) fn new_text_embedding(
     options: TextInitOptions,
     embedding_threads: usize,
 ) -> Result<TextEmbedding, fastembed::Error> {
     let cap = clamp_embedding_threads(embedding_threads);
-    let committed = *COMMITTED_CAP.get_or_init(|| {
-        commit_global_pool(cap);
-        cap
-    });
-    if committed != cap {
+    let (committed, environment) = POOL.get_or_init(|| (cap, build_pooled_environment(cap)));
+    if *committed != cap {
         tracing::debug!(
             target: "semantic",
             "ONNX Runtime pool already committed with {committed} threads; {cap} requested, keeping {committed}"
         );
     }
-    TextEmbedding::try_new(session_options(options, cap))
+    let options = session_options(options, cap);
+    TextEmbedding::try_new(match environment {
+        Some(environment) => options.with_environment(environment.clone()),
+        None => options,
+    })
 }
 
-/// Per-session settings for the case the global pool did not apply (an
-/// environment committed elsewhere, or a commit ORT rejected): `cap`
-/// intra-op threads with spin-waiting off. With the global pool in place
-/// ORT disables per-session threads and these are inert.
+/// Per-session settings. `PreferCPU` keeps ORT from registering an
+/// execution provider on its own: on macOS its default policy picks CoreML,
+/// which re-plans on every new sequence length. The thread settings cover
+/// the case the global pool did not apply (ORT rejected the environment):
+/// `cap` intra-op threads with spin-waiting off. With the global pool in
+/// place ORT disables per-session threads and they are inert.
 fn session_options(options: TextInitOptions, cap: usize) -> TextInitOptions {
     options
         .with_intra_threads(cap)
         .with_session_config("session.intra_op.allow_spinning", "0")
+        .with_auto_device(AutoDevicePolicy::PreferCPU)
 }
 
-fn commit_global_pool(intra_threads: usize) {
-    let committed = GlobalThreadPoolOptions::default()
+fn build_pooled_environment(intra_threads: usize) -> Option<Environment> {
+    let built = GlobalThreadPoolOptions::default()
         .with_intra_threads(intra_threads)
         .and_then(|o| o.with_inter_threads(1))
         .and_then(|o| o.with_spin_control(false))
-        .map(|o| ort::init().with_global_thread_pool(o).commit());
-    match committed {
-        Ok(true) => tracing::debug!(
-            target: "semantic",
-            "ONNX Runtime global thread pool: {intra_threads} intra-op threads, spinning off"
-        ),
-        Ok(false) => tracing::warn!(
-            target: "semantic",
-            "ONNX Runtime environment already initialized; global pool of {intra_threads} not applied, sessions run capped per-session pools"
-        ),
-        Err(e) => tracing::warn!(
-            target: "semantic",
-            "ONNX Runtime global thread pool not committed ({e}); sessions run capped per-session pools"
-        ),
+        .and_then(|o| ort::init().with_global_thread_pool(o).build());
+    match built {
+        Ok(environment) => {
+            tracing::debug!(
+                target: "semantic",
+                "ONNX Runtime global thread pool: {intra_threads} intra-op threads, spinning off"
+            );
+            Some(environment)
+        }
+        Err(e) => {
+            tracing::warn!(
+                target: "semantic",
+                "ONNX Runtime global thread pool not built ({e}); sessions run capped per-session pools"
+            );
+            None
+        }
     }
 }
 
@@ -121,6 +131,18 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "session.intra_op.allow_spinning" && v == "0")
         );
+    }
+
+    #[test]
+    fn session_options_keep_inference_on_the_cpu() {
+        let options = session_options(
+            TextInitOptions::new(fastembed::EmbeddingModel::AllMiniLML6V2),
+            3,
+        );
+        assert!(matches!(
+            options.auto_device,
+            Some(AutoDevicePolicy::PreferCPU)
+        ));
     }
 
     #[test]

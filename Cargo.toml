@@ -70,14 +70,15 @@ walkdir = "2.5.0"
 # instance. Model files and the ONNX Runtime binaries download over rustls:
 # no OpenSSL in the graph. On Linux the prebuilt ONNX Runtime binaries need
 # glibc 2.38+ and libstdc++ from GCC 13+.
-fastembed = { version = "=7.1.1", default-features = false, features = [
+fastembed = { version = "=7.7.1", default-features = false, features = [
     "hf-hub-rustls-tls",
     "ort-download-binaries-rustls-tls",
 ] }
 # The same crate instance as fastembed's own ort dependency: the two pins move
-# together, or the build links two ONNX runtimes. Used to commit the capped
-# global thread pool before fastembed creates its sessions.
-ort = { version = "=2.0.0-rc.13", default-features = false }
+# together, or the build links two ONNX runtimes. Used to build the
+# environment with the capped global thread pool that fastembed's sessions
+# run in, and to name the CPU device policy.
+ort = { version = "=2.0.0-rc.15", default-features = false }
 rand = "0.10.4"
 indicatif = "0.18.6"
 comfy-table = "8.0.1"
