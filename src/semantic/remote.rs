@@ -102,8 +102,25 @@ impl RemoteEmbedder {
         expected_dim: Option<usize>,
         api_key: Option<String>,
     ) -> Result<Self, SemanticSearchError> {
+        // reqwest reads the process-default rustls provider and panics without
+        // one. A lost install race means another thread set one; either serves.
+        if rustls::crypto::CryptoProvider::get_default().is_none() {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        }
+        // Bundled roots merged into the platform store: a host with no system
+        // CA certificates still builds a client.
+        let bundled = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|der| reqwest::Certificate::from_der(der))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                SemanticSearchError::ModelInitError(format!(
+                    "Bundled root certificate rejected: {e}"
+                ))
+            })?;
         let client = Client::builder()
             .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .tls_certs_merge(bundled)
             .build()
             .map_err(|e| {
                 SemanticSearchError::ModelInitError(format!("HTTP client build failed: {e}"))
@@ -253,5 +270,60 @@ impl RemoteEmbedder {
         }
 
         Ok(data.into_iter().map(|d| d.embedding).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// Answer `requests` POSTs on a loopback port with a fixed JSON body.
+    fn stub_server(body: &'static str, requests: usize) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(requests) {
+                let mut stream = stream.unwrap();
+                let mut seen = Vec::new();
+                let mut buf = [0u8; 4096];
+                let mut expected = None;
+                while expected.is_none_or(|total| seen.len() < total) {
+                    let n = stream.read(&mut buf).unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    seen.extend_from_slice(&buf[..n]);
+                    if expected.is_none() {
+                        if let Some(end) = seen.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&seen[..end]).to_ascii_lowercase();
+                            let length = head
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:"))
+                                .map_or(0, |v| v.trim().parse::<usize>().unwrap());
+                            expected = Some(end + 4 + length);
+                        }
+                    }
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    // reqwest panics when the process has no rustls provider. `new` installs
+    // one itself: a caller that set nothing up still gets a working client.
+    #[test]
+    fn new_builds_a_client_and_probes_without_caller_setup() {
+        let url = stub_server(r#"{"data":[{"index":0,"embedding":[0.6,0.8]}]}"#, 1);
+        let embedder =
+            run_async(async move { RemoteEmbedder::new(&url, "stub", Some(2), None).await })
+                .expect("client builds and the probe completes");
+        assert_eq!(embedder.dim(), 2);
     }
 }
