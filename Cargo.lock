@@ -648,7 +648,7 @@ checksum = "e0921b3876b3a1df8a1c9f912e7f94342458022c2e84288015893d83c4d62a79"
 
 [[package]]
 name = "codanna"
-version = "0.17.1"
+version = "0.18.0"
 dependencies = [
  "anyhow",
  "async-trait",
