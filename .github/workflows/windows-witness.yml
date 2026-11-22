@@ -42,4 +42,4 @@ jobs:
         run: |
           # --no-fail-fast: a witness surfaces every stratum; fail-fast is
           # gate semantics and masks the targets behind the first red one.
-          cargo test --verbose --no-fail-fast || echo "::warning title=Windows witness::test failures on Windows (witness leg, non-blocking) -- see this job's log; tracked in the wiki's Windows stories"
+          cargo test --verbose --no-fail-fast --all-features || echo "::warning title=Windows witness::test failures on Windows (witness leg, non-blocking) -- see this job's log; tracked in the wiki's Windows stories"
