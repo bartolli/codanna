@@ -208,6 +208,15 @@ impl ResolveStage {
             }
         }
 
+        // An unresolved import owns the bare name. It cannot fall through
+        // to a same-named export elsewhere in the index. Local scope above
+        // still takes precedence, and receiver calls keep their own resolution.
+        if Self::is_bare_instance_call(unresolved)
+            && context.scope.is_external_import(&unresolved.to_name)
+        {
+            return None;
+        }
+
         // Inheritance witness for bare calls inside a class body, only
         // where the language vouches that a bare name can dispatch to an
         // instance member. Runs after the scope lookup — file-local and
